@@ -1,17 +1,12 @@
 FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
 
 # Install dependencies
 RUN apk add --no-cache git
-
-# Copy go mod files
-COPY go.mod go.sum ./
-
-# Run go mod tidy to ensure go.sum is valid and up to date
-RUN go mod tidy
-
-RUN go mod download
 
 # Copy source code
 COPY cmd/ ./cmd/

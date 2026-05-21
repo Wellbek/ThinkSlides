@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/slideagent/orchestrator/internal/client"   // new import
 	"github.com/slideagent/orchestrator/internal/queue"
 	"github.com/slideagent/orchestrator/internal/sse"
 )
@@ -20,12 +20,12 @@ import (
 type SessionHandler struct {
 	queue     *queue.RedisQueue
 	hub       *sse.Hub
-	aiClient  *AIServiceClient
+	aiClient  *client.AIServiceClient   // changed type
 	dbURL     string
 	pool      *pgxpool.Pool
 }
 
-func NewSessionHandler(q *queue.RedisQueue, hub *sse.Hub, aiClient *AIServiceClient, dbURL string) *SessionHandler {
+func NewSessionHandler(q *queue.RedisQueue, hub *sse.Hub, aiClient *client.AIServiceClient, dbURL string) *SessionHandler {
 	h := &SessionHandler{
 		queue:    q,
 		hub:      hub,

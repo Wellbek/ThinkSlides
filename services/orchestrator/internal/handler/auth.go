@@ -59,7 +59,7 @@ func (h *AuthHandler) HandleLogin(c *gin.Context) {
 	// TODO: Look up user in database, verify password
 	// For now, placeholder logic
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("demo"), bcrypt.DefaultCost)
-	if err := bcrypt.CompareHashAndPassword(hashedPassword, []byte(req.Password)); req.Email == "" {
+	if err := bcrypt.CompareHashAndPassword(hashedPassword, []byte(req.Password)); err != nil || req.Email == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
