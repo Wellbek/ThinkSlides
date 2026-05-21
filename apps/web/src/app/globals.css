@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --sidebar-width: 280px;
+  --thought-panel-width: 380px;
+  --preview-width: 320px;
+}
+
+body {
+  @apply bg-surface text-gray-100 font-sans;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-surface-100 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-surface-200;
+}
+
+/* SSE thought stream styling */
+.thought-block {
+  @apply border-l-2 border-brand-500/30 pl-3 py-1 text-sm text-gray-400 italic;
+}
+
+.tool-call-block {
+  @apply bg-brand-950/30 border border-brand-500/20 rounded-md px-3 py-2 text-sm font-mono;
+}
+
+.tool-result-block {
+  @apply bg-emerald-950/20 border border-emerald-500/20 rounded-md px-3 py-2 text-sm;
+}
+
+.error-block {
+  @apply bg-red-950/30 border border-red-500/20 rounded-md px-3 py-2 text-sm text-red-300;
+}
+
+.slide-preview-card {
+  @apply bg-surface-50 rounded-lg border border-surface-100 overflow-hidden;
+  aspect-ratio: 16 / 9;
+}

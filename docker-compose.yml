@@ -1,0 +1,119 @@
+version: "3.9"
+
+services:
+  # ────────────────────────────────────────────
+  # PostgreSQL + pgvector
+  # ────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: slideagent-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-slideagent}
+      POSTGRES_USER: ${POSTGRES_USER:-slideagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-slideagent_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-slideagent}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ────────────────────────────────────────────
+  # Redis
+  # ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: slideagent-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ────────────────────────────────────────────
+  # Next.js Frontend
+  # ────────────────────────────────────────────
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: slideagent-web
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://orchestrator:${ORCHESTRATOR_PORT:-8080}
+      - NEXT_PUBLIC_AI_URL=http://ai-service:${AI_SERVICE_PORT:-8000}
+    depends_on:
+      - orchestrator
+    volumes:
+      - ./apps/web/src:/app/src
+
+  # ────────────────────────────────────────────
+  # Go Orchestrator
+  # ────────────────────────────────────────────
+  orchestrator:
+    build:
+      context: ./services/orchestrator
+      dockerfile: Dockerfile
+    container_name: slideagent-orchestrator
+    ports:
+      - "${ORCHESTRATOR_PORT:-8080}:8080"
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - AI_SERVICE_URL=http://ai-service:${AI_SERVICE_PORT:-8000}
+      - JWT_SECRET=${JWT_SECRET:-change-this-to-a-secure-random-string-in-production}
+      - DATABASE_URL=postgresql://slideagent:slideagent_dev_password@postgres:5432/slideagent
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # ────────────────────────────────────────────
+  # Python AI Service
+  # ────────────────────────────────────────────
+  ai-service:
+    build:
+      context: ./services/ai
+      dockerfile: Dockerfile
+    container_name: slideagent-ai
+    ports:
+      - "${AI_SERVICE_PORT:-8000}:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://slideagent:slideagent_dev_password@postgres:5432/slideagent}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - LLM_PROVIDER=${LLM_PROVIDER:-zhipu}
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
+      - ZHIPU_MODEL=${ZHIPU_MODEL:-glm-4}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-4}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-02-15-preview}
+      - UPLOAD_DIR=${UPLOAD_DIR:-/app/uploads}
+      - TEMPLATE_DIR=${TEMPLATE_DIR:-/app/templates}
+      - OUTPUT_DIR=${OUTPUT_DIR:-/app/output}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - uploads:${UPLOAD_DIR:-/app/uploads}
+      - templates:${TEMPLATE_DIR:-/app/templates}
+      - output:${OUTPUT_DIR:-/app/output}
+
+volumes:
+  pgdata:
+  redisdata:
+  uploads:
+  templates:
+  output:

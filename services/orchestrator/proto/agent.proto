@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package slideagent;
+
+option go_package = "github.com/slideagent/orchestrator/proto";
+
+// AgentService defines the gRPC interface between the orchestrator and the AI service.
+service AgentService {
+  // GeneratePresentation starts a presentation generation job.
+  rpc GeneratePresentation(GenerateRequest) returns (stream AgentEvent);
+
+  // ExtractDesignSystem extracts a design system from a template file.
+  rpc ExtractDesignSystem(TemplateRequest) returns (DesignSystemBundle);
+
+  // IngestDocument ingests a document for RAG retrieval.
+  rpc IngestDocument(IngestRequest) returns (IngestResponse);
+}
+
+message GenerateRequest {
+  string session_id = 1;
+  string content = 2;
+  repeated Attachment attachments = 3;
+  string template_id = 4;
+  string organisation_id = 5;
+}
+
+message Attachment {
+  string file_name = 1;
+  string mime_type = 2;
+  int64 size_bytes = 3;
+  bytes data = 4;
+}
+
+message TemplateRequest {
+  string template_path = 1;
+  string organisation_id = 2;
+}
+
+message DesignSystemBundle {
+  string id = 1;
+  string template_id = 2;
+  string palette_json = 3;
+  string typography_json = 4;
+  string spacing_json = 5;
+  string layouts_json = 6;
+  string slide_dimensions_json = 7;
+  string master_elements_json = 8;
+  string embedded_media_json = 9;
+}
+
+message IngestRequest {
+  string file_path = 1;
+  string organisation_id = 2;
+  string session_id = 3;
+  string mime_type = 4;
+}
+
+message IngestResponse {
+  string document_id = 1;
+  int32 chunk_count = 2;
+  string status = 3;
+}
+
+message AgentEvent {
+  string id = 1;
+  string session_id = 2;
+  string event_type = 3; // thought, tool_call, tool_result, slide_finalized, error, progress
+  string phase = 4;      // content_analysis, structure_planning, layout_selection, etc.
+  string content_json = 5;
+  string tool_name = 6;
+  string tool_args_json = 7;
+  string tool_result_json = 8;
+  int32 duration_ms = 9;
+  int32 token_count = 10;
+  string timestamp = 11;
+}

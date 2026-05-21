@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+*.exe
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# Uploads & generated
+uploads/
+templates/
+output/
+
+# Go
+services/orchestrator/bin/
+
+# Python
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+
+# Database
+*.sqlite3
+
+# Wellagent (Wellm)
+.wellagent

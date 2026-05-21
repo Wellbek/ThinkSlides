@@ -1,0 +1,21 @@
+{
+  "name": "slideagent",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "make dev-web",
+    "build:web": "make build-web",
+    "lint": "eslint apps/web/src --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit -p apps/web/tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "eslint": "^8.57.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0"
+  }
+}
