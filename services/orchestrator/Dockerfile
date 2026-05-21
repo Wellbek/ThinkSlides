@@ -7,6 +7,10 @@ RUN apk add --no-cache git
 
 # Copy go mod files
 COPY go.mod go.sum ./
+
+# Run go mod tidy to ensure go.sum is valid and up to date
+RUN go mod tidy
+
 RUN go mod download
 
 # Copy source code
