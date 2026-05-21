@@ -1,4 +1,4 @@
-# SlideAgent — AI-Powered PowerPoint Generation Platform
+# ThinkSlides
 
 Enterprise-grade, multi-tenant web application that generates fully branded, template-faithful
 PowerPoint presentations through a conversational LLM chat interface combined with document
