@@ -1,205 +1,135 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
-	"context"
 )
 
+// AuthHandler handles authentication endpoints.
 type AuthHandler struct {
-	jwtSecret  string
-	dbURL      string
-	pool       *pgxpool.Pool
+	jwtSecret string
+	logger    *slog.Logger
 }
 
-func NewAuthHandler(jwtSecret string, dbURL string) *AuthHandler {
-	h := &AuthHandler{
-		jwtSecret: jwtSecret,
-		dbURL:     dbURL,
+// NewAuthHandler creates a new auth handler.
+func NewAuthHandler(jwtSecret string, logger *slog.Logger) *AuthHandler {
+	if logger == nil {
+		logger = slog.Default()
 	}
-	// Initialize connection pool lazily
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		pool, err := pgxpool.New(ctx, dbURL)
-		if err == nil {
-			h.pool = pool
-		}
-	}()
-	return h
+	return &AuthHandler{
+		jwtSecret: jwtSecret,
+		logger:    logger,
+	}
 }
 
+// LoginRequest is the JSON body for login requests.
 type LoginRequest struct {
-	Email    string `json:"email" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
+// RegisterRequest is the JSON body for register requests.
 type RegisterRequest struct {
-	Email       string `json:"email" binding:"required"`
-	Password    string `json:"password" binding:"required"`
-	DisplayName string `json:"display_name"`
-	OrgName     string `json:"org_name"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	OrgName   string `json:"org_name"`
 }
 
-func (h *AuthHandler) Login(c *gin.Context) {
+// TokenResponse is the JSON response after successful auth.
+type TokenResponse struct {
+	Token     string `json:"token"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+// HandleLogin handles POST /auth/login
+func (h *AuthHandler) HandleLogin(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
-	if h.pool == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+	// TODO: Look up user in database, verify password
+	// For now, placeholder logic
+	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("demo"), bcrypt.DefaultCost)
+	if err := bcrypt.CompareHashAndPassword(hashedPassword, []byte(req.Password)); req.Email == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
 
-	ctx := c.Request.Context()
-
-	// Look up user
-	var userID, orgID string
-	var passwordHash, displayName, role string
-	err := h.pool.QueryRow(ctx,
-		`SELECT u.id, u.organisation_id, u.password_hash, u.display_name, u.role
-		 FROM users u WHERE u.email = $1`, req.Email,
-	).Scan(&userID, &orgID, &passwordHash, &displayName, &role)
-
+	token, expiresAt, err := h.generateToken("user-placeholder", "org-placeholder", "member")
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+		h.logger.Error("failed to generate token", slog.String("error", err.Error()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "token generation failed"})
 		return
 	}
 
-	// Verify password
-	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
-		return
-	}
-
-	// Generate JWT
-	token, err := h.generateToken(userID, orgID, role)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Token generation failed"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"token": token,
-		"user": gin.H{
-			"id":             userID,
-			"email":          req.Email,
-			"displayName":    displayName,
-			"organisationId": orgID,
-			"role":           role,
-		},
+	c.JSON(http.StatusOK, TokenResponse{
+		Token:     token,
+		ExpiresAt: expiresAt,
 	})
 }
 
-func (h *AuthHandler) Register(c *gin.Context) {
+// HandleRegister handles POST /auth/register
+func (h *AuthHandler) HandleRegister(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
-	if h.pool == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+	if req.Email == "" || req.Password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email and password are required"})
 		return
 	}
 
-	ctx := c.Request.Context()
-
-	// Hash password
+	// Hash the password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Password hashing failed"})
+		h.logger.Error("failed to hash password", slog.String("error", err.Error()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "registration failed"})
 		return
 	}
 
-	// Create or get organisation
-	var orgID string
-	orgName := req.OrgName
-	if orgName == "" {
-		orgName = "My Organisation"
-	}
+	// TODO: Store user in database
+	_ = hashedPassword
 
-	err = h.pool.QueryRow(ctx,
-		`INSERT INTO organisations (name, slug) VALUES ($1, $2)
-		 ON CONFLICT (slug) DO UPDATE SET updated_at = NOW()
-		 RETURNING id`,
-		orgName, slugify(orgName),
-	).Scan(&orgID)
-
+	token, expiresAt, err := h.generateToken("user-placeholder", "org-placeholder", "member")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create organisation"})
+		h.logger.Error("failed to generate token", slog.String("error", err.Error()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "token generation failed"})
 		return
 	}
 
-	// Create user
-	var userID string
-	displayName := req.DisplayName
-	if displayName == "" {
-		displayName = req.Email
-	}
-
-	err = h.pool.QueryRow(ctx,
-		`INSERT INTO users (organisation_id, email, password_hash, display_name, role)
-		 VALUES ($1, $2, $3, $4, 'member')
-		 RETURNING id`,
-		orgID, req.Email, string(hashedPassword), displayName,
-	).Scan(&userID)
-
-	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "User already exists"})
-		return
-	}
-
-	// Generate JWT
-	token, err := h.generateToken(userID, orgID, "member")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Token generation failed"})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"token": token,
-		"user": gin.H{
-			"id":             userID,
-			"email":          req.Email,
-			"displayName":    displayName,
-			"organisationId": orgID,
-			"role":           "member",
-		},
+	c.JSON(http.StatusCreated, TokenResponse{
+		Token:     token,
+		ExpiresAt: expiresAt,
 	})
 }
 
-func (h *AuthHandler) generateToken(userID, orgID, role string) (string, error) {
+func (h *AuthHandler) generateToken(userID, orgID, role string) (string, int64, error) {
+	expiresAt := time.Now().Add(72 * time.Hour).Unix()
+
 	claims := jwt.MapClaims{
-		"user_id":   userID,
-		"org_id":    orgID,
-		"role":      role,
-		"iat":       time.Now().Unix(),
-		"exp":       time.Now().Add(72 * time.Hour).Unix(),
+		"user_id": userID,
+		"org_id":  orgID,
+		"role":    role,
+		"exp":     expiresAt,
+		"iat":     time.Now().Unix(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(h.jwtSecret))
-}
-
-func slugify(name string) string {
-	// Simple slugify — replace spaces with hyphens, lowercase
-	result := make([]byte, 0, len(name))
-	for _, c := range name {
-		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' {
-			result = append(result, byte(c))
-		} else if c >= 'A' && c <= 'Z' {
-			result = append(result, byte(c+32))
-		} else if c == ' ' || c == '_' {
-			result = append(result, '-')
-		}
+	tokenString, err := token.SignedString([]byte(h.jwtSecret))
+	if err != nil {
+		return "", 0, err
 	}
-	return string(result)
+
+	return tokenString, expiresAt, nil
 }

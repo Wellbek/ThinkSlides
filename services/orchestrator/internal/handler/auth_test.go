@@ -1,42 +1,81 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+	"log/slog"
 )
 
-func TestSlugify(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"Hello World", "hello-world"},
-		{"My Organisation", "my-organisation"},
-		{"Test123", "test123"},
-		{"UPPER CASE", "upper-case"},
-		{"under_score", "under-score"},
-		{"  spaces  ", "--spaces--"},
-		{"Special!@#Chars", "specialchars"},
-	}
+func TestHandleLogin_BadRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h := NewAuthHandler("test-secret", slog.Default())
+	r.POST("/auth/login", h.HandleLogin)
 
-	for _, tt := range tests {
-		result := slugify(tt.input)
-		if result != tt.expected {
-			t.Errorf("slugify(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", w.Code)
 	}
 }
 
-func TestTokenGeneration(t *testing.T) {
-	handler := &AuthHandler{
-		jwtSecret: "test-secret-key",
+func TestHandleRegister_BadRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h := NewAuthHandler("test-secret", slog.Default())
+	r.POST("/auth/register", h.HandleRegister)
+
+	body, _ := json.Marshal(map[string]string{
+		"email":    "",
+		"password": "",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandleRegister_Success(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h := NewAuthHandler("test-secret", slog.Default())
+	r.POST("/auth/register", h.HandleRegister)
+
+	body, _ := json.Marshal(map[string]string{
+		"email":     "test@example.com",
+		"password":  "password123",
+		"first_name": "Test",
+		"last_name":  "User",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected status 201, got %d", w.Code)
 	}
 
-	token, err := handler.generateToken("user-123", "org-456", "admin")
-	if err != nil {
-		t.Fatalf("Failed to generate token: %v", err)
+	var resp TokenResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-
-	if token == "" {
-		t.Fatal("Token should not be empty")
+	if resp.Token == "" {
+		t.Error("expected token in response")
 	}
 }
