@@ -3,126 +3,120 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+
+	"github.com/slideagent/orchestrator/internal/client"
 	"github.com/slideagent/orchestrator/internal/handler"
 	"github.com/slideagent/orchestrator/internal/middleware"
 	"github.com/slideagent/orchestrator/internal/queue"
 	"github.com/slideagent/orchestrator/internal/sse"
-
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
+	"github.com/slideagent/orchestrator/internal/worker"
 )
 
 func main() {
-	// Read configuration from environment
-	port := envOrDefault("ORCHESTRATOR_PORT", "8080")
-	redisURL := envOrDefault("REDIS_URL", "redis://redis:6379/0")
-	aiServiceURL := envOrDefault("AI_SERVICE_URL", "http://ai-service:8000")
-	databaseURL := envOrDefault("DATABASE_URL", "postgresql://slideagent:slideagent_dev_password@postgres:5432/slideagent")
-	jwtSecret := envOrDefault("JWT_SECRET", "change-this-to-a-secure-random-string-in-production")
+	// Read environment variables
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379/0"
+	}
+	aiServiceURL := os.Getenv("AI_SERVICE_URL")
+	if aiServiceURL == "" {
+		aiServiceURL = "http://localhost:8000"
+	}
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://postgres:password@localhost:5432/slideagent?sslmode=disable"
+	}
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "your-secret-key-change-in-production"
+	}
 
-	// Initialize Redis job queue
-	jobQueue, err := queue.NewRedisQueue(redisURL)
+	// Logger
+	logger := slog.Default()
+
+	// Initialize Redis queue
+	redisQueue, err := queue.NewRedisQueue(redisURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
-	defer jobQueue.Close()
+	defer redisQueue.Close()
+
+	// Initialize AI client (from shared package)
+	aiClient := client.NewAIServiceClient(aiServiceURL)
 
 	// Initialize SSE hub
 	hub := sse.NewHub()
 	go hub.Run()
 
-	// Initialize AI service client
-	aiClient := handler.NewAIServiceClient(aiServiceURL)
+	// Initialize HTTP handlers
+	authHandler := handler.NewAuthHandler(jwtSecret, logger)                    // correct: uses *slog.Logger
+	sessionHandler := handler.NewSessionHandler(redisQueue, hub, aiClient, dbURL)
 
-	// Initialize job processor
-	processor := queue.NewProcessor(jobQueue, hub, aiClient)
-	go processor.Start(context.Background())
+	// Start background worker (pass hub as second argument)
+	workerProc := worker.NewProcessor(redisQueue, hub, aiClient)               // fixed: added hub argument
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go workerProc.Start(ctx)
 
-	// Set up Gin router
-	gin.SetMode(gin.ReleaseMode)
-	router := gin.New()
-	router.Use(gin.Recovery())
-	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		ExposeHeaders:    []string{"Content-Type"},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
-	}))
+	// Setup Gin router
+	r := gin.Default()
+	r.Use(cors.Default())
 
-	// Health endpoint
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "orchestrator"})
-	})
+	// Public routes
+	r.POST("/api/auth/login", authHandler.HandleLogin)
+	r.POST("/api/auth/register", authHandler.HandleRegister)
 
-	// Auth routes (public)
-	authHandler := handler.NewAuthHandler(jwtSecret, databaseURL)
-	authGroup := router.Group("/auth")
+	// Protected routes
+	authMw := middleware.AuthRequired(jwtSecret)
+	api := r.Group("/api")
+	api.Use(authMw)
 	{
-		authGroup.POST("/login", authHandler.Login)
-		authGroup.POST("/register", authHandler.Register)
-	}
-
-	// API routes (authenticated)
-	apiGroup := router.Group("/")
-	apiGroup.Use(middleware.AuthRequired(jwtSecret))
-	{
-		// Session management
-		sessionHandler := handler.NewSessionHandler(jobQueue, hub, aiClient, databaseURL)
-		apiGroup.GET("/sessions", sessionHandler.ListSessions)
-		apiGroup.POST("/sessions", sessionHandler.CreateSession)
-		apiGroup.GET("/sessions/:id", sessionHandler.GetSession)
-		apiGroup.DELETE("/sessions/:id", sessionHandler.DeleteSession)
-
-		// Message handling — enqueues generation jobs
-		apiGroup.POST("/sessions/:id/messages", sessionHandler.SendMessage)
-
-		// SSE stream for agent events
-		apiGroup.GET("/sessions/:id/events", sessionHandler.StreamEvents)
-
-		// Generated files
-		apiGroup.GET("/files/:id", sessionHandler.DownloadFile)
+		api.GET("/sessions", sessionHandler.ListSessions)
+		api.POST("/sessions", sessionHandler.CreateSession)
+		api.GET("/sessions/:id", sessionHandler.GetSession)
+		api.DELETE("/sessions/:id", sessionHandler.DeleteSession)
+		api.POST("/sessions/:id/messages", sessionHandler.SendMessage)
+		api.GET("/sessions/:id/events", sessionHandler.StreamEvents)
+		api.GET("/files/:id", sessionHandler.DownloadFile)
 	}
 
 	// Start server
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 	srv := &http.Server{
 		Addr:    ":" + port,
-		Handler: router,
+		Handler: r,
 	}
 
 	go func() {
-		log.Printf("Orchestrator starting on port %s", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
+
+	log.Printf("Orchestrator listening on port %s", port)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+	log.Println("Shutting down...")
 
-	log.Println("Shutting down orchestrator...")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	cancel() // stop worker
+	_ = srv.Shutdown(shutdownCtx)
 
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
-	}
-
-	log.Println("Orchestrator stopped")
-}
-
-func envOrDefault(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return defaultVal
+	log.Println("Server exited")
 }
