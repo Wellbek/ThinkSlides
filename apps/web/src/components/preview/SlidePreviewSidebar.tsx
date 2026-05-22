@@ -1,7 +1,7 @@
 "use client";
 
 import { useChatStore } from "@/stores/chat-store";
-import { Download, FilePresentation } from "lucide-react";
+import { Download, Presentation } from "lucide-react";
 import type { Slide } from "@slideagent/schemas/slide";
 
 export function SlidePreviewSidebar() {
@@ -26,7 +26,7 @@ export function SlidePreviewSidebar() {
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {slides.length === 0 && (
           <div className="text-center py-8">
-            <FilePresentation
+            <Presentation
               size={32}
               className="mx-auto text-gray-600 mb-2"
             />

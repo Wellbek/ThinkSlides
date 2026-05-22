@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useChatStore } from "@/stores/chat-store";
-import { ChevronDown, FilePresentation } from "lucide-react";
+import { ChevronDown, Presentation } from "lucide-react";
 
 export function TemplateSelector() {
   const { templates, activeSessionId, setSessionTemplate } = useChatStore();
@@ -28,7 +28,7 @@ export function TemplateSelector() {
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-2 px-3 py-1.5 bg-surface-50 border border-surface-100 rounded-lg text-xs text-gray-300 hover:border-brand-500/30 transition-colors"
       >
-        <FilePresentation size={14} />
+        <Presentation size={14} />
         <span>
           {activeSession?.templateBadge || "Select template"}
         </span>
@@ -52,7 +52,7 @@ export function TemplateSelector() {
               onClick={() => handleSelect(tpl.id)}
               className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-surface-100 flex items-center gap-2"
             >
-              <FilePresentation size={12} className="text-brand-400 shrink-0" />
+              <Presentation size={12} className="text-brand-400 shrink-0" />
               <div className="min-w-0">
                 <p className="truncate">{tpl.name}</p>
                 <p className="text-xs text-gray-500">

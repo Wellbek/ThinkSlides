@@ -7,7 +7,7 @@ import {
   Search,
   Trash2,
   Plus,
-  FilePresentation,
+  Presentation,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -87,7 +87,7 @@ export function ChatHistorySidebar() {
                   <div className="flex items-center gap-2 mt-0.5">
                     {session.templateBadge && (
                       <span className="inline-flex items-center gap-1 text-xs text-brand-400">
-                        <FilePresentation size={10} />
+                        <Presentation size={10} />
                         {session.templateBadge}
                       </span>
                     )}
