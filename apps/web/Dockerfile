@@ -13,7 +13,7 @@ COPY apps/web/package.json apps/web/package.json
 COPY packages/schemas/package.json packages/schemas/package.json
 
 # Install dependencies from root, using workspaces
-RUN npm install
+RUN npm ci
 
 # Rebuild the source code only when needed
 FROM base AS builder
@@ -36,10 +36,15 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-# Copy standalone output (Next.js >= 12.2 with output: 'standalone' in next.config.js)
-COPY --from=builder /app/apps/web/public ./public
+# Copy the standalone output correctly
+# The standalone output is created at /app/apps/web/.next/standalone
+# Inside that, the structure mirrors the workspace
+COPY --from=builder /app/apps/web/public ./apps/web/public
 COPY --from=builder /app/apps/web/.next/standalone ./
-COPY --from=builder /app/apps/web/.next/static ./.next/static
+COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+
+# Set the correct working directory for the standalone server
+WORKDIR /app/apps/web
 
 USER nextjs
 
@@ -47,4 +52,5 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
+# The server.js is now at /app/apps/web/server.js
 CMD ["node", "server.js"]

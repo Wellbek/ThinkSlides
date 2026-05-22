@@ -56,8 +56,16 @@ export function SlidePreviewSidebar() {
             <div className="px-3 pb-2">
               <p className="text-xs text-gray-400 truncate">
                 {slide.contents
-                  .filter((c) => c.type === "text")
-                  .map((c) => (c as { type: "text"; runs: { text: string }[] }).runs.map((r) => r.text).join(" "))
+                  .filter(
+                    (
+                      c
+                    ): c is { type: "text"; runs: { text: string }[] } =>
+                      typeof c === "object" &&
+                      c !== null &&
+                      "type" in c &&
+                      c.type === "text"
+                  )
+                  .map((c) => c.runs.map((r) => r.text).join(" "))
                   .join(" · ") || "No text content"}
               </p>
             </div>

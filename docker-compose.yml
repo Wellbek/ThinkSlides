@@ -1,5 +1,9 @@
 version: "3.9"
 
+networks:
+  slideagent-network:
+    driver: bridge
+
 services:
   # ────────────────────────────────────────────
   # PostgreSQL + pgvector
@@ -16,6 +20,8 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/migrations:/docker-entrypoint-initdb.d
+    networks:
+      - slideagent-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-slideagent}"]
       interval: 5s
@@ -32,6 +38,8 @@ services:
       - "6379:6379"
     volumes:
       - redisdata:/data
+    networks:
+      - slideagent-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -51,10 +59,10 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://orchestrator:${ORCHESTRATOR_PORT:-8080}
       - NEXT_PUBLIC_AI_URL=http://ai-service:${AI_SERVICE_PORT:-8000}
+    networks:
+      - slideagent-network
     depends_on:
       - orchestrator
-    volumes:
-      - ./apps/web/src:/app/src
 
   # ────────────────────────────────────────────
   # Go Orchestrator
@@ -71,6 +79,8 @@ services:
       - AI_SERVICE_URL=http://ai-service:${AI_SERVICE_PORT:-8000}
       - JWT_SECRET=${JWT_SECRET:-change-this-to-a-secure-random-string-in-production}
       - DATABASE_URL=postgresql://slideagent:slideagent_dev_password@postgres:5432/slideagent
+    networks:
+      - slideagent-network
     depends_on:
       redis:
         condition: service_healthy
@@ -101,6 +111,8 @@ services:
       - TEMPLATE_DIR=${TEMPLATE_DIR:-/app/templates}
       - OUTPUT_DIR=${OUTPUT_DIR:-/app/output}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    networks:
+      - slideagent-network
     depends_on:
       postgres:
         condition: service_healthy

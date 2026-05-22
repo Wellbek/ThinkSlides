@@ -3,14 +3,14 @@ import type { AgentEvent } from "@slideagent/schemas/agent-events";
 import type { Slide } from "@slideagent/schemas/slide";
 import { api } from "@/lib/api";
 
-interface Attachment {
+export interface Attachment {
   fileName: string;
   mimeType: string;
   size: number;
   url: string;
 }
 
-interface Message {
+export interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
@@ -18,7 +18,7 @@ interface Message {
   createdAt: string;
 }
 
-interface SessionListItem {
+export interface SessionListItem {
   id: string;
   title: string;
   templateBadge?: string;
@@ -27,7 +27,7 @@ interface SessionListItem {
   createdAt: string;
 }
 
-interface TemplateItem {
+export interface TemplateItem {
   id: string;
   name: string;
   tags: string[];
@@ -35,7 +35,7 @@ interface TemplateItem {
   isDefault: boolean;
 }
 
-interface GeneratedFile {
+export interface GeneratedFile {
   id: string;
   fileType: string;
   fileName: string;
@@ -44,7 +44,7 @@ interface GeneratedFile {
   createdAt: string;
 }
 
-interface ChatState {
+export interface ChatState {
   // Sessions
   sessions: SessionListItem[];
   activeSessionId: string | null;

@@ -1,22 +1,25 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-  reactStrictMode: true,
+  transpilePackages: ['@thinkslabs/schemas'],
   experimental: {
-    optimizePackageImports: ["lucide-react"],
+    serverComponentsExternalPackages: []
   },
-  async rewrites() {
-    return [
-      {
-        source: "/api/orchestrator/:path*",
-        destination: `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"}/:path*`,
-      },
-      {
-        source: "/api/ai/:path*",
-        destination: `${process.env.NEXT_PUBLIC_AI_URL || "http://localhost:8000"}/:path*`,
-      },
-    ];
+  env: {
+    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+    NEXT_PUBLIC_AI_URL: process.env.NEXT_PUBLIC_AI_URL,
   },
-};
+  serverRuntimeConfig: {
+    // Will only be available on the server side
+  },
+  publicRuntimeConfig: {
+    // Will be available on both server and client
+    apiUrl: process.env.NEXT_PUBLIC_API_URL,
+    aiUrl: process.env.NEXT_PUBLIC_AI_URL,
+  },
+  images: {
+    unoptimized: true,
+  },
+}
 
-module.exports = nextConfig;
+module.exports = nextConfig
