@@ -10,7 +10,8 @@ interface AttachedFile {
 }
 
 export function ChatInput() {
-  const { sendMessage, activeSessionId } = useChatStore();
+  const sendMessage = useChatStore((s) => s.sendMessage);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const [isSending, setIsSending] = useState(false);
@@ -22,16 +23,15 @@ export function ChatInput() {
 
     setIsSending(true);
     try {
-      await sendMessage(activeSessionId, {
-        content: text.trim(),
-        attachments: attachments.map((a) => ({
-          fileName: a.file.name,
-          mimeType: a.file.type,
-          size: a.file.size,
-        })),
-      });
+      // Store sendMessage signature is (content: string, files?: File[])
+      await sendMessage(
+        text.trim(),
+        attachments.length > 0 ? attachments.map((a) => a.file) : undefined
+      );
       setText("");
       setAttachments([]);
+    } catch (err) {
+      console.error("Failed to send message:", err);
     } finally {
       setIsSending(false);
     }

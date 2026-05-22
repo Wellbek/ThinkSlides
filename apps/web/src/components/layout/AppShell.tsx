@@ -7,7 +7,7 @@ import { SlidePreviewSidebar } from "../preview/SlidePreviewSidebar";
 import { useChatStore } from "@/stores/chat-store";
 
 export function AppShell() {
-  const activeSession = useChatStore((s) => s.activeSession);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden">
@@ -20,7 +20,7 @@ export function AppShell() {
       </main>
 
       {/* Right: Agent Thought Stream + Slide Preview */}
-      {activeSession && (
+      {activeSessionId && (
         <div className="flex flex-col border-l border-surface-100">
           <AgentThoughtPanel />
           <SlidePreviewSidebar />

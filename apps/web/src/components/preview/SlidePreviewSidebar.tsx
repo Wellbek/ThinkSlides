@@ -3,20 +3,29 @@
 import { useChatStore } from "@/stores/chat-store";
 import { Download, Presentation } from "lucide-react";
 import type { Slide } from "@slideagent/schemas/slide";
+import type { SlideFinalizedEvent } from "@slideagent/schemas";
 
 export function SlidePreviewSidebar() {
-  const { activeSession, generatedFiles } = useChatStore();
+  const { activeEvents, activeFiles } = useChatStore();
 
-  const slides: Slide[] = activeSession?.slides ?? [];
-  const files = generatedFiles ?? [];
+  // Extract slides from slide_finalized events
+  const slides: Slide[] = activeEvents
+    .filter((event): event is SlideFinalizedEvent => event.type === "slide_finalized")
+    .map((event) => event.slideData as Slide)
+    .sort((a, b) => a.slideIndex - b.slideIndex);
+
+  // Map GeneratedFile to the shape expected by the UI
+  const files = activeFiles.map((file) => ({
+    id: file.id,
+    downloadUrl: file.file_url,
+    fileName: file.filename,
+  }));
 
   return (
     <div className="flex flex-col" style={{ width: 320 }}>
       {/* Header */}
       <div className="px-4 py-2.5 border-b border-surface-100 flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-300">
-          Slide Preview
-        </span>
+        <span className="text-sm font-medium text-gray-300">Slide Preview</span>
         {slides.length > 0 && (
           <span className="text-xs text-gray-500">{slides.length} slides</span>
         )}
@@ -26,18 +35,15 @@ export function SlidePreviewSidebar() {
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {slides.length === 0 && (
           <div className="text-center py-8">
-            <Presentation
-              size={32}
-              className="mx-auto text-gray-600 mb-2"
-            />
+            <Presentation size={32} className="mx-auto text-gray-600 mb-2" />
             <p className="text-xs text-gray-500">
               Slides will appear here as they are generated
             </p>
           </div>
         )}
 
-        {slides.map((slide, i) => (
-          <div key={i} className="slide-preview-card">
+        {slides.map((slide, idx) => (
+          <div key={idx} className="slide-preview-card">
             <div className="p-3">
               <div className="bg-white rounded aspect-video flex items-center justify-center text-gray-800 text-xs relative">
                 <div className="text-center">
@@ -57,13 +63,8 @@ export function SlidePreviewSidebar() {
               <p className="text-xs text-gray-400 truncate">
                 {slide.contents
                   .filter(
-                    (
-                      c
-                    ): c is { type: "text"; runs: { text: string }[] } =>
-                      typeof c === "object" &&
-                      c !== null &&
-                      "type" in c &&
-                      c.type === "text"
+                    (c): c is { type: "text"; runs: { text: string }[] } =>
+                      typeof c === "object" && c !== null && "type" in c && c.type === "text"
                   )
                   .map((c) => c.runs.map((r) => r.text).join(" "))
                   .join(" · ") || "No text content"}

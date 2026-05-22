@@ -76,7 +76,7 @@ func main() {
 	r.POST("/api/auth/register", authHandler.HandleRegister)
 
 	// Protected routes
-	authMw := middleware.AuthRequired(jwtSecret)
+	authMw := middleware.AuthRequired()
 	api := r.Group("/api")
 	api.Use(authMw)
 	{

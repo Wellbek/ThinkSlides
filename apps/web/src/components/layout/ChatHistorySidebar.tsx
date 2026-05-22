@@ -2,14 +2,8 @@
 
 import { useChatStore } from "@/stores/chat-store";
 import { formatDistanceToNow } from "@/lib/date";
-import {
-  MessageSquare,
-  Search,
-  Trash2,
-  Plus,
-  Presentation,
-} from "lucide-react";
-import { useState } from "react";
+import { MessageSquare, Search, Trash2, Plus, Presentation } from "lucide-react";
+import { useState, useMemo } from "react";
 
 export function ChatHistorySidebar() {
   const {
@@ -18,19 +12,36 @@ export function ChatHistorySidebar() {
     setActiveSession,
     createSession,
     deleteSession,
-    searchSessions,
+    templates, // We need this to map template_id -> template name
   } = useChatStore();
 
   const [searchQuery, setSearchQuery] = useState("");
 
-  const filteredSessions = searchQuery
-    ? searchSessions(searchQuery)
-    : sessions;
+  // Client-side filtering (no API call)
+  const filteredSessions = useMemo(() => {
+    if (!searchQuery.trim()) return sessions;
+    const query = searchQuery.toLowerCase();
+    return sessions.filter((s) => s.title.toLowerCase().includes(query));
+  }, [sessions, searchQuery]);
 
-  const grouped = groupByDate(filteredSessions);
+  // Transform session data to what the UI expects
+  const transformedSessions = useMemo(() => {
+    return filteredSessions.map((session) => ({
+      id: session.id,
+      title: session.title,
+      updatedAt: session.updated_at,
+      slideCount: session.slide_count,
+      templateBadge: session.template_id
+        ? templates.find((t) => t.id === session.template_id)?.name
+        : undefined,
+    }));
+  }, [filteredSessions, templates]);
+
+  const grouped = groupByDate(transformedSessions);
 
   const handleNewChat = async () => {
-    await createSession({ title: "New Chat" });
+    // createSession expects optional templateId, not an object
+    await createSession();
   };
 
   return (
@@ -113,7 +124,7 @@ export function ChatHistorySidebar() {
           </div>
         ))}
 
-        {filteredSessions.length === 0 && (
+        {transformedSessions.length === 0 && (
           <div className="text-center py-8 text-gray-500 text-sm">
             {searchQuery ? "No sessions found" : "No chats yet"}
           </div>

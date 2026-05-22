@@ -7,7 +7,14 @@ import { TemplateSelector } from "./TemplateSelector";
 import { MessageSquarePlus } from "lucide-react";
 
 export function ChatArea() {
-  const { activeSession, activeSessionId } = useChatStore();
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const sessions = useChatStore((s) => s.sessions);
+  const createSession = useChatStore((s) => s.createSession);
+
+  // Derive the active session object from the sessions list
+  const activeSession = activeSessionId
+    ? sessions.find((s) => s.id === activeSessionId) ?? null
+    : null;
 
   if (!activeSessionId || !activeSession) {
     return <EmptyState />;
@@ -21,9 +28,9 @@ export function ChatArea() {
           <h2 className="text-sm font-medium text-gray-200">
             {activeSession.title}
           </h2>
-          {activeSession.templateBadge && (
+          {activeSession.template_id && (
             <span className="text-xs text-brand-400">
-              Template: {activeSession.templateBadge}
+              Template: {activeSession.template_id}
             </span>
           )}
         </div>
@@ -40,7 +47,15 @@ export function ChatArea() {
 }
 
 function EmptyState() {
-  const { createSession } = useChatStore();
+  const createSession = useChatStore((s) => s.createSession);
+
+  const handleNewChat = async () => {
+    try {
+      await createSession();
+    } catch (err) {
+      console.error("Failed to create session:", err);
+    }
+  };
 
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center px-8">
@@ -57,7 +72,7 @@ function EmptyState() {
         </p>
       </div>
       <button
-        onClick={() => createSession({ title: "New Chat" })}
+        onClick={handleNewChat}
         className="mt-2 px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm font-medium transition-colors"
       >
         New Chat

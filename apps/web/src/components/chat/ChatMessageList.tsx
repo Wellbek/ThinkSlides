@@ -6,10 +6,11 @@ import { User, Bot, Paperclip } from "lucide-react";
 import { formatTime } from "@/lib/date";
 
 export function ChatMessageList() {
-  const { activeSession } = useChatStore();
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const activeMessages = useChatStore((s) => s.activeMessages);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const messages = activeSession?.messages ?? [];
+  const messages = activeMessages ?? [];
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -46,10 +47,7 @@ export function ChatMessageList() {
                     className="flex items-center gap-2 text-xs opacity-80"
                   >
                     <Paperclip size={10} />
-                    <span>{att.fileName}</span>
-                    <span className="opacity-60">
-                      ({(att.size / 1024).toFixed(1)} KB)
-                    </span>
+                    <span>{typeof att === "string" ? att : (att as { fileName?: string }).fileName ?? "attachment"}</span>
                   </div>
                 ))}
               </div>
@@ -60,7 +58,7 @@ export function ChatMessageList() {
                 msg.role === "user" ? "text-brand-200" : "text-gray-500"
               }`}
             >
-              {formatTime(msg.createdAt)}
+              {formatTime(msg.created_at)}
             </p>
           </div>
 

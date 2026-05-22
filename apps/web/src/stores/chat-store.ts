@@ -1,270 +1,280 @@
-import { create } from "zustand";
-import type { AgentEvent } from "@slideagent/schemas/agent-events";
-import type { Slide } from "@slideagent/schemas/slide";
-import { api } from "@/lib/api";
+import { create } from 'zustand';
+import { apiGet, apiPost, apiDelete, apiPut } from '@/lib/api';
+import { SSEClient } from '@/lib/sse';
+import type { AgentEvent } from '@slideagent/schemas';
 
-export interface Attachment {
-  fileName: string;
-  mimeType: string;
-  size: number;
-  url: string;
-}
-
-export interface Message {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  attachments: Attachment[];
-  createdAt: string;
-}
-
-export interface SessionListItem {
+export interface ChatSession {
   id: string;
   title: string;
-  templateBadge?: string;
-  slideCount: number;
-  updatedAt: string;
-  createdAt: string;
+  created_at: string;
+  updated_at: string;
+  template_id?: string | null;
+  slide_count: number;
 }
 
-export interface TemplateItem {
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+  attachments?: string[];
+}
+
+export interface Template {
   id: string;
   name: string;
+  version: string;
   tags: string[];
-  version: number;
-  isDefault: boolean;
+  // ... other fields from your backend
 }
 
 export interface GeneratedFile {
   id: string;
-  fileType: string;
-  fileName: string;
-  fileSizeBytes: number;
-  downloadUrl: string;
-  createdAt: string;
+  filename: string;
+  file_url: string;
+  created_at: string;
 }
 
-export interface ChatState {
-  // Sessions
-  sessions: SessionListItem[];
+interface ChatState {
+  sessions: ChatSession[];
   activeSessionId: string | null;
-
-  // Session detail (loaded when active)
-  activeSession: {
-    id: string;
-    title: string;
-    templateBadge?: string;
-    slideCount: number;
-    messages: Message[];
-    slides: Slide[];
-    createdAt: string;
-    updatedAt: string;
-  } | null;
-
-  // SSE events for active session
+  activeMessages: ChatMessage[];
   activeEvents: AgentEvent[];
-
-  // Templates
-  templates: TemplateItem[];
-
-  // Generated files for active session
-  generatedFiles: GeneratedFile[];
-
-  // Loading states
-  isLoadingSession: boolean;
-  isSendingMessage: boolean;
+  activeFiles: GeneratedFile[];
+  templates: Template[];
+  isLoading: boolean;
+  isSending: boolean;
+  sseClient: SSEClient | null;
 
   // Actions
-  setActiveSession: (id: string | null) => void;
-  addSession: (session: SessionListItem) => void;
-  deleteSession: (id: string) => void;
-  loadSessionDetail: (id: string, detail: Record<string, unknown>) => void;
-  addMessage: (sessionId: string, message: Message) => void;
-  addAgentEvent: (sessionId: string, event: AgentEvent) => void;
-  updateSlideCount: (sessionId: string, count: number) => void;
-  setSessionTemplate: (sessionId: string, templateId: string | null) => void;
-  searchSessions: (query: string) => SessionListItem[];
-  createSession: (data: { title?: string; templateId?: string; brief?: string }) => Promise<string>;
-  sendMessage: (sessionId: string, data: { content: string; attachments?: unknown[] }) => Promise<void>;
   fetchSessions: () => Promise<void>;
+  createSession: (templateId?: string) => Promise<string>;
+  deleteSession: (sessionId: string) => Promise<void>;
+  setActiveSession: (sessionId: string) => Promise<void>;
+  sendMessage: (content: string, files?: File[]) => Promise<void>;
+  clearActiveSession: () => void;
+  
+  // New template actions
   fetchTemplates: () => Promise<void>;
+  setSessionTemplate: (sessionId: string, templateId: string | null) => Promise<void>;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
-  activeSession: null,
+  activeMessages: [],
   activeEvents: [],
+  activeFiles: [],
   templates: [],
-  generatedFiles: [],
-  isLoadingSession: false,
-  isSendingMessage: false,
-
-  setActiveSession: (id) => {
-    set({
-      activeSessionId: id,
-      activeEvents: [],
-      activeSession: id ? null : null,
-    });
-
-    if (id) {
-      get().loadSessionDetail(id, {} as Record<string, unknown>);
-      api.getSession(id).then((detail) => {
-        get().loadSessionDetail(id, detail);
-      });
-    }
-  },
-
-  addSession: (session) =>
-    set((state) => ({
-      sessions: [session, ...state.sessions],
-    })),
-
-  deleteSession: async (id) => {
-    try {
-      await api.deleteSession(id);
-    } catch {
-      // optimistically remove anyway
-    }
-    set((state) => ({
-      sessions: state.sessions.filter((s) => s.id !== id),
-      activeSessionId:
-        state.activeSessionId === id ? null : state.activeSessionId,
-      activeSession:
-        state.activeSessionId === id ? null : state.activeSession,
-    }));
-  },
-
-  loadSessionDetail: (id, detail) => {
-    const d = detail as Record<string, unknown>;
-    const messages: Message[] = (d.messages as Message[]) ?? [];
-    const slides: Slide[] = (d.slides as Slide[]) ?? [];
-    const files: GeneratedFile[] = ((d.generatedFiles as GeneratedFile[]) ?? []);
-
-    set({
-      activeSession: {
-        id,
-        title: (d.title as string) ?? "Untitled",
-        templateBadge: d.templateBadge as string | undefined,
-        slideCount: (d.slideCount as number) ?? 0,
-        messages,
-        slides,
-        createdAt: (d.createdAt as string) ?? new Date().toISOString(),
-        updatedAt: (d.updatedAt as string) ?? new Date().toISOString(),
-      },
-      generatedFiles: files,
-    });
-  },
-
-  addMessage: (sessionId, message) =>
-    set((state) => {
-      if (state.activeSession?.id === sessionId) {
-        return {
-          activeSession: {
-            ...state.activeSession,
-            messages: [...state.activeSession.messages, message],
-          },
-        };
-      }
-      return state;
-    }),
-
-  addAgentEvent: (sessionId, event) =>
-    set((state) => {
-      if (state.activeSessionId === sessionId) {
-        return {
-          activeEvents: [...state.activeEvents, event],
-        };
-      }
-      return state;
-    }),
-
-  updateSlideCount: (sessionId, count) =>
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === sessionId ? { ...s, slideCount: count } : s
-      ),
-      activeSession:
-        state.activeSession?.id === sessionId
-          ? { ...state.activeSession, slideCount: count }
-          : state.activeSession,
-    })),
-
-  setSessionTemplate: (sessionId, templateId) => {
-    const templates = get().templates;
-    const tpl = templateId
-      ? templates.find((t) => t.id === templateId)
-      : null;
-
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === sessionId
-          ? { ...s, templateBadge: tpl?.name }
-          : s
-      ),
-      activeSession:
-        state.activeSession?.id === sessionId
-          ? { ...state.activeSession, templateBadge: tpl?.name }
-          : state.activeSession,
-    }));
-  },
-
-  searchSessions: (query) => {
-    const lower = query.toLowerCase();
-    return get().sessions.filter((s) =>
-      s.title.toLowerCase().includes(lower)
-    );
-  },
-
-  createSession: async (data) => {
-    const response = await api.createSession(data);
-    const session: SessionListItem = {
-      id: response.session_id,
-      title: response.title,
-      slideCount: 0,
-      updatedAt: new Date().toISOString(),
-      createdAt: response.created_at,
-    };
-    set((state) => ({
-      sessions: [session, ...state.sessions],
-      activeSessionId: session.id,
-    }));
-    return session.id;
-  },
-
-  sendMessage: async (sessionId, data) => {
-    set({ isSendingMessage: true });
-    try {
-      // Add user message optimistically
-      get().addMessage(sessionId, {
-        id: `temp-${Date.now()}`,
-        role: "user",
-        content: data.content,
-        attachments: (data.attachments as Attachment[]) ?? [],
-        createdAt: new Date().toISOString(),
-      });
-
-      await api.sendMessage(sessionId, data);
-    } finally {
-      set({ isSendingMessage: false });
-    }
-  },
+  isLoading: false,
+  isSending: false,
+  sseClient: null,
 
   fetchSessions: async () => {
+    set({ isLoading: true });
     try {
-      const sessions = await api.listSessions();
-      set({ sessions: sessions as SessionListItem[] });
-    } catch (error) {
-      console.error("Failed to fetch sessions:", error);
+      const sessions = await apiGet<ChatSession[]>('/api/orchestrator/sessions');
+      set({ sessions, isLoading: false });
+    } catch (err) {
+      console.error('Failed to fetch sessions:', err);
+      set({ isLoading: false });
     }
   },
 
+  createSession: async (templateId?: string) => {
+    try {
+      const body: Record<string, unknown> = {};
+      if (templateId) body.template_id = templateId;
+
+      const session = await apiPost<ChatSession>('/api/orchestrator/sessions', body);
+      set((state) => ({
+        sessions: [session, ...state.sessions],
+      }));
+      return session.id;
+    } catch (err) {
+      console.error('Failed to create session:', err);
+      throw err;
+    }
+  },
+
+  deleteSession: async (sessionId: string) => {
+    try {
+      await apiDelete(`/api/orchestrator/sessions/${sessionId}`);
+      set((state) => ({
+        sessions: state.sessions.filter((s) => s.id !== sessionId),
+        activeSessionId:
+          state.activeSessionId === sessionId ? null : state.activeSessionId,
+        activeMessages:
+          state.activeSessionId === sessionId ? [] : state.activeMessages,
+        activeEvents:
+          state.activeSessionId === sessionId ? [] : state.activeEvents,
+        activeFiles:
+          state.activeSessionId === sessionId ? [] : state.activeFiles,
+      }));
+      if (get().activeSessionId === sessionId) {
+        get().sseClient?.disconnect();
+        set({ sseClient: null });
+      }
+    } catch (err) {
+      console.error('Failed to delete session:', err);
+    }
+  },
+
+  setActiveSession: async (sessionId: string) => {
+    const { sseClient } = get();
+    if (sseClient) {
+      sseClient.disconnect();
+    }
+
+    set({
+      activeSessionId: sessionId,
+      activeMessages: [],
+      activeEvents: [],
+      activeFiles: [],
+      isLoading: true,
+    });
+
+    try {
+      const [messages, events, files] = await Promise.all([
+        apiGet<ChatMessage[]>(`/api/orchestrator/sessions/${sessionId}/messages`),
+        apiGet<AgentEvent[]>(`/api/orchestrator/sessions/${sessionId}/events`),
+        apiGet<GeneratedFile[]>(`/api/orchestrator/sessions/${sessionId}/files`),
+      ]);
+
+      set({
+        activeMessages: messages,
+        activeEvents: events,
+        activeFiles: files,
+        isLoading: false,
+      });
+
+      // Open SSE connection for live events
+      const client = new SSEClient(sessionId);
+
+      // Parse incoming string data into AgentEvent object
+      const appendEvent = (eventType: string, e: { id?: string; data: string }) => {
+        try {
+          const parsedData = JSON.parse(e.data) as AgentEvent;
+          set((state) => ({
+            activeEvents: [...state.activeEvents, parsedData],
+          }));
+        } catch (err) {
+          console.error(`Failed to parse ${eventType} event data:`, err);
+        }
+      };
+
+      client.on('thought', (e) => appendEvent('thought', e));
+      client.on('tool_call', (e) => appendEvent('tool_call', e));
+      client.on('tool_result', (e) => appendEvent('tool_result', e));
+      client.on('slide_finalized', (e) => appendEvent('slide_finalized', e));
+      client.on('error', (e) => appendEvent('error', e));
+      client.on('progress', (e) => appendEvent('progress', e));
+      client.on('done', () => {
+        set({ isSending: false });
+      });
+
+      client.connect();
+      set({ sseClient: client });
+    } catch (err) {
+      console.error('Failed to load session:', err);
+      set({ isLoading: false });
+    }
+  },
+
+  sendMessage: async (content: string, files?: File[]) => {
+    const { activeSessionId } = get();
+    if (!activeSessionId) return;
+
+    set({ isSending: true });
+
+    const optimisticMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content,
+      created_at: new Date().toISOString(),
+    };
+    set((state) => ({
+      activeMessages: [...state.activeMessages, optimisticMessage],
+    }));
+
+    try {
+      if (files && files.length > 0) {
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        const formData = new FormData();
+        formData.append('content', content);
+        for (const file of files) {
+          formData.append('files', file);
+        }
+
+        const res = await fetch(`/api/orchestrator/sessions/${activeSessionId}/messages`, {
+          method: 'POST',
+          headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: formData,
+        });
+
+        if (res.status === 401) {
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('auth_user');
+          window.location.href = '/auth/login';
+          return;
+        }
+
+        if (!res.ok) throw new Error(`Failed to send message: ${res.status}`);
+
+        const data = await res.json();
+        if (data.messages) set({ activeMessages: data.messages });
+      } else {
+        const data = await apiPost<{ messages: ChatMessage[] }>(
+          `/api/orchestrator/sessions/${activeSessionId}/messages`,
+          { content }
+        );
+        if (data.messages) set({ activeMessages: data.messages });
+      }
+    } catch (err) {
+      console.error('Failed to send message:', err);
+      set((state) => ({
+        activeMessages: state.activeMessages.filter((m) => m.id !== optimisticMessage.id),
+        isSending: false,
+      }));
+    }
+  },
+
+  clearActiveSession: () => {
+    const { sseClient } = get();
+    sseClient?.disconnect();
+    set({
+      activeSessionId: null,
+      activeMessages: [],
+      activeEvents: [],
+      activeFiles: [],
+      sseClient: null,
+      isSending: false,
+    });
+  },
+
+  // --- Template actions ---
   fetchTemplates: async () => {
     try {
-      const templates = await api.listTemplates();
-      set({ templates: templates as TemplateItem[] });
-    } catch (error) {
-      console.error("Failed to fetch templates:", error);
+      const templates = await apiGet<Template[]>('/api/templates');
+      set({ templates });
+    } catch (err) {
+      console.error('Failed to fetch templates:', err);
+    }
+  },
+
+  setSessionTemplate: async (sessionId: string, templateId: string | null) => {
+    try {
+      const updatedSession = await apiPut<ChatSession>(`/api/orchestrator/sessions/${sessionId}/template`, {
+        template_id: templateId,
+      });
+      set((state) => ({
+        sessions: state.sessions.map((s) => (s.id === sessionId ? updatedSession : s)),
+        // If this is the active session, also update any local reference (though we don't store session detail separately)
+      }));
+      // Optionally refresh the session data (messages, etc.) if template affects content
+    } catch (err) {
+      console.error('Failed to set session template:', err);
+      throw err;
     }
   },
 }));

@@ -1,83 +1,100 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import { api, setToken } from "@/lib/api";
-import { useRouter } from "next/navigation";
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { setToken } from '@/lib/api';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
-    setIsLoading(true);
+    setError('');
+    setLoading(true);
 
     try {
-      const result = await api.login(email, password);
-      setToken(result.token);
-      router.push("/");
+      const res = await fetch('/api/orchestrator/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Login failed');
+      }
+
+      const data = await res.json();
+      setToken(data.token);
+      localStorage.setItem('auth_user', JSON.stringify(data.user));
+
+      router.push('/');
     } catch (err) {
-      setError("Invalid email or password");
+      setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-surface flex items-center justify-center p-4">
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-gray-100">SlideAgent</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Sign in to your account
-          </p>
+    <div className="flex min-h-screen items-center justify-center bg-gray-50">
+      <div className="w-full max-w-md space-y-8 rounded-xl bg-white p-8 shadow">
+        <div>
+          <h2 className="text-center text-3xl font-bold text-gray-900">
+            Sign in to ThinkSlides
+          </h2>
         </div>
-
-        <form
-          onSubmit={handleSubmit}
-          className="bg-surface-50 border border-surface-100 rounded-xl p-6 space-y-4"
-        >
+        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           {error && (
-            <div className="bg-red-950/30 border border-red-500/20 rounded-lg px-4 py-2 text-sm text-red-300">
+            <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">
               {error}
             </div>
           )}
-
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              className="w-full bg-surface border border-surface-100 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-brand-500/50"
-            />
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500"
+              />
+            </div>
           </div>
-
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">
-              Password
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="w-full bg-surface border border-surface-100 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-brand-500/50"
-            />
-          </div>
-
           <button
             type="submit"
-            disabled={isLoading}
-            className="w-full py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+            disabled={loading}
+            className="w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
           >
-            {isLoading ? "Signing in..." : "Sign In"}
+            {loading ? 'Signing in...' : 'Sign in'}
           </button>
+          <p className="text-center text-sm text-gray-600">
+            Don&apos;t have an account?{' '}
+            <a href="/auth/register" className="text-indigo-600 hover:text-indigo-500">
+              Register
+            </a>
+          </p>
         </form>
       </div>
     </div>

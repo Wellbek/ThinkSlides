@@ -5,21 +5,31 @@ import { useChatStore } from "@/stores/chat-store";
 import { ChevronDown, Presentation } from "lucide-react";
 
 export function TemplateSelector() {
-  const { templates, activeSessionId, setSessionTemplate } = useChatStore();
+  const { templates, activeSessionId, setSessionTemplate, fetchTemplates } = useChatStore();
   const activeSession = useChatStore((s) =>
     s.activeSessionId ? s.sessions.find((ses) => ses.id === s.activeSessionId) : null
   );
   const [isOpen, setIsOpen] = useState(false);
 
-  const currentTemplateId = activeSession?.templateBadge
-    ? undefined
-    : undefined; // resolved from session detail
+  // Load templates on mount
+  useEffect(() => {
+    fetchTemplates();
+  }, [fetchTemplates]);
+
+  const currentTemplateId = activeSession?.template_id || null;
 
   const handleSelect = (templateId: string | null) => {
     if (activeSessionId) {
       setSessionTemplate(activeSessionId, templateId);
     }
     setIsOpen(false);
+  };
+
+  // Find template name for display
+  const getTemplateDisplay = () => {
+    if (!currentTemplateId) return "No template (default theme)";
+    const template = templates.find((t) => t.id === currentTemplateId);
+    return template ? template.name : "Unknown template";
   };
 
   return (
@@ -29,15 +39,12 @@ export function TemplateSelector() {
         className="flex items-center gap-2 px-3 py-1.5 bg-surface-50 border border-surface-100 rounded-lg text-xs text-gray-300 hover:border-brand-500/30 transition-colors"
       >
         <Presentation size={14} />
-        <span>
-          {activeSession?.templateBadge || "Select template"}
-        </span>
+        <span>{getTemplateDisplay()}</span>
         <ChevronDown size={12} />
       </button>
 
       {isOpen && (
         <div className="absolute right-0 top-full mt-1 w-64 bg-surface-50 border border-surface-100 rounded-lg shadow-xl z-50 max-h-64 overflow-y-auto">
-          {/* No template option */}
           <button
             onClick={() => handleSelect(null)}
             className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-surface-100 rounded-t-lg"
@@ -45,7 +52,6 @@ export function TemplateSelector() {
             No template (default theme)
           </button>
 
-          {/* Template list */}
           {templates.map((tpl) => (
             <button
               key={tpl.id}
