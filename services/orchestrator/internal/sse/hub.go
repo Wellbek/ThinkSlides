@@ -2,6 +2,10 @@ package sse
 
 import (
 	"sync"
+	"fmt"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
 )
 
 // Event represents a single SSE event to be broadcast.
@@ -75,4 +79,45 @@ func (h *Hub) Broadcast(sessionID string, event Event) {
 func (h *Hub) Run() {
 	// No-op — broadcast is push-based via Broadcast()
 	// Could add periodic cleanup of stale subscribers here
+}
+
+// Handler returns a gin.HandlerFunc that streams SSE events for a session.
+func Handler(hub *Hub, sessionID string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Set SSE headers
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+		c.Writer.Flush()
+
+		// Subscribe to the hub
+		eventChan := hub.Subscribe(sessionID)
+		defer hub.Unsubscribe(sessionID, eventChan)
+
+		// Create a close notifier for client disconnect
+		closeNotify := c.Writer.(http.CloseNotifier).CloseNotify()
+
+		for {
+			select {
+			case event, ok := <-eventChan:
+				if !ok {
+					// Channel closed, exit
+					return
+				}
+				// Write SSE event
+				fmt.Fprintf(c.Writer, "event: %s\n", event.Event)
+				fmt.Fprintf(c.Writer, "data: %v\n\n", event.Data) // You may want to JSON encode Data
+				c.Writer.Flush()
+
+			case <-closeNotify:
+				// Client disconnected
+				return
+
+			case <-c.Request.Context().Done():
+				// Request context cancelled
+				return
+			}
+		}
+	}
 }
