@@ -2,15 +2,17 @@
  * API client for communicating with the orchestrator and AI service.
  */
 
+// On client side, use Next.js API routes (proxy)
+// On server side, use the service URLs directly
 const ORCHESTRATOR_URL =
   typeof window !== "undefined"
-    ? "/api/orchestrator"
-    : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+    ? "/api/orchestrator"  // Use Next.js proxy route on client
+    : process.env.NEXT_PUBLIC_API_URL || "http://orchestrator:8080";
 
 const AI_URL =
   typeof window !== "undefined"
-    ? "/api/ai"
-    : process.env.NEXT_PUBLIC_AI_URL || "http://localhost:8000";
+    ? "/api/ai"  // Use Next.js proxy route on client
+    : process.env.NEXT_PUBLIC_AI_URL || "http://ai-service:8000";
 
 async function request(
   baseUrl: string,
@@ -26,13 +28,17 @@ async function request(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${baseUrl}${path}`, {
+  const url = `${baseUrl}${path}`;
+  console.log('API Request:', url, options.method || 'GET');
+
+  const res = await fetch(url, {
     ...options,
     headers,
   });
 
   if (!res.ok) {
     const body = await res.text().catch(() => "Unknown error");
+    console.error('API Error:', res.status, body);
     throw new Error(`API error ${res.status}: ${body}`);
   }
 
@@ -42,30 +48,30 @@ async function request(
 export const api = {
   // ── Auth ──────────────────────────────────────
   login: (email: string, password: string) =>
-    request(ORCHESTRATOR_URL, "/auth/login", {
+    request(ORCHESTRATOR_URL, "/api/auth/login", {  // Added /api prefix
       method: "POST",
       body: JSON.stringify({ email, password }),
     }).then((r) => r.json()),
 
   // ── Sessions ──────────────────────────────────
   listSessions: () =>
-    request(ORCHESTRATOR_URL, "/sessions").then((r) => r.json()),
+    request(ORCHESTRATOR_URL, "/api/sessions").then((r) => r.json()),  // Added /api prefix
 
   getSession: (id: string) =>
-    request(ORCHESTRATOR_URL, `/sessions/${id}`).then((r) => r.json()),
+    request(ORCHESTRATOR_URL, `/api/sessions/${id}`).then((r) => r.json()),  // Added /api prefix
 
   createSession: (data: { title?: string; templateId?: string; brief?: string }) =>
-    request(ORCHESTRATOR_URL, "/sessions", {
+    request(ORCHESTRATOR_URL, "/api/sessions", {  // Added /api prefix
       method: "POST",
       body: JSON.stringify(data),
     }).then((r) => r.json()),
 
   deleteSession: (id: string) =>
-    request(ORCHESTRATOR_URL, `/sessions/${id}`, { method: "DELETE" }),
+    request(ORCHESTRATOR_URL, `/api/sessions/${id}`, { method: "DELETE" }),  // Added /api prefix
 
   // ── Messages ──────────────────────────────────
   sendMessage: (sessionId: string, data: { content: string; attachments?: unknown[] }) =>
-    request(ORCHESTRATOR_URL, `/sessions/${sessionId}/messages`, {
+    request(ORCHESTRATOR_URL, `/api/sessions/${sessionId}/messages`, {  // Added /api prefix
       method: "POST",
       body: JSON.stringify(data),
     }).then((r) => r.json()),
@@ -84,14 +90,15 @@ export const api = {
   // ── SSE Stream ────────────────────────────────
   sessionEvents: (sessionId: string): EventSource => {
     const token = getToken();
-    const url = `${ORCHESTRATOR_URL}/sessions/${sessionId}/events`;
-    const es = new EventSource(url);
-    return es;
+    // Use the proxy URL for EventSource as well - added /api prefix
+    const url = `${ORCHESTRATOR_URL}/api/sessions/${sessionId}/events`;
+    console.log('Creating EventSource:', url);
+    return new EventSource(url);
   },
 
   // ── Generated Files ───────────────────────────
   downloadFile: (fileId: string) =>
-    request(ORCHESTRATOR_URL, `/files/${fileId}`).then((r) => r.blob()),
+    request(ORCHESTRATOR_URL, `/api/files/${fileId}`).then((r) => r.blob()),  // Added /api prefix
 };
 
 function getToken(): string | null {

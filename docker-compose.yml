@@ -62,7 +62,8 @@ services:
     networks:
       - slideagent-network
     depends_on:
-      - orchestrator
+      orchestrator:
+        condition: service_started
 
   # ────────────────────────────────────────────
   # Go Orchestrator
@@ -86,6 +87,7 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    restart: on-failure
 
   # ────────────────────────────────────────────
   # Python AI Service
