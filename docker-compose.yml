@@ -43,8 +43,8 @@ services:
   # ────────────────────────────────────────────
   web:
     build:
-      context: ./apps/web
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/web/Dockerfile
     container_name: slideagent-web
     ports:
       - "${WEB_PORT:-3000}:3000"
