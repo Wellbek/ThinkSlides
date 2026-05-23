@@ -8,7 +8,7 @@ export interface AuthUser {
   id: string;
   email: string;
   displayName: string;
-  organisationId: string;
+  organisationId: string | null; // nullable — user may not have an org yet
   role: string;
 }
 
@@ -26,11 +26,12 @@ export function parseToken(token: string): AuthUser | null {
     if (parts.length !== 3) return null;
 
     const payload = JSON.parse(atob(parts[1]));
+    const orgId = payload.org_id || null;
     return {
       id: payload.user_id || "",
       email: payload.email || "",
       displayName: payload.display_name || "",
-      organisationId: payload.org_id || "",
+      organisationId: orgId === "" ? null : orgId,
       role: payload.role || "",
     };
   } catch {
@@ -46,7 +47,7 @@ export function initAuth(): AuthState {
     return { user: null, isAuthenticated: false };
   }
 
-  const token = localStorage.getItem("slideagent_token");
+  const token = localStorage.getItem("auth_token");
   if (!token) {
     return { user: null, isAuthenticated: false };
   }
@@ -68,4 +69,11 @@ export function logout(): void {
   if (typeof window !== "undefined") {
     window.location.href = "/auth/login";
   }
+}
+
+/**
+ * Check if dev mode is enabled (via NEXT_PUBLIC_DEV_MODE env var).
+ */
+export function isDevMode(): boolean {
+  return process.env.NEXT_PUBLIC_DEV_MODE === "true";
 }

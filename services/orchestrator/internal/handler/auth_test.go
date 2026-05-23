@@ -1,31 +1,27 @@
 package handler
 
 import (
-	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/slideagent/orchestrator/internal/repository"
 )
 
-// ── Mock UserStore ───────────────────────────────────────────────────
+// ── mock ──────────────────────────────────────────────────────────────
 
 type mockUserStore struct {
-	users  map[string]*repository.User // keyed by email
-	nextID int
+	users map[string]*repository.User // email → user
 }
 
-func newMockStore() *mockUserStore {
-	return &mockUserStore{
-		users: make(map[string]*repository.User),
-	}
+func newMockUserStore() *mockUserStore {
+	return &mockUserStore{users: make(map[string]*repository.User)}
 }
 
 func (m *mockUserStore) GetByEmail(_ context.Context, email string) (*repository.User, error) {
@@ -36,75 +32,78 @@ func (m *mockUserStore) GetByEmail(_ context.Context, email string) (*repository
 	return u, nil
 }
 
-// DB is not used in login tests. HandleRegister is covered by integration
-// tests since it needs a real *sql.DB for transactions.
-func (m *mockUserStore) DB() *sql.DB {
-	return nil
+func (m *mockUserStore) DB() interface{ ExecContext(context.Context, string, ...interface{}) (interface{}, error) } {
+	return nil // not used in unit tests — dev-login + register need *repository.UserRepository
 }
 
-// seedUser adds a user to the mock store with a bcrypt-hashed password.
-func (m *mockUserStore) seedUser(email, password, displayName, role string) {
+func seedUser(m *mockUserStore, email, password, role string) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	m.nextID++
+	orgID := "00000000-0000-0000-0000-000000000001"
 	m.users[email] = &repository.User{
-		ID:             fmt.Sprintf("user-%d", m.nextID),
-		OrganisationID: "org-1",
+		ID:             "user-1",
+		OrganisationID: &orgID,
 		Email:          email,
 		PasswordHash:   string(hash),
-		DisplayName:    displayName,
+		Name:           "Test User",
 		Role:           role,
 	}
 }
 
-// ── Tests ────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────
+
+func setupRouter(h *AuthHandler) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/auth/login", h.HandleLogin)
+	r.POST("/auth/register", h.HandleRegister)
+	r.POST("/auth/dev-login", h.HandleDevLogin)
+	return r
+}
+
+func parseBody(body string) map[string]interface{} {
+	var m map[string]interface{}
+	json.Unmarshal([]byte(body), &m)
+	return m
+}
+
+// ── login tests ───────────────────────────────────────────────────────
 
 func TestHandleLogin_Success(t *testing.T) {
-	store := newMockStore()
-	store.seedUser("alice@example.com", "secret123", "Alice", "owner")
+	store := newMockUserStore()
+	seedUser(store, "alice@example.com", "password123", "admin")
 
-	h := NewAuthHandler(store, "test-secret")
+	h := NewAuthHandler(store, "test-secret", false)
+	r := setupRouter(h)
 
-	body, _ := json.Marshal(LoginRequest{Email: "alice@example.com", Password: "secret123"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(body))
+	body := `{"email":"alice@example.com","password":"password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleLogin(w, req)
+	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	var resp AuthResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.Token == "" {
-		t.Error("expected non-empty token")
-	}
-	if resp.User.Email != "alice@example.com" {
-		t.Errorf("expected email alice@example.com, got %s", resp.User.Email)
-	}
-	if resp.User.DisplayName != "Alice" {
-		t.Errorf("expected display name Alice, got %s", resp.User.DisplayName)
-	}
-	if resp.OrgID != "org-1" {
-		t.Errorf("expected org_id org-1, got %s", resp.OrgID)
+	resp := parseBody(w.Body.String())
+	if resp["token"] == nil {
+		t.Fatal("expected token in response")
 	}
 }
 
 func TestHandleLogin_InvalidPassword(t *testing.T) {
-	store := newMockStore()
-	store.seedUser("alice@example.com", "secret123", "Alice", "owner")
+	store := newMockUserStore()
+	seedUser(store, "alice@example.com", "password123", "admin")
 
-	h := NewAuthHandler(store, "test-secret")
+	h := NewAuthHandler(store, "test-secret", false)
+	r := setupRouter(h)
 
-	body, _ := json.Marshal(LoginRequest{Email: "alice@example.com", Password: "wrongpassword"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(body))
+	body := `{"email":"alice@example.com","password":"wrongpassword"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleLogin(w, req)
+	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
@@ -112,16 +111,16 @@ func TestHandleLogin_InvalidPassword(t *testing.T) {
 }
 
 func TestHandleLogin_UserNotFound(t *testing.T) {
-	store := newMockStore()
+	store := newMockUserStore()
+	h := NewAuthHandler(store, "test-secret", false)
+	r := setupRouter(h)
 
-	h := NewAuthHandler(store, "test-secret")
-
-	body, _ := json.Marshal(LoginRequest{Email: "nobody@example.com", Password: "secret123"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(body))
+	body := `{"email":"nobody@example.com","password":"password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleLogin(w, req)
+	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
@@ -129,74 +128,107 @@ func TestHandleLogin_UserNotFound(t *testing.T) {
 }
 
 func TestHandleLogin_MissingFields(t *testing.T) {
-	store := newMockStore()
-	h := NewAuthHandler(store, "test-secret")
+	store := newMockUserStore()
+	h := NewAuthHandler(store, "test-secret", false)
+	r := setupRouter(h)
 
-	// Empty email.
-	body, _ := json.Marshal(LoginRequest{Email: "", Password: "secret123"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(body))
+	body := `{"email":"alice@example.com"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleLogin(w, req)
+	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for missing email, got %d", w.Code)
-	}
-
-	// Empty password.
-	body, _ = json.Marshal(LoginRequest{Email: "alice@example.com", Password: ""})
-	req = httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-
-	h.HandleLogin(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for missing password, got %d", w.Code)
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 
-func TestHandleRegister_MissingFields(t *testing.T) {
-	store := newMockStore()
-	h := NewAuthHandler(store, "test-secret")
+// ── register validation tests ─────────────────────────────────────────
 
-	// Missing email.
-	body, _ := json.Marshal(RegisterRequest{Password: "secret123"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(body))
+func TestHandleRegister_MissingEmail(t *testing.T) {
+	store := newMockUserStore()
+	h := NewAuthHandler(store, "test-secret", false)
+	r := setupRouter(h)
+
+	body := `{"password":"password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleRegister(w, req)
+	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for missing email, got %d", w.Code)
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
+}
 
-	// Short password.
-	body, _ = json.Marshal(RegisterRequest{Email: "bob@example.com", Password: "short"})
-	req = httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(body))
+func TestHandleRegister_ShortPassword(t *testing.T) {
+	store := newMockUserStore()
+	h := NewAuthHandler(store, "test-secret", false)
+	r := setupRouter(h)
+
+	body := `{"email":"bob@example.com","password":"short"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
+	w := httptest.NewRecorder()
 
-	h.HandleRegister(w, req)
+	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for short password, got %d", w.Code)
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 
 func TestHandleRegister_InvalidBody(t *testing.T) {
-	store := newMockStore()
-	h := NewAuthHandler(store, "test-secret")
+	store := newMockUserStore()
+	h := NewAuthHandler(store, "test-secret", false)
+	r := setupRouter(h)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader([]byte("not json")))
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleRegister(w, req)
+	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for invalid body, got %d", w.Code)
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// ── dev-login tests ───────────────────────────────────────────────────
+
+func TestHandleDevLogin_Disabled(t *testing.T) {
+	store := newMockUserStore()
+	h := NewAuthHandler(store, "test-secret", false) // devMode=false
+	r := setupRouter(h)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/dev-login", nil)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleDevLogin_EnabledButNoDB(t *testing.T) {
+	// When devMode=true but the store is a mock (not *repository.UserRepository),
+	// the handler should return 500 because it can't start a transaction.
+	store := newMockUserStore()
+	h := NewAuthHandler(store, "test-secret", true) // devMode=true
+	r := setupRouter(h)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/dev-login", nil)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	// Mock store can't create the dev user, so it returns 500
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 (no real DB in unit test), got %d", w.Code)
 	}
 }

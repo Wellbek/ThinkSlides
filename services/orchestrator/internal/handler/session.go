@@ -12,17 +12,17 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/slideagent/orchestrator/internal/client"   // new import
+	"github.com/slideagent/orchestrator/internal/client"
 	"github.com/slideagent/orchestrator/internal/queue"
 	"github.com/slideagent/orchestrator/internal/sse"
 )
 
 type SessionHandler struct {
-	queue     *queue.RedisQueue
-	hub       *sse.Hub
-	aiClient  *client.AIServiceClient   // changed type
-	dbURL     string
-	pool      *pgxpool.Pool
+	queue    *queue.RedisQueue
+	hub      *sse.Hub
+	aiClient *client.AIServiceClient
+	dbURL    string
+	pool     *pgxpool.Pool
 }
 
 func NewSessionHandler(q *queue.RedisQueue, hub *sse.Hub, aiClient *client.AIServiceClient, dbURL string) *SessionHandler {
@@ -86,6 +86,7 @@ func (h *SessionHandler) ListSessions(c *gin.Context) {
 }
 
 // CreateSession creates a new chat session.
+// Users without an organisation must create or join one first.
 func (h *SessionHandler) CreateSession(c *gin.Context) {
 	var req struct {
 		Title      *string `json:"title"`
@@ -102,6 +103,14 @@ func (h *SessionHandler) CreateSession(c *gin.Context) {
 
 	if h.pool == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	// Users without an org must create or join one first.
+	if orgID == "" {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "You must belong to an organisation to create sessions. Create or join one in Settings.",
+		})
 		return
 	}
 
@@ -141,7 +150,6 @@ func (h *SessionHandler) GetSession(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	// Get session
 	var title string
 	var slideCount int
 	var createdAt, updatedAt time.Time
@@ -219,14 +227,14 @@ func (h *SessionHandler) GetSession(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"id":              sessionID,
-		"title":           title,
-		"slideCount":      slideCount,
-		"messages":        messages,
-		"events":          events,
-		"generatedFiles":  []interface{}{},
-		"createdAt":       createdAt.Format(time.RFC3339),
-		"updatedAt":       updatedAt.Format(time.RFC3339),
+		"id":             sessionID,
+		"title":          title,
+		"slideCount":     slideCount,
+		"messages":       messages,
+		"events":         events,
+		"generatedFiles": []interface{}{},
+		"createdAt":      createdAt.Format(time.RFC3339),
+		"updatedAt":      updatedAt.Format(time.RFC3339),
 	})
 }
 
@@ -261,7 +269,6 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	// Enqueue job to Redis
 	jobID := uuid.New().String()
 	job := queue.Job{
 		ID:        jobID,
@@ -289,17 +296,15 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 func (h *SessionHandler) StreamEvents(c *gin.Context) {
 	sessionID := c.Param("id")
 
-	// Set SSE headers
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	// Subscribe to events for this session
 	eventChan := h.hub.Subscribe(sessionID)
 	defer h.hub.Unsubscribe(sessionID, eventChan)
 
-	// Stream existing events from database first (if reconnecting)
+	// Replay historical events from database
 	if h.pool != nil {
 		ctx := c.Request.Context()
 		rows, err := h.pool.Query(ctx,

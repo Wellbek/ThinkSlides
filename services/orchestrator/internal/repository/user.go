@@ -9,10 +9,16 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// Sentinel errors.
+var (
+	ErrNotFound       = errors.New("user not found")
+	ErrDuplicateEmail = errors.New("email already registered")
+)
+
 // User represents a row in the users table.
 type User struct {
 	ID             string
-	OrganisationID string
+	OrganisationID *string // nullable: user may not belong to an org yet
 	Email          string
 	PasswordHash   string
 	DisplayName    string
@@ -26,32 +32,23 @@ type UserRepository struct {
 	db *sql.DB
 }
 
-// NewUserRepository creates a new UserRepository backed by the given db.
+// NewUserRepository creates a new UserRepository backed by the given *sql.DB.
 func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
-// DB returns the underlying database connection, used for transactions.
+// DB returns the underlying *sql.DB, used for transactions in handlers.
 func (r *UserRepository) DB() *sql.DB {
 	return r.db
 }
 
-// Create inserts a new user into the database. Returns an error if the email
-// already exists within the same organisation (unique constraint violation).
-func (r *UserRepository) Create(ctx context.Context, user *User) error {
-	query := `
-		INSERT INTO users (id, organisation_id, email, password_hash, display_name, role, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`
-	_, err := r.db.ExecContext(ctx, query,
-		user.ID,
-		user.OrganisationID,
-		user.Email,
-		user.PasswordHash,
-		user.DisplayName,
-		user.Role,
-		user.CreatedAt,
-		user.UpdatedAt,
+// Create inserts a new user into the database.
+// Returns ErrDuplicateEmail if the email is already taken.
+func (r *UserRepository) Create(ctx context.Context, u *User) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO users (id, organisation_id, email, password_hash, display_name, role, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		u.ID, u.OrganisationID, u.Email, u.PasswordHash, u.DisplayName, u.Role, u.CreatedAt, u.UpdatedAt,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -63,37 +60,24 @@ func (r *UserRepository) Create(ctx context.Context, user *User) error {
 	return nil
 }
 
-// GetByEmail fetches a user by email address. Returns ErrNotFound if no row matches.
+// GetByEmail fetches a user by email address.
+// Returns ErrNotFound if no row matches.
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*User, error) {
-	query := `
-		SELECT id, organisation_id, email, password_hash, display_name, role, created_at, updated_at
-		FROM users
-		WHERE email = $1
-	`
-	row := r.db.QueryRowContext(ctx, query, email)
+	u := &User{}
+	var orgID *string
 
-	var u User
-	err := row.Scan(
-		&u.ID,
-		&u.OrganisationID,
-		&u.Email,
-		&u.PasswordHash,
-		&u.DisplayName,
-		&u.Role,
-		&u.CreatedAt,
-		&u.UpdatedAt,
-	)
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, organisation_id, email, password_hash, display_name, role, created_at, updated_at
+		 FROM users WHERE email = $1`,
+		email,
+	).Scan(&u.ID, &orgID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Role, &u.CreatedAt, &u.UpdatedAt)
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-	return &u, nil
+	u.OrganisationID = orgID
+	return u, nil
 }
-
-// Sentinel errors.
-var (
-	ErrNotFound       = errors.New("user not found")
-	ErrDuplicateEmail = errors.New("email already exists within organisation")
-)
