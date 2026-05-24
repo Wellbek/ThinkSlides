@@ -13,4 +13,11 @@ ALTER TABLE users ALTER COLUMN organisation_id DROP NOT NULL;
 
 -- Replace per-org email uniqueness with global email uniqueness
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_organisation_id_email_key;
-ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'users_email_key'
+  ) THEN
+    ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email);
+  END IF;
+END$$;
