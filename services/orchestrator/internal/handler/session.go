@@ -74,11 +74,11 @@ func (h *SessionHandler) ListSessions(c *gin.Context) {
 			continue
 		}
 		sessions = append(sessions, gin.H{
-			"id":         id,
-			"title":      title,
-			"slideCount": slideCount,
-			"updatedAt":  updatedAt.Format(time.RFC3339),
-			"createdAt":  createdAt.Format(time.RFC3339),
+			"id":          id,
+			"title":       title,
+			"slide_count": slideCount,
+			"updated_at":  updatedAt.Format(time.RFC3339),
+			"created_at":  createdAt.Format(time.RFC3339),
 		})
 	}
 
@@ -134,7 +134,7 @@ func (h *SessionHandler) CreateSession(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"session_id": sessionID,
+		"id":         sessionID,
 		"title":      title,
 		"created_at": time.Now().Format(time.RFC3339),
 	})
@@ -187,7 +187,7 @@ func (h *SessionHandler) GetSession(c *gin.Context) {
 				"role":        role,
 				"content":     content,
 				"attachments": atts,
-				"createdAt":   msgCreatedAt.Format(time.RFC3339),
+				"created_at":  msgCreatedAt.Format(time.RFC3339),
 			})
 		}
 	}
@@ -213,28 +213,28 @@ func (h *SessionHandler) GetSession(c *gin.Context) {
 			var contentData interface{}
 			json.Unmarshal(content, &contentData)
 			evt := gin.H{
-				"id":        id,
-				"eventType": eventType,
-				"phase":     phase,
-				"content":   contentData,
-				"createdAt": evtCreatedAt.Format(time.RFC3339),
+				"id":         id,
+				"event_type": eventType,
+				"phase":      phase,
+				"content":    contentData,
+				"created_at": evtCreatedAt.Format(time.RFC3339),
 			}
 			if toolName != nil {
-				evt["toolName"] = *toolName
+				evt["tool_name"] = *toolName
 			}
 			events = append(events, evt)
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"id":             sessionID,
-		"title":          title,
-		"slideCount":     slideCount,
-		"messages":       messages,
-		"events":         events,
-		"generatedFiles": []interface{}{},
-		"createdAt":      createdAt.Format(time.RFC3339),
-		"updatedAt":      updatedAt.Format(time.RFC3339),
+		"id":              sessionID,
+		"title":           title,
+		"slide_count":     slideCount,
+		"messages":        messages,
+		"events":          events,
+		"generated_files": []interface{}{},
+		"created_at":      createdAt.Format(time.RFC3339),
+		"updated_at":      updatedAt.Format(time.RFC3339),
 	})
 }
 
