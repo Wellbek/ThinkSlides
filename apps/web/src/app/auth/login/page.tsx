@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
   const { login, register, devLogin } = useAuth();
@@ -11,19 +12,19 @@ export default function LoginPage() {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
       if (isRegister) {
         await register(email, password, displayName || undefined);
       } else {
         await login(email, password);
       }
-      // On success the auth hook updates state and the app redirects
+      router.push('/');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
@@ -36,6 +37,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await devLogin();
+      router.push('/');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Dev login failed');
     } finally {
