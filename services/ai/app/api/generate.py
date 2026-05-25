@@ -67,7 +67,7 @@ async def send_message(
     # In production this goes through the orchestrator Redis queue.
     # For direct AI-service invocation, run agent loop in background.
     import asyncio
-    asyncio.create_task(_run_agent(db, sid, user_msg.id, assistant_msg.id))
+    asyncio.create_task(_run_agent(sid, user_msg.id, assistant_msg.id))
 
     return {
         "message_id": str(assistant_msg.id),
@@ -76,46 +76,45 @@ async def send_message(
 
 
 async def _run_agent(
-    db: AsyncSession,
     session_id: uuid.UUID,
     user_message_id: uuid.UUID,
     assistant_message_id: uuid.UUID,
 ):
-    """Run the agent loop and persist events."""
-    try:
-        loop = AgentLoop(db=db)
-        async for event in loop.run(session_id=session_id):
-            # Persist each agent event
-            agent_event = AgentEvent(
+    from app.db.session import async_session  # import your session factory
+    
+    async with async_session() as db:
+        try:
+            loop = AgentLoop(db=db)
+            async for event in loop.run(session_id=session_id):
+                agent_event = AgentEvent(
+                    session_id=session_id,
+                    message_id=assistant_message_id,
+                    event_type=event.get("type", "unknown"),
+                    phase=event.get("phase"),
+                    content=event.get("content", {}),
+                    tool_name=event.get("toolName"),
+                    tool_args=event.get("toolArgs"),
+                    tool_result=event.get("toolResult"),
+                    duration_ms=event.get("durationMs"),
+                    token_count=event.get("tokenCount"),
+                )
+                db.add(agent_event)
+                await db.commit()
+
+                logger.info(
+                    "agent_event",
+                    event_type=event.get("type"),
+                    phase=event.get("phase"),
+                    session_id=str(session_id),
+                )
+        except Exception as e:
+            logger.error("agent_loop_failed", session_id=str(session_id), error=str(e))
+            error_event = AgentEvent(
                 session_id=session_id,
                 message_id=assistant_message_id,
-                event_type=event.get("type", "unknown"),
-                phase=event.get("phase"),
-                content=event.get("content", {}),
-                tool_name=event.get("toolName"),
-                tool_args=event.get("toolArgs"),
-                tool_result=event.get("toolResult"),
-                duration_ms=event.get("durationMs"),
-                token_count=event.get("tokenCount"),
+                event_type="error",
+                phase="content_analysis",
+                content={"message": str(e)},
             )
-            db.add(agent_event)
+            db.add(error_event)
             await db.commit()
-
-            logger.info(
-                "agent_event",
-                event_type=event.get("type"),
-                phase=event.get("phase"),
-                session_id=str(session_id),
-            )
-    except Exception as e:
-        logger.error("agent_loop_failed", session_id=str(session_id), error=str(e))
-        # Persist error event
-        error_event = AgentEvent(
-            session_id=session_id,
-            message_id=assistant_message_id,
-            event_type="error",
-            phase="content_analysis",
-            content={"message": str(e)},
-        )
-        db.add(error_event)
-        await db.commit()
