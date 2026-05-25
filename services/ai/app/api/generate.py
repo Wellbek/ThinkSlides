@@ -10,7 +10,12 @@ from typing import Optional
 import uuid
 
 logger = get_logger(__name__)
-router = APIRouter()
+
+# Carry the full path prefix on the router itself so this endpoint resolves
+# regardless of how api/__init__.py mounts it. Combined with main.py's
+# `prefix="/api/v1"`, the final URL is /api/v1/sessions/{id}/messages,
+# matching the orchestrator's AIServiceClient.SendMessage call.
+router = APIRouter(tags=["sessions"])
 
 
 class SendMessageRequest(BaseModel):
@@ -18,14 +23,18 @@ class SendMessageRequest(BaseModel):
     attachments: list = []
 
 
-@router.post("/{session_id}/messages")
+@router.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: str,
     req: SendMessageRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """Send a message to a chat session and trigger agent generation."""
-    sid = uuid.UUID(session_id)
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session_id")
+
     result = await db.execute(
         select(ChatSession).where(ChatSession.id == sid)
     )

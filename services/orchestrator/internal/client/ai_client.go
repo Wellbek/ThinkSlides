@@ -36,7 +36,7 @@ func (c *AIServiceClient) SendMessage(sessionID string, content string, attachme
 		return nil, fmt.Errorf("marshal error: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/sessions/%s/messages", c.baseURL, sessionID)
+	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/messages", c.baseURL, sessionID)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("request error: %w", err)

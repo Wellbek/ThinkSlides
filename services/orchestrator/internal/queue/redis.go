@@ -48,7 +48,9 @@ func (q *RedisQueue) Close() error {
 	return q.client.Close()
 }
 
-// Enqueue adds a job to the queue.
+// Enqueue adds a job to the queue. The status key and queue push are
+// committed in a single pipeline so the worker cannot dequeue the job
+// before its status record exists.
 func (q *RedisQueue) Enqueue(job Job) error {
 	ctx := context.Background()
 	job.Status = "pending"
@@ -59,12 +61,11 @@ func (q *RedisQueue) Enqueue(job Job) error {
 		return fmt.Errorf("marshal job: %w", err)
 	}
 
-	if err := q.client.LPush(ctx, "slideagent:jobs", data).Err(); err != nil {
-		return fmt.Errorf("lpush job: %w", err)
-	}
-
-	if err := q.client.Set(ctx, fmt.Sprintf("slideagent:job:%s", job.ID), data, 24*time.Hour).Err(); err != nil {
-		return fmt.Errorf("store job: %w", err)
+	pipe := q.client.Pipeline()
+	pipe.Set(ctx, fmt.Sprintf("slideagent:job:%s", job.ID), data, 24*time.Hour)
+	pipe.LPush(ctx, "slideagent:jobs", data)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("enqueue pipeline: %w", err)
 	}
 
 	return nil
@@ -111,7 +112,9 @@ func (q *RedisQueue) GetJob(jobID string) (*Job, error) {
 	return &job, nil
 }
 
-// UpdateJobStatus updates the status of a job.
+// UpdateJobStatus updates the status of a job. If the status record is
+// missing (e.g. the 24h TTL has expired) the update is treated as a no-op
+// rather than failing the job — the queue's job lifecycle is best-effort.
 func (q *RedisQueue) UpdateJobStatus(jobID string, status string) error {
 	ctx := context.Background()
 	job, err := q.GetJob(jobID)
@@ -119,7 +122,8 @@ func (q *RedisQueue) UpdateJobStatus(jobID string, status string) error {
 		return err
 	}
 	if job == nil {
-		return fmt.Errorf("job not found: %s", jobID)
+		// Status record gone; nothing to update. Don't fail the job.
+		return nil
 	}
 
 	job.Status = status
