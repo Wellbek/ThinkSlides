@@ -238,6 +238,171 @@ func (h *SessionHandler) GetSession(c *gin.Context) {
 	})
 }
 
+// GetSessionMessages returns just the messages for a session.
+func (h *SessionHandler) GetSessionMessages(c *gin.Context) {
+	sessionID := c.Param("id")
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Verify session exists (implicit org check via auth middleware scoping)
+	var exists int
+	err := h.pool.QueryRow(ctx,
+		`SELECT 1 FROM chat_sessions WHERE id = $1`, sessionID,
+	).Scan(&exists)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Session not found"})
+		return
+	}
+
+	rows, err := h.pool.Query(ctx,
+		`SELECT id, role, content, attachments, created_at
+		 FROM chat_messages
+		 WHERE session_id = $1
+		 ORDER BY created_at`, sessionID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query failed"})
+		return
+	}
+	defer rows.Close()
+
+	messages := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, role, content string
+		var attachments []byte
+		var createdAt time.Time
+		if err := rows.Scan(&id, &role, &content, &attachments, &createdAt); err != nil {
+			continue
+		}
+		var atts interface{}
+		json.Unmarshal(attachments, &atts)
+		messages = append(messages, gin.H{
+			"id":          id,
+			"role":        role,
+			"content":     content,
+			"attachments": atts,
+			"created_at":  createdAt.Format(time.RFC3339),
+		})
+	}
+
+	c.JSON(http.StatusOK, messages)
+}
+
+// GetSessionFiles returns the generated files for a session.
+func (h *SessionHandler) GetSessionFiles(c *gin.Context) {
+	sessionID := c.Param("id")
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Verify session exists
+	var exists int
+	err := h.pool.QueryRow(ctx,
+		`SELECT 1 FROM chat_sessions WHERE id = $1`, sessionID,
+	).Scan(&exists)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Session not found"})
+		return
+	}
+
+	rows, err := h.pool.Query(ctx,
+		`SELECT id, session_id, file_type, file_path, original_filename, file_size_bytes, created_at
+		 FROM generated_files
+		 WHERE session_id = $1
+		 ORDER BY created_at`, sessionID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query failed"})
+		return
+	}
+	defer rows.Close()
+
+	files := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, sessionID, fileType, filePath string
+		var originalFilename *string
+		var fileSizeBytes *int64
+		var createdAt time.Time
+		if err := rows.Scan(&id, &sessionID, &fileType, &filePath, &originalFilename, &fileSizeBytes, &createdAt); err != nil {
+			continue
+		}
+		f := gin.H{
+			"id":         id,
+			"session_id": sessionID,
+			"file_type":  fileType,
+			"file_path":  filePath,
+			"created_at": createdAt.Format(time.RFC3339),
+		}
+		if originalFilename != nil {
+			f["filename"] = *originalFilename
+		}
+		if fileSizeBytes != nil {
+			f["file_size"] = *fileSizeBytes
+		}
+		files = append(files, f)
+	}
+
+	c.JSON(http.StatusOK, files)
+}
+
+// ListTemplates returns all templates for the current user's organisation.
+func (h *SessionHandler) ListTemplates(c *gin.Context) {
+	orgID := c.GetString("org_id")
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	if orgID == "" {
+		c.JSON(http.StatusOK, []interface{}{})
+		return
+	}
+
+	ctx := c.Request.Context()
+	rows, err := h.pool.Query(ctx,
+		`SELECT id, name, COALESCE(description, ''), tags, version, is_default, created_at, updated_at
+		 FROM templates
+		 WHERE organisation_id = $1
+		 ORDER BY created_at DESC`, orgID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query failed"})
+		return
+	}
+	defer rows.Close()
+
+	templates := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, name, description string
+		var tags []string
+		var version int
+		var isDefault bool
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&id, &name, &description, &tags, &version, &isDefault, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		templates = append(templates, gin.H{
+			"id":          id,
+			"name":        name,
+			"description": description,
+			"tags":        tags,
+			"version":     version,
+			"is_default":  isDefault,
+			"created_at":  createdAt.Format(time.RFC3339),
+			"updated_at":  updatedAt.Format(time.RFC3339),
+		})
+	}
+
+	c.JSON(http.StatusOK, templates)
+}
+
 // DeleteSession deletes a chat session.
 func (h *SessionHandler) DeleteSession(c *gin.Context) {
 	sessionID := c.Param("id")

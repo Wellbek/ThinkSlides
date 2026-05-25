@@ -255,7 +255,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // --- Template actions ---
   fetchTemplates: async () => {
     try {
-      const templates = await apiGet<Template[]>('/api/templates');
+      const templates = await apiGet<Template[]>('/api/orchestrator/templates');
       set({ templates });
     } catch (err) {
       console.error('Failed to fetch templates:', err);
