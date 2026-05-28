@@ -8,6 +8,8 @@ from app.observability.logging import get_logger
 from pydantic import BaseModel
 from typing import Optional
 import uuid
+import json
+import redis.asyncio as redis
 
 logger = get_logger(__name__)
 
@@ -16,6 +18,9 @@ logger = get_logger(__name__)
 # `prefix="/api/v1"`, the final URL is /api/v1/sessions/{id}/messages,
 # matching the orchestrator's AIServiceClient.SendMessage call.
 router = APIRouter(tags=["sessions"])
+
+# Redis client (adjust URL as needed)
+redis_client = redis.from_url("redis://redis:6379", decode_responses=True)
 
 
 class SendMessageRequest(BaseModel):
@@ -69,6 +74,7 @@ async def send_message(
     import asyncio
     asyncio.create_task(_run_agent(sid, user_msg.id, assistant_msg.id))
 
+    # Return immediately – the real work happens in the background
     return {
         "message_id": str(assistant_msg.id),
         "session_id": str(sid),
@@ -101,6 +107,12 @@ async def _run_agent(
                 db.add(agent_event)
                 await db.commit()
 
+                # 2. Publish event to Redis for real‑time SSE forwarding
+                event_json = json.dumps(event, default=str)
+                await redis_client.publish(
+                    f"agent:events:{session_id}", event_json
+                )
+
                 logger.info(
                     "agent_event",
                     event_type=event.get("type"),
@@ -109,12 +121,22 @@ async def _run_agent(
                 )
         except Exception as e:
             logger.error("agent_loop_failed", session_id=str(session_id), error=str(e))
-            error_event = AgentEvent(
+            error_event = {
+                "type": "error",
+                "phase": "content_analysis",
+                "message": str(e),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            # Publish error to Redis as well
+            await redis_client.publish(
+                f"agent:events:{session_id}", json.dumps(error_event)
+            )
+            error_event_db = AgentEvent(
                 session_id=session_id,
                 message_id=assistant_message_id,
                 event_type="error",
                 phase="content_analysis",
                 content={"message": str(e)},
             )
-            db.add(error_event)
+            db.add(error_event_db)
             await db.commit()

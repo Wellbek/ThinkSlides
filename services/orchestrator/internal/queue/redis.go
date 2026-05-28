@@ -43,6 +43,11 @@ func NewRedisQueue(redisURL string) (*RedisQueue, error) {
 	return &RedisQueue{client: client}, nil
 }
 
+// GetClient returns the underlying Redis client.
+func (q *RedisQueue) GetClient() *redis.Client {
+    return q.client
+}
+
 // Close closes the Redis connection.
 func (q *RedisQueue) Close() error {
 	return q.client.Close()

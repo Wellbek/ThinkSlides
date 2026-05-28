@@ -169,7 +169,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       client.on('slide_finalized', (e) => appendEvent('slide_finalized', e));
       client.on('error', (e) => appendEvent('error', e));
       client.on('progress', (e) => appendEvent('progress', e));
-      client.on('done', () => {
+      client.on('done', async () => {
+        const { activeSessionId } = get();
+        if (activeSessionId) {
+          try {
+            const messages = await apiGet<ChatMessage[]>(
+              `/api/orchestrator/sessions/${activeSessionId}/messages`
+            );
+            set({ activeMessages: messages });
+          } catch (err) {
+            console.error('Failed to refresh messages after done:', err);
+          }
+        }
         set({ isSending: false });
       });
 
@@ -224,11 +235,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const data = await res.json();
         if (data.messages) set({ activeMessages: data.messages });
       } else {
-        const data = await apiPost<{ messages: ChatMessage[] }>(
-          `/api/orchestrator/sessions/${activeSessionId}/messages`,
-          { content }
-        );
-        if (data.messages) set({ activeMessages: data.messages });
+        await apiPost(`/api/orchestrator/sessions/${activeSessionId}/messages`, { content });
       }
     } catch (err) {
       console.error('Failed to send message:', err);

@@ -20,6 +20,8 @@ from app.config import settings
 import json
 import time
 import uuid
+import asyncio
+import redis.asyncio as redis
 
 logger = get_logger(__name__)
 
@@ -42,6 +44,7 @@ class AgentLoop:
         self.db = db
         self.registry = get_registry()
         self.llm = get_llm_provider()
+        self.redis = None
 
     async def run(
         self,
@@ -51,13 +54,37 @@ class AgentLoop:
         Run the full agent loop for a session.
         Yields typed SSE events as dictionaries.
         """
+        self.session_id = session_id  # Store for broadcasting
+        
+        # Initialize Redis client
+        redis_client = None
+        try:
+            redis_client = await redis.from_url(settings.redis_url, decode_responses=True)
+        except ImportError:
+            logger.warning("redis_not_installed", error="redis package not installed")
+        except Exception as e:
+            logger.warning("redis_init_failed", error=str(e))
+        
+        async def broadcast(event: dict):
+            """Broadcast event to Redis for orchestrator SSE hub."""
+            if redis_client:
+                try:
+                    await redis_client.publish(
+                        f"agent:events:{session_id}",
+                        json.dumps(event)
+                    )
+                except Exception as e:
+                    logger.warning("redis_publish_failed", error=str(e))
+        
         import_timestamp = _iso_now()
 
         # ── Phase 1: Load context ────────────────────
-        yield _event("thought", "content_analysis", {
+        event = _event("thought", "content_analysis", {
             "content": "Loading session context and design system...",
             "timestamp": import_timestamp,
         })
+        yield event
+        await broadcast(event)
 
         context = await self._load_context(session_id)
 
@@ -71,10 +98,12 @@ class AgentLoop:
         tool_schemas = self.registry.get_function_schemas()
 
         for iteration in range(self.MAX_ITERATIONS):
-            yield _event("thought", "content_analysis", {
+            event = _event("thought", "content_analysis", {
                 "content": f"Agent iteration {iteration + 1}",
                 "timestamp": _iso_now(),
             })
+            yield event
+            await broadcast(event)
 
             # Call LLM
             start_time = time.time()
@@ -85,10 +114,12 @@ class AgentLoop:
                 )
             except Exception as e:
                 logger.error("llm_call_failed", error=str(e), iteration=iteration)
-                yield _event("error", "content_analysis", {
+                event = _event("error", "content_analysis", {
                     "message": f"LLM call failed: {str(e)}",
                     "timestamp": _iso_now(),
                 })
+                yield event
+                await broadcast(event)
                 break
 
             duration_ms = int((time.time() - start_time) * 1000)
@@ -99,17 +130,29 @@ class AgentLoop:
 
             # Yield thought event
             if assistant_message.get("content"):
-                yield _event("thought", "content_analysis", {
+                event = _event("thought", "content_analysis", {
                     "content": assistant_message["content"],
                     "timestamp": _iso_now(),
                 })
+                yield event
+                await broadcast(event)
 
             # If no tool calls, agent is done reasoning
             if not tool_calls:
-                yield _event("thought", "complete", {
+                event = _event("thought", "complete", {
                     "content": "Agent completed reasoning.",
                     "timestamp": _iso_now(),
                 })
+                yield event
+                await broadcast(event)
+                
+                # Broadcast final done event
+                done_event = _event("done", "complete", {
+                    "session_id": str(session_id),
+                    "timestamp": _iso_now(),
+                })
+                yield done_event
+                await broadcast(done_event)
                 break
 
             # Add assistant message to conversation
@@ -127,12 +170,14 @@ class AgentLoop:
                     fn_args = {}
 
                 # Yield tool_call event
-                yield _event("tool_call", "content_analysis", {
+                event = _event("tool_call", "content_analysis", {
                     "toolName": fn_name,
                     "toolArgs": fn_args,
                     "callId": call_id,
                     "timestamp": _iso_now(),
                 })
+                yield event
+                await broadcast(event)
 
                 # Execute tool
                 tool_start = time.time()
@@ -149,14 +194,17 @@ class AgentLoop:
                     "timestamp": _iso_now(),
                 })
                 yield result_event
+                await broadcast(result_event)
 
                 # If a slide was finalized, emit slide_finalized
                 if fn_name == "finalize_and_render_pptx" and tool_result.success:
-                    yield _event("slide_finalized", "content_generation", {
+                    slide_event = _event("slide_finalized", "content_generation", {
                         "slideIndex": fn_args.get("slide_index", 0),
                         "slideData": tool_result.data,
                         "timestamp": _iso_now(),
                     })
+                    yield slide_event
+                    await broadcast(slide_event)
 
                 # Feed result back to conversation
                 messages.append({
@@ -173,6 +221,10 @@ class AgentLoop:
                     success=tool_result.success,
                     duration_ms=tool_duration,
                 )
+        
+        # Clean up Redis connection
+        if redis_client:
+            await redis_client.close()
 
     async def _execute_tool(self, name: str, args: dict) -> ToolResult:
         """Execute a registered tool by name."""
