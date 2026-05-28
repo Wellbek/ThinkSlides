@@ -10,6 +10,7 @@ from typing import Optional
 import uuid
 import json
 import redis.asyncio as redis
+import datetime
 
 logger = get_logger(__name__)
 
@@ -86,57 +87,127 @@ async def _run_agent(
     user_message_id: uuid.UUID,
     assistant_message_id: uuid.UUID,
 ):
-    from app.db.session import async_session  # import your session factory
-    
-    async with async_session() as db:
-        try:
-            loop = AgentLoop(db=db)
-            async for event in loop.run(session_id=session_id):
-                agent_event = AgentEvent(
-                    session_id=session_id,
-                    message_id=assistant_message_id,
-                    event_type=event.get("type", "unknown"),
-                    phase=event.get("phase"),
-                    content=event.get("content", {}),
-                    tool_name=event.get("toolName"),
-                    tool_args=event.get("toolArgs"),
-                    tool_result=event.get("toolResult"),
-                    duration_ms=event.get("durationMs"),
-                    token_count=event.get("tokenCount"),
-                )
-                db.add(agent_event)
-                await db.commit()
+    from app.db.session import async_session
+    import datetime
+    import traceback
 
-                # 2. Publish event to Redis for real‑time SSE forwarding
-                event_json = json.dumps(event, default=str)
-                await redis_client.publish(
-                    f"agent:events:{session_id}", event_json
-                )
+    logger.info("_run_agent STARTED for session %s", session_id)
+
+    try:
+        async with async_session() as db:
+            logger.info("_run_agent: got db session for %s", session_id)
+            
+            final_content = ""
+            try:
+                logger.info("_run_agent: creating AgentLoop for %s", session_id)
+                loop = AgentLoop(db=db)
+                
+                logger.info("_run_agent: starting loop.run() for %s", session_id)
+                event_count = 0
+                
+                async for event in loop.run(session_id=session_id):
+                    event_count += 1
+                    logger.info(
+                        "_run_agent: got event #%d type=%s for session %s",
+                        event_count, event.get("type"), session_id
+                    )
+                    
+                    # Persist event
+                    agent_event = AgentEvent(
+                        session_id=session_id,
+                        message_id=assistant_message_id,
+                        event_type=event.get("type", "unknown"),
+                        phase=event.get("phase"),
+                        content=event.get("content", {}),
+                        tool_name=event.get("toolName"),
+                        tool_args=event.get("toolArgs"),
+                        tool_result=event.get("toolResult"),
+                        duration_ms=event.get("durationMs"),
+                        token_count=event.get("tokenCount"),
+                    )
+                    db.add(agent_event)
+                    await db.commit()
+
+                    # Publish to Redis
+                    event_json = json.dumps(event, default=str)
+                    pub_result = await redis_client.publish(
+                        f"agent:events:{session_id}", event_json
+                    )
+                    logger.info(
+                        "_run_agent: published event type=%s to Redis, subscribers=%d",
+                        event.get("type"), pub_result
+                    )
+
+                    # Capture any final content emitted
+                    if event.get("type") == "message_complete":
+                        final_content = event.get("content", "")
 
                 logger.info(
-                    "agent_event",
-                    event_type=event.get("type"),
-                    phase=event.get("phase"),
-                    session_id=str(session_id),
+                    "_run_agent: loop finished, got %d events for session %s",
+                    event_count, session_id
                 )
-        except Exception as e:
-            logger.error("agent_loop_failed", session_id=str(session_id), error=str(e))
-            error_event = {
-                "type": "error",
-                "phase": "content_analysis",
-                "message": str(e),
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-            # Publish error to Redis as well
-            await redis_client.publish(
-                f"agent:events:{session_id}", json.dumps(error_event)
+
+                # FALLBACK: ensure we have text to show
+                if not final_content:
+                    final_content = "Presentation generation completed. Check the preview panel for your slides."
+
+                # Save directly into the assistant placeholder
+                await db.execute(
+                    "UPDATE chat_messages SET content = :content WHERE id = :id",
+                    {"content": final_content, "id": assistant_message_id},
+                )
+                await db.commit()
+                logger.info("_run_agent: saved assistant message for %s", session_id)
+
+                done_event = {
+                    "type": "done",
+                    "message_id": str(assistant_message_id),
+                    "content": final_content,
+                    "timestamp": datetime.datetime.utcnow().isoformat(),
+                }
+                pub_result = await redis_client.publish(
+                    f"agent:events:{session_id}", json.dumps(done_event)
+                )
+                logger.info(
+                    "_run_agent: published DONE event for session %s, subscribers=%d",
+                    session_id, pub_result
+                )
+
+            except Exception as inner_e:
+                logger.error(
+                    "_run_agent: INNER EXCEPTION for session %s: %s\n%s",
+                    session_id, str(inner_e), traceback.format_exc()
+                )
+                raise  # re-raise to be caught by outer handler
+
+    except Exception as e:
+        logger.error(
+            "_run_agent: OUTER EXCEPTION for session %s: %s\n%s",
+            session_id, str(e), traceback.format_exc()
+        )
+        
+        # Try to save fallback and publish done event even on error
+        try:
+            async with async_session() as db:
+                fallback = f"An error occurred: {str(e)}"
+                await db.execute(
+                    "UPDATE chat_messages SET content = :content WHERE id = :id",
+                    {"content": fallback, "id": assistant_message_id},
+                )
+                await db.commit()
+
+                done_event = {
+                    "type": "done",
+                    "message_id": str(assistant_message_id),
+                    "content": fallback,
+                    "error": str(e),
+                    "timestamp": datetime.datetime.utcnow().isoformat(),
+                }
+                await redis_client.publish(
+                    f"agent:events:{session_id}", json.dumps(done_event)
+                )
+                logger.info("_run_agent: published ERROR done event for %s", session_id)
+        except Exception as final_e:
+            logger.error(
+                "_run_agent: CRITICAL - couldn't even save fallback: %s", str(final_e)
             )
-            error_event_db = AgentEvent(
-                session_id=session_id,
-                message_id=assistant_message_id,
-                event_type="error",
-                phase="content_analysis",
-                content={"message": str(e)},
-            )
-            db.add(error_event_db)
-            await db.commit()

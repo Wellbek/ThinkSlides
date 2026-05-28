@@ -3,13 +3,16 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/slideagent/orchestrator/internal/client"
 	"github.com/slideagent/orchestrator/internal/queue"
 	"github.com/slideagent/orchestrator/internal/sse"
-	"github.com/redis/go-redis/v9"
 )
 
 // Processor continuously dequeues jobs and processes them by calling the AI service.
@@ -18,15 +21,17 @@ type Processor struct {
 	hub         *sse.Hub
 	aiClient    *client.AIServiceClient
 	redisClient *redis.Client // needed to listen for job completion
+	dbPool      *pgxpool.Pool // database connection pool for saving assistant messages
 }
 
 // NewProcessor creates a new job processor.
-func NewProcessor(q *queue.RedisQueue, hub *sse.Hub, aiClient *client.AIServiceClient, redisClient *redis.Client) *Processor {
+func NewProcessor(q *queue.RedisQueue, hub *sse.Hub, aiClient *client.AIServiceClient, redisClient *redis.Client, dbPool *pgxpool.Pool) *Processor {
 	return &Processor{
 		queue:       q,
 		hub:         hub,
 		aiClient:    aiClient,
 		redisClient: redisClient,
+		dbPool:      dbPool,
 	}
 }
 
@@ -103,13 +108,18 @@ func (p *Processor) processJobAsync(ctx context.Context, job *queue.Job) {
 	}
 }
 
-// waitForCompletion subscribes to Redis for the session's events and waits for a "done" event.
+// waitForCompletion subscribes to Redis for the session's events, captures the final assistant reply,
+// saves it to the database, and waits for a "done" event.
 func (p *Processor) waitForCompletion(ctx context.Context, sessionID, jobID string, done chan struct{}) {
 	channel := "agent:events:" + sessionID
 	pubsub := p.redisClient.Subscribe(ctx, channel)
 	defer pubsub.Close()
 
 	ch := pubsub.Channel()
+	var assistantContent string
+
+	log.Printf("Job %s waiting for completion", jobID)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -119,12 +129,119 @@ func (p *Processor) waitForCompletion(ctx context.Context, sessionID, jobID stri
 			if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
 				continue
 			}
-			if eventType, ok := event["type"].(string); ok && eventType == "done" {
+
+			// DEBUG: Log all events to see what's coming
+			// log.Printf("DEBUG - Event type: %v, keys: %v", event["type"], getKeys(event))
+
+			eventType, _ := event["type"].(string)
+
+			// Capture from slide_finalized event
+			if eventType == "slide_finalized" {
+				if content, ok := event["content"].(string); ok && content != "" {
+					assistantContent = content
+					// log.Printf("Captured content from slide_finalized: %s", content[:min(100, len(content))])
+				}
+				if result, ok := event["result"].(string); ok && result != "" {
+					assistantContent = result
+				}
+				if presentation, ok := event["presentation"].(string); ok && presentation != "" {
+					assistantContent = presentation
+				}
+			}
+
+			if eventType == "tool_result" {
+				if toolName, ok := event["tool_name"].(string); ok && toolName == "finalize_and_render_pptx" {
+					if result, ok := event["result"].(string); ok && result != "" {
+						assistantContent = result
+						// log.Printf("Captured content from tool_result: %s", result[:min(100, len(result))])
+					}
+				}
+			}
+
+			if eventType == "thought" && assistantContent == "" {
+				if phase, ok := event["phase"].(string); ok && phase == "complete" {
+					if content, ok := event["content"].(string); ok && content != "" {
+						assistantContent = content
+					}
+				}
+			}
+
+			if eventType == "done" {
+				if assistantContent != "" {
+					if err := p.saveAssistantMessage(sessionID, assistantContent); err != nil {
+						// log.Printf("Failed to save assistant message for session %s: %v", sessionID, err)
+					} else {
+						// log.Printf("Saved assistant message for session %s (length: %d)", sessionID, len(assistantContent))
+					}
+				} else {
+					// log.Printf("Warning: done event with no assistant content for session %s", sessionID)
+					// Save a fallback message
+					p.saveAssistantMessage(sessionID, "Presentation generation completed. Check the preview panel for your slides.")
+				}
 				close(done)
 				return
 			}
 		}
 	}
+}
+
+// Helper function for debugging
+func getKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func (p *Processor) saveAssistantMessage(sessionID, content string) error {
+    if p.dbPool == nil {
+        log.Printf("saveAssistantMessage: database pool is nil for session %s", sessionID)
+        return fmt.Errorf("database pool not initialized")
+    }
+    ctx := context.Background()
+
+    result, err := p.dbPool.Exec(ctx,
+        `UPDATE chat_messages 
+         SET content = $1, created_at = NOW()
+         WHERE id = (
+             SELECT id FROM chat_messages 
+             WHERE session_id = $2 
+               AND role = 'assistant' 
+               AND (content = '' OR content IS NULL)
+             ORDER BY created_at DESC 
+             LIMIT 1
+         )`,
+        content, sessionID,
+    )
+    if err != nil {
+        log.Printf("saveAssistantMessage: update failed for session %s: %v", sessionID, err)
+        return fmt.Errorf("update failed: %w", err)
+    }
+
+    if result.RowsAffected() == 0 {
+        // No placeholder found – insert a new message
+        _, err = p.dbPool.Exec(ctx,
+            `INSERT INTO chat_messages (session_id, role, content, created_at)
+             VALUES ($1, 'assistant', $2, NOW())`,
+            sessionID, content,
+        )
+        if err != nil {
+            log.Printf("saveAssistantMessage: insert failed for session %s: %v", sessionID, err)
+            return fmt.Errorf("insert failed: %w", err)
+        }
+        log.Printf("saveAssistantMessage: inserted new assistant message for session %s", sessionID)
+    } else {
+        log.Printf("saveAssistantMessage: updated assistant message for session %s, rows affected: %d", sessionID, result.RowsAffected())
+    }
+    return nil
 }
 
 // processJob now only starts the AI job and does NOT mark it completed.

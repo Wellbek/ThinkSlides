@@ -1,4 +1,5 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '';
+const SSE_BASE = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || API_BASE;
 
 export type SSEEventType =
   | 'thought'
@@ -35,7 +36,7 @@ export class SSEClient {
 
     // EventSource cannot set custom headers, so pass token as query param.
     // The Go middleware checks both Authorization header and ?token= query param.
-    let url = `${API_BASE}/api/orchestrator/sessions/${this.sessionId}/events`;
+    let url = `${SSE_BASE}/api/orchestrator/sessions/${this.sessionId}/events`;
     if (token) {
       url += `?token=${encodeURIComponent(token)}`;
     }

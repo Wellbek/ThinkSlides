@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/slideagent/orchestrator/internal/client"
 	"github.com/slideagent/orchestrator/internal/handler"
@@ -59,6 +60,13 @@ func main() {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
+
+	// Create pgxpool for processor (required for concurrent inserts)
+	dbPool, err := pgxpool.New(context.Background(), dbURL)
+	if err != nil {
+		log.Fatalf("Failed to create connection pool: %v", err)
+	}
+	defer dbPool.Close()
 
 	if err := db.Ping(); err != nil {
 		log.Fatalf("Failed to ping database: %v", err)
@@ -115,15 +123,13 @@ func main() {
 		protected.POST("/sessions/:id/messages", sessionHandler.SendMessage)
 		protected.GET("/sessions/:id/messages", sessionHandler.GetSessionMessages)
 		protected.GET("/sessions/:id/files", sessionHandler.GetSessionFiles)
-		protected.GET("/sessions/:id/events", func(c *gin.Context) {
-			hub.Handler(c.Param("id"))(c)
-		})
+		protected.GET("/sessions/:id/events", hub.Handler())
 		protected.GET("/templates", sessionHandler.ListTemplates)
 		protected.GET("/files/:id", sessionHandler.DownloadFile)
 	}
 
 	// ── Background workers ─────────────────────────────────────────────
-	processor := worker.NewProcessor(redisQueue, hub, aiClient, redisClient)
+	processor := worker.NewProcessor(redisQueue, hub, aiClient, redisClient, dbPool)
 	go processor.Start(context.Background())
 
 	// ── Start ──────────────────────────────────────────────────────────

@@ -25,7 +25,6 @@ export interface Template {
   name: string;
   version: string;
   tags: string[];
-  // ... other fields from your backend
 }
 
 export interface GeneratedFile {
@@ -87,9 +86,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (templateId) body.template_id = templateId;
 
       const session = await apiPost<ChatSession>('/api/orchestrator/sessions', body);
-      set((state) => ({
-        sessions: [session, ...state.sessions],
-      }));
+      set((state) => ({ sessions: [session, ...state.sessions] }));
+
+      // Activate it immediately so SSE starts and messages load
+      await get().setActiveSession(session.id);
+
       return session.id;
     } catch (err) {
       console.error('Failed to create session:', err);
@@ -169,19 +170,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
       client.on('slide_finalized', (e) => appendEvent('slide_finalized', e));
       client.on('error', (e) => appendEvent('error', e));
       client.on('progress', (e) => appendEvent('progress', e));
-      client.on('done', async () => {
-        const { activeSessionId } = get();
-        if (activeSessionId) {
-          try {
-            const messages = await apiGet<ChatMessage[]>(
-              `/api/orchestrator/sessions/${activeSessionId}/messages`
-            );
-            set({ activeMessages: messages });
-          } catch (err) {
-            console.error('Failed to refresh messages after done:', err);
+
+      // Handle the "done" event: update the assistant message directly if content is provided
+      client.on('done', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.content) {
+            set((state) => ({
+              activeMessages: state.activeMessages.map((msg) =>
+                msg.role === 'assistant' && msg.content === ''
+                  ? { ...msg, content: data.content }
+                  : msg
+              ),
+              isSending: false,
+            }));
+          } else {
+            // No content in done event – refresh messages from API
+            const { activeSessionId } = get();
+            if (activeSessionId) {
+              apiGet<ChatMessage[]>(`/api/orchestrator/sessions/${activeSessionId}/messages`)
+                .then((messages) => set({ activeMessages: messages, isSending: false }))
+                .catch(() => set({ isSending: false }));
+            } else {
+              set({ isSending: false });
+            }
+          }
+        } catch (parseErr) {
+          // If parsing fails, fall back to a message refresh
+          const { activeSessionId } = get();
+          if (activeSessionId) {
+            apiGet<ChatMessage[]>(`/api/orchestrator/sessions/${activeSessionId}/messages`)
+              .then((messages) => set({ activeMessages: messages, isSending: false }))
+              .catch(() => set({ isSending: false }));
+          } else {
+            set({ isSending: false });
           }
         }
-        set({ isSending: false });
       });
 
       client.connect();
@@ -198,14 +222,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     set({ isSending: true });
 
-    const optimisticMessage: ChatMessage = {
+    // Optimistic user message
+    const optimisticUser: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
       content,
       created_at: new Date().toISOString(),
     };
+
+    // Optimistic assistant placeholder (empty content)
+    const optimisticAssistant: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: '',
+      created_at: new Date().toISOString(),
+    };
+
     set((state) => ({
-      activeMessages: [...state.activeMessages, optimisticMessage],
+      activeMessages: [...state.activeMessages, optimisticUser, optimisticAssistant],
     }));
 
     try {
@@ -230,17 +264,49 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return;
         }
 
-        if (!res.ok) throw new Error(`Failed to send message: ${res.status}`);
+        if (!res.ok) {
+          throw new Error(`Failed to send message: ${res.status}`);
+        }
 
         const data = await res.json();
-        if (data.messages) set({ activeMessages: data.messages });
+        // CHECK 1: file upload response
+        const serverMessages: ChatMessage[] | undefined = data.messages;
+        if (serverMessages && Array.isArray(serverMessages)) {
+          set((state) => ({
+            activeMessages: [
+              ...state.activeMessages.filter(
+                (m) => m.id !== optimisticUser.id && m.id !== optimisticAssistant.id
+              ),
+              ...serverMessages,   // now safely narrowed to ChatMessage[]
+            ],
+          }));
+        }
       } else {
-        await apiPost(`/api/orchestrator/sessions/${activeSessionId}/messages`, { content });
+        const data = await apiPost<{ messages?: ChatMessage[] }>(
+          `/api/orchestrator/sessions/${activeSessionId}/messages`,
+          { content }
+        );
+        // CHECK 2: regular message response
+        const serverMessages = data?.messages;
+        if (serverMessages && Array.isArray(serverMessages)) {
+          set((state) => ({
+            activeMessages: [
+              ...state.activeMessages.filter(
+                (m) => m.id !== optimisticUser.id && m.id !== optimisticAssistant.id
+              ),
+              ...serverMessages,   // safely narrowed
+            ],
+          }));
+        }
       }
+      // Note: we deliberately do NOT set isSending = false here.
+      // It stays true until the SSE 'done' event arrives.
     } catch (err) {
       console.error('Failed to send message:', err);
       set((state) => ({
-        activeMessages: state.activeMessages.filter((m) => m.id !== optimisticMessage.id),
+        activeMessages: state.activeMessages.filter(
+          (m) => m.id !== optimisticUser.id && m.id !== optimisticAssistant.id
+        ),
         isSending: false,
       }));
     }

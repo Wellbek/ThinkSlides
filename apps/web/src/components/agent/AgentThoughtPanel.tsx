@@ -13,10 +13,18 @@ import { useState } from "react";
 import type { AgentEvent } from "@slideagent/schemas/agent-events";
 
 export function AgentThoughtPanel() {
-  const { activeEvents } = useChatStore();
+  const { activeEvents, isSending } = useChatStore();
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const events = activeEvents ?? [];
+  
+  // Check if the last event indicates completion without relying on the type literal
+  const lastEvent = events.length > 0 ? events[events.length - 1] : null;
+  const isComplete =
+    lastEvent !== null &&
+    (lastEvent.type === "error" || 
+     lastEvent.type === "slide_finalized" ||
+     (lastEvent.type === "thought" && lastEvent.phase === "complete"));
 
   return (
     <div
@@ -48,25 +56,30 @@ export function AgentThoughtPanel() {
       {/* Event Stream */}
       {!isCollapsed && (
         <div className="flex-1 overflow-y-auto px-4 pb-3 space-y-2 max-h-[50vh]">
-          {events.length === 0 && (
+          {events.length === 0 && !isSending && (
             <p className="text-xs text-gray-500 text-center py-4">
               Agent events will appear here...
             </p>
+          )}
+
+          {events.length === 0 && isSending && (
+            <div className="flex items-center gap-2 text-xs text-brand-400 py-4 justify-center">
+              <Loader2 size={12} className="animate-spin" />
+              Waiting for agent...
+            </div>
           )}
 
           {events.map((event, i) => (
             <AgentEventRenderer key={i} event={event} />
           ))}
 
-          {/* Live indicator */}
-          {events.length > 0 &&
-            events[events.length - 1].type !== "error" &&
-            events[events.length - 1].type !== "slide_finalized" && (
-              <div className="flex items-center gap-2 text-xs text-brand-400 py-1">
-                <Loader2 size={12} className="animate-spin" />
-                Agent working...
-              </div>
-            )}
+          {/* Live indicator while agent is still working */}
+          {isSending && events.length > 0 && !isComplete && (
+            <div className="flex items-center gap-2 text-xs text-brand-400 py-1">
+              <Loader2 size={12} className="animate-spin" />
+              Agent working...
+            </div>
+          )}
         </div>
       )}
     </div>

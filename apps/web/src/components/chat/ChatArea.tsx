@@ -11,7 +11,6 @@ export function ChatArea() {
   const sessions = useChatStore((s) => s.sessions);
   const createSession = useChatStore((s) => s.createSession);
 
-  // Derive the active session object from the sessions list
   const activeSession = activeSessionId
     ? sessions.find((s) => s.id === activeSessionId) ?? null
     : null;
