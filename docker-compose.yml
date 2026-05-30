@@ -65,7 +65,7 @@ services:
       - slideagent-network
     depends_on:
       orchestrator:
-        condition: service_started
+        condition: service_healthy
 
   # ────────────────────────────────────────────
   # Go Orchestrator
@@ -122,6 +122,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: on-failure
     volumes:
       - uploads:${UPLOAD_DIR:-/app/uploads}
       - templates:${TEMPLATE_DIR:-/app/templates}

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -20,6 +21,28 @@ import (
 	"github.com/slideagent/orchestrator/internal/sse"
 	"github.com/slideagent/orchestrator/internal/worker"
 )
+
+// retryConnect retries a function with exponential backoff until it succeeds
+// or the maximum number of attempts is reached.
+func retryConnect(name string, maxAttempts int, baseDelay time.Duration, fn func() error) error {
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		lastErr = fn()
+		if lastErr == nil {
+			return nil
+		}
+		if attempt < maxAttempts {
+			delay := baseDelay * time.Duration(1<<(attempt-1)) // exponential backoff
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
+			log.Printf("Failed to connect to %s (attempt %d/%d): %v — retrying in %s...",
+				name, attempt, maxAttempts, lastErr, delay)
+			time.Sleep(delay)
+		}
+	}
+	return fmt.Errorf("failed to connect to %s after %d attempts: %w", name, maxAttempts, lastErr)
+}
 
 func main() {
 	// ── Configuration from environment ─────────────────────────────────
@@ -54,30 +77,45 @@ func main() {
 		log.Println("INFO: DEV_MODE enabled — /auth/dev-login endpoint is active")
 	}
 
-	// ── Database ───────────────────────────────────────────────────────
-	db, err := sql.Open("pgx", dbURL)
-	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+	// ── Database (with retry) ──────────────────────────────────────────
+	var db *sql.DB
+	if err := retryConnect("database", 10, 2*time.Second, func() error {
+		var openErr error
+		db, openErr = sql.Open("pgx", dbURL)
+		if openErr != nil {
+			return openErr
+		}
+		return db.Ping()
+	}); err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer db.Close()
+	log.Println("Connected to database")
 
 	// Create pgxpool for processor (required for concurrent inserts)
-	dbPool, err := pgxpool.New(context.Background(), dbURL)
-	if err != nil {
+	var dbPool *pgxpool.Pool
+	if err := retryConnect("database pool", 10, 2*time.Second, func() error {
+		var poolErr error
+		dbPool, poolErr = pgxpool.New(context.Background(), dbURL)
+		if poolErr != nil {
+			return poolErr
+		}
+		return dbPool.Ping(context.Background())
+	}); err != nil {
 		log.Fatalf("Failed to create connection pool: %v", err)
 	}
 	defer dbPool.Close()
-
-	if err := db.Ping(); err != nil {
-		log.Fatalf("Failed to ping database: %v", err)
-	}
-	log.Println("Connected to database")
+	log.Println("Database pool ready")
 
 	userRepo := repository.NewUserRepository(db)
 
-	// ── Services ───────────────────────────────────────────────────────
-	redisQueue, err := queue.NewRedisQueue(redisURL)
-	if err != nil {
+	// ── Services (with retry) ──────────────────────────────────────────
+	var redisQueue *queue.RedisQueue
+	if err := retryConnect("redis", 10, 2*time.Second, func() error {
+		var queueErr error
+		redisQueue, queueErr = queue.NewRedisQueue(redisURL)
+		return queueErr
+	}); err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
 	log.Println("Connected to Redis")
