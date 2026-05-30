@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from app.db.session import get_db
 from app.db.models import ChatSession, ChatMessage, AgentEvent
 from app.agent.loop import AgentLoop
@@ -153,7 +153,7 @@ async def _run_agent(
 
                 # Save directly into the assistant placeholder
                 await db.execute(
-                    "UPDATE chat_messages SET content = :content WHERE id = :id",
+                    text("UPDATE chat_messages SET content = :content WHERE id = :id"),
                     {"content": final_content, "id": assistant_message_id},
                 )
                 await db.commit()
@@ -191,7 +191,7 @@ async def _run_agent(
             async with async_session() as db:
                 fallback = f"An error occurred: {str(e)}"
                 await db.execute(
-                    "UPDATE chat_messages SET content = :content WHERE id = :id",
+                    text("UPDATE chat_messages SET content = :content WHERE id = :id"),
                     {"content": fallback, "id": assistant_message_id},
                 )
                 await db.commit()
