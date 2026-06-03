@@ -18,12 +18,14 @@ export type AgentEventType =
   | "tool_result"
   | "slide_finalized"
   | "error"
-  | "progress";
+  | "progress"
+  | "done";
 
 export interface ThoughtEvent {
   type: "thought";
   phase: AgentEventPhase;
   content: string;
+  durationMs?: number;   // optional, for timing
   timestamp: string;
 }
 
@@ -43,6 +45,8 @@ export interface ToolResultEvent {
   callId: string;
   result: unknown;
   durationMs: number;
+  success: boolean;      // required – indicates tool execution success
+  error?: string;        // optional error message if success is false
   tokenCount?: number;
   timestamp: string;
 }
@@ -51,7 +55,7 @@ export interface SlideFinalizedEvent {
   type: "slide_finalized";
   phase: "content_generation";
   slideIndex: number;
-  slideData: unknown; // Slide from ./slide
+  slideData: unknown;
   previewUrl?: string;
   timestamp: string;
 }
@@ -73,13 +77,22 @@ export interface ProgressEvent {
   timestamp: string;
 }
 
+export interface DoneEvent {
+  type: "done";
+  phase?: "complete";
+  message_id: string;
+  content: string;
+  timestamp: string;
+}
+
 export type AgentEvent =
   | ThoughtEvent
   | ToolCallEvent
   | ToolResultEvent
   | SlideFinalizedEvent
   | ErrorEvent
-  | ProgressEvent;
+  | ProgressEvent
+  | DoneEvent;
 
 export interface SSEMessage {
   event: AgentEventType;

@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	// "io"
 	"net/http"
 	"time"
+	"log"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -26,23 +27,23 @@ type SessionHandler struct {
 }
 
 func NewSessionHandler(q *queue.RedisQueue, hub *sse.Hub, aiClient *client.AIServiceClient, dbURL string) *SessionHandler {
-	h := &SessionHandler{
-		queue:    q,
-		hub:      hub,
-		aiClient: aiClient,
-		dbURL:    dbURL,
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		pool, err := pgxpool.New(ctx, dbURL)
-		if err == nil {
-			h.pool = pool
-		}
-	}()
-	return h
+    // Create pool synchronously
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+    
+    pool, err := pgxpool.New(ctx, dbURL)
+    if err != nil {
+        log.Printf("Failed to create connection pool: %v", err)
+    }
+    
+    return &SessionHandler{
+        queue:    q,
+        hub:      hub,
+        aiClient: aiClient,
+        dbURL:    dbURL,
+        pool:     pool,
+    }
 }
-
 // ListSessions returns all chat sessions for the current user.
 func (h *SessionHandler) ListSessions(c *gin.Context) {
 	userID := c.GetString("user_id")
@@ -422,8 +423,12 @@ func (h *SessionHandler) DeleteSession(c *gin.Context) {
 }
 
 // SendMessage sends a message and enqueues a generation job.
+// It persists both the user message and an empty assistant placeholder to the
+// database so that the frontend can replace its optimistic messages with the
+// server-assigned IDs immediately.
 func (h *SessionHandler) SendMessage(c *gin.Context) {
 	sessionID := c.Param("id")
+	// userID := c.GetString("user_id")
 
 	var req struct {
 		Content     string                   `json:"content" binding:"required"`
@@ -434,14 +439,48 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Persist user message
+	userMsgID := uuid.New().String()
+	_, err := h.pool.Exec(ctx,
+		`INSERT INTO chat_messages (id, session_id, role, content, attachments, created_at)
+		 VALUES ($1, $2, 'user', $3, $4, NOW())`,
+		userMsgID, sessionID, req.Content, toJSON(req.Attachments),
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save user message"})
+		return
+	}
+
+	// Persist assistant placeholder (empty content, will be filled later)
+	assistantMsgID := uuid.New().String()
+	_, err = h.pool.Exec(ctx,
+		`INSERT INTO chat_messages (id, session_id, role, content, attachments, created_at)
+		 VALUES ($1, $2, 'assistant', '', '[]', NOW())`,
+		assistantMsgID, sessionID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save assistant placeholder"})
+		return
+	}
+
+	// Enqueue generation job
 	jobID := uuid.New().String()
 	job := queue.Job{
 		ID:        jobID,
 		SessionID: sessionID,
 		Type:      "generate",
 		Payload: map[string]interface{}{
-			"content":     req.Content,
-			"attachments": req.Attachments,
+			"content":             req.Content,
+			"attachments":         req.Attachments,
+			"user_message_id":     userMsgID,
+			"assistant_message_id": assistantMsgID,
 		},
 	}
 
@@ -451,15 +490,30 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{
-		"message_id": jobID,
-		"session_id": sessionID,
-		"job_id":     jobID,
+		"messages": []map[string]interface{}{
+			{
+				"id":         userMsgID,
+				"session_id": sessionID,
+				"role":       "user",
+				"content":    req.Content,
+				"created_at": time.Now().Format(time.RFC3339),
+			},
+			{
+				"id":         assistantMsgID,
+				"session_id": sessionID,
+				"role":       "assistant",
+				"content":    "",
+				"created_at": time.Now().Format(time.RFC3339),
+			},
+		},
+		"job_id": jobID,
 	})
 }
 
 // StreamEvents handles SSE connections for real-time agent event streaming.
 func (h *SessionHandler) StreamEvents(c *gin.Context) {
 	sessionID := c.Param("id")
+	log.Printf("SSE: StreamEvents entered session=%s", sessionID)
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -488,6 +542,7 @@ func (h *SessionHandler) StreamEvents(c *gin.Context) {
 				if err := rows.Scan(&eventType, &content, &createdAt); err != nil {
 					continue
 				}
+				log.Printf("SSE: replaying event=%s", eventType)
 				fmt.Fprintf(c.Writer, "event: %s\n", eventType)
 				fmt.Fprintf(c.Writer, "data: %s\n\n", content)
 				c.Writer.(http.Flusher).Flush()
@@ -496,18 +551,49 @@ func (h *SessionHandler) StreamEvents(c *gin.Context) {
 	}
 
 	// Stream live events
-	c.Stream(func(w io.Writer) bool {
+	// c.Stream(func(w io.Writer) bool {
+	// 	select {
+	// 	case event, ok := <-eventChan:
+	// 		if !ok {
+	// 			return false
+	// 		}
+	// 		c.SSEvent(event.Event, event.Data)
+	// 		return true
+	// 	case <-c.Request.Context().Done():
+	// 		return false
+	// 	}
+	// })
+
+	ctx := c.Request.Context()
+
+	for {
 		select {
 		case event, ok := <-eventChan:
 			if !ok {
-				return false
+				return
 			}
-			c.SSEvent(event.Event, event.Data)
-			return true
-		case <-c.Request.Context().Done():
-			return false
+
+			log.Printf("SSE: writing event=%s", event.Event)
+
+			fmt.Fprintf(c.Writer, "event: %s\n", event.Event)
+			fmt.Fprintf(c.Writer, "data: %s\n\n", event.Data)
+
+			c.Writer.Flush()
+
+		case <-ctx.Done():
+			return
 		}
-	})
+	}
+}
+
+// toJSON is a small helper that marshals a value to JSON, returning a empty
+// JSON array on error.
+func toJSON(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }
 
 // DownloadFile serves a generated file for download.

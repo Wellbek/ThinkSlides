@@ -2,7 +2,6 @@
 
 import { ChatHistorySidebar } from "./ChatHistorySidebar";
 import { ChatArea } from "../chat/ChatArea";
-import { AgentThoughtPanel } from "../agent/AgentThoughtPanel";
 import { SlidePreviewSidebar } from "../preview/SlidePreviewSidebar";
 import { useChatStore } from "@/stores/chat-store";
 
@@ -19,10 +18,9 @@ export function AppShell() {
         <ChatArea />
       </main>
 
-      {/* Right: Agent Thought Stream + Slide Preview */}
+      {/* Right: Slide Preview Sidebar (only when a session is active) */}
       {activeSessionId && (
-        <div className="flex flex-col border-l border-surface-100">
-          <AgentThoughtPanel />
+        <div className="flex flex-col border-l border-gray-800 w-[320px]">
           <SlidePreviewSidebar />
         </div>
       )}

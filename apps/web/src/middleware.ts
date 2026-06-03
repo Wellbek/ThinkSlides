@@ -9,6 +9,18 @@ export function middleware(request: NextRequest) {
     const backendUrl = process.env.ORCHESTRATOR_URL || 'http://localhost:8080';
     const newPathname = pathname.replace('/api/orchestrator', '/api');
     const url = new URL(newPathname + request.nextUrl.search, backendUrl);
+
+    // SSE streams require no buffering — use a direct fetch response passthrough
+    // instead of NextResponse.rewrite() which can buffer the response body.
+    if (pathname.endsWith('/events')) {
+      return NextResponse.rewrite(url, {
+        headers: {
+          'X-Accel-Buffering': 'no',
+          'Cache-Control': 'no-cache',
+        },
+      });
+    }
+
     return NextResponse.rewrite(url);
   }
 

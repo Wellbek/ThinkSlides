@@ -161,7 +161,7 @@ func main() {
 		protected.POST("/sessions/:id/messages", sessionHandler.SendMessage)
 		protected.GET("/sessions/:id/messages", sessionHandler.GetSessionMessages)
 		protected.GET("/sessions/:id/files", sessionHandler.GetSessionFiles)
-		protected.GET("/sessions/:id/events", hub.Handler())
+		protected.GET("/sessions/:id/events", sessionHandler.StreamEvents)
 		protected.GET("/templates", sessionHandler.ListTemplates)
 		protected.GET("/files/:id", sessionHandler.DownloadFile)
 	}

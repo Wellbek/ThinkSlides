@@ -20,10 +20,21 @@ from app.config import settings
 import json
 import time
 import uuid
-import asyncio
-import redis.asyncio as redis
 
 logger = get_logger(__name__)
+
+# Map tool names to logical phases
+TOOL_PHASES = {
+    "analyze_document": "content_analysis",
+    "extract_key_data": "content_analysis",
+    "extract_template_design_system": "content_analysis",
+    "plan_presentation_structure": "structure_planning",
+    "select_layout": "layout_selection",
+    "design_slide_content": "content_generation",
+    "validate_slide_json": "validation",
+    "generate_image_prompt": "content_generation",
+    "finalize_and_render_pptx": "rendering",
+}
 
 
 class AgentLoop:
@@ -44,7 +55,6 @@ class AgentLoop:
         self.db = db
         self.registry = get_registry()
         self.llm = get_llm_provider()
-        self.redis = None
 
     async def run(
         self,
@@ -53,38 +63,15 @@ class AgentLoop:
         """
         Run the full agent loop for a session.
         Yields typed SSE events as dictionaries.
+        Does NOT publish to Redis – that is the caller's responsibility.
         """
-        self.session_id = session_id  # Store for broadcasting
-        
-        # Initialize Redis client
-        redis_client = None
-        try:
-            redis_client = await redis.from_url(settings.redis_url, decode_responses=True)
-        except ImportError:
-            logger.warning("redis_not_installed", error="redis package not installed")
-        except Exception as e:
-            logger.warning("redis_init_failed", error=str(e))
-        
-        async def broadcast(event: dict):
-            """Broadcast event to Redis for orchestrator SSE hub."""
-            if redis_client:
-                try:
-                    await redis_client.publish(
-                        f"agent:events:{session_id}",
-                        json.dumps(event)
-                    )
-                except Exception as e:
-                    logger.warning("redis_publish_failed", error=str(e))
-        
         import_timestamp = _iso_now()
 
         # ── Phase 1: Load context ────────────────────
-        event = _event("thought", "content_analysis", {
+        yield _event("thought", "content_analysis", {
             "content": "Loading session context and design system...",
             "timestamp": import_timestamp,
         })
-        yield event
-        await broadcast(event)
 
         context = await self._load_context(session_id)
 
@@ -96,15 +83,9 @@ class AgentLoop:
 
         # ── Phase 3: ReAct loop ──────────────────────
         tool_schemas = self.registry.get_function_schemas()
+        current_phase = "content_analysis"
 
         for iteration in range(self.MAX_ITERATIONS):
-            event = _event("thought", "content_analysis", {
-                "content": f"Agent iteration {iteration + 1}",
-                "timestamp": _iso_now(),
-            })
-            yield event
-            await broadcast(event)
-
             # Call LLM
             start_time = time.time()
             try:
@@ -114,12 +95,10 @@ class AgentLoop:
                 )
             except Exception as e:
                 logger.error("llm_call_failed", error=str(e), iteration=iteration)
-                event = _event("error", "content_analysis", {
+                yield _event("error", "content_analysis", {
                     "message": f"LLM call failed: {str(e)}",
                     "timestamp": _iso_now(),
                 })
-                yield event
-                await broadcast(event)
                 break
 
             duration_ms = int((time.time() - start_time) * 1000)
@@ -128,35 +107,29 @@ class AgentLoop:
             assistant_message = response.get("message", {})
             tool_calls = response.get("tool_calls", [])
 
-            # Yield thought event
+            # Yield thought event if there is content
             if assistant_message.get("content"):
-                event = _event("thought", "content_analysis", {
+                yield _event("thought", current_phase, {
                     "content": assistant_message["content"],
+                    "durationMs": duration_ms,
                     "timestamp": _iso_now(),
                 })
-                yield event
-                await broadcast(event)
 
-            # If no tool calls, agent is done reasoning
+            # If no tool calls, agent is done reasoning (but we do NOT yield "done" here)
             if not tool_calls:
-                event = _event("thought", "complete", {
+                # Final thought (optional)
+                yield _event("thought", "complete", {
                     "content": "Agent completed reasoning.",
                     "timestamp": _iso_now(),
                 })
-                yield event
-                await broadcast(event)
-                
-                # Broadcast final done event
-                done_event = _event("done", "complete", {
-                    "session_id": str(session_id),
-                    "timestamp": _iso_now(),
-                })
-                yield done_event
-                await broadcast(done_event)
+                # No done event – caller will handle final persistence and "done"
                 break
 
-            # Add assistant message to conversation
-            messages.append(assistant_message)
+            # Append assistant message to conversation, INCLUDING tool_calls (critical fix)
+            assistant_msg_for_history = dict(assistant_message)
+            if tool_calls:
+                assistant_msg_for_history["tool_calls"] = tool_calls
+            messages.append(assistant_msg_for_history)
 
             # Execute tool calls (parallel where independent)
             for tool_call in tool_calls:
@@ -164,20 +137,22 @@ class AgentLoop:
                 fn_args_str = tool_call.get("function", {}).get("arguments", "{}")
                 call_id = tool_call.get("id", str(uuid.uuid4()))
 
+                # Update phase based on tool name
+                if fn_name in TOOL_PHASES:
+                    current_phase = TOOL_PHASES[fn_name]
+
                 try:
                     fn_args = json.loads(fn_args_str)
                 except json.JSONDecodeError:
                     fn_args = {}
 
                 # Yield tool_call event
-                event = _event("tool_call", "content_analysis", {
+                yield _event("tool_call", current_phase, {
                     "toolName": fn_name,
                     "toolArgs": fn_args,
                     "callId": call_id,
                     "timestamp": _iso_now(),
                 })
-                yield event
-                await broadcast(event)
 
                 # Execute tool
                 tool_start = time.time()
@@ -185,28 +160,25 @@ class AgentLoop:
                 tool_duration = int((time.time() - tool_start) * 1000)
 
                 # Yield tool_result event
-                result_event = _event("tool_result", "content_analysis", {
+                yield _event("tool_result", current_phase, {
                     "toolName": fn_name,
                     "callId": call_id,
                     "result": tool_result.data if tool_result.success else tool_result.error,
                     "durationMs": tool_duration,
+                    "success": tool_result.success,
                     "tokenCount": tool_result.token_count,
                     "timestamp": _iso_now(),
                 })
-                yield result_event
-                await broadcast(result_event)
 
                 # If a slide was finalized, emit slide_finalized
                 if fn_name == "finalize_and_render_pptx" and tool_result.success:
-                    slide_event = _event("slide_finalized", "content_generation", {
+                    yield _event("slide_finalized", "rendering", {
                         "slideIndex": fn_args.get("slide_index", 0),
                         "slideData": tool_result.data,
                         "timestamp": _iso_now(),
                     })
-                    yield slide_event
-                    await broadcast(slide_event)
 
-                # Feed result back to conversation
+                # Feed result back to conversation (tool role message)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call_id,
@@ -221,10 +193,6 @@ class AgentLoop:
                     success=tool_result.success,
                     duration_ms=tool_duration,
                 )
-        
-        # Clean up Redis connection
-        if redis_client:
-            await redis_client.close()
 
     async def _execute_tool(self, name: str, args: dict) -> ToolResult:
         """Execute a registered tool by name."""

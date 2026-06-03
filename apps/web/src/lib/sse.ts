@@ -1,5 +1,7 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '';
-const SSE_BASE = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || API_BASE;
+// SSE always uses a relative URL so the request is proxied through the Next.js
+// middleware rewrite (/api/orchestrator/* → orchestrator /api/*).  Going direct
+// to the orchestrator caused CORS issues and bypassed the auth-cookie flow.
+const SSE_BASE = 'http://localhost:8080';
 
 export type SSEEventType =
   | 'thought'
@@ -36,7 +38,9 @@ export class SSEClient {
 
     // EventSource cannot set custom headers, so pass token as query param.
     // The Go middleware checks both Authorization header and ?token= query param.
-    let url = `${SSE_BASE}/api/orchestrator/sessions/${this.sessionId}/events`;
+    // The /api/orchestrator prefix is rewritten by Next.js middleware to the
+    // orchestrator's /api/sessions/:id/events endpoint.
+    let url = `${SSE_BASE}/api/sessions/${this.sessionId}/events`;
     if (token) {
       url += `?token=${encodeURIComponent(token)}`;
     }
@@ -44,6 +48,7 @@ export class SSEClient {
     this.eventSource = new EventSource(url);
 
     this.eventSource.onopen = () => {
+      console.log('SSE OPEN');
       this.reconnectAttempts = 0;
     };
 
@@ -68,11 +73,14 @@ export class SSEClient {
 
     for (const eventType of eventTypes) {
       this.eventSource.addEventListener(eventType, (e: MessageEvent) => {
+        console.log('SSE EVENT', eventType, e.data);
+
         const sseEvent: SSEEvent = {
           id: (e as MessageEvent & { lastEventId?: string }).lastEventId,
           event: eventType,
           data: e.data,
         };
+
         this.emit(sseEvent);
       });
     }

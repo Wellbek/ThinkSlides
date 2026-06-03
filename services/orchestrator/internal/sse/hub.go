@@ -7,8 +7,10 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	// "time"
 
 	"github.com/gin-gonic/gin"
+	// "github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -33,6 +35,7 @@ func NewHub(redisClient *redis.Client) *Hub {
 
 // Subscribe registers a channel and starts listening to Redis for that session.
 func (h *Hub) Subscribe(sessionID string) chan Event {
+	log.Printf("SSE: Subscribe called for session %s", sessionID)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 

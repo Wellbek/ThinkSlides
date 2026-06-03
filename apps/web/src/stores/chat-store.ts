@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { apiGet, apiPost, apiDelete, apiPut } from '@/lib/api';
 import { SSEClient } from '@/lib/sse';
-import type { AgentEvent } from '@slideagent/schemas';
+import type { AgentEvent, DoneEvent } from '@slideagent/schemas';
 
 export interface ChatSession {
   id: string;
@@ -18,6 +18,8 @@ export interface ChatMessage {
   content: string;
   created_at: string;
   attachments?: string[];
+  agentEventStream?: AgentEvent[]; // new: inline events for this message
+  isComplete?: boolean;            // true when the assistant has finished generating
 }
 
 export interface Template {
@@ -52,10 +54,20 @@ interface ChatState {
   setActiveSession: (sessionId: string) => Promise<void>;
   sendMessage: (content: string, files?: File[]) => Promise<void>;
   clearActiveSession: () => void;
-  
-  // New template actions
   fetchTemplates: () => Promise<void>;
   setSessionTemplate: (sessionId: string, templateId: string | null) => Promise<void>;
+}
+
+// Helper: find the last assistant message that is still incomplete
+function findActiveAssistantMessage(messages: ChatMessage[]): ChatMessage | null {
+  // Look from the end backwards for an assistant message with isComplete !== true
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === 'assistant' && !msg.isComplete) {
+      return msg;
+    }
+  }
+  return null;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -136,67 +148,115 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
 
     try {
-      const [messages, events, files] = await Promise.all([
+      const [messages, files] = await Promise.all([
         apiGet<ChatMessage[]>(`/api/orchestrator/sessions/${sessionId}/messages`),
-        apiGet<AgentEvent[]>(`/api/orchestrator/sessions/${sessionId}/events`),
         apiGet<GeneratedFile[]>(`/api/orchestrator/sessions/${sessionId}/files`),
       ]);
 
       set({
-        activeMessages: messages,
-        activeEvents: events,
+        activeMessages: messages.map(m => ({ ...m, isComplete: true })), // mark old assistant messages as complete
         activeFiles: files,
         isLoading: false,
       });
 
-      // Open SSE connection for live events
+      // Open SSE connection
       const client = new SSEClient(sessionId);
 
-      // Parse incoming string data into AgentEvent object
-      const appendEvent = (eventType: string, e: { id?: string; data: string }) => {
-        try {
-          const parsedData = JSON.parse(e.data) as AgentEvent;
-          set((state) => ({
-            activeEvents: [...state.activeEvents, parsedData],
-          }));
-        } catch (err) {
-          console.error(`Failed to parse ${eventType} event data:`, err);
-        }
+      // Helper to append event to the current active assistant message
+      const appendEventToActiveMessage = (event: AgentEvent) => {
+        set((state) => {
+          const activeMsg = findActiveAssistantMessage(state.activeMessages);
+          if (!activeMsg) return state;
+
+          const updatedMessages = state.activeMessages.map((msg) =>
+            msg.id === activeMsg.id
+              ? {
+                  ...msg,
+                  agentEventStream: [...(msg.agentEventStream || []), event],
+                }
+              : msg
+          );
+          return { activeMessages: updatedMessages };
+        });
       };
 
-      client.on('thought', (e) => appendEvent('thought', e));
-      client.on('tool_call', (e) => appendEvent('tool_call', e));
-      client.on('tool_result', (e) => appendEvent('tool_result', e));
-      client.on('slide_finalized', (e) => appendEvent('slide_finalized', e));
-      client.on('error', (e) => appendEvent('error', e));
-      client.on('progress', (e) => appendEvent('progress', e));
+      client.on('thought', (e) => {
+        try {
+          const data = JSON.parse(e.data) as AgentEvent;
+          appendEventToActiveMessage(data);
+        } catch (err) {
+          console.error('Failed to parse thought event:', err);
+        }
+      });
 
-      // Handle the "done" event: update the assistant message directly if content is provided
+      client.on('tool_call', (e) => {
+        try {
+          const data = JSON.parse(e.data) as AgentEvent;
+          appendEventToActiveMessage(data);
+        } catch (err) {
+          console.error('Failed to parse tool_call event:', err);
+        }
+      });
+
+      client.on('tool_result', (e) => {
+        try {
+          const data = JSON.parse(e.data) as AgentEvent;
+          appendEventToActiveMessage(data);
+        } catch (err) {
+          console.error('Failed to parse tool_result event:', err);
+        }
+      });
+
+      client.on('slide_finalized', (e) => {
+        try {
+          const data = JSON.parse(e.data) as AgentEvent;
+          appendEventToActiveMessage(data);
+        } catch (err) {
+          console.error('Failed to parse slide_finalized event:', err);
+        }
+      });
+
+      client.on('error', (e) => {
+        try {
+          const data = JSON.parse(e.data) as AgentEvent;
+          appendEventToActiveMessage(data);
+        } catch (err) {
+          console.error('Failed to parse error event:', err);
+        }
+      });
+
+      client.on('progress', (e) => {
+        try {
+          const data = JSON.parse(e.data) as AgentEvent;
+          appendEventToActiveMessage(data);
+        } catch (err) {
+          console.error('Failed to parse progress event:', err);
+        }
+      });
+
+      // Handle the "done" event: finalize the assistant message
       client.on('done', (e) => {
         try {
-          const data = JSON.parse(e.data);
-          if (data.content) {
-            set((state) => ({
-              activeMessages: state.activeMessages.map((msg) =>
-                msg.role === 'assistant' && msg.content === ''
-                  ? { ...msg, content: data.content }
-                  : msg
-              ),
-              isSending: false,
-            }));
-          } else {
-            // No content in done event – refresh messages from API
-            const { activeSessionId } = get();
-            if (activeSessionId) {
-              apiGet<ChatMessage[]>(`/api/orchestrator/sessions/${activeSessionId}/messages`)
-                .then((messages) => set({ activeMessages: messages, isSending: false }))
-                .catch(() => set({ isSending: false }));
-            } else {
-              set({ isSending: false });
-            }
-          }
-        } catch (parseErr) {
-          // If parsing fails, fall back to a message refresh
+          const data = JSON.parse(e.data) as DoneEvent;
+          set((state) => {
+            const activeMsg = findActiveAssistantMessage(state.activeMessages);
+            if (!activeMsg) return { isSending: false };
+
+            const updatedMessages = state.activeMessages.map((msg) =>
+              msg.id === activeMsg.id
+                ? {
+                    ...msg,
+                    // Only update content if it's non-empty
+                    ...(data.content ? { content: data.content } : {}),
+                    isComplete: true,
+                  }
+                : msg
+            );
+            return { activeMessages: updatedMessages, isSending: false };
+          });
+        } catch (err) {
+          console.error('Failed to parse done event:', err);
+          // Fallback: refresh messages from API
           const { activeSessionId } = get();
           if (activeSessionId) {
             apiGet<ChatMessage[]>(`/api/orchestrator/sessions/${activeSessionId}/messages`)
@@ -236,6 +296,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       role: 'assistant',
       content: '',
       created_at: new Date().toISOString(),
+      agentEventStream: [],
+      isComplete: false,
     };
 
     set((state) => ({
@@ -264,9 +326,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return;
         }
 
-        if (!res.ok) {
-          throw new Error(`Failed to send message: ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`Failed to send message: ${res.status}`);
 
         const data = await res.json();
         // CHECK 1: file upload response
@@ -277,7 +337,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...state.activeMessages.filter(
                 (m) => m.id !== optimisticUser.id && m.id !== optimisticAssistant.id
               ),
-              ...serverMessages,   // now safely narrowed to ChatMessage[]
+              ...serverMessages.map(m => ({ ...m, isComplete: m.role === 'assistant' ? false : true })),
             ],
           }));
         }
@@ -294,13 +354,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...state.activeMessages.filter(
                 (m) => m.id !== optimisticUser.id && m.id !== optimisticAssistant.id
               ),
-              ...serverMessages,   // safely narrowed
+              ...serverMessages.map(m => ({ ...m, isComplete: m.role === 'assistant' ? false : true })),
             ],
           }));
         }
       }
-      // Note: we deliberately do NOT set isSending = false here.
-      // It stays true until the SSE 'done' event arrives.
+      // isSending remains true until SSE 'done' event arrives
     } catch (err) {
       console.error('Failed to send message:', err);
       set((state) => ({
