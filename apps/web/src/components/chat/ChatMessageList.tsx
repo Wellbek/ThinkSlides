@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 
-// ─── Type guards ────────────────────────────────────────────────────────────
+// Type guards 
 function isThought(e: AgentEvent): e is ThoughtEvent {
   return e.type === "thought";
 }
@@ -37,7 +37,7 @@ function isToolResult(e: AgentEvent): e is ToolResultEvent {
   return e.type === "tool_result";
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// Helpers 
 function fmtMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
@@ -56,7 +56,7 @@ function toolLabel(name: string) {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// ─── Live wall‑clock timer (with RAF) ───────────────────────────────────────
+// Live wall‑clock timer (with RAF) 
 function useLiveClock(startMs: number | null, frozen?: number | null) {
   const [elapsed, setElapsed] = useState(frozen ?? 0);
   const rafRef = useRef<number>();
@@ -80,7 +80,7 @@ function useLiveClock(startMs: number | null, frozen?: number | null) {
   return elapsed;
 }
 
-// ─── Syntax‑highlighted code block (with fallback) ─────────────────────────
+// Syntax‑highlighted code block (with fallback) 
 function CodeBlock({ content, language = "json" }: { content: string; language?: string }) {
   try {
     return (
@@ -111,7 +111,7 @@ function CodeBlock({ content, language = "json" }: { content: string; language?:
   }
 }
 
-// ─── Step shape ─────────────────────────────────────────────────────────────
+// Step shape 
 interface Step {
   id: string;
   phase: string;
@@ -127,7 +127,7 @@ interface Step {
   revertReason?: string;
 }
 
-// ─── Build steps from raw events (with revert detection) ────────────────────
+// Build steps from raw events (with revert detection) 
 const PHASE_ORDER = [
   "content_analysis",
   "structure_planning",
@@ -212,7 +212,7 @@ function deriveSteps(events: AgentEvent[]): Step[] {
   return steps;
 }
 
-// ─── Individual step row (full detail) ──────────────────────────────────────
+// Individual step row (full detail) 
 function StepRow({ step, isLive, isLastStep, isStreaming }: { step: Step; isLive: boolean; isLastStep: boolean; isStreaming: boolean }) {
   const [open, setOpen] = useState(false);
   
@@ -347,7 +347,7 @@ function StepRow({ step, isLive, isLastStep, isStreaming }: { step: Step; isLive
   );
 }
 
-// ─── Phase badge (with active underline) ────────────────────────────────────
+// Phase badge (with active underline) 
 const PHASE_LABELS: Record<string, string> = {
   content_analysis: "Analyze",
   structure_planning: "Plan",
@@ -361,7 +361,7 @@ function PhaseBadge({ phase, active, showSeparator }: { phase: string; active: b
   const label = PHASE_LABELS[phase] || phase;
   return (
     <div className="flex items-center gap-2">
-      {showSeparator && <span className="text-gray-700 text-[10px] font-light">—</span>}
+      {showSeparator && <span className="text-gray-700 text-[10px] font-light"> </span>}
       <span
         className={`text-[10px] font-semibold tracking-wide transition-all duration-200 ${
           active
@@ -375,7 +375,7 @@ function PhaseBadge({ phase, active, showSeparator }: { phase: string; active: b
   );
 }
 
-// ─── Compact step icon (used in collapsed view) ─────────────────────────────
+// Compact step icon (used in collapsed view) 
 function CompactStepIcon({ step, onClick }: { step: Step; onClick: () => void }) {
   const isComplete = step.endMs != null;
   const isFailed = step.kind === "tool" && step.toolSuccess === false;
@@ -415,7 +415,7 @@ function CompactStepIcon({ step, onClick }: { step: Step; onClick: () => void })
   );
 }
 
-// ─── Main EventStream component (with collapsed/expanded states) ────────────
+// Main EventStream component (with collapsed/expanded states) 
 function EventStream({ events, isStreaming }: { events: AgentEvent[]; isStreaming: boolean }) {
   const steps = useMemo(() => deriveSteps(events), [events]);
 
@@ -594,7 +594,7 @@ function EventStream({ events, isStreaming }: { events: AgentEvent[]; isStreamin
   );
 }
 
-// ─── Typing Indicator ────────────────────────────────────────────────────────
+// Typing Indicator 
 function TypingIndicator() {
   return (
     <div className="flex items-center gap-1.5 px-4 py-2">
@@ -609,7 +609,7 @@ function TypingIndicator() {
   );
 }
 
-// ─── User Message ────────────────────────────────────────────────────────────
+// User Message 
 function UserMessage({ content }: { content: string }) {
   return (
     <div className="flex justify-end">
@@ -625,7 +625,7 @@ function UserMessage({ content }: { content: string }) {
   );
 }
 
-// ─── Assistant Message (wrapper) ────────────────────────────────────────────
+// Assistant Message (wrapper) 
 function AssistantMessage({ message }: { message: any }) {
   const events: AgentEvent[] = message.agentEventStream ?? [];
   const isComplete = !!message.isComplete;
@@ -681,7 +681,7 @@ function AssistantMessage({ message }: { message: any }) {
   );
 }
 
-// ─── Empty State ─────────────────────────────────────────────────────────────
+// Empty State 
 function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center h-full text-center">
@@ -697,7 +697,7 @@ function EmptyState() {
   );
 }
 
-// ─── Root ────────────────────────────────────────────────────────────────────
+// Root 
 export function ChatMessageList() {
   const messages = useChatStore((s) => s.activeMessages);
   const isSending = useChatStore((s) => s.isSending);
