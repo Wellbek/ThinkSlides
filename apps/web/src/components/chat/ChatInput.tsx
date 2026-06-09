@@ -16,6 +16,9 @@ export function ChatInput() {
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const [isSending, setIsSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showTemplatePrompt, setShowTemplatePrompt] = useState(false);
+  const [pendingTemplateFile, setPendingTemplateFile] = useState<File | null>(null);
+  const uploadTemplate = useChatStore((s) => s.uploadTemplate);
 
   const handleSend = useCallback(async () => {
     if (!text.trim() && attachments.length === 0) return;
@@ -44,8 +47,31 @@ export function ChatInput() {
       file,
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     }));
+    
+    // Check if any of the new files is a template type
+    const templateFile = newAttachments.find(att => /\.(pptx|potx|pdf)$/i.test(att.file.name));
+    if (templateFile && !showTemplatePrompt) {
+      setPendingTemplateFile(templateFile.file);
+      setShowTemplatePrompt(true);
+    }
+    
     setAttachments((prev) => [...prev, ...newAttachments]);
     e.target.value = "";
+  };
+
+  const handleSaveAsTemplate = async () => {
+    if (pendingTemplateFile) {
+      await uploadTemplate(pendingTemplateFile);
+      // Remove the file from attachments after saving as template
+      setAttachments(prev => prev.filter(a => a.file !== pendingTemplateFile));
+      setPendingTemplateFile(null);
+      setShowTemplatePrompt(false);
+    }
+  };
+
+  const handleSkipTemplate = () => {
+    setPendingTemplateFile(null);
+    setShowTemplatePrompt(false);
   };
 
   const removeAttachment = (id: string) => {
@@ -79,6 +105,16 @@ export function ChatInput() {
               </button>
             </span>
           ))}
+        </div>
+      )}
+
+      {showTemplatePrompt && pendingTemplateFile && (
+        <div className="mb-3 p-2 bg-brand-500/10 border border-brand-500/30 rounded-lg text-sm flex items-center justify-between">
+          <span>Save &quot;{pendingTemplateFile.name}&quot; as a template?</span>
+          <div className="flex gap-2">
+            <button onClick={handleSaveAsTemplate} className="text-brand-400 hover:text-brand-300 text-xs px-2 py-1 rounded bg-brand-500/20">Yes, save as template</button>
+            <button onClick={handleSkipTemplate} className="text-gray-400 hover:text-white text-xs">No, just attach</button>
+          </div>
         </div>
       )}
 

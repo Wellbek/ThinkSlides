@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { apiGet, apiPost, apiDelete, apiPut } from '@/lib/api';
+import { apiGet, apiPost, apiDelete, apiPut, apiUpload } from '@/lib/api';
 import { SSEClient } from '@/lib/sse';
 import type { AgentEvent, DoneEvent } from '@slideagent/schemas';
 
@@ -56,6 +56,8 @@ interface ChatState {
   clearActiveSession: () => void;
   fetchTemplates: () => Promise<void>;
   setSessionTemplate: (sessionId: string, templateId: string | null) => Promise<void>;
+  uploadTemplate: (file: File, name?: string) => Promise<Template>;
+  deleteTemplate: (id: string) => Promise<void>;
 }
 
 // Helper: find the last assistant message that is still incomplete
@@ -392,6 +394,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch (err) {
       console.error('Failed to fetch templates:', err);
     }
+  },
+
+  uploadTemplate: async (file: File, name?: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (name) formData.append('name', name);
+    
+    const template = await apiUpload<Template>('/api/orchestrator/templates', formData);
+    set((state) => ({ templates: [template, ...state.templates] }));
+    return template;
+  },
+
+  deleteTemplate: async (id: string) => {
+    await apiDelete(`/api/orchestrator/templates/${id}`);
+    set((state) => ({
+      templates: state.templates.filter((t) => t.id !== id),
+    }));
   },
 
   setSessionTemplate: async (sessionId: string, templateId: string | null) => {

@@ -79,3 +79,74 @@ export async function apiDelete<T = unknown>(path: string): Promise<T> {
 export async function apiPut<T = unknown>(path: string, body?: unknown): Promise<T> {
   return apiRequest<T>('PUT', path, body);
 }
+
+/**
+ * Upload files via multipart/form-data. Returns parsed JSON response.
+ */
+export async function apiUpload<T = unknown>(
+  path: string,
+  formData: FormData,
+): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  // NOTE: Do NOT set Content-Type — the browser sets it with the correct boundary
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+
+  if (res.status === 401) {
+    clearToken();
+    if (typeof window !== 'undefined') {
+      window.location.href = '/auth/login';
+    }
+    throw new Error('Unauthorized');
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || err.detail || `Upload failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+/**
+ * Delete a resource. Returns parsed JSON response.
+ */
+export async function apiUploadPut<T = unknown>(
+  path: string,
+  formData: FormData,
+): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'PUT',
+    headers,
+    body: formData,
+  });
+
+  if (res.status === 401) {
+    clearToken();
+    if (typeof window !== 'undefined') {
+      window.location.href = '/auth/login';
+    }
+    throw new Error('Unauthorized');
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || err.detail || `Upload failed: ${res.status}`);
+  }
+
+  return res.json();
+}

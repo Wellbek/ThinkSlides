@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	// "io"
-	"net/http"
-	"time"
 	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -404,6 +406,158 @@ func (h *SessionHandler) ListTemplates(c *gin.Context) {
 	c.JSON(http.StatusOK, templates)
 }
 
+// UploadTemplate handles template file upload and design system extraction.
+func (h *SessionHandler) UploadTemplate(c *gin.Context) {
+	// Get org ID from context
+	orgID := c.GetString("org_id")
+	if orgID == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "No organisation associated with user"})
+		return
+	}
+
+	// Parse multipart form
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
+		return
+	}
+	defer file.Close()
+
+	name := c.PostForm("name")
+	if name == "" {
+		name = header.Filename
+	}
+	description := c.PostForm("description")
+	tagsStr := c.PostForm("tags")
+	var tags []string
+	if tagsStr != "" {
+		json.Unmarshal([]byte(tagsStr), &tags)
+	}
+
+	// Save file to templates directory
+	templateDir := os.Getenv("TEMPLATE_DIR")
+	if templateDir == "" {
+		templateDir = "/app/templates"
+	}
+	os.MkdirAll(templateDir, 0755)
+
+	fileID := uuid.New().String()
+	ext := ""
+	if idx := strings.LastIndex(header.Filename, "."); idx >= 0 {
+		ext = header.Filename[idx:]
+	}
+	filePath := filepath.Join(templateDir, fmt.Sprintf("%s%s", fileID, ext))
+
+	if err := c.SaveUploadedFile(header, filePath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
+		return
+	}
+
+	// Insert template record
+	ctx := c.Request.Context()
+	var templateID string
+	err = h.pool.QueryRow(ctx,
+		`INSERT INTO templates (organisation_id, name, description, tags, file_path, version, is_default)
+		 VALUES ($1, $2, $3, $4, $5, 1, false)
+		 RETURNING id`,
+		orgID, name, description, tags, filePath,
+	).Scan(&templateID)
+	if err != nil {
+		os.Remove(filePath)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create template record"})
+		return
+	}
+
+	// Extract design system via AI service
+	designSystem, err := h.aiClient.ExtractTemplateDesignSystem(filePath)
+	if err != nil {
+		// Log error but continue - template still saved without design system
+		log.Printf("Failed to extract design system for template %s: %v", templateID, err)
+	} else {
+		// Save design system bundle
+		bundleJSON := toJSON(designSystem)
+		_, err = h.pool.Exec(ctx,
+			`INSERT INTO design_system_bundles (template_id, bundle, version, is_active)
+			 VALUES ($1, $2, 1, true)`,
+			templateID, bundleJSON,
+		)
+		if err != nil {
+			log.Printf("Failed to save design system bundle for template %s: %v", templateID, err)
+		}
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"id":          templateID,
+		"name":        name,
+		"description": description,
+		"tags":        tags,
+		"file_path":   filePath,
+	})
+}
+
+// DeleteTemplate removes a template and its design system bundles.
+func (h *SessionHandler) DeleteTemplate(c *gin.Context) {
+	templateID := c.Param("id")
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	// First get file path to delete from disk
+	var filePath string
+	err := h.pool.QueryRow(ctx,
+		`SELECT file_path FROM templates WHERE id = $1`, templateID,
+	).Scan(&filePath)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Template not found"})
+		return
+	}
+
+	// Delete template (cascade deletes design_system_bundles)
+	_, err = h.pool.Exec(ctx, `DELETE FROM templates WHERE id = $1`, templateID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Delete failed"})
+		return
+	}
+
+	// Delete file from disk
+	if filePath != "" {
+		os.Remove(filePath)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"deleted": true})
+}
+
+// UpdateSessionTemplate updates the template_id for a session.
+func (h *SessionHandler) UpdateSessionTemplate(c *gin.Context) {
+	sessionID := c.Param("id")
+	var req struct {
+		TemplateID *string `json:"template_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	_, err := h.pool.Exec(ctx,
+		`UPDATE chat_sessions SET template_id = $1, updated_at = NOW() WHERE id = $2`,
+		req.TemplateID, sessionID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Update failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
 // DeleteSession deletes a chat session.
 func (h *SessionHandler) DeleteSession(c *gin.Context) {
 	sessionID := c.Param("id")
@@ -423,35 +577,96 @@ func (h *SessionHandler) DeleteSession(c *gin.Context) {
 }
 
 // SendMessage sends a message and enqueues a generation job.
+// It handles both JSON and multipart/form-data requests (for file uploads).
 // It persists both the user message and an empty assistant placeholder to the
 // database so that the frontend can replace its optimistic messages with the
 // server-assigned IDs immediately.
 func (h *SessionHandler) SendMessage(c *gin.Context) {
 	sessionID := c.Param("id")
-	// userID := c.GetString("user_id")
-
-	var req struct {
-		Content     string                   `json:"content" binding:"required"`
-		Attachments []map[string]interface{} `json:"attachments"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
-		return
-	}
 
 	if h.pool == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
 		return
 	}
 
+	contentType := c.GetHeader("Content-Type")
+	var messageContent string
+	var attachments []map[string]interface{}
+
+	// Handle multipart/form-data (file uploads) vs JSON
+	if len(contentType) > 0 && contentType[:10] == "multipart/" {
+		// Multipart form data
+		form, err := c.MultipartForm()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid multipart form"})
+			return
+		}
+
+		// Extract content text field
+		contentValues := form.Value["content"]
+		if len(contentValues) > 0 {
+			messageContent = contentValues[0]
+		}
+
+		// Process uploaded files
+		files := form.File["files"]
+		uploadDir := os.Getenv("UPLOAD_DIR")
+		if uploadDir == "" {
+			uploadDir = "/app/uploads"
+		}
+		os.MkdirAll(uploadDir, 0755)
+
+		for _, fileHeader := range files {
+			fileID := uuid.New().String()
+			ext := ""
+			if idx := strings.LastIndex(fileHeader.Filename, "."); idx >= 0 {
+				ext = fileHeader.Filename[idx:]
+			}
+			filePath := filepath.Join(uploadDir, fmt.Sprintf("%s%s", fileID, ext))
+
+			if err := c.SaveUploadedFile(fileHeader, filePath); err != nil {
+				log.Printf("Failed to save uploaded file %s: %v", fileHeader.Filename, err)
+				continue
+			}
+
+			attachments = append(attachments, map[string]interface{}{
+				"original_filename": fileHeader.Filename,
+				"file_path":         filePath,
+				"file_size_bytes":   fileHeader.Size,
+				"mime_type":         fileHeader.Header.Get("Content-Type"),
+				"upload_id":         fileID,
+			})
+		}
+	} else {
+		// JSON request
+		var req struct {
+			Content     string                   `json:"content" binding:"required"`
+			Attachments []map[string]interface{} `json:"attachments"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+		messageContent = req.Content
+		attachments = req.Attachments
+	}
+
+	if messageContent == "" && len(attachments) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Message content or files required"})
+		return
+	}
+
 	ctx := c.Request.Context()
+
+	// Build attachment JSON for storage
+	attachmentJSON := toJSON(attachments)
 
 	// Persist user message
 	userMsgID := uuid.New().String()
 	_, err := h.pool.Exec(ctx,
 		`INSERT INTO chat_messages (id, session_id, role, content, attachments, created_at)
 		 VALUES ($1, $2, 'user', $3, $4, NOW())`,
-		userMsgID, sessionID, req.Content, toJSON(req.Attachments),
+		userMsgID, sessionID, messageContent, attachmentJSON,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save user message"})
@@ -477,9 +692,9 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		SessionID: sessionID,
 		Type:      "generate",
 		Payload: map[string]interface{}{
-			"content":             req.Content,
-			"attachments":         req.Attachments,
-			"user_message_id":     userMsgID,
+			"content":              messageContent,
+			"attachments":          attachments,
+			"user_message_id":      userMsgID,
 			"assistant_message_id": assistantMsgID,
 		},
 	}
@@ -495,15 +710,16 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 				"id":         userMsgID,
 				"session_id": sessionID,
 				"role":       "user",
-				"content":    req.Content,
+				"content":    messageContent,
+				"attachments": attachments,
 				"created_at": time.Now().Format(time.RFC3339),
 			},
 			{
-				"id":         assistantMsgID,
-				"session_id": sessionID,
-				"role":       "assistant",
-				"content":    "",
-				"created_at": time.Now().Format(time.RFC3339),
+				"id":          assistantMsgID,
+				"session_id":  sessionID,
+				"role":        "assistant",
+				"content":     "",
+				"created_at":  time.Now().Format(time.RFC3339),
 			},
 		},
 		"job_id": jobID,

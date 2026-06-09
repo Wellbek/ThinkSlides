@@ -15,14 +15,14 @@ export function useChat() {
       }
       await store.sendMessage(data.content, data.attachments);
     },
-    [store.activeSessionId, store.sendMessage]
+    [store.activeSessionId, store.sendMessage, store]
   );
 
   const loadSession = useCallback(
     async (sessionId: string) => {
       await store.setActiveSession(sessionId);
     },
-    [store.setActiveSession]
+    [store.setActiveSession, store]
   );
 
   const createSession = useCallback(
@@ -31,12 +31,12 @@ export function useChat() {
       const sessionId = await store.createSession(data.templateId);
       return sessionId;
     },
-    [store.createSession]
+    [store.createSession, store]
   );
 
   const disconnect = useCallback(() => {
     store.clearActiveSession();
-  }, [store.clearActiveSession]);
+  }, [store.clearActiveSession, store]);
 
   return {
     sendMessage,

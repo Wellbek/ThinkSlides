@@ -434,7 +434,7 @@ function EventStream({ events, isStreaming }: { events: AgentEvent[]; isStreamin
         setFrozenTotal(Date.now() - globalStartMs);
       }
     }
-  }, [isStreaming, steps, globalStartMs]);
+  }, [isStreaming, steps, globalStartMs, frozenTotal]);
 
   const totalElapsed = useLiveClock(isStreaming ? globalStartMs : null, frozenTotal);
 
@@ -467,7 +467,7 @@ function EventStream({ events, isStreaming }: { events: AgentEvent[]; isStreamin
     if (!isStreaming && !isCollapsed && steps.length > 0) {
       setIsCollapsed(true);
     }
-  }, [isStreaming, steps.length]);
+  }, [isStreaming, steps.length, isCollapsed]);
 
   // Expanded view (full step list)
   if (!isCollapsed) {

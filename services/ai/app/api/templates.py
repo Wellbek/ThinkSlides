@@ -1,153 +1,124 @@
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+import json
+import os
+import uuid
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.db.session import get_db
-from app.db.models import Template, DesignSystemBundle
-from app.agent.tools.extract_template_design_system import ExtractTemplateDesignSystemTool
-from app.observability.logging import get_logger
-import uuid
-import os
-import shutil
+from typing import Optional, List
+import asyncio
 
-logger = get_logger(__name__)
+from app.db.session import get_db
+from app.db.models import Template, DesignSystemBundle 
+from app.agent.tools.extract_template_design_system import ExtractTemplateDesignSystemTool
+from app.llm import get_llm_provider
+
 router = APIRouter()
 
+async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSession):
+    """SSE generator with database persistence."""
+    yield f"event: start\ndata: {json.dumps({'status': 'processing', 'message': 'Starting template analysis...'})}\n\n"
+    await asyncio.sleep(0.1)
 
-@router.get("")
-async def list_templates(db: AsyncSession = Depends(get_db)):
-    """List all templates for the current organisation."""
-    # TODO: Extract org_id from JWT context
-    org_id = await _get_default_org_id(db)
+    yield f"event: extracting\ndata: {json.dumps({'progress': 0, 'message': 'Extracting design system...'})}\n\n"
+    try:
+        tool = ExtractTemplateDesignSystemTool()
+        result = await tool.run(file_path)
+        if not result.success:
+            raise Exception(result.error)
+        design_system = result.data
+    except Exception as e:
+        yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+        return
 
-    result = await db.execute(
-        select(Template)
-        .where(Template.organisation_id == org_id)
-        .order_by(Template.updated_at.desc())
-    )
-    templates = result.scalars().all()
+    yield f"event: extracting\ndata: {json.dumps({'progress': 100, 'message': 'Design system extracted'})}\n\n"
+    yield f"event: analyzing\ndata: {json.dumps({'progress': 0, 'message': 'LLM analyzing template...'})}\n\n"
 
-    return [
-        {
-            "id": str(t.id),
-            "name": t.name,
-            "description": t.description,
-            "tags": t.tags or [],
-            "version": t.version,
-            "isDefault": t.is_default,
-            "originalFileName": t.original_filename,
-            "createdAt": t.created_at.isoformat(),
-        }
-        for t in templates
-    ]
+    # LLM analysis (streaming if your LLM supports it)
+    prompt = f"""Analyze this design system in 2-3 sentences:\n{json.dumps(design_system, indent=2)}"""
+    llm = get_llm_client()
+    # Replace with async streaming if available
+    full_analysis = await llm.complete(prompt)
+    # Simulate streaming chunks (modify as needed)
+    words = full_analysis.split()
+    for i in range(0, len(words), 2):
+        chunk = " ".join(words[i:i+2]) + " "
+        yield f"event: analysis_chunk\ndata: {json.dumps({'chunk': chunk, 'accumulated': full_analysis[:i+2]})}\n\n"
+        await asyncio.sleep(0.1)
 
-
-@router.post("")
-async def upload_template(
-    name: str = Form(...),
-    description: str = Form(""),
-    tags: str = Form(""),
-    file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-):
-    """Upload a new template and extract its design system."""
-    org_id = await _get_default_org_id(db)
-
-    # Save uploaded file
-    template_dir = os.environ.get("TEMPLATE_DIR", "/app/templates")
-    os.makedirs(template_dir, exist_ok=True)
-
+    # Save to database
+    template_id = str(uuid.uuid4())
     file_id = str(uuid.uuid4())
-    ext = os.path.splitext(file.filename or "template.pptx")[1]
-    file_path = os.path.join(template_dir, f"{file_id}{ext}")
+    ext = os.path.splitext(file_path)[1]
+    saved_path = f"/app/templates/{file_id}{ext}"
+    os.rename(file_path, saved_path)
 
-    with open(file_path, "wb") as f:
+    new_template = Template(
+        id=template_id,
+        organisation_id=org_id,
+        name=name,
+        file_path=saved_path,
+        version=1,
+        is_default=False
+    )
+    db.add(new_template)
+
+    bundle = DesignSystemBundle(
+        template_id=template_id,
+        bundle=design_system,
+        version=1,
+        is_active=True
+    )
+    db.add(bundle)
+    await db.commit()
+
+    yield f"event: done\ndata: {json.dumps({'template_id': template_id, 'name': name, 'design_system': design_system, 'analysis': full_analysis})}\n\n"
+
+
+@router.post("/upload-stream")
+async def upload_template_stream(
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    # org_id would be extracted from JWT in a real implementation
+):
+    if not file.filename.endswith(('.pptx', '.potx', '.pdf')):
+        raise HTTPException(400, "Only PPTX, POTX, or PDF files allowed")
+
+    if name is None:
+        name = file.filename
+
+    # Get organisation ID from current user (simplified – you'll need to implement JWT extraction)
+    # For now, fetch a default org or use a placeholder
+    # Ideally: user = await get_current_user(...); org_id = user.organisation_id
+    org_id = "00000000-0000-0000-0000-000000000000"  # TODO: replace with actual org ID
+
+    temp_dir = "/app/temp_uploads"
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{file.filename}")
+    with open(temp_path, "wb") as f:
         content = await file.read()
         f.write(content)
 
-    file_size = len(content)
-
-    # Create template record
-    template = Template(
-        organisation_id=org_id,
-        name=name,
-        description=description,
-        tags=[t.strip() for t in tags.split(",") if t.strip()],
-        file_path=file_path,
-        original_filename=file.filename,
-        file_size_bytes=file_size,
-        mime_type=file.content_type or "application/vnd.openxmlformats-officedocument.presentationml.template",
+    return StreamingResponse(
+        stream_analysis(temp_path, name, org_id, db),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
-    db.add(template)
-    await db.commit()
-    await db.refresh(template)
-
-    # Extract design system
-    try:
-        extractor = ExtractTemplateDesignSystemTool()
-        design_system = await extractor.run(file_path)
-
-        bundle = DesignSystemBundle(
-            template_id=template.id,
-            palette=design_system.get("palette", {}),
-            typography=design_system.get("typography", {}),
-            spacing=design_system.get("spacing", {}),
-            layouts=design_system.get("layouts", []),
-            slide_dimensions=design_system.get("slideDimensions", {}),
-            master_elements=design_system.get("masterElements", []),
-            embedded_media=design_system.get("embeddedMedia", []),
-        )
-        db.add(bundle)
-        await db.commit()
-
-        logger.info(
-            "template_design_system_extracted",
-            template_id=str(template.id),
-            layout_count=len(design_system.get("layouts", [])),
-        )
-    except Exception as e:
-        logger.error("design_system_extraction_failed", template_id=str(template.id), error=str(e))
-
-    return {
-        "id": str(template.id),
-        "name": template.name,
-        "version": template.version,
-        "designSystemBundleId": str(bundle.id) if "bundle" in dir() else None,
-    }
 
 
-@router.delete("/{template_id}")
-async def delete_template(
-    template_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """Delete a template and its design system bundles."""
-    result = await db.execute(
-        select(Template).where(Template.id == uuid.UUID(template_id))
-    )
-    template = result.scalar_one_or_none()
-    if not template:
-        raise HTTPException(status_code=404, detail="Template not found")
-
-    # Remove file
-    if os.path.exists(template.file_path):
-        os.remove(template.file_path)
-
-    await db.delete(template)
-    await db.commit()
-
-    return {"deleted": True}
-
-
-async def _get_default_org_id(db: AsyncSession) -> uuid.UUID:
-    """Get default organisation ID. In production this comes from JWT."""
-    from app.db.models import Organisation
-    result = await db.execute(select(Organisation).limit(1))
-    org = result.scalar_one_or_none()
-    if org:
-        return org.id
-    # Create default org
-    org = Organisation(name="Default", slug="default")
-    db.add(org)
-    await db.commit()
-    await db.refresh(org)
-    return org.id
+@router.post("/extract")
+async def extract_design_system(data: dict):
+    """Synchronous endpoint for orchestrator to extract design system from a file path."""
+    file_path = data.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(400, "Invalid file path")
+    tool = ExtractTemplateDesignSystemTool()
+    result = await tool.run(file_path)
+    if not result.success:
+        raise HTTPException(500, result.error)
+    return result.data

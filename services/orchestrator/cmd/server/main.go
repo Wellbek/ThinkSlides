@@ -164,6 +164,9 @@ func main() {
 		protected.GET("/sessions/:id/events", sessionHandler.StreamEvents)
 		protected.GET("/templates", sessionHandler.ListTemplates)
 		protected.GET("/files/:id", sessionHandler.DownloadFile)
+		protected.POST("/templates", sessionHandler.UploadTemplate)
+		protected.DELETE("/templates/:id", sessionHandler.DeleteTemplate)
+		protected.PUT("/sessions/:id/template", sessionHandler.UpdateSessionTemplate)
 	}
 
 	// ── Background workers ─────────────────────────────────────────────
