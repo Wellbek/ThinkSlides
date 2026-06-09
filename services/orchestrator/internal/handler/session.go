@@ -474,12 +474,26 @@ func (h *SessionHandler) UploadTemplate(c *gin.Context) {
 		// Log error but continue - template still saved without design system
 		log.Printf("Failed to extract design system for template %s: %v", templateID, err)
 	} else {
-		// Save design system bundle
-		bundleJSON := toJSON(designSystem)
+		// Map camelCase keys from the AI extraction response to snake_case DB columns.
+		// The extraction tool returns: palette, typography, spacing, layouts,
+		// slideDimensions, masterElements, embeddedMedia.
+		// The DB table has: palette, typography, spacing, layouts,
+		// slide_dimensions, master_elements, embedded_media, raw_xml_snapshot.
+		palette := toJSON(designSystem["palette"])
+		typography := toJSON(designSystem["typography"])
+		spacing := toJSON(designSystem["spacing"])
+		layouts := toJSON(designSystem["layouts"])
+		slideDimensions := toJSON(designSystem["slideDimensions"])
+		masterElements := toJSON(designSystem["masterElements"])
+		embeddedMedia := toJSON(designSystem["embeddedMedia"])
+
 		_, err = h.pool.Exec(ctx,
-			`INSERT INTO design_system_bundles (template_id, bundle, version, is_active)
-			 VALUES ($1, $2, 1, true)`,
-			templateID, bundleJSON,
+			`INSERT INTO design_system_bundles
+			 (template_id, version, palette, typography, spacing, layouts,
+			  slide_dimensions, master_elements, embedded_media, raw_xml_snapshot)
+			 VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			templateID, palette, typography, spacing, layouts,
+			slideDimensions, masterElements, embeddedMedia, toJSON(designSystem),
 		)
 		if err != nil {
 			log.Printf("Failed to save design system bundle for template %s: %v", templateID, err)

@@ -80,7 +80,7 @@ services:
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - AI_SERVICE_URL=http://ai-service:${AI_SERVICE_PORT:-8000}
-      - JWT_SECRET=${JWT_SECRET:-change-this-to-a-secure-random-string-in-production}
+      - JWT_SECRET=${JWT_SECRET:-thinkslides-dev-jwt-secret-change-in-production}
       - DATABASE_URL=postgresql://thinkslides:thinkslides_dev_password@postgres:5432/thinkslides
       - UPLOAD_DIR=/app/uploads
       - TEMPLATE_DIR=/app/templates
@@ -120,6 +120,7 @@ services:
       - TEMPLATE_DIR=${TEMPLATE_DIR:-/app/templates}
       - OUTPUT_DIR=${OUTPUT_DIR:-/app/output}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - JWT_SECRET=${JWT_SECRET:-thinkslides-dev-jwt-secret-change-in-production}
     networks:
       - thinkslides-network
     depends_on:

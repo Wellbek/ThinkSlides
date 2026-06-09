@@ -4,6 +4,10 @@ Unpacks a PPTX/POTX template's XML to derive the color palette, font scheme,
 slide dimensions, layout catalog with placeholder positions, spacing tokens,
 corner decorations, master slide elements, and embedded media.
 
+For PDF templates, pages are rendered to images and analysed by a vision LLM
+(GLM-4.6V / GPT-4o) which returns a structured design-system bundle matching
+the same schema produced by the XML path.
+
 This is also called at template upload time (in api/templates.py) and stored
 as a versioned DesignSystemBundle in the database.
 """
@@ -11,11 +15,14 @@ as a versioned DesignSystemBundle in the database.
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.observability.logging import get_logger
+from app.llm import get_vision_llm_provider
 import os
 import json
+import re
 import time
 import zipfile
 import xml.etree.ElementTree as ET
+import base64
 
 logger = get_logger(__name__)
 
@@ -36,17 +43,18 @@ class ExtractTemplateDesignSystemTool:
         registry.register_tool(
             name="extract_template_design_system",
             description=(
-                "Parse a PowerPoint template (PPTX/POTX) and extract its design system: "
+                "Parse a presentation template (PPTX/POTX/PDF) and extract its design system: "
                 "color palette, font scheme, slide dimensions, layout catalog with "
                 "placeholder positions, spacing tokens, master elements, and embedded media. "
-                "Returns a structured design system bundle."
+                "PPTX/POTX files are parsed via XML; PDF files are rendered to images and "
+                "analysed by a vision LLM. Returns a structured design system bundle."
             ),
             fn=cls.run,
             parameters=[
                 ToolParameter(
                     name="template_path",
                     type="string",
-                    description="Path to the PPTX/POTX template file",
+                    description="Path to the PPTX/POTX/PDF template file",
                 ),
             ],
         )
@@ -58,34 +66,24 @@ class ExtractTemplateDesignSystemTool:
             if not os.path.exists(template_path):
                 return ToolResult(success=False, error=f"Template not found: {template_path}")
 
-            with zipfile.ZipFile(template_path, "r") as zf:
-                design_system = {}
+            ext = os.path.splitext(template_path)[1].lower()
 
-                # 1. Color palette from theme
-                design_system["palette"] = cls._extract_palette(zf)
-
-                # 2. Typography / font scheme
-                design_system["typography"] = cls._extract_typography(zf)
-
-                # 3. Slide dimensions
-                design_system["slideDimensions"] = cls._extract_dimensions(zf)
-
-                # 4. Layout catalog with placeholder positions
-                design_system["layouts"] = cls._extract_layouts(zf)
-
-                # 5. Spacing tokens (derived from layout analysis)
-                design_system["spacing"] = cls._extract_spacing(zf)
-
-                # 6. Master slide elements
-                design_system["masterElements"] = cls._extract_master_elements(zf)
-
-                # 7. Embedded media
-                design_system["embeddedMedia"] = cls._extract_embedded_media(zf)
+            if ext == ".pdf":
+                design_system = await cls._extract_from_pdf(template_path)
+            elif ext in (".pptx", ".potx"):
+                design_system = await cls._extract_from_pptx(template_path)
+            else:
+                return ToolResult(
+                    success=False,
+                    error=f"Unsupported template format: {ext}. Supported: .pptx, .potx, .pdf",
+                    duration_ms=int((time.time() - start) * 1000),
+                )
 
             duration_ms = int((time.time() - start) * 1000)
             logger.info(
                 "design_system_extracted",
                 template_path=template_path,
+                source_type=ext,
                 layout_count=len(design_system.get("layouts", [])),
                 duration_ms=duration_ms,
             )
@@ -98,6 +96,239 @@ class ExtractTemplateDesignSystemTool:
         except Exception as e:
             logger.error("design_system_extraction_failed", error=str(e))
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
+
+    # ── PPTX / POTX extraction (XML-based) ──────────────────────────────
+
+    @classmethod
+    async def _extract_from_pptx(cls, template_path: str) -> dict:
+        """Extract design system from a PPTX/POTX template via XML parsing."""
+        with zipfile.ZipFile(template_path, "r") as zf:
+            design_system = {}
+            design_system["palette"] = cls._extract_palette(zf)
+            design_system["typography"] = cls._extract_typography(zf)
+            design_system["slideDimensions"] = cls._extract_dimensions(zf)
+            design_system["layouts"] = cls._extract_layouts(zf)
+            design_system["spacing"] = cls._extract_spacing(zf)
+            design_system["masterElements"] = cls._extract_master_elements(zf)
+            design_system["embeddedMedia"] = cls._extract_embedded_media(zf)
+        design_system["sourceType"] = "pptx"
+        return design_system
+
+    # ── PDF extraction (vision LLM-based) ───────────────────────────────
+
+    @classmethod
+    async def _extract_from_pdf(cls, template_path: str) -> dict:
+        """Extract design system from a PDF template using a vision LLM.
+
+        The PDF pages are rendered to PNG images and sent to a vision-capable
+        model (e.g. GLM-4.6V, GPT-4o) which analyses the visual design and
+        returns a structured JSON design-system bundle matching the same
+        schema produced by the XML path.
+        """
+        images = cls._convert_pdf_pages_to_images(template_path)
+        if not images:
+            raise ValueError("No pages could be rendered from the PDF")
+
+        prompt = cls._build_vision_prompt(page_count=len(images))
+        vision_provider = get_vision_llm_provider()
+
+        logger.info(
+            "pdf_vision_analysis_starting",
+            template_path=template_path,
+            sampled_pages=len(images),
+        )
+
+        response_text = await vision_provider.chat_with_images(
+            prompt=prompt,
+            images=images,
+            temperature=0.3,
+            max_tokens=4096,
+        )
+
+        design_system = cls._parse_vision_response(response_text)
+        design_system["sourceType"] = "pdf"
+
+        logger.info(
+            "pdf_vision_analysis_completed",
+            palette_colors=len(design_system.get("palette", {}).get("colors", [])),
+            layout_count=len(design_system.get("layouts", [])),
+        )
+
+        return design_system
+
+    @staticmethod
+    def _convert_pdf_pages_to_images(
+        pdf_path: str,
+        max_pages: int = 15,
+        dpi_scale: float = 1.5,
+    ) -> list[str]:
+        """Render PDF pages to base64-encoded JPEG data URIs.
+
+        For PDFs with more pages than *max_pages*, pages are sampled evenly
+        across the document (always including the first and last page) so
+        that the vision LLM sees representative layouts throughout.
+
+        Args:
+            pdf_path: Path to the PDF file.
+            max_pages: Maximum number of pages to render (default 15).
+            dpi_scale: Scaling factor — 1.5 balances quality and token count.
+                JPEG compression keeps each page ~50–150 KB instead of
+                ~500 KB–1 MB for PNG.
+            Returns:
+            List of data URI strings (``data:image/jpeg;base64,...``).
+        """
+        import fitz  # PyMuPDF
+
+        images: list[str] = []
+        doc = fitz.open(pdf_path)
+
+        try:
+            total_pages = len(doc)
+            if total_pages == 0:
+                return images
+
+            # Smart sampling: evenly distribute sampled pages, always include
+            # first and last page so the vision model sees the full range.
+            if total_pages <= max_pages:
+                page_indices = list(range(total_pages))
+            else:
+                step = (total_pages - 1) / (max_pages - 1)
+                page_indices = sorted(
+                    set(round(i * step) for i in range(max_pages))
+                )
+
+            logger.info(
+                "pdf_pages_rendering",
+                total_pages=total_pages,
+                sampled_pages=len(page_indices),
+            )
+
+            for page_num in page_indices:
+                page = doc[page_num]
+                mat = fitz.Matrix(dpi_scale, dpi_scale)
+                # alpha=False required for JPEG output (no transparency)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                img_bytes = pix.tobytes("jpeg")
+                b64 = base64.b64encode(img_bytes).decode("utf-8")
+                images.append(f"data:image/jpeg;base64,{b64}")
+        finally:
+            doc.close()
+
+        return images
+
+    @staticmethod
+    def _build_vision_prompt(page_count: int = 1) -> str:
+        """Build the prompt instructing the vision LLM to extract design-system info.
+
+        The prompt asks for JSON matching the same schema that the XML
+        extraction path produces, so downstream consumers (renderer, agent)
+        don't need to know the source format.
+        """
+        page_note = (
+            f"I am showing you {page_count} pages from this template."
+            if page_count > 1
+            else "I am showing you one page from this template."
+        )
+        return f"""Analyze the visual design system of this presentation template. {page_note}
+
+Return a JSON object with these EXACT keys (no extra keys, no missing keys):
+
+1. "palette": {{ "colors": [ {{"name": string, "value": hex like "#FF0000", "type": "hex"}} ], "schemeName": string }}
+   - Identify ALL distinct colors: slide background, title text, body text, accent bars, decorative shapes, footers, etc.
+
+2. "typography": {{ "titleFont": {{"typeface": string, "sizePt": number, "bold": boolean}}, "bodyFont": {{"typeface": string, "sizePt": number, "bold": boolean}}, "captionFont": {{"typeface": string, "sizePt": number, "bold": boolean}} }}
+   - Estimate font sizes in points. Common ranges: titles 24-44pt, body 14-18pt, captions 9-12pt.
+
+3. "slideDimensions": {{ "widthEmu": number, "heightEmu": number, "widthPx": number, "heightPx": number }}
+   - Standard widescreen (16:9): 12192000×6858000 EMU = 1280×720 px
+   - Standard (4:3): 9144000×6858000 EMU = 960×720 px
+   - Determine which aspect ratio the slides use.
+
+4. "layouts": [ {{ "layoutId": string, "layoutName": string, "masterId": "1", "placeholders": [ {{"idx": number, "type": "title"|"body"|"subtitle"|"ctrTitle"|"sldNum"|"dt"|"ftr", "name": string, "xEmu": number, "yEmu": number, "cxEmu": number, "cyEmu": number}} ], "hasBackground": boolean, "hasDecorations": boolean }} ]
+   - Each distinct slide layout you see should be a separate entry.
+   - Estimate placeholder positions in EMU (1 inch = 914400 EMU, 1 cm = 360000 EMU).
+   - Common layouts: title slide, title+content, section header, two-column, blank.
+
+5. "spacing": {{ "slidePaddingEmu": number, "elementGapEmu": number, "titleTopMarginEmu": number, "bodyTopMarginEmu": number }}
+   - Margins/padding around content areas. Default: slidePaddingEmu ≈ 457200 (~0.5 inch).
+
+6. "masterElements": [ {{"elementType": "shape"|"image"|"line", "name": string, "position": {{"xEmu": number, "yEmu": number, "cxEmu": number, "cyEmu": number}} }} ]
+   - Decorative elements that appear on every slide: logos, accent bars, background shapes, footer lines.
+
+7. "embeddedMedia": [ {{"mediaType": "image"|"audio"|"video", "rId": "", "fileName": string, "mimeType": string, "fileSizeBytes": number}} ]
+   - Any embedded images/logos visible in the template.
+
+Be precise with hex colors and positions. Return ONLY valid JSON — no markdown fences, no commentary."""
+
+    @staticmethod
+    def _parse_vision_response(response_text: str) -> dict:
+        """Parse the vision LLM response into a design-system bundle.
+
+        Falls back to sensible defaults for any fields the LLM could not
+        determine, ensuring the output always matches the expected schema.
+        """
+        DEFAULTS: dict = {
+            "palette": {"colors": [], "schemeName": "pdf-extracted"},
+            "typography": {
+                "titleFont": {"typeface": "Calibri", "sizePt": 28, "bold": True},
+                "bodyFont": {"typeface": "Calibri", "sizePt": 14, "bold": False},
+                "captionFont": {"typeface": "Calibri", "sizePt": 10, "bold": False},
+            },
+            "slideDimensions": {
+                "widthEmu": 12192000,
+                "heightEmu": 6858000,
+                "widthPx": 1280,
+                "heightPx": 720,
+            },
+            "layouts": [],
+            "spacing": {
+                "slidePaddingEmu": 457200,
+                "elementGapEmu": 228600,
+                "titleTopMarginEmu": 274320,
+                "bodyTopMarginEmu": 182880,
+            },
+            "masterElements": [],
+            "embeddedMedia": [],
+        }
+
+        # Strip whitespace
+        text = response_text.strip()
+
+        # Remove markdown code fences if the LLM wrapped its output
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            text = "\n".join(lines)
+
+        parsed: dict | None = None
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning(
+                "vision_response_json_parse_failed",
+                response_preview=text[:500],
+            )
+            # Try to extract the first {...} block
+            json_match = re.search(r"\{[\s\S]*\}", text)
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    logger.error("vision_response_json_extraction_failed")
+
+        if parsed is None:
+            logger.warning("vision_response_fallback_to_defaults")
+            return dict(DEFAULTS)
+
+        # Merge: use parsed values where present, defaults for missing keys
+        result: dict = {}
+        for key, default_val in DEFAULTS.items():
+            if key in parsed and parsed[key] is not None:
+                result[key] = parsed[key]
+            else:
+                result[key] = default_val
+
+        return result
 
     @staticmethod
     def _extract_palette(zf: zipfile.ZipFile) -> dict:

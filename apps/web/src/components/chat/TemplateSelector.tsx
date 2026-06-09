@@ -52,6 +52,17 @@ export function TemplateSelector() {
     formData.append("file", file);
     formData.append("name", file.name.replace(/\.[^/.]+$/, ""));
 
+    // Pass org_id explicitly so the AI service can persist the template
+    // under the correct organisation (JWT extraction is also attempted server-side).
+    try {
+      const authUser = JSON.parse(localStorage.getItem("auth_user") || "{}");
+      if (authUser.organisation_id) {
+        formData.append("org_id", authUser.organisation_id);
+      }
+    } catch {
+      // Silently ignore — server will attempt JWT extraction
+    }
+
     try {
       const controller = new AbortController();
       abortControllerRef.current = controller;

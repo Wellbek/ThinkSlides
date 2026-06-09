@@ -26,9 +26,17 @@ export function middleware(request: NextRequest) {
 
   // Proxy AI service requests
   if (pathname.startsWith('/api/ai/')) {
+    // SSE streams (template upload-stream) are handled by a dedicated
+    // Route Handler that pipes bytes through without buffering.
+    // Do NOT rewrite — let Next.js route matching find the handler.
+    if (pathname.includes('/upload-stream')) {
+      return NextResponse.next();
+    }
+
     const aiUrl = process.env.AI_SERVICE_URL || 'http://localhost:8000';
     const newPathname = pathname.replace('/api/ai', '/api');
     const url = new URL(newPathname + request.nextUrl.search, aiUrl);
+
     return NextResponse.rewrite(url);
   }
 

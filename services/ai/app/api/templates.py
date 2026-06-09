@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import uuid
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import StreamingResponse
@@ -9,9 +10,11 @@ from typing import Optional, List
 import asyncio
 
 from app.db.session import get_db
-from app.db.models import Template, DesignSystemBundle 
+from app.db.models import Template, DesignSystemBundle
 from app.agent.tools.extract_template_design_system import ExtractTemplateDesignSystemTool
 from app.llm import get_llm_provider
+from app.api.auth import get_current_user
+from app.config import settings
 
 router = APIRouter()
 
@@ -21,24 +24,46 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
     await asyncio.sleep(0.1)
 
     yield f"event: extracting\ndata: {json.dumps({'progress': 0, 'message': 'Extracting design system...'})}\n\n"
+
+    # Run extraction with periodic heartbeat SSE events to prevent proxy
+    # timeouts during long vision-LLM calls (PDF analysis can take 30+ s).
+    tool = ExtractTemplateDesignSystemTool()
+    extract_task = asyncio.create_task(tool.run(file_path))
+
     try:
-        tool = ExtractTemplateDesignSystemTool()
-        result = await tool.run(file_path)
-        if not result.success:
-            raise Exception(result.error)
-        design_system = result.data
+        while not extract_task.done():
+            yield f"event: heartbeat\ndata: {json.dumps({'status': 'extracting', 'message': 'Still analyzing template...'})}\n\n"
+            done, _ = await asyncio.wait({extract_task}, timeout=8.0)
+            if done:
+                break
+    except Exception as e:
+        extract_task.cancel()
+        yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+        return
+
+    # Retrieve result (may raise if the task failed internally)
+    try:
+        result = extract_task.result()
     except Exception as e:
         yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
         return
+
+    if not result.success:
+        yield f"event: error\ndata: {json.dumps({'error': result.error})}\n\n"
+        return
+    design_system = result.data
 
     yield f"event: extracting\ndata: {json.dumps({'progress': 100, 'message': 'Design system extracted'})}\n\n"
     yield f"event: analyzing\ndata: {json.dumps({'progress': 0, 'message': 'LLM analyzing template...'})}\n\n"
 
     # LLM analysis (streaming if your LLM supports it)
     prompt = f"""Analyze this design system in 2-3 sentences:\n{json.dumps(design_system, indent=2)}"""
-    llm = get_llm_client()
-    # Replace with async streaming if available
-    full_analysis = await llm.complete(prompt)
+    llm = get_llm_provider()
+    response = await llm.chat(
+        messages=[{"role": "user", "content": prompt}],
+        tools=None,
+    )
+    full_analysis = response.get("message", {}).get("content", "")
     # Simulate streaming chunks (modify as needed)
     words = full_analysis.split()
     for i in range(0, len(words), 2):
@@ -46,12 +71,18 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
         yield f"event: analysis_chunk\ndata: {json.dumps({'chunk': chunk, 'accumulated': full_analysis[:i+2]})}\n\n"
         await asyncio.sleep(0.1)
 
-    # Save to database
+    # Save to database — move file from temp dir to shared templates volume.
+    # Use shutil.move() instead of os.rename() because the temp uploads
+    # directory (/app/temp_uploads) and the templates directory
+    # (/app/templates — Docker named volume) are on different filesystems.
+    # os.rename() would raise OSError: Invalid cross-device link.
     template_id = str(uuid.uuid4())
     file_id = str(uuid.uuid4())
     ext = os.path.splitext(file_path)[1]
-    saved_path = f"/app/templates/{file_id}{ext}"
-    os.rename(file_path, saved_path)
+    template_dir = settings.template_dir
+    os.makedirs(template_dir, exist_ok=True)
+    saved_path = os.path.join(template_dir, f"{file_id}{ext}")
+    shutil.move(file_path, saved_path)
 
     new_template = Template(
         id=template_id,
@@ -63,11 +94,22 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
     )
     db.add(new_template)
 
+    # Map camelCase extraction keys to snake_case DB columns.
+    # The extraction tool returns: palette, typography, spacing, layouts,
+    # slideDimensions, masterElements, embeddedMedia, sourceType.
+    # The DB model has: palette, typography, spacing, layouts,
+    # slide_dimensions, master_elements, embedded_media, raw_xml_snapshot.
     bundle = DesignSystemBundle(
         template_id=template_id,
-        bundle=design_system,
         version=1,
-        is_active=True
+        palette=design_system.get("palette", {}),
+        typography=design_system.get("typography", {}),
+        spacing=design_system.get("spacing", {}),
+        layouts=design_system.get("layouts", []),
+        slide_dimensions=design_system.get("slideDimensions", {}),
+        master_elements=design_system.get("masterElements", []),
+        embedded_media=design_system.get("embeddedMedia", []),
+        raw_xml_snapshot=json.dumps(design_system),
     )
     db.add(bundle)
     await db.commit()
@@ -79,8 +121,9 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
 async def upload_template_stream(
     file: UploadFile = File(...),
     name: Optional[str] = Form(None),
+    org_id: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
-    # org_id would be extracted from JWT in a real implementation
+    user: dict = Depends(get_current_user),
 ):
     if not file.filename.endswith(('.pptx', '.potx', '.pdf')):
         raise HTTPException(400, "Only PPTX, POTX, or PDF files allowed")
@@ -88,20 +131,32 @@ async def upload_template_stream(
     if name is None:
         name = file.filename
 
-    # Get organisation ID from current user (simplified – you'll need to implement JWT extraction)
-    # For now, fetch a default org or use a placeholder
-    # Ideally: user = await get_current_user(...); org_id = user.organisation_id
-    org_id = "00000000-0000-0000-0000-000000000000"  # TODO: replace with actual org ID
+    # Resolve org_id: explicit form field > JWT claim > error
+    resolved_org_id = org_id or user.get("org_id", "")
+    if not resolved_org_id or resolved_org_id == "dev-org":
+        raise HTTPException(
+            status_code=400,
+            detail="organisation_id is required. Please belong to an organisation before uploading templates.",
+        )
 
-    temp_dir = "/app/temp_uploads"
+    # Use a temp subdirectory within the upload_dir (not a shared volume —
+    # temp files are private to this container and will be moved to the
+    # shared templates volume after successful analysis).
+    temp_dir = os.path.join(settings.upload_dir, "temp_uploads")
     os.makedirs(temp_dir, exist_ok=True)
     temp_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{file.filename}")
-    with open(temp_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+    try:
+        with open(temp_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+    except Exception:
+        # Clean up temp file on write failure
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
 
     return StreamingResponse(
-        stream_analysis(temp_path, name, org_id, db),
+        stream_analysis(temp_path, name, resolved_org_id, db),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
