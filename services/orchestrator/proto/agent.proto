@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package slideagent;
+package thinkslides;
 
-option go_package = "github.com/slideagent/orchestrator/proto";
+option go_package = "github.com/thinkslides/orchestrator/proto";
 
 // AgentService defines the gRPC interface between the orchestrator and the AI service.
 service AgentService {

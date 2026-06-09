@@ -15,9 +15,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/slideagent/orchestrator/internal/client"
-	"github.com/slideagent/orchestrator/internal/queue"
-	"github.com/slideagent/orchestrator/internal/sse"
+	"github.com/thinkslides/orchestrator/internal/client"
+	"github.com/thinkslides/orchestrator/internal/queue"
+	"github.com/thinkslides/orchestrator/internal/sse"
 )
 
 type SessionHandler struct {

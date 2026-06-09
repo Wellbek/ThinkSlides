@@ -1,4 +1,4 @@
-# SlideAgent Orchestrator
+# ThinkSlides Orchestrator
 
 Go Gin service for high-performance task orchestration, job queue management, and SSE streaming.
 

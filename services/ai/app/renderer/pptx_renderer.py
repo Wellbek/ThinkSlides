@@ -68,7 +68,7 @@ class PPTXRenderer:
         metadata: dict,
         output_path: str,
     ) -> str:
-        working_dir = tempfile.mkdtemp(prefix="slideagent_render_")
+        working_dir = tempfile.mkdtemp(prefix="thinkslides_render_")
 
         try:
             with zipfile.ZipFile(self.template_path, "r") as zf:

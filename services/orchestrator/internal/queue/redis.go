@@ -67,8 +67,8 @@ func (q *RedisQueue) Enqueue(job Job) error {
 	}
 
 	pipe := q.client.Pipeline()
-	pipe.Set(ctx, fmt.Sprintf("slideagent:job:%s", job.ID), data, 24*time.Hour)
-	pipe.LPush(ctx, "slideagent:jobs", data)
+	pipe.Set(ctx, fmt.Sprintf("thinkslides:job:%s", job.ID), data, 24*time.Hour)
+	pipe.LPush(ctx, "thinkslides:jobs", data)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("enqueue pipeline: %w", err)
 	}
@@ -78,7 +78,7 @@ func (q *RedisQueue) Enqueue(job Job) error {
 
 // Dequeue pops a job from the queue (blocking with timeout).
 func (q *RedisQueue) Dequeue(ctx context.Context) (*Job, error) {
-	result, err := q.client.BRPop(ctx, 5*time.Second, "slideagent:jobs").Result()
+	result, err := q.client.BRPop(ctx, 5*time.Second, "thinkslides:jobs").Result()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil
@@ -101,7 +101,7 @@ func (q *RedisQueue) Dequeue(ctx context.Context) (*Job, error) {
 // GetJob retrieves a job by ID.
 func (q *RedisQueue) GetJob(jobID string) (*Job, error) {
 	ctx := context.Background()
-	data, err := q.client.Get(ctx, fmt.Sprintf("slideagent:job:%s", jobID)).Bytes()
+	data, err := q.client.Get(ctx, fmt.Sprintf("thinkslides:job:%s", jobID)).Bytes()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil
@@ -137,5 +137,5 @@ func (q *RedisQueue) UpdateJobStatus(jobID string, status string) error {
 		return fmt.Errorf("marshal job: %w", err)
 	}
 
-	return q.client.Set(ctx, fmt.Sprintf("slideagent:job:%s", jobID), data, 24*time.Hour).Err()
+	return q.client.Set(ctx, fmt.Sprintf("thinkslides:job:%s", jobID), data, 24*time.Hour).Err()
 }

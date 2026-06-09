@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/slideagent/orchestrator/internal/repository"
+	"github.com/thinkslides/orchestrator/internal/repository"
 )
 
 // UserStore abstracts the persistence operations needed by AuthHandler.

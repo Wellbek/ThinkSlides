@@ -13,13 +13,13 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/slideagent/orchestrator/internal/client"
-	"github.com/slideagent/orchestrator/internal/handler"
-	"github.com/slideagent/orchestrator/internal/middleware"
-	"github.com/slideagent/orchestrator/internal/queue"
-	"github.com/slideagent/orchestrator/internal/repository"
-	"github.com/slideagent/orchestrator/internal/sse"
-	"github.com/slideagent/orchestrator/internal/worker"
+	"github.com/thinkslides/orchestrator/internal/client"
+	"github.com/thinkslides/orchestrator/internal/handler"
+	"github.com/thinkslides/orchestrator/internal/middleware"
+	"github.com/thinkslides/orchestrator/internal/queue"
+	"github.com/thinkslides/orchestrator/internal/repository"
+	"github.com/thinkslides/orchestrator/internal/sse"
+	"github.com/thinkslides/orchestrator/internal/worker"
 )
 
 // retryConnect retries a function with exponential backoff until it succeeds

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { apiGet, apiPost, apiDelete, apiPut, apiUpload } from '@/lib/api';
 import { SSEClient } from '@/lib/sse';
-import type { AgentEvent, DoneEvent } from '@slideagent/schemas';
+import type { AgentEvent, DoneEvent } from '@thinkslides/schemas';
 
 export interface ChatSession {
   id: string;

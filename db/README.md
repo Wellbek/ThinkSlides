@@ -15,7 +15,7 @@ SQL migration files executed in alphabetical order by Docker entrypoint.
 cd services/ai && alembic upgrade head
 
 # Using psql directly
-psql -U slideagent -d slideagent -f db/migrations/001_create_extensions.sql
-psql -U slideagent -d slideagent -f db/migrations/002_create_core_tables.sql
-psql -U slideagent -d slideagent -f db/migrations/003_create_chat_tables.sql
+psql -U thinkslides -d thinkslides -f db/migrations/001_create_extensions.sql
+psql -U thinkslides -d thinkslides -f db/migrations/002_create_core_tables.sql
+psql -U thinkslides -d thinkslides -f db/migrations/003_create_chat_tables.sql
 ```

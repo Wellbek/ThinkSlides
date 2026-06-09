@@ -1,4 +1,4 @@
-module github.com/slideagent/orchestrator
+module github.com/thinkslides/orchestrator
 
 go 1.24.0
 

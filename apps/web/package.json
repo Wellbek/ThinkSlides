@@ -1,5 +1,5 @@
 {
-  "name": "@slideagent/web",
+  "name": "@thinkslides/web",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@slideagent/schemas": "*",
+    "@thinkslides/schemas": "*",
     "clsx": "^2.1.0",
     "framer-motion": "^12.40.0",
     "lucide-react": "^0.378.0",

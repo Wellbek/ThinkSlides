@@ -2,8 +2,8 @@
 
 import { useChatStore } from "@/stores/chat-store";
 import { Download, Presentation } from "lucide-react";
-import type { Slide } from "@slideagent/schemas/slide";
-import type { SlideFinalizedEvent } from "@slideagent/schemas";
+import type { Slide } from "@thinkslides/schemas/slide";
+import type { SlideFinalizedEvent } from "@thinkslides/schemas";
 
 export function SlidePreviewSidebar() {
   const { activeEvents, activeFiles } = useChatStore();

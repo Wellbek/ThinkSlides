@@ -1,1 +1,1 @@
-# SlideAgent AI Service
+# ThinkSlides AI Service

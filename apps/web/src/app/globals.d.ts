@@ -1,4 +1,4 @@
-declare module "@slideagent/schemas/agent-events" {
+declare module "@thinkslides/schemas/agent-events" {
   export type AgentEventPhase =
     | "content_analysis"
     | "structure_planning"
@@ -78,7 +78,7 @@ declare module "@slideagent/schemas/agent-events" {
     | ProgressEvent;
 }
 
-declare module "@slideagent/schemas/slide" {
+declare module "@thinkslides/schemas/slide" {
   export interface Slide {
     slideIndex: number;
     layoutId: string;

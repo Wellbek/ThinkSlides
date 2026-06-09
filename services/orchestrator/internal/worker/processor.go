@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/slideagent/orchestrator/internal/client"
-	"github.com/slideagent/orchestrator/internal/queue"
-	"github.com/slideagent/orchestrator/internal/sse"
+	"github.com/thinkslides/orchestrator/internal/client"
+	"github.com/thinkslides/orchestrator/internal/queue"
+	"github.com/thinkslides/orchestrator/internal/sse"
 )
 
 // Processor continuously dequeues jobs and processes them by calling the AI service.

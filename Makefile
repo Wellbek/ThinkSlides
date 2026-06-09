@@ -35,13 +35,13 @@ build:
 	$(DOCKER_COMPOSE) build
 
 build-web:
-	cd apps/web && docker build -t slideagent-web .
+	cd apps/web && docker build -t thinkslides-web .
 
 build-ai:
-	cd services/ai && docker build -t slideagent-ai .
+	cd services/ai && docker build -t thinkslides-ai .
 
 build-orchestrator:
-	cd services/orchestrator && docker build -t slideagent-orchestrator .
+	cd services/orchestrator && docker build -t thinkslides-orchestrator .
 
 # ──────────────────────────────────────────────
 # Test

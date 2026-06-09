@@ -49,7 +49,7 @@ export function ChatHistorySidebar() {
       {/* Header */}
       <div className="p-4 border-b border-surface-100">
         <div className="flex items-center justify-between mb-3">
-          <h1 className="text-lg font-semibold text-gray-100">SlideAgent</h1>
+          <h1 className="text-lg font-semibold text-gray-100">ThinkSlides</h1>
           <button
             onClick={handleNewChat}
             className="p-1.5 rounded-md hover:bg-surface-50 text-gray-400 hover:text-gray-200 transition-colors"

@@ -6,7 +6,7 @@ import type {
   ThoughtEvent,
   ToolCallEvent,
   ToolResultEvent,
-} from "@slideagent/schemas";
+} from "@thinkslides/schemas";
 import { useState, useEffect, useRef, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";

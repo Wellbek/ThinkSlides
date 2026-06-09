@@ -1,6 +1,6 @@
-# @slideagent/schemas
+# @thinkslides/schemas
 
-Shared type schemas used across the SlideAgent platform.
+Shared type schemas used across the ThinkSlides platform.
 
 ## Structure
 

@@ -247,7 +247,7 @@ class AgentLoop:
     def _build_system_prompt(self, context: dict) -> str:
         """Build the system prompt with embedded design system context."""
         prompt_parts = [
-            "You are SlideAgent, an AI assistant that generates professional PowerPoint presentations.",
+            "You are ThinkSlides, an AI assistant that generates professional PowerPoint presentations.",
             "You follow a ReAct (Reason-Act-Observe) pattern to create presentations step by step.",
             "",
             "## Available Tools",

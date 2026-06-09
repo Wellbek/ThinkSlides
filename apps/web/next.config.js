@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-  transpilePackages: ['@slideagent/schemas'],
+  transpilePackages: ['@thinkslides/schemas'],
   experimental: {
     serverComponentsExternalPackages: [],
   },

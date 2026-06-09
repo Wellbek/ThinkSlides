@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # ── Database ────────────────────────────────
-    database_url: str = "postgresql+asyncpg://slideagent:slideagent_dev_password@postgres:5432/slideagent"
+    database_url: str = "postgresql+asyncpg://thinkslides:thinkslides_dev_password@postgres:5432/thinkslides"
 
     # ── Redis ───────────────────────────────────
     redis_url: str = "redis://redis:6379/0"

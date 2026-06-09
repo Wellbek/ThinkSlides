@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/slideagent/orchestrator/internal/repository"
+	"github.com/thinkslides/orchestrator/internal/repository"
 )
 
 // ── mock ──────────────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ async def lifespan(application: FastAPI):
 
 
 app = FastAPI(
-    title="SlideAgent AI Service",
+    title="ThinkSlides AI Service",
     version="0.1.0",
     lifespan=lifespan,
 )

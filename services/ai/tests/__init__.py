@@ -1,1 +1,1 @@
-# SlideAgent AI Service Tests
+# ThinkSlides AI Service Tests

@@ -1,4 +1,4 @@
-# SlideAgent AI Service
+# ThinkSlides AI Service
 
 Python FastAPI service handling all AI and document processing workloads.
 

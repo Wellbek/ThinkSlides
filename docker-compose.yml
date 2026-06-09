@@ -1,7 +1,7 @@
 version: "3.9"
 
 networks:
-  slideagent-network:
+  thinkslides-network:
     driver: bridge
 
 services:
@@ -10,20 +10,20 @@ services:
   # ────────────────────────────────────────────
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: slideagent-postgres
+    container_name: thinkslides-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-slideagent}
-      POSTGRES_USER: ${POSTGRES_USER:-slideagent}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-slideagent_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-thinkslides}
+      POSTGRES_USER: ${POSTGRES_USER:-thinkslides}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-thinkslides_dev_password}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/migrations:/docker-entrypoint-initdb.d
     networks:
-      - slideagent-network
+      - thinkslides-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-slideagent}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-thinkslides}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -33,13 +33,13 @@ services:
   # ────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: slideagent-redis
+    container_name: thinkslides-redis
     ports:
       - "6379:6379"
     volumes:
       - redisdata:/data
     networks:
-      - slideagent-network
+      - thinkslides-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -53,7 +53,7 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    container_name: slideagent-web
+    container_name: thinkslides-web
     ports:
       - "${WEB_PORT:-3000}:3000"
     environment:
@@ -62,7 +62,7 @@ services:
       - NEXT_PUBLIC_API_BASE=
       - NEXT_PUBLIC_AI_URL=http://ai-service:8000
     networks:
-      - slideagent-network
+      - thinkslides-network
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -74,21 +74,21 @@ services:
     build:
       context: ./services/orchestrator
       dockerfile: Dockerfile
-    container_name: slideagent-orchestrator
+    container_name: thinkslides-orchestrator
     ports:
       - "${ORCHESTRATOR_PORT:-8080}:8080"
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - AI_SERVICE_URL=http://ai-service:${AI_SERVICE_PORT:-8000}
       - JWT_SECRET=${JWT_SECRET:-change-this-to-a-secure-random-string-in-production}
-      - DATABASE_URL=postgresql://slideagent:slideagent_dev_password@postgres:5432/slideagent
+      - DATABASE_URL=postgresql://thinkslides:thinkslides_dev_password@postgres:5432/thinkslides
       - UPLOAD_DIR=/app/uploads
       - TEMPLATE_DIR=/app/templates
     volumes:
       - uploads:${UPLOAD_DIR:-/app/uploads}
       - templates:${TEMPLATE_DIR:-/app/templates}
     networks:
-      - slideagent-network
+      - thinkslides-network
     depends_on:
       redis:
         condition: service_healthy
@@ -103,11 +103,11 @@ services:
     build:
       context: ./services/ai
       dockerfile: Dockerfile
-    container_name: slideagent-ai
+    container_name: thinkslides-ai
     ports:
       - "${AI_SERVICE_PORT:-8000}:8000"
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://slideagent:slideagent_dev_password@postgres:5432/slideagent}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://thinkslides:thinkslides_dev_password@postgres:5432/thinkslides}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - LLM_PROVIDER=${LLM_PROVIDER:-zhipu}
       - ZHIPU_API_KEY=${ZHIPU_API_KEY}
@@ -121,7 +121,7 @@ services:
       - OUTPUT_DIR=${OUTPUT_DIR:-/app/output}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     networks:
-      - slideagent-network
+      - thinkslides-network
     depends_on:
       postgres:
         condition: service_healthy

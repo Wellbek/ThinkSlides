@@ -183,7 +183,7 @@ async def _get_default_user_id(db: AsyncSession, org_id: uuid.UUID) -> uuid.UUID
         return user.id
     user = User(
         organisation_id=org_id,
-        email="admin@slideagent.dev",
+        email="admin@thinkslides.dev",
         password_hash="$2b$12$placeholder_not_for_production",
         display_name="Admin",
         role="admin",

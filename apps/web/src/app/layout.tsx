@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SlideAgent — AI Presentation Generator",
+  title: "ThinkSlides — AI Presentation Generator",
   description: "Generate fully branded, template-faithful PowerPoint presentations through AI",
 };
 

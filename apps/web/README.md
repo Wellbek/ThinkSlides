@@ -1,4 +1,4 @@
-# SlideAgent Web Frontend
+# ThinkSlides Web Frontend
 
 Next.js 14 App Router frontend with TypeScript and Tailwind CSS.
 
