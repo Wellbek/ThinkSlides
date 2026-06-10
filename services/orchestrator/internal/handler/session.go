@@ -341,10 +341,13 @@ func (h *SessionHandler) GetSessionFiles(c *gin.Context) {
 			"session_id": sessionID,
 			"file_type":  fileType,
 			"file_path":  filePath,
+			"file_url":   fmt.Sprintf("/api/files/%s", id),
 			"created_at": createdAt.Format(time.RFC3339),
 		}
 		if originalFilename != nil {
 			f["filename"] = *originalFilename
+		} else {
+			f["filename"] = "presentation.pptx"
 		}
 		if fileSizeBytes != nil {
 			f["file_size"] = *fileSizeBytes

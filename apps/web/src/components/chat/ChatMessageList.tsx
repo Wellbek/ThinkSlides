@@ -729,9 +729,15 @@ export function ChatMessageList() {
   const isSending = useChatStore((s) => s.isSending);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Count total events across all messages for scroll triggering
+  const totalEventCount = messages.reduce(
+    (sum, msg) => sum + (msg.agentEventStream?.length ?? 0),
+    0
+  );
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+  }, [messages.length, totalEventCount]);
 
   if (messages.length === 0 && !isSending) {
     return (

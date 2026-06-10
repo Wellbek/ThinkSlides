@@ -27,6 +27,7 @@ export class SSEClient {
   private handlers: Map<SSEEventType, SSEEventHandler[]> = new Map();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
+  private intentionallyClosed = false;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -54,6 +55,7 @@ export class SSEClient {
     };
 
     this.eventSource.onerror = () => {
+      if (this.intentionallyClosed) return;
       if (this.eventSource?.readyState === EventSource.CLOSED) {
         // Auth failure or server explicitly closed — don't reconnect
         return;
@@ -84,6 +86,11 @@ export class SSEClient {
         };
 
         this.emit(sseEvent);
+
+        // Auto-close on 'done' — the agent loop has finished
+        if (eventType === 'done') {
+          this.disconnect();
+        }
       });
     }
   }
@@ -103,6 +110,7 @@ export class SSEClient {
   }
 
   disconnect(): void {
+    this.intentionallyClosed = true;
     if (this.eventSource) {
       this.eventSource.close();
       this.eventSource = null;

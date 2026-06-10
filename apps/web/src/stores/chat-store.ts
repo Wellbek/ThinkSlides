@@ -159,21 +159,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
         apiGet<GeneratedFile[]>(`/api/orchestrator/sessions/${sessionId}/files`),
       ]);
 
+      // Normalize file URLs to go through the Next.js proxy
+      const normalizedFiles: GeneratedFile[] = files.map((f: any) => ({
+        ...f,
+        filename: f.filename || 'presentation.pptx',
+        file_url: f.file_url
+          ? `/api/orchestrator${f.file_url.startsWith('/') ? f.file_url : `/${f.file_url}`}`
+          : `/api/orchestrator/files/${f.id}`,
+        file_size: f.file_size ?? f.file_size_bytes,
+      }));
+
       set({
         activeMessages: messages.map(m => ({ ...m, isComplete: true })), // mark old assistant messages as complete
-        activeFiles: files,
+        activeFiles: normalizedFiles,
         isLoading: false,
       });
 
       // Associate generated files with their assistant messages (heuristic: last assistant message per session)
-      if (files.length > 0) {
+      if (normalizedFiles.length > 0) {
         set((state) => {
           const assistantMessages = state.activeMessages.filter(m => m.role === 'assistant');
           if (assistantMessages.length > 0) {
             const lastAssistant = assistantMessages[assistantMessages.length - 1];
             const updatedMessages = state.activeMessages.map((msg) =>
               msg.id === lastAssistant.id
-                ? { ...msg, generatedFiles: files }
+                ? { ...msg, generatedFiles: normalizedFiles }
                 : msg
             );
             return { activeMessages: updatedMessages };
@@ -263,7 +273,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const data = JSON.parse(e.data);
           const generatedFile: GeneratedFile = {
             id: data.fileId,
-            filename: data.fileName,
+            filename: data.fileName || 'presentation.pptx',
             file_url: `/api/orchestrator/files/${data.fileId}`,
             file_size: data.fileSizeBytes,
             file_type: data.fileType,
