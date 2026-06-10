@@ -8,6 +8,7 @@ export type SSEEventType =
   | 'tool_call'
   | 'tool_result'
   | 'slide_finalized'
+  | 'file_generated'
   | 'error'
   | 'progress'
   | 'done';
@@ -66,6 +67,7 @@ export class SSEClient {
       'tool_call',
       'tool_result',
       'slide_finalized',
+      'file_generated',
       'error',
       'progress',
       'done',

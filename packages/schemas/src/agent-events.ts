@@ -17,6 +17,7 @@ export type AgentEventType =
   | "tool_call"
   | "tool_result"
   | "slide_finalized"
+  | "file_generated"
   | "error"
   | "progress"
   | "done";
@@ -77,11 +78,24 @@ export interface ProgressEvent {
   timestamp: string;
 }
 
+export interface FileGeneratedEvent {
+  type: "file_generated";
+  phase: "rendering";
+  fileId: string;
+  fileName: string;
+  fileUrl: string;
+  fileSizeBytes: number;
+  fileType: string;
+  slideCount: number;
+  timestamp: string;
+}
+
 export interface DoneEvent {
   type: "done";
   phase?: "complete";
   message_id: string;
   content: string;
+  files?: FileGeneratedEvent[];
   timestamp: string;
 }
 
@@ -90,6 +104,7 @@ export type AgentEvent =
   | ToolCallEvent
   | ToolResultEvent
   | SlideFinalizedEvent
+  | FileGeneratedEvent
   | ErrorEvent
   | ProgressEvent
   | DoneEvent;

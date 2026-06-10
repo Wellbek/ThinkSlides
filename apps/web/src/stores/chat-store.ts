@@ -19,6 +19,7 @@ export interface ChatMessage {
   created_at: string;
   attachments?: string[];
   agentEventStream?: AgentEvent[]; // new: inline events for this message
+  generatedFiles?: GeneratedFile[]; // generated file attachments for this message
   isComplete?: boolean;            // true when the assistant has finished generating
 }
 
@@ -33,6 +34,9 @@ export interface GeneratedFile {
   id: string;
   filename: string;
   file_url: string;
+  file_size?: number;
+  file_type?: string;
+  slide_count?: number;
   created_at: string;
 }
 
@@ -161,6 +165,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isLoading: false,
       });
 
+      // Associate generated files with their assistant messages (heuristic: last assistant message per session)
+      if (files.length > 0) {
+        set((state) => {
+          const assistantMessages = state.activeMessages.filter(m => m.role === 'assistant');
+          if (assistantMessages.length > 0) {
+            const lastAssistant = assistantMessages[assistantMessages.length - 1];
+            const updatedMessages = state.activeMessages.map((msg) =>
+              msg.id === lastAssistant.id
+                ? { ...msg, generatedFiles: files }
+                : msg
+            );
+            return { activeMessages: updatedMessages };
+          }
+          return state;
+        });
+      }
+
       // Open SSE connection
       const client = new SSEClient(sessionId);
 
@@ -236,6 +257,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       });
 
+      // Handle the "file_generated" event: add generated file to active message and activeFiles
+      client.on('file_generated', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          const generatedFile: GeneratedFile = {
+            id: data.fileId,
+            filename: data.fileName,
+            file_url: `/api/orchestrator/files/${data.fileId}`,
+            file_size: data.fileSizeBytes,
+            file_type: data.fileType,
+            slide_count: data.slideCount,
+            created_at: data.timestamp,
+          };
+
+          set((state) => {
+            const activeMsg = findActiveAssistantMessage(state.activeMessages);
+            if (!activeMsg) return { activeFiles: [...state.activeFiles, generatedFile] };
+
+            const updatedMessages = state.activeMessages.map((msg) =>
+              msg.id === activeMsg.id
+                ? {
+                    ...msg,
+                    generatedFiles: [...(msg.generatedFiles || []), generatedFile],
+                  }
+                : msg
+            );
+            return {
+              activeMessages: updatedMessages,
+              activeFiles: [...state.activeFiles, generatedFile],
+            };
+          });
+        } catch (err) {
+          console.error('Failed to parse file_generated event:', err);
+        }
+      });
+
       // Handle the "done" event: finalize the assistant message
       client.on('done', (e) => {
         try {
@@ -244,17 +301,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const activeMsg = findActiveAssistantMessage(state.activeMessages);
             if (!activeMsg) return { isSending: false };
 
+            // If the done event includes files, add them to the message
+            const doneFiles: GeneratedFile[] = (data as any).files
+              ? ((data as any).files as any[]).map((f: any) => ({
+                  id: f.fileId,
+                  filename: f.fileName,
+                  file_url: `/api/orchestrator/files/${f.fileId}`,
+                  file_size: f.fileSizeBytes,
+                  file_type: f.fileType,
+                  slide_count: f.slideCount,
+                  created_at: f.timestamp,
+                }))
+              : [];
+
+            const existingFiles = activeMsg.generatedFiles || [];
+            const newFiles = doneFiles.filter(
+              (nf) => !existingFiles.some((ef) => ef.id === nf.id)
+            );
+
             const updatedMessages = state.activeMessages.map((msg) =>
               msg.id === activeMsg.id
                 ? {
                     ...msg,
                     // Only update content if it's non-empty
                     ...(data.content ? { content: data.content } : {}),
+                    generatedFiles: [...existingFiles, ...newFiles],
                     isComplete: true,
                   }
                 : msg
             );
-            return { activeMessages: updatedMessages, isSending: false };
+            return {
+              activeMessages: updatedMessages,
+              activeFiles: [...state.activeFiles, ...newFiles],
+              isSending: false,
+            };
           });
         } catch (err) {
           console.error('Failed to parse done event:', err);

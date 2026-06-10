@@ -80,4 +80,16 @@ class ProgressEvent(BaseModel):
     timestamp: str
 
 
-AgentEvent = Union[ThoughtEvent, ToolCallEvent, ToolResultEvent, SlideFinalizedEvent, ErrorEvent, ProgressEvent]
+class FileGeneratedEvent(BaseModel):
+    type: Literal["file_generated"] = "file_generated"
+    phase: Literal["rendering"] = "rendering"
+    file_id: str
+    file_name: str
+    file_url: str
+    file_size_bytes: int
+    file_type: str = "pptx"
+    slide_count: int
+    timestamp: str
+
+
+AgentEvent = Union[ThoughtEvent, ToolCallEvent, ToolResultEvent, SlideFinalizedEvent, ErrorEvent, ProgressEvent, FileGeneratedEvent]

@@ -98,6 +98,7 @@ async def _run_agent(
             logger.info("_run_agent: got db session for %s", session_id)
             
             final_content = ""
+            generated_files = []
             try:
                 logger.info("_run_agent: creating AgentLoop for %s", session_id)
                 loop = AgentLoop(db=db)
@@ -142,6 +143,75 @@ async def _run_agent(
                     if event.get("type") == "message_complete":
                         final_content = event.get("content", "")
 
+                    # Track generated files from tool_result events
+                    if event.get("type") == "tool_result" and event.get("toolName") == "finalize_and_render_pptx":
+                        tool_result_data = event.get("toolResult") or event.get("result")
+                        generated_file_info = {}
+                        if tool_result_data and isinstance(tool_result_data, dict):
+                            generated_file_info = tool_result_data
+                        elif isinstance(tool_result_data, str):
+                            try:
+                                generated_file_info = json.loads(tool_result_data)
+                            except (json.JSONDecodeError, TypeError):
+                                generated_file_info = {}
+
+                        if generated_file_info and generated_file_info.get("success", True):
+                            # Save to generated_files table
+                            file_path = generated_file_info.get("filePath", "")
+                            file_name = generated_file_info.get("fileName", "presentation.pptx")
+                            file_size = generated_file_info.get("fileSizeBytes", 0)
+                            slide_count = generated_file_info.get("slideCount", 0)
+                            file_type = "pptx"
+
+                            try:
+                                file_id = str(uuid.uuid4())
+                                await db.execute(
+                                    text(
+                                        """INSERT INTO generated_files 
+                                           (id, organisation_id, session_id, file_type, file_path, 
+                                            original_filename, file_size_bytes, metadata, created_at)
+                                           SELECT :fid, organisation_id, :sid, :ftype, :fpath,
+                                                  :fname, :fsize, :fmeta, NOW()
+                                           FROM chat_sessions WHERE id = :sid"""
+                                    ),
+                                    {
+                                        "fid": file_id,
+                                        "sid": str(session_id),
+                                        "ftype": file_type,
+                                        "fpath": file_path,
+                                        "fname": file_name,
+                                        "fsize": file_size,
+                                        "fmeta": json.dumps({"slideCount": slide_count}),
+                                    },
+                                )
+                                await db.commit()
+
+                                # Emit file_generated SSE event
+                                file_event = {
+                                    "type": "file_generated",
+                                    "phase": "rendering",
+                                    "fileId": file_id,
+                                    "fileName": file_name,
+                                    "fileUrl": f"/api/files/{file_id}",
+                                    "fileSizeBytes": file_size,
+                                    "fileType": file_type,
+                                    "slideCount": slide_count,
+                                    "timestamp": datetime.datetime.utcnow().isoformat(),
+                                }
+                                pub_result = await redis_client.publish(
+                                    f"agent:events:{session_id}", json.dumps(file_event, default=str)
+                                )
+                                logger.info(
+                                    "_run_agent: published file_generated event for session %s, file_id=%s, subscribers=%d",
+                                    session_id, file_id, pub_result,
+                                )
+                                generated_files.append(file_event)
+                            except Exception as db_err:
+                                logger.error(
+                                    "_run_agent: failed to save generated file for session %s: %s",
+                                    session_id, str(db_err),
+                                )
+
                 logger.info(
                     "_run_agent: loop finished, got %d events for session %s",
                     event_count, session_id
@@ -149,7 +219,11 @@ async def _run_agent(
 
                 # FALLBACK: ensure we have text to show
                 if not final_content:
-                    final_content = "Presentation generation completed. Check the preview panel for your slides."
+                    if generated_files:
+                        file_names = ", ".join(f["fileName"] for f in generated_files)
+                        final_content = f"Presentation generated: {file_names}"
+                    else:
+                        final_content = "Presentation generation completed. Check the preview panel for your slides."
 
                 # Save directly into the assistant placeholder
                 await db.execute(
@@ -163,6 +237,7 @@ async def _run_agent(
                     "type": "done",
                     "message_id": str(assistant_message_id),
                     "content": final_content,
+                    "files": generated_files if generated_files else None,
                     "timestamp": datetime.datetime.utcnow().isoformat(),
                 }
                 pub_result = await redis_client.publish(

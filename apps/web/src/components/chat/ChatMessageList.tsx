@@ -6,6 +6,7 @@ import type {
   ThoughtEvent,
   ToolCallEvent,
   ToolResultEvent,
+  SlideFinalizedEvent,
 } from "@thinkslides/schemas";
 import { useState, useEffect, useRef, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
@@ -25,7 +26,8 @@ import {
   Clock,
   X,
 } from "lucide-react";
-
+import { GeneratedFileCard } from "./GeneratedFileCard";
+import type { GeneratedFile } from "@/stores/chat-store";
 // Type guards 
 function isThought(e: AgentEvent): e is ThoughtEvent {
   return e.type === "thought";
@@ -630,6 +632,16 @@ function AssistantMessage({ message }: { message: any }) {
   const events: AgentEvent[] = message.agentEventStream ?? [];
   const isComplete = !!message.isComplete;
   const isStreaming = !isComplete;
+  const generatedFiles: GeneratedFile[] = message.generatedFiles ?? [];
+
+  // Extract slide thumbnails from slide_finalized events
+  const slideThumbnails = events
+    .filter((e): e is SlideFinalizedEvent => e.type === "slide_finalized")
+    .map((e) => ({
+      slideIndex: e.slideIndex,
+      layoutName: "Slide",
+    }))
+    .sort((a, b) => a.slideIndex - b.slideIndex);
 
   if (!events.length && !message.content && !isComplete) {
     return (
@@ -676,6 +688,20 @@ function AssistantMessage({ message }: { message: any }) {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Generated file cards (MS Teams-style preview) */}
+        {generatedFiles.length > 0 && (
+          <div className="space-y-3">
+            {generatedFiles.map((file) => (
+              <GeneratedFileCard
+                key={file.id}
+                file={file}
+                slideCount={file.slide_count ?? slideThumbnails.length}
+                slideThumbnails={slideThumbnails}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
