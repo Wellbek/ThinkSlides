@@ -84,14 +84,14 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-4xl mx-auto py-8 px-4">
-      <h1 className="text-2xl font-bold text-white mb-6">Settings</h1>
+      <h1 className="text-heading-lg font-medium text-paper mb-6">Settings</h1>
 
-      <section className="bg-surface-50 border border-surface-100 rounded-xl p-6">
+      <section className="bg-charcoal border border-iron rounded-lg p-6 shadow-subtle">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-semibold text-gray-200">Templates</h2>
+          <h2 className="text-heading-sm font-medium text-paper">Templates</h2>
           <button
             onClick={() => document.getElementById("template-upload")?.click()}
-            className="flex items-center gap-2 px-3 py-1.5 bg-brand-600 hover:bg-brand-700 rounded-lg text-sm text-white transition-colors"
+            className="btn-outlined"
           >
             <Upload size={14} />
             Upload Template
@@ -106,18 +106,18 @@ export default function SettingsPage() {
         </div>
 
         {templates.length === 0 ? (
-          <p className="text-gray-500 text-sm">No templates yet. Upload one above.</p>
+          <p className="text-fog text-body">No templates yet. Upload one above.</p>
         ) : (
           <div className="space-y-2">
             {templates.map((tpl) => (
-              <div key={tpl.id} className="flex items-center justify-between p-3 bg-surface-100 rounded-lg">
+              <div key={tpl.id} className="flex items-center justify-between p-3 bg-graphite rounded-lg border border-iron">
                 <div>
-                  <p className="font-medium text-gray-200">{tpl.name}</p>
-                  <p className="text-xs text-gray-400">v{tpl.version} · {tpl.tags?.join(", ") || "no tags"}</p>
+                  <p className="font-medium text-paper text-body">{tpl.name}</p>
+                  <p className="text-caption text-fog font-mono">v{tpl.version} · {tpl.tags?.join(", ") || "no tags"}</p>
                 </div>
                 <button
                   onClick={() => handleDelete(tpl.id)}
-                  className="p-1.5 rounded-md hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition-colors"
+                  className="p-1.5 rounded-md hover:bg-error/20 text-fog hover:text-error transition-colors"
                 >
                   <Trash2 size={16} />
                 </button>
@@ -129,17 +129,17 @@ export default function SettingsPage() {
 
       {/* Upload Modal (same as in TemplateSelector) */}
       {uploadModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-surface-50 border border-surface-100 rounded-xl w-full max-w-md p-6 shadow-2xl">
-            <h3 className="text-lg font-semibold text-white mb-4">Analyzing Template</h3>
+        <div className="fixed inset-0 bg-void/50 flex items-center justify-center z-50 backdrop-blur-sm">
+          <div className="bg-charcoal border border-iron rounded-lg w-full max-w-md p-6 shadow-subtle">
+            <h3 className="text-heading-sm font-medium text-paper mb-4">Analyzing Template</h3>
             <div className="space-y-4">
               <div className="flex items-center gap-3 text-sm">
-                <Loader2 size={16} className="animate-spin text-brand-400" />
-                <span className="text-gray-300">{uploadProgress}</span>
+                <Loader2 size={16} className="animate-spin text-ice" />
+                <span className="text-paper">{uploadProgress}</span>
               </div>
               {analysisText && (
-                <div className="bg-surface-100 rounded-lg p-3 max-h-60 overflow-y-auto">
-                  <p className="text-xs text-gray-300 whitespace-pre-wrap">{analysisText}</p>
+                <div className="bg-graphite rounded-lg p-3 max-h-60 overflow-y-auto">
+                  <p className="text-caption text-paper whitespace-pre-wrap font-mono">{analysisText}</p>
                 </div>
               )}
             </div>

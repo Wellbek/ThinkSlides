@@ -37,10 +37,10 @@ export function SlidePreviewSidebar() {
   return (
     <div className="flex flex-col" style={{ width: 320 }}>
       {/* Header */}
-      <div className="px-4 py-2.5 border-b border-surface-100 flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-300">Slide Preview</span>
+      <div className="px-4 py-2.5 border-b border-iron flex items-center justify-between">
+        <span className="text-caption font-medium text-paper">Slide Preview</span>
         {allSlides.length > 0 && (
-          <span className="text-xs text-gray-500 tabular-nums">{allSlides.length} slides</span>
+          <span className="text-caption text-fog font-mono tabular-nums">{allSlides.length} slides</span>
         )}
       </div>
 
@@ -55,8 +55,8 @@ export function SlidePreviewSidebar() {
               exit={{ opacity: 0 }}
               className="text-center py-10"
             >
-              <Presentation size={32} className="mx-auto text-gray-600 mb-2" />
-              <p className="text-xs text-gray-500">
+              <Presentation size={32} className="mx-auto text-fog mb-2" />
+              <p className="text-caption text-fog">
                 Slides will appear here as they are generated
               </p>
             </motion.div>
@@ -68,19 +68,19 @@ export function SlidePreviewSidebar() {
               initial={{ opacity: 0, y: 12, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={{ delay: idx * 0.05, type: "spring", stiffness: 500, damping: 30 }}
-              className="rounded-xl border border-gray-700/30 bg-gradient-to-b from-gray-800/40 to-gray-900/30 overflow-hidden hover:border-gray-600/40 transition-colors group"
+              className="rounded-lg border border-iron bg-charcoal overflow-hidden hover:border-ice/30 transition-colors group"
             >
               <div className="p-3">
-                <div className="bg-white rounded-lg aspect-video flex items-center justify-center text-gray-800 text-xs relative shadow-inner overflow-hidden">
+                <div className="bg-paper rounded-lg aspect-video flex items-center justify-center text-void text-caption relative shadow-inner overflow-hidden">
                   {/* Decorative mockup content */}
                   <div className="absolute inset-x-3 top-3 space-y-[3px]">
-                    <div className="h-[3px] bg-gray-300/60 rounded-full w-4/5" />
-                    <div className="h-[2px] bg-gray-300/40 rounded-full w-3/5" />
+                    <div className="h-[3px] bg-iron/60 rounded-full w-4/5" />
+                    <div className="h-[2px] bg-iron/40 rounded-full w-3/5" />
                   </div>
                   <div className="absolute inset-x-3 bottom-2.5 space-y-[2px]">
-                    <div className="h-[2px] bg-gray-200/50 rounded-full w-full" />
-                    <div className="h-[2px] bg-gray-200/40 rounded-full w-5/6" />
-                    <div className="h-[2px] bg-gray-200/30 rounded-full w-2/3" />
+                    <div className="h-[2px] bg-iron/50 rounded-full w-full" />
+                    <div className="h-[2px] bg-iron/40 rounded-full w-5/6" />
+                    <div className="h-[2px] bg-iron/30 rounded-full w-2/3" />
                   </div>
                   <div className="text-center z-10">
                     <p className="font-semibold text-sm text-gray-700">
@@ -91,7 +91,7 @@ export function SlidePreviewSidebar() {
                     </p>
                   </div>
                   {/* Slide number badge */}
-                  <span className="absolute top-1.5 left-1.5 bg-gray-800/90 text-white rounded-md w-5 h-5 flex items-center justify-center text-[9px] font-bold shadow-sm backdrop-blur-sm">
+                  <span className="absolute top-1.5 left-1.5 bg-obsidian/90 text-paper rounded-md w-5 h-5 flex items-center justify-center text-caption font-bold shadow-sm backdrop-blur-sm">
                     {slide.slideIndex + 1}
                   </span>
                   {/* Hover shimmer */}
@@ -99,7 +99,7 @@ export function SlidePreviewSidebar() {
                 </div>
               </div>
               <div className="px-3 pb-2.5">
-                <p className="text-[11px] text-gray-400 truncate leading-relaxed">
+                <p className="text-caption text-fog truncate leading-relaxed">
                   {slide.contents
                     ?.filter(
                       (c: any): c is { type: "text"; runs: { text: string }[] } =>
@@ -118,7 +118,7 @@ export function SlidePreviewSidebar() {
 
       {/* Download section */}
       {files.length > 0 && (
-        <div className="border-t border-surface-100 p-3 space-y-2">
+        <div className="border-t border-iron p-3 space-y-2">
           {files.map((file) => {
             // Build authenticated download URL
             const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
@@ -131,7 +131,7 @@ export function SlidePreviewSidebar() {
                 key={file.id}
                 href={downloadUrl}
                 download
-                className="flex items-center gap-2 px-3 py-2 bg-brand-600/10 hover:bg-brand-600/20 rounded-lg text-sm text-brand-300 transition-colors"
+                className="flex items-center gap-2 px-3 py-2 bg-ice/5 hover:bg-ice/10 rounded-lg text-body text-ice transition-colors border border-ice/20"
               >
                 <Download size={14} />
                 <span className="truncate">{file.fileName}</span>

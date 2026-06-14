@@ -40,6 +40,16 @@ function isToolResult(e: AgentEvent): e is ToolResultEvent {
 }
 
 // Helpers 
+// Color constants for status
+const STATUS_COLORS = {
+  success: "text-success",
+  error: "text-error",
+  ice: "text-ice",
+  fog: "text-fog",
+  paper: "text-paper",
+  warning: "text-warning",
+};
+
 function fmtMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
@@ -86,17 +96,17 @@ function useLiveClock(startMs: number | null, frozen?: number | null) {
 function CodeBlock({ content, language = "json" }: { content: string; language?: string }) {
   try {
     return (
-      <div className="rounded-lg overflow-hidden border border-gray-700/50 shadow-inner">
+      <div className="rounded-md overflow-hidden border border-iron shadow-subtle">
         <SyntaxHighlighter
           language={language}
           style={vscDarkPlus}
           customStyle={{
-            background: "rgba(0,0,0,0.3)",
-            borderRadius: "0.5rem",
-            padding: "0.75rem",
-            fontSize: "11px",
+            background: "var(--surface-obsidian)",
+            borderRadius: "var(--radius-md)",
+            padding: "var(--spacing-12)",
+            fontSize: "var(--text-caption)",
             margin: 0,
-            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            fontFamily: "var(--font-gtamericamono)",
           }}
           wrapLongLines
         >
@@ -106,7 +116,7 @@ function CodeBlock({ content, language = "json" }: { content: string; language?:
     );
   } catch {
     return (
-      <pre className="bg-black/40 rounded-lg p-3 overflow-x-auto font-mono text-[11px] text-gray-300 whitespace-pre-wrap border border-gray-700/30">
+      <pre className="bg-obsidian rounded-md p-3 overflow-x-auto font-mono text-caption text-fog whitespace-pre-wrap border border-iron">
         {content}
       </pre>
     );
@@ -249,14 +259,14 @@ function StepRow({ step, isLive, isLastStep, isStreaming }: { step: Step; isLive
   if (isComplete) {
     if (step.kind === "tool" && step.toolSuccess === false) {
       StatusIcon = XCircle;
-      statusColor = "text-red-400 drop-shadow-sm";
+      statusColor = "text-error drop-shadow-sm";
     } else {
       StatusIcon = CheckCircle2;
-      statusColor = "text-emerald-400 drop-shadow-sm";
+      statusColor = "text-success drop-shadow-sm";
     }
   } else {
     StatusIcon = Loader2;
-    statusColor = "text-blue-400 drop-shadow-sm";
+    statusColor = "text-ice drop-shadow-sm";
   }
 
   const PhaseIcon = step.kind === "tool" ? Wrench : Brain;
@@ -272,24 +282,24 @@ function StepRow({ step, isLive, isLastStep, isStreaming }: { step: Step; isLive
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 8, scale: 0.97 }}
       transition={{ type: "spring", stiffness: 500, damping: 30 }}
-      className={`group rounded-lg transition-all duration-200 ${
-        hasRevert ? "bg-yellow-500/5 border-l-2 border-yellow-500/60 pl-2 -ml-1" : ""
+      className={`group rounded-md transition-all duration-200 ${
+        hasRevert ? "bg-warning/5 border-l-2 border-warning/60 pl-2 -ml-1" : ""
       }`}
     >
       <button
         onClick={() => hasDetail && setOpen((o) => !o)}
-        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
-          hasDetail ? "hover:bg-white/[0.04] cursor-pointer" : "cursor-default"
+        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-all ${
+          hasDetail ? "hover:bg-graphite cursor-pointer" : "cursor-default"
         }`}
       >
-        <PhaseIcon size={14} className="text-gray-400 group-hover:text-gray-300 shrink-0 transition-colors" />
+        <PhaseIcon size={14} className="text-fog group-hover:text-paper shrink-0 transition-colors" />
 
-        <span className="flex-1 text-[13px] font-medium text-gray-200 truncate leading-snug">
+        <span className="flex-1 text-body font-medium text-paper truncate leading-snug">
           {step.kind === "thought"
             ? step.thoughtContent?.split("\n")[0].slice(0, 90) ?? "Thinking…"
             : toolLabel(step.toolName ?? "")}
           {hasRevert && (
-            <span className="ml-2 text-[10px] text-yellow-400 inline-flex items-center gap-1 font-normal">
+            <span className="ml-2 text-caption text-warning inline-flex items-center gap-1 font-normal">
               <ArrowLeft size={10} />
               {step.revertReason}
             </span>
@@ -298,7 +308,7 @@ function StepRow({ step, isLive, isLastStep, isStreaming }: { step: Step; isLive
 
         <div className="flex items-center gap-2 shrink-0">
           {durationLabel && (
-            <span className="text-[10px] font-mono text-gray-500 flex items-center gap-1">
+            <span className="text-caption font-mono text-fog flex items-center gap-1">
               <Clock size={10} />
               {durationLabel}
             </span>
@@ -331,13 +341,13 @@ function StepRow({ step, isLive, isLastStep, isStreaming }: { step: Step; isLive
             <div className="ml-10 mr-3 mb-3 mt-1 space-y-3">
               {hasArgs && step.toolArgs !== undefined && step.toolArgs !== null && (
                 <div>
-                  <p className="text-[10px] font-mono text-gray-400 uppercase tracking-wider mb-1.5">Input</p>
+                  <p className="text-caption font-mono text-fog uppercase tracking-wider mb-1.5">Input</p>
                   <CodeBlock content={JSON.stringify(step.toolArgs, null, 2)} language="json" />
                 </div>
               )}
               {hasResult && step.toolResult !== undefined && step.toolResult !== null && (
                 <div>
-                  <p className="text-[10px] font-mono text-gray-400 uppercase tracking-wider mb-1.5">Output</p>
+                  <p className="text-caption font-mono text-fog uppercase tracking-wider mb-1.5">Output</p>
                   <CodeBlock content={JSON.stringify(step.toolResult, null, 2)} language="json" />
                 </div>
               )}
@@ -363,12 +373,12 @@ function PhaseBadge({ phase, active, showSeparator }: { phase: string; active: b
   const label = PHASE_LABELS[phase] || phase;
   return (
     <div className="flex items-center gap-2">
-      {showSeparator && <span className="text-gray-700 text-[10px] font-light"> </span>}
+      {showSeparator && <span className="text-iron text-caption font-light"> </span>}
       <span
-        className={`text-[10px] font-semibold tracking-wide transition-all duration-200 ${
+        className={`text-caption font-semibold tracking-wide transition-all duration-200 ${
           active
-            ? "text-blue-400 border-b border-blue-400/50 pb-0.5"
-            : "text-gray-500 hover:text-gray-400"
+            ? "text-ice border-b border-ice/50 pb-0.5"
+            : "text-fog hover:text-paper"
         }`}
       >
         {label}
@@ -383,18 +393,18 @@ function CompactStepIcon({ step, onClick }: { step: Step; onClick: () => void })
   const isFailed = step.kind === "tool" && step.toolSuccess === false;
 
   let StatusIcon = Brain;
-  let statusColor = "text-gray-500";
+  let statusColor = "text-fog";
   if (isComplete) {
     if (isFailed) {
       StatusIcon = XCircle;
-      statusColor = "text-red-400";
+      statusColor = "text-error";
     } else {
       StatusIcon = CheckCircle2;
-      statusColor = "text-emerald-400";
+      statusColor = "text-success";
     }
   } else {
     StatusIcon = Loader2;
-    statusColor = "text-blue-400";
+    statusColor = "text-ice";
   }
 
   if (step.kind === "tool") StatusIcon = Wrench;
@@ -407,10 +417,10 @@ function CompactStepIcon({ step, onClick }: { step: Step; onClick: () => void })
       whileHover={{ scale: 1.1 }}
       transition={{ type: "spring", stiffness: 500, damping: 30 }}
     >
-      <div className="w-7 h-7 rounded-full bg-gray-800/60 border border-gray-700/50 flex items-center justify-center backdrop-blur-sm">
+      <div className="w-7 h-7 rounded-full bg-graphite/60 border border-iron/50 flex items-center justify-center backdrop-blur-sm">
         <StatusIcon size={12} className={statusColor} />
       </div>
-      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-1.5 py-0.5 bg-gray-900 text-gray-300 text-[9px] rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition pointer-events-none z-10">
+      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-1.5 py-0.5 bg-obsidian text-paper text-caption rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition pointer-events-none z-10">
         {step.kind === "thought" ? step.phase : step.toolName}
       </div>
     </motion.button>
@@ -460,7 +470,7 @@ function EventStream({ events, isStreaming }: { events: AgentEvent[]; isStreamin
   const hasFailure = steps.some((s) => s.kind === "tool" && s.toolSuccess === false);
   const overallStatus = hasFailure ? "Failed" : "Complete";
   const OverallIcon = hasFailure ? XCircle : CheckCircle2;
-  const overallColor = hasFailure ? "text-red-400" : "text-emerald-400";
+  const overallColor = hasFailure ? "text-error" : "text-success";
 
   // Collapsed state for when streaming is done
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -478,27 +488,27 @@ function EventStream({ events, isStreaming }: { events: AgentEvent[]; isStreamin
         initial={{ opacity: 0, y: 12, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ type: "spring", stiffness: 400, damping: 30 }}
-        className="w-full rounded-2xl border border-gray-700/40 bg-gradient-to-br from-gray-900/30 to-gray-800/20 backdrop-blur-md overflow-hidden shadow-xl shadow-black/10"
+        className="w-full rounded-lg border border-iron bg-gradient-to-br from-obsidian/30 to-graphite/20 backdrop-blur-md overflow-hidden shadow-subtle"
       >
         {/* Header with phase pipeline and close button (if streaming is done) */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700/40 bg-gray-900/20">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-iron bg-obsidian/20">
           <div className="flex items-center gap-1">
             {PHASE_ORDER.map((p, idx) => (
               <PhaseBadge key={p} phase={p} active={p === currentPhase} showSeparator={idx > 0} />
             ))}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <div className="bg-gray-800/40 rounded-full px-2 py-0.5 flex items-center gap-1.5">
-              {isStreaming && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />}
-              <span className="text-[10px] font-mono text-gray-400 tabular-nums">{fmtElapsed(totalElapsed)}</span>
+            <div className="bg-graphite/40 rounded-full px-2 py-0.5 flex items-center gap-1.5">
+              {isStreaming && <span className="w-1.5 h-1.5 rounded-full bg-ice animate-pulse" />}
+              <span className="text-caption font-mono text-fog tabular-nums">{fmtElapsed(totalElapsed)}</span>
             </div>
             {!isStreaming && (
               <button
                 onClick={() => setIsCollapsed(true)}
-                className="p-1 rounded-md hover:bg-gray-700/50 transition-colors"
+                className="p-1 rounded-md hover:bg-graphite/50 transition-colors"
                 title="Collapse"
               >
-                <X size={12} className="text-gray-400" />
+                <X size={12} className="text-fog" />
               </button>
             )}
           </div>
@@ -510,7 +520,7 @@ function EventStream({ events, isStreaming }: { events: AgentEvent[]; isStreamin
             <>
               <button
                 onClick={() => setHistoryOpen((o) => !o)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-medium text-gray-500 hover:text-gray-300 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-caption font-medium text-fog hover:text-paper transition-colors"
               >
                 <ChevronDown size={11} className={`transition-transform duration-200 ${historyOpen ? "rotate-180" : ""}`} />
                 {historyOpen ? "Hide" : "Show"} {historySteps.length} earlier {historySteps.length === 1 ? "step" : "steps"}
@@ -524,7 +534,7 @@ function EventStream({ events, isStreaming }: { events: AgentEvent[]; isStreamin
                     transition={{ type: "spring", stiffness: 400, damping: 35 }}
                     className="overflow-hidden"
                   >
-                    <div className="pl-3 border-l border-gray-700/30 ml-1 space-y-0.5">
+                    <div className="pl-3 border-l border-iron/30 ml-1 space-y-0.5">
                       {historySteps.map((step) => (
                         <StepRow
                           key={step.id}
@@ -552,8 +562,8 @@ function EventStream({ events, isStreaming }: { events: AgentEvent[]; isStreamin
           ))}
 
           {steps.length === 0 && (
-            <div className="flex items-center gap-2 px-3 py-2 text-[12px] text-gray-400">
-              <Loader2 size={12} className="animate-spin text-blue-400" />
+            <div className="flex items-center gap-2 px-3 py-2 text-caption text-fog">
+              <Loader2 size={12} className="animate-spin text-ice" />
               <span>Initializing context...</span>
             </div>
           )}
@@ -573,23 +583,23 @@ function EventStream({ events, isStreaming }: { events: AgentEvent[]; isStreamin
     >
       <button
         onClick={() => setIsCollapsed(false)}
-        className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-xl border border-gray-700/40 bg-gray-800/30 backdrop-blur-sm hover:bg-gray-800/50 transition-all group"
+        className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-iron bg-graphite/30 backdrop-blur-sm hover:bg-graphite/50 transition-all group"
       >
         <div className="flex items-center gap-1.5 flex-wrap">
           {steps.slice(0, 8).map((step) => (
             <CompactStepIcon key={step.id} step={step} onClick={() => setIsCollapsed(false)} />
           ))}
           {steps.length > 8 && (
-            <span className="text-[10px] text-gray-500 font-mono">+{steps.length - 8}</span>
+            <span className="text-caption text-fog font-mono">+{steps.length - 8}</span>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-[10px] font-mono text-gray-500">{fmtElapsed(totalElapsed)}</span>
-          <div className="flex items-center gap-1 bg-gray-800/60 rounded-full px-2 py-0.5">
+          <span className="text-caption font-mono text-fog">{fmtElapsed(totalElapsed)}</span>
+          <div className="flex items-center gap-1 bg-graphite/60 rounded-full px-2 py-0.5">
             <OverallIcon size={10} className={overallColor} />
-            <span className="text-[10px] font-medium text-gray-300">{overallStatus}</span>
+            <span className="text-caption font-medium text-paper">{overallStatus}</span>
           </div>
-          <span className="text-[10px] text-gray-500">({steps.length})</span>
+          <span className="text-caption text-fog">({steps.length})</span>
         </div>
       </button>
     </motion.div>
@@ -603,7 +613,7 @@ function TypingIndicator() {
       {[0, 0.15, 0.3].map((delay, i) => (
         <span
           key={i}
-          className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"
+          className="w-1.5 h-1.5 bg-fog rounded-full animate-bounce"
           style={{ animationDelay: `${delay}s` }}
         />
       ))}
@@ -619,7 +629,7 @@ function UserMessage({ content }: { content: string }) {
         initial={{ opacity: 0, y: 8, scale: 0.96 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ type: "spring", stiffness: 500, damping: 30 }}
-        className="max-w-[78%] bg-blue-500/15 text-gray-100 rounded-2xl px-4 py-2.5 text-sm border border-blue-500/30 shadow-md shadow-blue-900/10 backdrop-blur-sm"
+        className="max-w-[78%] bg-ice/10 text-paper rounded-md px-4 py-2.5 text-body border border-ice/30 shadow-subtle backdrop-blur-sm"
       >
         <p className="whitespace-pre-wrap leading-relaxed font-sans">{content}</p>
       </motion.div>
@@ -646,7 +656,7 @@ function AssistantMessage({ message }: { message: any }) {
   if (!events.length && !message.content && !isComplete) {
     return (
       <div className="flex justify-start">
-        <div className="bg-gray-800/50 rounded-2xl px-4 py-2 border border-gray-700/40 backdrop-blur-sm">
+        <div className="bg-graphite/50 rounded-md px-4 py-2 border border-iron backdrop-blur-sm">
           <TypingIndicator />
         </div>
       </div>
@@ -664,7 +674,7 @@ function AssistantMessage({ message }: { message: any }) {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              className="text-sm text-gray-300 leading-relaxed prose prose-invert prose-sm max-w-none prose-p:text-gray-300 prose-code:text-gray-300 font-sans"
+              className="text-body text-fog leading-relaxed prose prose-invert max-w-none prose-p:text-fog prose-code:text-paper font-sans"
             >
               <ReactMarkdown
                 components={{
@@ -676,7 +686,7 @@ function AssistantMessage({ message }: { message: any }) {
                       return <CodeBlock content={content} language={match[1]} />;
                     }
                     return (
-                      <code className="bg-gray-800/80 rounded-md px-1.5 py-0.5 text-xs font-mono text-blue-300" {...props}>
+                      <code className="bg-graphite rounded-md px-1.5 py-0.5 text-caption font-mono text-ice" {...props}>
                         {children}
                       </code>
                     );
@@ -712,10 +722,10 @@ function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center h-full text-center">
       <div className="space-y-3">
-        <div className="mx-auto w-10 h-10 rounded-xl bg-gray-800/50 border border-gray-700/50 flex items-center justify-center backdrop-blur-sm">
-          <Sparkles size={18} className="text-gray-500" />
+        <div className="mx-auto w-10 h-10 rounded-md bg-graphite/50 border border-iron/50 flex items-center justify-center backdrop-blur-sm">
+          <Sparkles size={18} className="text-fog" />
         </div>
-        <p className="text-sm text-gray-500 font-sans">
+        <p className="text-body text-fog font-sans">
           Upload a document or describe your presentation
         </p>
       </div>

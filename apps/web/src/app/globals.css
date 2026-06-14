@@ -1,153 +1,309 @@
+@import "../styles/tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --sidebar-width: 280px;
-  --thought-panel-width: 380px;
-  --preview-width: 320px;
+/* ============================================================
+   Base Layer — Global resets & defaults using design tokens
+   ============================================================ */
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    font-family: var(--font-gtamerica);
+    font-size: var(--text-body);
+    line-height: var(--leading-body);
+    font-weight: var(--font-weight-regular);
+    color: var(--color-text-primary);
+    background-color: var(--surface-charcoal);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-iron);
+    border-radius: var(--radius-md);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-slate);
+  }
+
+  /* Focus rings */
+  *:focus-visible {
+    outline: 1px solid var(--color-ice-signal);
+    outline-offset: 1px;
+  }
 }
 
-body {
-  @apply bg-surface text-gray-100 font-sans;
+/* ============================================================
+   Component Layer — Reusable patterns
+   ============================================================ */
+
+@layer components {
+  /* Card — the universal surface container */
+  .card {
+    background: var(--surface-charcoal);
+    border-radius: var(--radius-cards);
+    padding: var(--card-padding);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* Inset ring edge (OpenSea signature) */
+  .ring-inset-subtle {
+    box-shadow: var(--shadow-subtle);
+  }
+
+  /* Outlined action button (primary interactive control) */
+  .btn-outlined {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-8);
+    padding: 10px 16px;
+    font-family: var(--font-gtamerica);
+    font-size: var(--text-body);
+    font-weight: var(--font-weight-medium);
+    line-height: 1;
+    color: var(--color-paper-white);
+    background: transparent;
+    border: 1px solid var(--color-ice-signal);
+    border-radius: var(--radius-buttons);
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+  }
+  .btn-outlined:hover {
+    border-color: var(--color-paper-white);
+  }
+
+  /* Ghost button */
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-8);
+    padding: var(--spacing-8);
+    font-family: var(--font-gtamerica);
+    font-size: var(--text-body);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-fog);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-buttons);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+  .btn-ghost:hover {
+    background: var(--surface-slate);
+    color: var(--color-paper-white);
+  }
+
+  /* Pill / tag */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    font-family: var(--font-gtamerica);
+    font-size: var(--text-caption);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-paper-white);
+    background: transparent;
+    border: 1px solid var(--color-iron);
+    border-radius: var(--radius-tags);
+    transition: border-color var(--transition-fast);
+  }
+
+  /* Section header */
+  .section-header {
+    font-family: var(--font-gtamerica);
+    font-size: var(--text-heading-lg);
+    font-weight: var(--font-weight-medium);
+    line-height: var(--leading-heading-lg);
+    color: var(--color-paper-white);
+  }
+
+  /* Mono data — prices, counts, addresses */
+  .mono-data {
+    font-family: var(--font-gtamericamono);
+    font-size: var(--text-body);
+    font-weight: var(--font-weight-regular);
+  }
+
+  /* SSE thought stream styling */
+  .thought-block {
+    border-left: 2px solid rgba(131, 195, 255, 0.3);
+    padding-left: var(--spacing-12);
+    padding-top: var(--spacing-4);
+    padding-bottom: var(--spacing-4);
+    font-size: var(--text-caption);
+    color: var(--color-fog);
+    font-style: italic;
+  }
+
+  .tool-call-block {
+    background: rgba(131, 195, 255, 0.05);
+    border: 1px solid rgba(131, 195, 255, 0.15);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-8) var(--spacing-12);
+    font-size: var(--text-caption);
+    font-family: var(--font-gtamericamono);
+  }
+
+  .tool-result-block {
+    background: rgba(52, 211, 153, 0.05);
+    border: 1px solid rgba(52, 211, 153, 0.15);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-8) var(--spacing-12);
+    font-size: var(--text-caption);
+  }
+
+  .error-block {
+    background: rgba(226, 71, 86, 0.08);
+    border: 1px solid rgba(226, 71, 86, 0.2);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-8) var(--spacing-12);
+    font-size: var(--text-caption);
+    color: #f87171;
+  }
+
+  .slide-preview-card {
+    background: var(--surface-charcoal);
+    border-radius: var(--radius-cards);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+    aspect-ratio: 16 / 9;
+  }
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
-
-::-webkit-scrollbar-track {
-  @apply bg-transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  @apply bg-surface-100 rounded-full;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-surface-200;
-}
-
-/* SSE thought stream styling */
-.thought-block {
-  @apply border-l-2 border-brand-500/30 pl-3 py-1 text-sm text-gray-400 italic;
-}
-
-.tool-call-block {
-  @apply bg-brand-950/30 border border-brand-500/20 rounded-md px-3 py-2 text-sm font-mono;
-}
-
-.tool-result-block {
-  @apply bg-emerald-950/20 border border-emerald-500/20 rounded-md px-3 py-2 text-sm;
-}
-
-.error-block {
-  @apply bg-red-950/30 border border-red-500/20 rounded-md px-3 py-2 text-sm text-red-300;
-}
-
-.slide-preview-card {
-  @apply bg-surface-50 rounded-lg border border-surface-100 overflow-hidden;
-  aspect-ratio: 16 / 9;
-}
-
-/* ============================================
+/* ============================================================
    Bounce animation for typing indicator
-   ============================================ */
+   ============================================================ */
 @keyframes bounce {
-  0%, 60%, 100% {
-    transform: translateY(0);
-  }
-  30% {
-    transform: translateY(-4px);
-  }
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
 }
-
 .animate-bounce {
   animation: bounce 1.4s infinite ease-in-out;
 }
 
-/* ============================================
-   Markdown prose styles (fallback)
-   ============================================ */
+/* ============================================================
+   Markdown prose styles
+   ============================================================ */
 .prose {
   max-width: none;
-  color: #e5e7eb; /* gray-200 */
+  color: var(--color-fog);
 }
 
 .prose h1, .prose h2, .prose h3, .prose h4 {
-  @apply font-semibold mt-6 mb-2 text-gray-100;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-paper-white);
+  margin-top: var(--spacing-24);
+  margin-bottom: var(--spacing-8);
 }
-
-.prose h1 { @apply text-2xl; }
-.prose h2 { @apply text-xl; }
-.prose h3 { @apply text-lg; }
+.prose h1 { font-size: var(--text-heading-lg); }
+.prose h2 { font-size: var(--text-heading-sm); }
+.prose h3 { font-size: var(--text-body); }
 
 .prose p {
-  @apply mb-3 leading-relaxed;
+  margin-bottom: var(--spacing-12);
+  line-height: var(--leading-body);
 }
 
 .prose a {
-  @apply text-brand-400 hover:underline;
+  color: var(--color-ice-signal);
+}
+.prose a:hover {
+  text-decoration: underline;
 }
 
 .prose ul, .prose ol {
-  @apply pl-5 mb-3;
+  padding-left: 20px;
+  margin-bottom: var(--spacing-12);
 }
 
 .prose li {
-  @apply mb-1;
+  margin-bottom: var(--spacing-4);
 }
 
 .prose code {
-  @apply bg-gray-800 rounded px-1.5 py-0.5 text-sm font-mono text-gray-200;
+  background: var(--surface-graphite);
+  border-radius: var(--radius-md);
+  padding: 2px 6px;
+  font-size: var(--text-caption);
+  font-family: var(--font-gtamericamono);
+  color: var(--color-paper-white);
 }
 
 .prose pre {
-  @apply bg-gray-900 rounded-lg p-3 overflow-x-auto my-3;
+  background: var(--surface-obsidian);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-12);
+  overflow-x: auto;
+  margin: var(--spacing-12) 0;
 }
 
 .prose pre code {
-  @apply bg-transparent p-0;
+  background: transparent;
+  padding: 0;
 }
 
 .prose blockquote {
-  @apply border-l-4 border-gray-700 pl-4 italic text-gray-300 my-3;
+  border-left: 4px solid var(--color-iron);
+  padding-left: 16px;
+  font-style: italic;
+  color: var(--color-fog);
+  margin: var(--spacing-12) 0;
 }
 
 .prose hr {
-  @apply my-6 border-gray-700;
+  margin: var(--spacing-24) 0;
+  border-color: var(--color-iron);
 }
 
 .prose table {
-  @apply w-full border-collapse my-3;
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--spacing-12) 0;
 }
 
 .prose th, .prose td {
-  @apply border border-gray-700 px-3 py-2 text-left;
+  border: 1px solid var(--color-iron);
+  padding: var(--spacing-8) var(--spacing-12);
+  text-align: left;
 }
 
 .prose th {
-  @apply bg-gray-800 font-semibold;
+  background: var(--surface-graphite);
+  font-weight: var(--font-weight-medium);
 }
 
-/* Invert colors for dark background */
+/* Invert variant */
 .prose-invert {
-  color: #e5e7eb;
+  color: var(--color-fog);
 }
-
 .prose-invert a {
-  @apply text-brand-400;
+  color: var(--color-ice-signal);
 }
-
 .prose-invert blockquote {
-  @apply border-gray-600 text-gray-300;
+  border-color: var(--color-slate);
+  color: var(--color-fog);
 }
-
 .prose-invert hr {
-  @apply border-gray-700;
+  border-color: var(--color-iron);
+}
+.prose-invert th, .prose-invert td {
+  border-color: var(--color-iron);
 }
 
-.prose-invert th, .prose-invert td {
-  @apply border-gray-700;
-}

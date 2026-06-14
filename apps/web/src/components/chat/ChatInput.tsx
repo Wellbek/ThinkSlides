@@ -26,7 +26,6 @@ export function ChatInput() {
 
     setIsSending(true);
     try {
-      // Store sendMessage signature is (content: string, files?: File[])
       await sendMessage(
         text.trim(),
         attachments.length > 0 ? attachments.map((a) => a.file) : undefined
@@ -47,14 +46,13 @@ export function ChatInput() {
       file,
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     }));
-    
-    // Check if any of the new files is a template type
+
     const templateFile = newAttachments.find(att => /\.(pptx|potx|pdf)$/i.test(att.file.name));
     if (templateFile && !showTemplatePrompt) {
       setPendingTemplateFile(templateFile.file);
       setShowTemplatePrompt(true);
     }
-    
+
     setAttachments((prev) => [...prev, ...newAttachments]);
     e.target.value = "";
   };
@@ -62,7 +60,6 @@ export function ChatInput() {
   const handleSaveAsTemplate = async () => {
     if (pendingTemplateFile) {
       await uploadTemplate(pendingTemplateFile);
-      // Remove the file from attachments after saving as template
       setAttachments(prev => prev.filter(a => a.file !== pendingTemplateFile));
       setPendingTemplateFile(null);
       setShowTemplatePrompt(false);
@@ -86,20 +83,20 @@ export function ChatInput() {
   };
 
   return (
-    <div className="border-t border-surface-100 px-6 py-4">
+    <div className="border-t border-iron px-6 py-4">
       {/* Attachment pills */}
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-3">
           {attachments.map((att) => (
             <span
               key={att.id}
-              className="inline-flex items-center gap-1.5 px-3 py-1 bg-surface-50 rounded-full text-xs text-gray-300"
+              className="pill text-ice"
             >
               <Paperclip size={10} />
               {att.file.name}
               <button
                 onClick={() => removeAttachment(att.id)}
-                className="ml-1 hover:text-red-400"
+                className="ml-1 text-fog hover:text-red-400 transition-colors"
               >
                 <X size={10} />
               </button>
@@ -108,12 +105,23 @@ export function ChatInput() {
         </div>
       )}
 
+      {/* Template prompt — Ice Signal outlined style */}
       {showTemplatePrompt && pendingTemplateFile && (
-        <div className="mb-3 p-2 bg-brand-500/10 border border-brand-500/30 rounded-lg text-sm flex items-center justify-between">
-          <span>Save &quot;{pendingTemplateFile.name}&quot; as a template?</span>
+        <div className="mb-3 p-2 bg-ice/5 border border-ice/20 rounded-md text-sm flex items-center justify-between">
+          <span className="text-paper">Save &quot;{pendingTemplateFile.name}&quot; as a template?</span>
           <div className="flex gap-2">
-            <button onClick={handleSaveAsTemplate} className="text-brand-400 hover:text-brand-300 text-xs px-2 py-1 rounded bg-brand-500/20">Yes, save as template</button>
-            <button onClick={handleSkipTemplate} className="text-gray-400 hover:text-white text-xs">No, just attach</button>
+            <button
+              onClick={handleSaveAsTemplate}
+              className="btn-outlined text-xs !py-1 !px-2"
+            >
+              Yes, save as template
+            </button>
+            <button
+              onClick={handleSkipTemplate}
+              className="btn-ghost text-xs"
+            >
+              No, just attach
+            </button>
           </div>
         </div>
       )}
@@ -122,7 +130,7 @@ export function ChatInput() {
         {/* File attach button */}
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="p-2 rounded-lg hover:bg-surface-50 text-gray-400 hover:text-gray-200 transition-colors"
+          className="btn-ghost"
           title="Attach files"
         >
           <Paperclip size={20} />
@@ -136,22 +144,22 @@ export function ChatInput() {
           className="hidden"
         />
 
-        {/* Text input */}
+        {/* Text input — Charcoal fill, Iron border, Fog placeholder */}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Describe your presentation or upload documents..."
           rows={1}
-          className="flex-1 bg-surface-50 border border-surface-100 rounded-xl px-4 py-2.5 text-sm text-gray-200 placeholder-gray-500 resize-none focus:outline-none focus:border-brand-500/50 max-h-32"
+          className="flex-1 bg-charcoal border border-iron rounded-md px-4 py-2.5 text-body text-paper placeholder-fog resize-none focus:outline-none focus:border-ice/50 max-h-32"
           style={{ minHeight: "44px" }}
         />
 
-        {/* Send button */}
+        {/* Send button — Outlined action style */}
         <button
           onClick={handleSend}
           disabled={isSending || (!text.trim() && attachments.length === 0)}
-          className="p-2.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="btn-outlined !p-2.5 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <Send size={18} />
         </button>

@@ -21,14 +21,14 @@ export function ChatArea() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {/* Session Header */}
-      <div className="px-6 py-3 border-b border-surface-100 flex items-center justify-between">
+      {/* Session Header — Obsidian bar */}
+      <div className="px-6 py-3 border-b border-iron bg-obsidian flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-medium text-gray-200">
+          <h2 className="text-caption font-medium text-paper">
             {activeSession.title}
           </h2>
           {activeSession.template_id && (
-            <span className="text-xs text-brand-400">
+            <span className="text-caption text-ice">
               Template: {activeSession.template_id}
             </span>
           )}
@@ -58,21 +58,21 @@ function EmptyState() {
 
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center px-8">
-      <div className="w-16 h-16 rounded-2xl bg-brand-600/10 flex items-center justify-center">
-        <MessageSquarePlus size={32} className="text-brand-400" />
+      <div className="w-16 h-16 rounded-lg bg-ice/10 flex items-center justify-center shadow-subtle">
+        <MessageSquarePlus size={32} className="text-ice" />
       </div>
       <div>
-        <h2 className="text-xl font-semibold text-gray-200 mb-1">
+        <h2 className="text-heading-sm font-medium text-paper mb-1">
           Create a presentation
         </h2>
-        <p className="text-sm text-gray-500 max-w-md">
+        <p className="text-caption text-fog max-w-md">
           Start a new chat session to generate a fully branded PowerPoint
           presentation. Upload documents, describe your goal, or paste a brief.
         </p>
       </div>
       <button
         onClick={handleNewChat}
-        className="mt-2 px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm font-medium transition-colors"
+        className="btn-outlined mt-2"
       >
         New Chat
       </button>

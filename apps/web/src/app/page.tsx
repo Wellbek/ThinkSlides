@@ -17,8 +17,8 @@ export default function HomePage() {
 
   if (authLoading) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-gray-500">Loading...</div>
+      <div className="flex h-screen items-center justify-center bg-void">
+        <div className="text-fog text-body">Loading...</div>
       </div>
     );
   }
@@ -28,8 +28,8 @@ export default function HomePage() {
       window.location.href = '/auth/login';
     }
     return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-gray-500">Redirecting to login...</div>
+      <div className="flex h-screen items-center justify-center bg-void">
+        <div className="text-fog text-body">Redirecting to login...</div>
       </div>
     );
   }

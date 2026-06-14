@@ -48,20 +48,20 @@ export default function LoginPage() {
   const devModeEnabled = process.env.NEXT_PUBLIC_DEV_MODE === 'true';
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0a0a0f] px-4">
+    <div className="flex min-h-screen items-center justify-center bg-void px-4">
       <div className="w-full max-w-sm space-y-6">
         {/* Logo / Brand */}
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-white">ThinkSlides</h1>
-          <p className="mt-1 text-sm text-gray-400">AI-powered presentations</p>
+          <h1 className="text-heading-sm font-medium text-paper">ThinkSlides</h1>
+          <p className="mt-1 text-body text-fog">AI-powered presentations</p>
         </div>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           {isRegister && (
             <div>
-              <label htmlFor="displayName" className="block text-sm font-medium text-gray-300 mb-1">
-                Display name <span className="text-gray-500">(optional)</span>
+              <label htmlFor="displayName" className="block text-body font-medium text-paper mb-1">
+                Display name <span className="text-fog">(optional)</span>
               </label>
               <input
                 id="displayName"
@@ -69,13 +69,13 @@ export default function LoginPage() {
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="Your name"
-                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                className="w-full rounded-md border border-iron bg-charcoal px-3 py-2 text-body text-paper placeholder-fog focus:border-ice focus:outline-none focus:ring-1 focus:ring-ice"
               />
             </div>
           )}
 
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-1">
+            <label htmlFor="email" className="block text-body font-medium text-paper mb-1">
               Email
             </label>
             <input
@@ -90,7 +90,7 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-1">
+            <label htmlFor="password" className="block text-body font-medium text-paper mb-1">
               Password
             </label>
             <input
@@ -104,12 +104,12 @@ export default function LoginPage() {
               className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
             {isRegister && (
-              <p className="mt-1 text-xs text-gray-500">Minimum 8 characters</p>
+              <p className="mt-1 text-caption text-fog">Minimum 8 characters</p>
             )}
           </div>
 
           {error && (
-            <div className="rounded-md bg-red-950/30 border border-red-500/20 px-3 py-2 text-sm text-red-300">
+            <div className="rounded-md bg-error/10 border border-error/20 px-3 py-2 text-body text-error">
               {error}
             </div>
           )}
@@ -117,20 +117,20 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full btn-outlined"
           >
             {loading ? 'Please wait…' : isRegister ? 'Create account' : 'Sign in'}
           </button>
         </form>
 
         {/* Toggle register / login */}
-        <p className="text-center text-sm text-gray-400">
+        <p className="text-center text-body text-fog">
           {isRegister ? (
             <>
               Already have an account?{' '}
               <button
                 onClick={() => { setIsRegister(false); setError(''); }}
-                className="text-indigo-400 hover:text-indigo-300 underline"
+                className="text-ice hover:text-paper underline"
               >
                 Sign in
               </button>
@@ -150,17 +150,17 @@ export default function LoginPage() {
 
         {/* Dev login shortcut — only shown when NEXT_PUBLIC_DEV_MODE=true */}
         {devModeEnabled && (
-          <div className="border-t border-gray-700 pt-4">
+          <div className="border-t border-iron pt-4">
             <button
               onClick={handleDevLogin}
               disabled={loading}
-              className="w-full rounded-md border border-yellow-500/30 bg-yellow-950/20 px-4 py-2 text-sm font-medium text-yellow-300 hover:bg-yellow-950/30 disabled:opacity-50 transition-colors"
+              className="w-full rounded-md border border-warning/30 bg-warning/10 px-4 py-2 text-body font-medium text-warning hover:bg-warning/20 disabled:opacity-50 transition-colors"
             >
               ⚡ Dev Login (dev@thinkslices.local)
             </button>
             <p className="mt-1 text-center text-xs text-gray-500">
               Auto-creates a dev account. Bookmark{' '}
-              <code className="text-yellow-400/70">?dev=1</code> to auto-login.
+              <code className="text-warning/70">?dev=1</code> to auto-login.
             </p>
           </div>
         )}
