@@ -3,6 +3,7 @@
 import { ChatHistorySidebar } from "./ChatHistorySidebar";
 import { ChatArea } from "../chat/ChatArea";
 import { SlidePreviewSidebar } from "../preview/SlidePreviewSidebar";
+import { SettingsModal } from "./SettingsModal";
 import { useChatStore } from "@/stores/chat-store";
 
 export function AppShell() {
@@ -24,6 +25,9 @@ export function AppShell() {
           <SlidePreviewSidebar />
         </div>
       )}
+
+      {/* Settings Modal — overlay on top of everything */}
+      <SettingsModal />
     </div>
   );
 }

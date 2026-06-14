@@ -50,6 +50,7 @@ interface ChatState {
   isLoading: boolean;
   isSending: boolean;
   sseClient: SSEClient | null;
+  settingsOpen: boolean;
 
   // Actions
   fetchSessions: () => Promise<void>;
@@ -62,6 +63,7 @@ interface ChatState {
   setSessionTemplate: (sessionId: string, templateId: string | null) => Promise<void>;
   uploadTemplate: (file: File, name?: string) => Promise<Template>;
   deleteTemplate: (id: string) => Promise<void>;
+  setSettingsOpen: (open: boolean) => void;
 }
 
 // Helper: find the last assistant message that is still incomplete
@@ -86,6 +88,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isLoading: false,
   isSending: false,
   sseClient: null,
+  settingsOpen: false,
 
   fetchSessions: async () => {
     set({ isLoading: true });
@@ -517,5 +520,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       console.error('Failed to set session template:', err);
       throw err;
     }
+  },
+
+  setSettingsOpen: (open: boolean) => {
+    set({ settingsOpen: open });
   },
 }));
