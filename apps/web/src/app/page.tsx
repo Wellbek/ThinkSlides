@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useChatStore } from '@/stores/chat-store';
-import { AppShell } from '@/components/layout/AppShell';
+import { WorkspaceShell } from '@/components/workspace/WorkspaceShell';
 
 export default function HomePage() {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
@@ -34,5 +34,5 @@ export default function HomePage() {
     );
   }
 
-  return <AppShell />;
+  return <WorkspaceShell />;
 }
