@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Zhipu GLM
     zhipu_api_key: str = ""
     zhipu_model: str = "glm-4.7"
-    zhipu_flash_model: str = "glm-4-flash"  # Cheap model for title generation
+    zhipu_flash_model: str = "glm-4.5-flash"  # Cheap model for title generation
 
     # Azure OpenAI
     azure_openai_api_key: Optional[str] = None
