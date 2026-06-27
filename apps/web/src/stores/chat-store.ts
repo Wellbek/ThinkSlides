@@ -215,6 +215,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       client.on('slide_finalized', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
       client.on('error', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
       client.on('progress', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
+      client.on('question', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
       client.on('session_title_updated', (e) => {
         try {
           const data = JSON.parse(e.data) as { session_id: string; title: string };
