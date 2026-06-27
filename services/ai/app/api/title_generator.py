@@ -5,11 +5,14 @@ Uses a cheap flash GLM model to generate concise titles from user queries.
 """
 
 from typing import Optional
+import httpx
 from app.config import settings
-from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Zhipu GLM chat completions endpoint (same default the zhipuai SDK uses).
+ZHIPU_CHAT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 
 async def generate_chat_title(first_user_message: str) -> Optional[str]:
@@ -40,23 +43,29 @@ async def generate_chat_title(first_user_message: str) -> Optional[str]:
             }
         ]
 
-        # Create a provider with the flash model
-        from app.llm.provider import ZhipuProvider
+        # GLM flash models are reasoning models: with thinking enabled they
+        # emit reasoning_content and leave `content` empty (and the reasoning
+        # is slow enough to trip the SDK's request timeout). The zhipuai SDK
+        # pinned here (v2.0.1) does not support the `thinking` parameter, so
+        # call the HTTP API directly with thinking disabled. This returns a
+        # short, direct title in `content` quickly and deterministically.
+        payload = {
+            "model": settings.zhipu_flash_model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 100,
+            "thinking": {"type": "disabled"},
+        }
+        headers = {
+            "Authorization": f"Bearer {settings.zhipu_api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(ZHIPU_CHAT_URL, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
 
-        class FlashTitleProvider(ZhipuProvider):
-            def __init__(self):
-                from zhipuai import ZhipuAI
-                self.client = ZhipuAI(api_key=settings.zhipu_api_key)
-                self.model = settings.zhipu_flash_model  # Use flash model
-
-        provider = FlashTitleProvider()
-        result = await provider.chat(
-            messages=messages,
-            temperature=0.7,
-            max_tokens=100,  # We only need a short title
-        )
-
-        title = result.get("message", {}).get("content", "").strip()
+        title = data["choices"][0]["message"].get("content", "").strip()
 
         # Clean up the title - remove quotes, limit length
         title = title.strip('"\'').strip()
@@ -71,6 +80,12 @@ async def generate_chat_title(first_user_message: str) -> Optional[str]:
         logger.info("title_generated", title=title, original_message_length=len(first_user_message))
         return title
 
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            "title_generation_failed",
+            error=f"HTTP {e.response.status_code}: {e.response.text[:200]}",
+        )
+        return None
     except Exception as e:
-        logger.error("title_generation_failed", error=str(e))
+        logger.error("title_generation_failed", error=f"{type(e).__name__}: {e}")
         return None
