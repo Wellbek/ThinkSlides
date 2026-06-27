@@ -1,7 +1,10 @@
 "use client";
 
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
 import { QuestionCard } from "./QuestionCard";
+import { buildDownloadUrl, formatFileSize } from "@/lib/download";
+import { ChevronDown, Download } from "lucide-react";
 import type { AgentEvent } from "@thinkslides/schemas";
 
 const PHASE_LABEL: Record<string, string> = {
@@ -40,42 +43,299 @@ function fmtTime(ts?: string): string {
   }
 }
 
+function fmtDuration(ms?: number): string {
+  if (ms == null) return "";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60000);
+  const s = Math.round((ms % 60000) / 1000);
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+// ──────────────────────────────────────────────
+// Step grouping: collapse the flat event stream
+// into per-tool "steps" (thoughts → call → result)
+// plus standalone event nodes, preserving order.
+// ──────────────────────────────────────────────
+
+interface StepNode {
+  kind: "step";
+  key: string;
+  callId: string;
+  toolName: string;
+  phase?: string;
+  thoughts: any[];
+  progress: any[];
+  args: Record<string, unknown>;
+  startTs: string;
+  endTs?: string;
+  result?: unknown;
+  success?: boolean;
+  error?: string;
+  durationMs?: number;
+  tokenCount?: number;
+  running: boolean;
+}
+interface ThoughtsNode {
+  kind: "thoughts";
+  key: string;
+  thoughts: any[];
+  progress: any[];
+}
+interface EventNode {
+  kind: "event";
+  key: string;
+  ev: any;
+}
+type FeedNode = StepNode | ThoughtsNode | EventNode;
+
+function buildNodes(events: AgentEvent[]): FeedNode[] {
+  const nodes: FeedNode[] = [];
+  let pendingThoughts: any[] = [];
+  let pendingProgress: any[] = [];
+  let stepCounter = 0;
+  const openSteps = new Map<string, StepNode>();
+
+  const flushThoughts = () => {
+    if (pendingThoughts.length || pendingProgress.length) {
+      nodes.push({
+        kind: "thoughts",
+        key: `th-${nodes.length}`,
+        thoughts: pendingThoughts,
+        progress: pendingProgress,
+      });
+      pendingThoughts = [];
+      pendingProgress = [];
+    }
+  };
+
+  for (const ev of events as any[]) {
+    switch (ev.type) {
+      case "thought":
+        pendingThoughts.push(ev);
+        break;
+      case "progress":
+        pendingProgress.push(ev);
+        break;
+      case "tool_call": {
+        stepCounter++;
+        const step: StepNode = {
+          kind: "step",
+          key: `step-${stepCounter}-${ev.callId}`,
+          callId: ev.callId,
+          toolName: ev.toolName,
+          phase: ev.phase,
+          thoughts: pendingThoughts,
+          progress: pendingProgress,
+          args: ev.toolArgs || {},
+          startTs: ev.timestamp,
+          running: true,
+        };
+        pendingThoughts = [];
+        pendingProgress = [];
+        nodes.push(step);
+        openSteps.set(ev.callId, step);
+        break;
+      }
+      case "tool_result": {
+        const step = openSteps.get(ev.callId);
+        if (step) {
+          step.running = false;
+          step.endTs = ev.timestamp;
+          step.result = ev.result;
+          step.success = ev.success;
+          step.error = ev.error;
+          step.durationMs = ev.durationMs;
+          step.tokenCount = ev.tokenCount;
+          openSteps.delete(ev.callId);
+        } else {
+          // Orphan result (e.g. a reloaded session where the call event was
+          // not persisted): synthesize a completed step so the detail still
+          // renders.
+          stepCounter++;
+          nodes.push({
+            kind: "step",
+            key: `step-${stepCounter}-orphan-${ev.callId}`,
+            callId: ev.callId,
+            toolName: ev.toolName,
+            phase: ev.phase,
+            thoughts: [],
+            progress: [],
+            args: {},
+            startTs: ev.timestamp,
+            endTs: ev.timestamp,
+            result: ev.result,
+            success: ev.success,
+            error: ev.error,
+            durationMs: ev.durationMs,
+            tokenCount: ev.tokenCount,
+            running: false,
+          });
+        }
+        break;
+      }
+      case "slide_finalized":
+      case "file_generated":
+      case "question":
+      case "error":
+      case "done":
+        flushThoughts();
+        nodes.push({ kind: "event", key: `ev-${nodes.length}-${ev.type}`, ev });
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (pendingThoughts.length || pendingProgress.length) {
+    nodes.push({
+      kind: "thoughts",
+      key: `th-trailing`,
+      thoughts: pendingThoughts,
+      progress: pendingProgress,
+    });
+  }
+  return nodes;
+}
+
+// ──────────────────────────────────────────────
+// ActivityFeed: scroll container + auto-scroll
+// ──────────────────────────────────────────────
+
 export function ActivityFeed() {
   const messages = useChatStore((s) => s.activeMessages);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+
+  // Signature that changes whenever the visible content grows.
+  const signature = useMemo(() => {
+    let events = 0;
+    for (const m of messages) events += m.agentEventStream?.length ?? 0;
+    const last = messages[messages.length - 1];
+    return `${messages.length}:${events}:${last?.id ?? ""}`;
+  }, [messages]);
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (atBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setShowJump(false);
+    } else {
+      setShowJump(true);
+    }
+  }, [signature]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    atBottomRef.current = atBottom;
+    if (atBottom) setShowJump(false);
+  };
+
+  const jumpToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    atBottomRef.current = true;
+    setShowJump(false);
+  };
+
   return (
-    <div className="ws-feed">
-      {messages.length === 0 && (
-        <div className="ws-empty-note">Send a message to start the agent workflow.</div>
-      )}
-      {messages.map((m) =>
-        m.role === "user" ? (
-          <FeedItem key={m.id} dot={<span className="ws-av indigo">WK</span>} dotClass="ws-dot-user">
-            <div className="ws-feed-header"><span className="lbl">You</span><span className="ts">{fmtTime(m.created_at)}</span></div>
-            <div className="ws-feed-text">{m.content}</div>
-          </FeedItem>
-        ) : (
-          <AssistantBlock key={m.id} message={m} />
-        )
+    <div className="ws-feed-wrap">
+      <div className="ws-feed" ref={scrollRef} onScroll={onScroll}>
+        {messages.length === 0 && (
+          <div className="ws-empty-note">Send a message to start the agent workflow.</div>
+        )}
+        {messages.map((m) =>
+          m.role === "user" ? (
+            <FeedItem key={m.id} dot={<span className="ws-av indigo">WK</span>} dotClass="ws-dot-user">
+              <div className="ws-feed-header"><span className="lbl">You</span><span className="ts">{fmtTime(m.created_at)}</span></div>
+              <div className="ws-feed-text">{m.content}</div>
+            </FeedItem>
+          ) : (
+            <AssistantBlock key={m.id} message={m} />
+          )
+        )}
+      </div>
+
+      {showJump && (
+        <button className="ws-jump" onClick={jumpToBottom} title="Jump to latest">
+          <span>New messages</span>
+          <ChevronDown size={14} />
+          <span className="ws-jump-arrow" />
+        </button>
       )}
     </div>
   );
 }
 
 function AssistantBlock({ message }: { message: any }) {
-  const events: AgentEvent[] = message.agentEventStream || [];
+  const events: AgentEvent[] = useMemo(
+    () => message.agentEventStream || [],
+    [message.agentEventStream]
+  );
   const isLive = message.isComplete === false;
 
-  const lastThought = [...events].reverse().find((e) => e.type === "thought") as any;
-  const lastProgress = [...events].reverse().find((e) => e.type === "progress") as any;
+  const nodes = useMemo(() => buildNodes(events), [events]);
+
+  // Which step is auto-expanded: a running step wins, else the most recent
+  // completed step. Everything else auto-collapses to a one-line summary so
+  // the feed keeps only the latest step in full detail. Manual toggles
+  // override the auto behaviour.
+  const autoKey = useMemo(() => {
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const n = nodes[i];
+      if (n.kind === "step" && n.running) return n.key;
+    }
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const n = nodes[i];
+      if (n.kind === "step" && !n.running) return n.key;
+    }
+    return null;
+  }, [nodes]);
+
+  const [manual, setManual] = useState<Record<string, boolean>>({});
+  const isExpanded = (key: string) => (key in manual ? manual[key] : key === autoKey);
+  const toggle = (key: string) => setManual((m) => ({ ...m, [key]: !isExpanded(key) }));
+
+  // Live "working" shimmer: shown when the agent is live but there is no open
+  // tool step to render the timer against (it is still reasoning).
+  const showLiveShimmer =
+    isLive && (nodes.length === 0 || nodes[nodes.length - 1].kind !== "step" || (nodes[nodes.length - 1] as StepNode).running === false);
+  const liveThought = useMemo(() => {
+    const last = nodes[nodes.length - 1];
+    if (last && last.kind === "thoughts") {
+      return [...last.thoughts].reverse()[0];
+    }
+    return null;
+  }, [nodes]);
 
   return (
     <>
-      {events.map((ev: any, i) => (
-        <EventItem key={`${message.id}-${i}`} ev={ev} />
-      ))}
+      {nodes.map((node) => {
+        if (node.kind === "step") {
+          return (
+            <StepItem
+              key={node.key}
+              step={node}
+              expanded={isExpanded(node.key)}
+              onToggle={() => toggle(node.key)}
+            />
+          );
+        }
+        if (node.kind === "thoughts") {
+          // Trailing thoughts while live → shimmer working block.
+          if (node === nodes[nodes.length - 1] && isLive) return null; // rendered via shimmer below
+          return <ThoughtsBlock key={node.key} node={node} />;
+        }
+        return <EventItem key={node.key} ev={node.ev} />;
+      })}
 
-      {isLive && (
+      {showLiveShimmer && (
         <FeedItem
           dot={
             <span className="ws-ai-dot">
@@ -87,64 +347,165 @@ function AssistantBlock({ message }: { message: any }) {
         >
           <div className="ws-feed-header">
             <span className="ws-shimmer-headline">
-              {lastThought ? PHASE_LABEL[lastThought.phase] ?? "Working" : "Working..."}
+              {liveThought ? PHASE_LABEL[liveThought.phase] ?? "Working" : "Working..."}
             </span>
           </div>
           <span className="ws-shimmer-body">
-            {lastThought ? lastThought.content : "The agent is reasoning through the next step."}
+            {liveThought ? liveThought.content : "The agent is reasoning through the next step."}
             <span className="ws-ai-cursor" />
           </span>
-          {lastProgress && (
-            <div className="ws-ai-progress">
-              <div className="track">
-                <div className="fill" style={{ width: `${pct(lastProgress.current, lastProgress.total)}%` }} />
-              </div>
-              <div className="meta">
-                <span>{lastProgress.message || `${lastProgress.current} / ${lastProgress.total}`}</span>
-                <span><b>{pct(lastProgress.current, lastProgress.total)}%</b></span>
-              </div>
-            </div>
-          )}
         </FeedItem>
       )}
     </>
   );
 }
 
+function ThoughtsBlock({ node }: { node: ThoughtsNode }) {
+  return (
+    <>
+      {node.thoughts.map((t: any, i: number) => (
+        <FeedItem key={`th-${i}`} dot="◆" dotClass="ws-dot-fact">
+          <div className="ws-feed-header"><span className="lbl">{PHASE_LABEL[t.phase] ?? "Thinking"}</span><span className="ts">{fmtTime(t.timestamp)}</span></div>
+          {t.content && <div className="ws-feed-text">{t.content}</div>}
+        </FeedItem>
+      ))}
+      {node.progress.map((p: any, i: number) => (
+        <FeedItem key={`pg-${i}`} dot="◆" dotClass="ws-dot-fact">
+          <div className="ws-feed-header"><span className="lbl">Progress</span><span className="ts">{fmtTime(p.timestamp)}</span></div>
+          <div className="ws-feed-text">{p.message}</div>
+          <ProgressBar current={p.current} total={p.total} />
+        </FeedItem>
+      ))}
+    </>
+  );
+}
+
+function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: boolean; onToggle: () => void }) {
+  const failed = step.success === false;
+  const ok = step.success === true;
+  const dotClass = failed ? "ws-dot-error" : ok ? "ws-dot-fact" : "ws-dot-status";
+  const dot = failed ? "●" : ok ? "✓" : "↺";
+
+  if (!expanded) {
+    return (
+      <FeedItem dot={dot} dotClass={dotClass}>
+        <div className="ws-step-summary" onClick={onToggle} role="button" tabIndex={0}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}>
+          <span className="lbl">{toolLabel(step.toolName)}</span>
+          {step.phase && <span className="ws-step-phase">{PHASE_LABEL[step.phase] ?? step.phase}</span>}
+          <StepTimer startTs={step.startTs} endTs={step.endTs} durationMs={step.durationMs} running={step.running} />
+          <span className="ws-step-toggle">▾ expand</span>
+        </div>
+      </FeedItem>
+    );
+  }
+
+  const lastThought = [...step.thoughts].reverse()[0];
+  return (
+    <FeedItem dot={dot} dotClass={dotClass}>
+      <div className="ws-step">
+        <div className="ws-feed-header ws-step-head" onClick={onToggle} role="button" tabIndex={0}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}>
+          <span className="lbl">{toolLabel(step.toolName)}</span>
+          {step.phase && <span className="ws-step-phase">{PHASE_LABEL[step.phase] ?? step.phase}</span>}
+          <span className="ws-spacer-sm" />
+          <StepTimer startTs={step.startTs} endTs={step.endTs} durationMs={step.durationMs} running={step.running} />
+          <span className={`ws-step-mark ${failed ? "bad" : ok ? "ok" : "run"}`}>
+            {step.running ? "running" : failed ? "failed" : "complete"}
+          </span>
+          <span className="ws-step-toggle">▴ collapse</span>
+        </div>
+
+        {/* Reasoning - full detail, no truncation. */}
+        {step.thoughts.map((t: any, i: number) => (
+          <div className="ws-feed-text ws-step-thought" key={`th-${i}`}>
+            {t.content}
+          </div>
+        ))}
+
+        {Object.keys(step.args || {}).length > 0 && (
+          <DetailBlock label="Args" content={stringify(step.args)} />
+        )}
+
+        {step.progress.map((p: any, i: number) => (
+          <div className="ws-step-progress" key={`pg-${i}`}>
+            <div className="ws-feed-text">{p.message}</div>
+            <ProgressBar current={p.current} total={p.total} />
+          </div>
+        ))}
+
+        {/* Result - full detail; only clamped when extremely long. */}
+        {!step.running && (
+          step.error ? (
+            <DetailBlock label="Error" content={String(step.error)} error />
+          ) : (
+            <DetailBlock label="Result" content={stringify(step.result)} />
+          )
+        )}
+
+        {lastThought?.phase && step.running && (
+          <span className="ws-shimmer-body ws-step-live">
+            {lastThought.content || "Working..."}
+            <span className="ws-ai-cursor" />
+          </span>
+        )}
+      </div>
+    </FeedItem>
+  );
+}
+
+/** Timer that ticks while a step is running, freezing on its duration once done. */
+function StepTimer({ startTs, endTs, durationMs, running }: {
+  startTs: string; endTs?: string; durationMs?: number; running: boolean;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [running]);
+
+  if (running && startTs) {
+    const elapsed = now - new Date(startTs).getTime();
+    return <span className="ws-step-dur live" title={`started ${fmtTime(startTs)}`}>{fmtDuration(elapsed)}</span>;
+  }
+  return <span className="ws-step-dur" title={endTs ? `finished ${fmtTime(endTs)}` : undefined}>{fmtDuration(durationMs)}</span>;
+}
+
+/** Full-detail block; only clamps output that is truly excessive. */
+function DetailBlock({ label, content, error }: { label: string; content: string; error?: boolean }) {
+  const CLAMP = 4000;
+  const [open, setOpen] = useState(false);
+  if (!content) return null;
+  const long = content.length > CLAMP;
+  const shown = long && !open ? content.slice(0, CLAMP) : content;
+  return (
+    <div className="ws-step-detail">
+      <div className="ws-step-detail-head" onClick={() => long && setOpen((o) => !o)} role={long ? "button" : undefined} tabIndex={long ? 0 : undefined}>
+        <span className="k">{label}</span>
+        {long && (
+          <span className="ws-step-more">
+            {open ? "show less" : `show ${content.length - CLAMP} more chars`}
+          </span>
+        )}
+      </div>
+      <pre className={`ws-step-pre ${error ? "bad" : ""}`}>{shown}</pre>
+    </div>
+  );
+}
+
+function ProgressBar({ current, total }: { current?: number; total?: number }) {
+  return (
+    <div className="ws-ai-progress">
+      <div className="track"><div className="fill" style={{ width: `${pct(current, total)}%` }} /></div>
+      <div className="meta"><span>{current ?? 0} / {total ?? 0}</span><span><b>{pct(current, total)}%</b></span></div>
+    </div>
+  );
+}
+
 function EventItem({ ev }: { ev: any }) {
   switch (ev.type) {
-    case "thought":
-      return (
-        <FeedItem dot="◆" dotClass="ws-dot-fact">
-          <div className="ws-feed-header"><span className="lbl">{PHASE_LABEL[ev.phase] ?? "Thinking"}</span><span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          {ev.content && <div className="ws-feed-text">{ev.content}</div>}
-        </FeedItem>
-      );
-    case "tool_call":
-      return (
-        <FeedItem dot="↺" dotClass="ws-dot-status">
-          <div className="ws-feed-header"><span className="lbl">{toolLabel(ev.toolName)}</span><span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          {Object.keys(ev.toolArgs || {}).length > 0 && (
-            <div className="ws-feed-text">Args: <code>{truncate(JSON.stringify(ev.toolArgs), 140)}</code></div>
-          )}
-        </FeedItem>
-      );
-    case "tool_result":
-      return (
-        <FeedItem dot={ev.success ? "◆" : "●"} dotClass={ev.success ? "ws-dot-fact" : "ws-dot-error"}>
-          <div className="ws-feed-header"><span className="lbl">{toolLabel(ev.toolName)} - result</span><span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          <div className="ws-card">
-            <div className="ws-card-head">
-              <div className="ws-card-title">{ev.success ? "completed" : "failed"} <span className="tag">{ev.durationMs ? `${ev.durationMs}ms` : "tool_result"}</span></div>
-            </div>
-            {ev.error ? (
-              <div className="ws-card-row bad"><span className="v">{ev.error}</span></div>
-            ) : (
-              <div className="ws-card-row"><span className="v">{truncate(stringify(ev.result), 240)}</span></div>
-            )}
-          </div>
-        </FeedItem>
-      );
     case "slide_finalized":
       return (
         <FeedItem dot="↺" dotClass="ws-dot-status">
@@ -152,36 +513,33 @@ function EventItem({ ev }: { ev: any }) {
           <div className="ws-feed-text">{ev.previewUrl ? <code>preview ready</code> : "Layout cloned from template; placeholders filled."}</div>
         </FeedItem>
       );
-    case "error":
-      return (
-        <FeedItem dot="●" dotClass="ws-dot-error">
-          <div className="ws-feed-header"><span className="lbl" style={{ color: "#F87171" }}>Error</span><span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          <div className="ws-feed-text">{ev.message}{ev.code ? <code> ({ev.code})</code> : null}</div>
-        </FeedItem>
-      );
-    case "progress":
-      return (
-        <FeedItem dot="◆" dotClass="ws-dot-fact">
-          <div className="ws-feed-header"><span className="lbl">Progress</span><span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          <div className="ws-feed-text">{ev.message}</div>
-          <div className="ws-ai-progress">
-            <div className="track"><div className="fill" style={{ width: `${pct(ev.current, ev.total)}%` }} /></div>
-            <div className="meta"><span>{ev.current} / {ev.total}</span><span><b>{pct(ev.current, ev.total)}%</b></span></div>
-          </div>
-        </FeedItem>
-      );
-    case "file_generated":
+    case "file_generated": {
+      const url = buildDownloadUrl(`/api/orchestrator/files/${ev.fileId}`);
       return (
         <FeedItem dot="↺" dotClass="ws-dot-status">
           <div className="ws-feed-header sys">File generated - <b>{ev.fileName}</b><span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          <div className="ws-feed-text">{ev.slideCount ? `${ev.slideCount} slides` : "ready to download"}</div>
+          <div className="ws-feed-text">
+            {ev.slideCount ? `${ev.slideCount} slides` : "ready to download"}
+            {ev.fileSizeBytes ? ` - ${formatFileSize(ev.fileSizeBytes)}` : ""}
+          </div>
+          <a className="ws-tb-btn primary ws-file-dl" href={url} download>
+            <Download size={13} /> Download
+          </a>
         </FeedItem>
       );
+    }
     case "question":
       return (
         <FeedItem dot="?" dotClass="ws-dot-q">
           <div className="ws-feed-header"><span className="lbl">Agent question</span><span className="ws-qbadge">needs your input</span><span className="ts">{fmtTime(ev.timestamp)}</span></div>
           <QuestionCard question={ev.question} options={ev.options} context={ev.context} />
+        </FeedItem>
+      );
+    case "error":
+      return (
+        <FeedItem dot="●" dotClass="ws-dot-error">
+          <div className="ws-feed-header"><span className="lbl" style={{ color: "#F87171" }}>Error</span><span className="ts">{fmtTime(ev.timestamp)}</span></div>
+          <div className="ws-feed-text">{ev.message}{ev.code ? <code> ({ev.code})</code> : null}</div>
         </FeedItem>
       );
     case "done":
@@ -219,15 +577,11 @@ function pct(c?: number, t?: number): number {
   return Math.min(100, Math.round(((c ?? 0) / t) * 100));
 }
 
-function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n) + "..." : s;
-}
-
 function stringify(v: unknown): string {
   if (v == null) return "";
   if (typeof v === "string") return v;
   try {
-    return JSON.stringify(v);
+    return JSON.stringify(v, null, 2);
   } catch {
     return String(v);
   }
