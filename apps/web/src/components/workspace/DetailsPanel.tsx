@@ -2,8 +2,9 @@
 
 import { useMemo } from "react";
 import { useChatStore, type GeneratedFile } from "@/stores/chat-store";
-import { FileSpreadsheet, Presentation, Globe, Plus, Monitor } from "lucide-react";
-import type { SlideFinalizedEvent } from "@thinkslides/schemas";
+import { collectPreviewSlides } from "@/lib/slides";
+import { buildDownloadUrl, formatFileSize } from "@/lib/download";
+import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download } from "lucide-react";
 
 export function DetailsPanel() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -17,8 +18,12 @@ export function DetailsPanel() {
     ? templates.find((t) => t.id === session.template_id)?.name
     : null;
 
-  const slides = useMemo(() => collectSlides(activeMessages), [activeMessages]);
+  const slides = useMemo(() => collectPreviewSlides(activeMessages), [activeMessages]);
   const sources = useMemo(() => collectSources(activeMessages, activeFiles), [activeMessages, activeFiles]);
+  const generatedFiles = useMemo(
+    () => activeFiles.map((f) => ({ ...f, downloadUrl: buildDownloadUrl(f.file_url) })),
+    [activeFiles]
+  );
 
   const created = session?.created_at ? new Date(session.created_at).toISOString().slice(0, 10) : "-";
 
@@ -85,31 +90,30 @@ export function DetailsPanel() {
           </div>
         ))}
       </div>
+
+      {generatedFiles.length > 0 && (
+        <>
+          <div className="ws-divider" />
+          <div className="ws-sect-label">Downloads</div>
+          <div className="ws-sources">
+            {generatedFiles.map((f) => (
+              <a className="ws-src ws-src-dl" key={f.id} href={f.downloadUrl} download title={`Download ${f.filename}`}>
+                <div className="s-ic pptx"><Presentation size={14} /></div>
+                <div className="s-body">
+                  <div className="s-name">{f.filename}</div>
+                  <div className="s-meta">
+                    {f.slide_count ? `${f.slide_count} slides` : "PPTX"}
+                    {f.file_size ? ` - ${formatFileSize(f.file_size)}` : ""}
+                  </div>
+                </div>
+                <span className="s-tag"><Download size={13} /></span>
+              </a>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
-}
-
-interface SlideRow { key: string; slideIndex: number; title: string }
-
-function collectSlides(messages: any[]): SlideRow[] {
-  const seen = new Set<number>();
-  const rows: SlideRow[] = [];
-  const push = (ev: SlideFinalizedEvent) => {
-    if (seen.has(ev.slideIndex)) return;
-    seen.add(ev.slideIndex);
-    const data = ev.slideData as any;
-    rows.push({
-      key: `${ev.slideIndex}-${ev.timestamp}`,
-      slideIndex: ev.slideIndex,
-      title: data?.title || data?.layout || `Slide ${ev.slideIndex + 1}`,
-    });
-  };
-  for (const m of messages) {
-    for (const ev of m.agentEventStream || []) {
-      if (ev.type === "slide_finalized") push(ev);
-    }
-  }
-  return rows.sort((a, b) => a.slideIndex - b.slideIndex);
 }
 
 interface SourceRow { key: string; name: string; meta: string; kind: "xlsx" | "pptx" | "web" }
