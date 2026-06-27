@@ -1,15 +1,18 @@
 "use client";
 
 import { useChatStore } from "@/stores/chat-store";
+import { useLayoutStore } from "@/stores/layout-store";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatInput } from "./ChatInput";
 import { TemplateSelector } from "./TemplateSelector";
-import { MessageSquarePlus } from "lucide-react";
+import { MessageSquarePlus, PanelRightClose, Loader2 } from "lucide-react";
 
 export function ChatArea() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const sessions = useChatStore((s) => s.sessions);
   const createSession = useChatStore((s) => s.createSession);
+  const isGenerating = useChatStore((s) => s.isGenerating());
+  const toggleChat = useLayoutStore((s) => s.toggleChat);
 
   const activeSession = activeSessionId
     ? sessions.find((s) => s.id === activeSessionId) ?? null
@@ -21,7 +24,7 @@ export function ChatArea() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {/* Session Header — Obsidian bar */}
+      {/* Session Header */}
       <div className="px-6 py-3 border-b border-iron bg-obsidian flex items-center justify-between">
         <div>
           <h2 className="text-caption font-medium text-paper">
@@ -33,7 +36,22 @@ export function ChatArea() {
             </span>
           )}
         </div>
-        <TemplateSelector />
+        <div className="flex items-center gap-2">
+          {isGenerating && (
+            <div className="flex items-center gap-1.5 text-ice text-caption">
+              <Loader2 size={14} className="animate-spin" />
+              <span>Generating...</span>
+            </div>
+          )}
+          <TemplateSelector />
+          <button
+            onClick={toggleChat}
+            className="p-1.5 rounded-md hover:bg-slate-dark text-fog hover:text-paper transition-colors"
+            title="Collapse chat"
+          >
+            <PanelRightClose size={16} />
+          </button>
+        </div>
       </div>
 
       {/* Messages */}

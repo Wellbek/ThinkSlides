@@ -1,14 +1,25 @@
+// SlidePreviewSidebar.tsx
 "use client";
 
 import { useChatStore } from "@/stores/chat-store";
-import { Download, Presentation } from "lucide-react";
+import { useLayoutStore } from "@/stores/layout-store";
+import { Download, Presentation, PanelRightOpen, PanelRightClose, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { SlideFinalizedEvent } from "@thinkslides/schemas";
 
-export function SlidePreviewSidebar() {
-  const { activeEvents, activeFiles, activeMessages } = useChatStore();
+interface SlidePreviewSidebarProps {
+  collapsed?: boolean;
+  width?: number;
+}
 
-  // Extract slides from slide_finalized events in both activeEvents and message event streams
+export function SlidePreviewSidebar({ collapsed = false, width = 320 }: SlidePreviewSidebarProps) {
+  const { activeEvents, activeFiles, activeMessages } = useChatStore();
+  const togglePreview = useLayoutStore((s) => s.togglePreview);
+
+  // Derive generating state
+  const isGenerating = activeMessages.some((msg: any) => msg.isStreaming === true) ||
+                       activeEvents.some((event: any) => event.type === "thinking" || event.status === "pending");
+
   const slidesFromActiveEvents = activeEvents
     .filter((event): event is SlideFinalizedEvent => event.type === "slide_finalized")
     .map((event) => event.slideData as any);
@@ -20,31 +31,63 @@ export function SlidePreviewSidebar() {
         .map((event) => event.slideData as any)
   );
 
-  // Deduplicate by slideIndex (prefer activeEvents which are more recent)
   const seenIndices = new Set(slidesFromActiveEvents.map((s: any) => s.slideIndex));
   const allSlides = [
     ...slidesFromActiveEvents,
     ...slidesFromMessages.filter((s: any) => !seenIndices.has(s.slideIndex)),
   ].sort((a: any, b: any) => a.slideIndex - b.slideIndex);
 
-  // Map GeneratedFile to the shape expected by the UI
   const files = activeFiles.map((file) => ({
     id: file.id,
     downloadUrl: file.file_url,
     fileName: file.filename,
   }));
 
-  return (
-    <div className="flex flex-col" style={{ width: 320 }}>
-      {/* Header */}
-      <div className="px-4 py-2.5 border-b border-iron flex items-center justify-between">
-        <span className="text-caption font-medium text-paper">Slide Preview</span>
+  if (collapsed) {
+    return (
+      <div className="w-full h-full bg-charcoal flex flex-col items-center py-4 gap-2">
+        <button
+          onClick={togglePreview}
+          className="p-2 rounded-md hover:bg-slate-dark text-fog hover:text-paper transition-colors"
+          title="Expand preview"
+        >
+          <PanelRightOpen size={20} />
+        </button>
         {allSlides.length > 0 && (
-          <span className="text-caption text-fog font-mono tabular-nums">{allSlides.length} slides</span>
+          <span className="text-caption text-ice font-mono tabular-nums mt-1">
+            {allSlides.length}
+          </span>
+        )}
+        {isGenerating && (
+          <div className="mt-1">
+            <Loader2 size={18} className="text-ice animate-spin" />
+          </div>
         )}
       </div>
+    );
+  }
 
-      {/* Slide thumbnails */}
+  return (
+    <div className="flex flex-col h-full" style={{ width }}>
+      <div className="flex-shrink-0 px-4 py-2.5 border-b border-iron flex items-center justify-between">
+        <span className="text-caption font-medium text-paper">Slide Preview</span>
+        <div className="flex items-center gap-2">
+          {allSlides.length > 0 && (
+            <span className="text-caption text-fog font-mono tabular-nums">{allSlides.length} slides</span>
+          )}
+          {isGenerating && (
+            <Loader2 size={14} className="text-ice animate-spin" />
+          )}
+          <button
+            onClick={togglePreview}
+            className="p-1 rounded-md hover:bg-slate-dark text-fog hover:text-paper transition-colors"
+            title="Collapse preview"
+          >
+            <PanelRightClose size={16} />
+          </button>
+        </div>
+      </div>
+
       <div className="flex-1 overflow-y-auto p-3 space-y-3 scroll-smooth">
         <AnimatePresence mode="popLayout">
           {allSlides.length === 0 && (
@@ -61,7 +104,6 @@ export function SlidePreviewSidebar() {
               </p>
             </motion.div>
           )}
-
           {allSlides.map((slide, idx) => (
             <motion.div
               key={slide.slideIndex}
@@ -72,7 +114,6 @@ export function SlidePreviewSidebar() {
             >
               <div className="p-3">
                 <div className="bg-paper rounded-lg aspect-video flex items-center justify-center text-void text-caption relative shadow-inner overflow-hidden">
-                  {/* Decorative mockup content */}
                   <div className="absolute inset-x-3 top-3 space-y-[3px]">
                     <div className="h-[3px] bg-iron/60 rounded-full w-4/5" />
                     <div className="h-[2px] bg-iron/40 rounded-full w-3/5" />
@@ -90,11 +131,9 @@ export function SlidePreviewSidebar() {
                       {slide.layoutName}
                     </p>
                   </div>
-                  {/* Slide number badge */}
                   <span className="absolute top-1.5 left-1.5 bg-obsidian/90 text-paper rounded-md w-5 h-5 flex items-center justify-center text-caption font-bold shadow-sm backdrop-blur-sm">
                     {slide.slideIndex + 1}
                   </span>
-                  {/* Hover shimmer */}
                   <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
                 </div>
               </div>
@@ -116,16 +155,13 @@ export function SlidePreviewSidebar() {
         </AnimatePresence>
       </div>
 
-      {/* Download section */}
       {files.length > 0 && (
-        <div className="border-t border-iron p-3 space-y-2">
+        <div className="flex-shrink-0 border-t border-iron p-3 space-y-2">
           {files.map((file) => {
-            // Build authenticated download URL
             const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
             const downloadUrl = file.downloadUrl
               ? `${file.downloadUrl}${token ? `${file.downloadUrl.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}` : ""}`
               : "#";
-
             return (
               <a
                 key={file.id}

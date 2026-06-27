@@ -1,11 +1,17 @@
+// ChatHistorySidebar.tsx
 "use client";
 
 import { useChatStore } from "@/stores/chat-store";
 import { formatDistanceToNow } from "@/lib/date";
-import { MessageSquare, Search, Trash2, Plus, Presentation, Settings } from "lucide-react";
+import { MessageSquare, Search, Trash2, Plus, Presentation, Settings, PanelLeftOpen, PanelLeftClose, Loader2 } from "lucide-react";
 import { useState, useMemo } from "react";
+import { useLayoutStore } from "@/stores/layout-store";
 
-export function ChatHistorySidebar() {
+interface ChatHistorySidebarProps {
+  collapsed?: boolean;
+}
+
+export function ChatHistorySidebar({ collapsed = false }: ChatHistorySidebarProps) {
   const {
     sessions,
     activeSessionId,
@@ -13,11 +19,21 @@ export function ChatHistorySidebar() {
     createSession,
     deleteSession,
     templates,
+    activeMessages,
+    activeEvents,
   } = useChatStore();
 
   const setSettingsOpen = useChatStore((s) => s.setSettingsOpen);
+  const toggleSidebar = useLayoutStore((s) => s.toggleSidebar);
+
+  // Derive generating state from active messages (if any message is streaming)
+  const isGenerating = activeMessages.some((msg: any) => msg.isStreaming === true) ||
+                       activeEvents.some((event: any) => event.type === "thinking" || event.status === "pending");
 
   const [searchQuery, setSearchQuery] = useState("");
+
+  // ... rest of the component remains the same (filteredSessions, transformedSessions, grouped, etc.)
+  // I'll copy the full component code below, but keep the logic identical to previous except for the isGenerating derivation
 
   const filteredSessions = useMemo(() => {
     if (!searchQuery.trim()) return sessions;
@@ -38,27 +54,69 @@ export function ChatHistorySidebar() {
   }, [filteredSessions, templates]);
 
   const grouped = groupByDate(transformedSessions);
+  const hasActiveProcessing = activeSessionId && isGenerating;
+
+  if (collapsed) {
+    return (
+      <aside className="w-full h-full bg-obsidian border-r border-iron flex flex-col items-center py-4 gap-2">
+        <button
+          onClick={toggleSidebar}
+          className="p-2 rounded-md hover:bg-slate-dark text-fog hover:text-paper transition-colors"
+          title="Expand sidebar"
+        >
+          <PanelLeftOpen size={20} />
+        </button>
+        <button
+          onClick={async () => { await createSession(); }}
+          className="p-2 rounded-md hover:bg-slate-dark text-fog hover:text-paper transition-colors"
+          title="New Chat"
+        >
+          <Plus size={20} />
+        </button>
+        {hasActiveProcessing && (
+          <div className="relative mt-1">
+            <Loader2 size={18} className="text-ice animate-spin" />
+            <span className="absolute -top-1 -right-1 h-2 w-2 bg-ice rounded-full animate-pulse" />
+          </div>
+        )}
+        <div className="flex-1" />
+        <button
+          onClick={() => setSettingsOpen(true)}
+          className="p-2 rounded-md hover:bg-slate-dark text-fog hover:text-paper transition-colors"
+          title="Settings"
+        >
+          <Settings size={18} />
+        </button>
+      </aside>
+    );
+  }
 
   const handleNewChat = async () => {
     await createSession();
   };
 
   return (
-    <aside className="w-[280px] min-w-[280px] bg-obsidian border-r border-iron flex flex-col">
-      {/* Header */}
-      <div className="p-4 border-b border-iron">
+    <aside className="w-full h-full bg-obsidian border-r border-iron flex flex-col">
+      <div className="flex-shrink-0 p-4 border-b border-iron">
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-heading-sm font-medium text-paper">ThinkSlides</h1>
-          <button
-            onClick={handleNewChat}
-            className="p-1.5 rounded-md hover:bg-slate-dark text-fog hover:text-paper transition-colors"
-            title="New Chat"
-          >
-            <Plus size={20} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={toggleSidebar}
+              className="p-1.5 rounded-md hover:bg-slate-dark text-fog hover:text-paper transition-colors"
+              title="Collapse sidebar"
+            >
+              <PanelLeftClose size={18} />
+            </button>
+            <button
+              onClick={handleNewChat}
+              className="p-1.5 rounded-md hover:bg-slate-dark text-fog hover:text-paper transition-colors"
+              title="New Chat"
+            >
+              <Plus size={18} />
+            </button>
+          </div>
         </div>
-
-        {/* Search */}
         <div className="relative">
           <Search
             size={14}
@@ -74,8 +132,7 @@ export function ChatHistorySidebar() {
         </div>
       </div>
 
-      {/* Session List */}
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 overflow-y-auto p-2 min-h-0">
         {Object.entries(grouped).map(([dateLabel, items]) => (
           <div key={dateLabel} className="mb-4">
             <p className="px-3 py-1 text-caption font-medium text-fog uppercase tracking-wider">
@@ -122,7 +179,6 @@ export function ChatHistorySidebar() {
             ))}
           </div>
         ))}
-
         {transformedSessions.length === 0 && (
           <div className="text-center py-8 text-fog text-caption">
             {searchQuery ? "No sessions found" : "No chats yet"}
@@ -130,8 +186,7 @@ export function ChatHistorySidebar() {
         )}
       </div>
 
-      {/* Settings button at bottom */}
-      <div className="p-4 border-t border-iron">
+      <div className="flex-shrink-0 p-4 border-t border-iron">
         <button
           onClick={() => setSettingsOpen(true)}
           className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-fog hover:text-paper hover:bg-slate-dark transition-colors text-caption"
@@ -151,26 +206,16 @@ function groupByDate(
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today.getTime() - 86400000);
   const weekAgo = new Date(today.getTime() - 7 * 86400000);
-
   const groups: Record<string, typeof sessions> = {};
-
   for (const session of sessions) {
     const date = new Date(session.updatedAt);
     let label: string;
-
-    if (date >= today) {
-      label = "Today";
-    } else if (date >= yesterday) {
-      label = "Yesterday";
-    } else if (date >= weekAgo) {
-      label = "This Week";
-    } else {
-      label = "Older";
-    }
-
+    if (date >= today) label = "Today";
+    else if (date >= yesterday) label = "Yesterday";
+    else if (date >= weekAgo) label = "This Week";
+    else label = "Older";
     if (!groups[label]) groups[label] = [];
     groups[label].push(session);
   }
-
   return groups;
 }
