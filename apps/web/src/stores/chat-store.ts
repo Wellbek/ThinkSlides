@@ -215,6 +215,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       client.on('slide_finalized', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
       client.on('error', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
       client.on('progress', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
+      client.on('session_title_updated', (e) => {
+        try {
+          const data = JSON.parse(e.data) as { session_id: string; title: string };
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === data.session_id ? { ...s, title: data.title } : s
+            ),
+          }));
+        } catch (err) { console.error(err); }
+      });
       client.on('file_generated', (e) => {
         try {
           const data = JSON.parse(e.data);
@@ -270,6 +280,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             );
             return { activeMessages: updatedMessages, activeFiles: [...state.activeFiles, ...newFiles], isSending: false };
           });
+          // Refresh the session list so any late state changes (e.g. the
+          // auto-generated title landing after this event) are reflected.
+          get().fetchSessions();
         } catch (err) {
           console.error(err);
           const { activeSessionId } = get();

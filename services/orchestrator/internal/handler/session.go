@@ -741,6 +741,11 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 					log.Printf("Failed to update session title: %v", updateErr)
 				} else {
 					log.Printf("Auto-generated title '%s' for session %s", title, sessionID)
+					// Notify connected SSE clients so the sidebar updates live.
+					h.hub.Broadcast(sessionID, sse.Event{
+						Event: "session_title_updated",
+						Data:  toJSON(map[string]string{"session_id": sessionID, "title": title}),
+					})
 				}
 			} else if titleErr != nil {
 				log.Printf("Failed to generate title: %v", titleErr)

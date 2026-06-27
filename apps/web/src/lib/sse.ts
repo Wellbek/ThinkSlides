@@ -11,6 +11,7 @@ export type SSEEventType =
   | 'file_generated'
   | 'error'
   | 'progress'
+  | 'session_title_updated'
   | 'done';
 
 export interface SSEEvent {
@@ -72,6 +73,7 @@ export class SSEClient {
       'file_generated',
       'error',
       'progress',
+      'session_title_updated',
       'done',
     ];
 

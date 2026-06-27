@@ -80,6 +80,12 @@ async def generate_chat_title(first_user_message: str) -> Optional[str]:
         logger.info("title_generated", title=title, original_message_length=len(first_user_message))
         return title
 
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            "title_generation_failed",
+            error=f"HTTP {e.response.status_code}: {e.response.text[:200]}",
+        )
+        return None
     except Exception as e:
-        logger.error("title_generation_failed", error=str(e))
+        logger.error("title_generation_failed", error=f"{type(e).__name__}: {e}")
         return None
