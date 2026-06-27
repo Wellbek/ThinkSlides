@@ -34,7 +34,40 @@ TOOL_PHASES = {
     "validate_slide_json": "validation",
     "generate_image_prompt": "content_generation",
     "finalize_and_render_pptx": "rendering",
+    "ask_user_question": "user_input",  # Future: pause for user input
 }
+
+
+class WorkingState:
+    """
+    Maintains the working state of the agent loop across iterations.
+    Tracks accumulated slides, current step, and any pending questions.
+    """
+
+    def __init__(self) -> None:
+        self.accumulated_slides: list[dict] = []
+        self.presentation_structure: dict | None = None
+        self.current_step_index: int = 0
+        self.pending_question: dict | None = None
+        self.is_paused_for_user: bool = False
+        self.has_called_finalize: bool = False
+
+    def add_slide(self, slide: dict) -> None:
+        """Add a slide to the accumulated list."""
+        self.accumulated_slides.append(slide)
+
+    def get_slides_json(self) -> str:
+        """Get accumulated slides as JSON string."""
+        return json.dumps(self.accumulated_slides)
+
+    def reset(self) -> None:
+        """Reset the working state for a new session."""
+        self.accumulated_slides = []
+        self.presentation_structure = None
+        self.current_step_index = 0
+        self.pending_question = None
+        self.is_paused_for_user = False
+        self.has_called_finalize = False
 
 
 class AgentLoop:
@@ -55,6 +88,7 @@ class AgentLoop:
         self.db = db
         self.registry = get_registry()
         self.llm = get_llm_provider()
+        self.working_state = WorkingState()
 
     async def run(
         self,
@@ -66,6 +100,9 @@ class AgentLoop:
         Does NOT publish to Redis – that is the caller's responsibility.
         """
         import_timestamp = _iso_now()
+
+        # Reset working state for this session
+        self.working_state.reset()
 
         # ── Phase 1: Load context ────────────────────
         yield _event("thought", "content_analysis", {
@@ -115,11 +152,33 @@ class AgentLoop:
                     "timestamp": _iso_now(),
                 })
 
-            # If no tool calls, agent is done reasoning (but we do NOT yield "done" here)
+            # If no tool calls, check if we're actually done
             if not tool_calls:
-                # Final thought (optional)
+                # MANDATORY: Can only exit if finalize_and_render_pptx was called
+                if not self.working_state.has_called_finalize:
+                    # Agent is trying to exit without completing the task
+                    # Feed back an instruction to continue
+                    logger.warning(
+                        "agent_exited_early",
+                        session_id=str(session_id),
+                        iteration=iteration,
+                        message="LLM responded without tool calls before finalize was called",
+                    )
+                    # Add a system message forcing the agent to continue
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            "You have NOT completed the task. You MUST continue using tools "
+                            "until you call finalize_and_render_pptx. Do not stop with just text responses. "
+                            "If you need user input, use the ask_user_question tool (available in your tools). "
+                            "Otherwise, continue with the next step in the presentation generation workflow."
+                        ),
+                    })
+                    continue  # Skip the break and continue the loop
+
+                # Final thought (optional) - only if we actually called finalize
                 yield _event("thought", "complete", {
-                    "content": "Agent completed reasoning.",
+                    "content": "Agent completed reasoning. Presentation finalized.",
                     "timestamp": _iso_now(),
                 })
                 # No done event – caller will handle final persistence and "done"
@@ -172,11 +231,31 @@ class AgentLoop:
 
                 # If a slide was finalized, emit slide_finalized
                 if fn_name == "finalize_and_render_pptx" and tool_result.success:
+                    self.working_state.has_called_finalize = True
                     yield _event("slide_finalized", "rendering", {
                         "slideIndex": fn_args.get("slide_index", 0),
                         "slideData": tool_result.data,
                         "timestamp": _iso_now(),
                     })
+
+                # If ask_user_question was called, emit question event and pause
+                if fn_name == "ask_user_question" and tool_result.success:
+                    self.working_state.is_paused_for_user = True
+                    self.working_state.pending_question = tool_result.data
+                    yield _event("question", "user_input", {
+                        "question": tool_result.data.get("question"),
+                        "options": tool_result.data.get("options", []),
+                        "context": tool_result.data.get("context", ""),
+                        "timestamp": _iso_now(),
+                    })
+                    # Yield done event to signal the workflow is paused
+                    yield _event("done", "user_input", {
+                        "content": f"Waiting for user input: {tool_result.data.get('question')}",
+                        "paused": True,
+                        "timestamp": _iso_now(),
+                    })
+                    # Break the loop - workflow will resume on next user message
+                    break
 
                 # Feed result back to conversation (tool role message)
                 messages.append({
@@ -250,6 +329,16 @@ class AgentLoop:
             "You are ThinkSlides, an AI assistant that generates professional PowerPoint presentations.",
             "You follow a ReAct (Reason-Act-Observe) pattern to create presentations step by step.",
             "",
+            "## CRITICAL RULES - YOU MUST FOLLOW",
+            "",
+            "1. You MUST always call tools until you complete the presentation.",
+            "2. You MUST call finalize_and_render_pptx as the final step to generate the PPTX file.",
+            "3. NEVER respond with only text and stop - this will cause the generation to fail.",
+            "4. If you need clarification, use the ask_user_question tool (if available).",
+            "5. If you don't have enough information, make reasonable assumptions and proceed.",
+            "",
+            "The system will NOT accept completion until finalize_and_render_pptx is called.",
+            "",
             "## Available Tools",
             "Use the provided function tools to accomplish each step:",
             "1. analyze_document — Extract and summarize content from uploaded documents",
@@ -260,7 +349,7 @@ class AgentLoop:
             "6. design_slide_content — Generate slide content (text, image prompts, tables, charts)",
             "7. validate_slide_json — Validate slide JSON against the schema before rendering",
             "8. generate_image_prompt — Create prompts for AI-generated images",
-            "9. finalize_and_render_pptx — Render the final PPTX file",
+            "9. finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
             "",
         ]
 
@@ -282,9 +371,10 @@ class AgentLoop:
             "4. For each slide, select a layout with select_layout",
             "5. Generate content for each slide with design_slide_content",
             "6. Validate all slides with validate_slide_json",
-            "7. Render with finalize_and_render_pptx",
+            "7. Render with finalize_and_render_pptx - THIS IS MANDATORY",
             "",
             "Always think step by step. Explain your reasoning before each tool call.",
+            "NEVER stop until you have called finalize_and_render_pptx.",
         ])
 
         return "\n".join(prompt_parts)

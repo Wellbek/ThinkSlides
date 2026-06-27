@@ -158,6 +158,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     from app.agent.tools.validate_slide_json import ValidateSlideJsonTool
     from app.agent.tools.generate_image_prompt import GenerateImagePromptTool
     from app.agent.tools.finalize_and_render_pptx import FinalizeAndRenderPptxTool
+    from app.agent.tools.ask_user_question import AskUserQuestionTool
 
     AnalyzeDocumentTool.register(registry)
     ExtractKeyDataTool.register(registry)
@@ -168,3 +169,4 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     ValidateSlideJsonTool.register(registry)
     GenerateImagePromptTool.register(registry)
     FinalizeAndRenderPptxTool.register(registry)
+    AskUserQuestionTool.register(registry)
