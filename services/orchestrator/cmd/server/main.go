@@ -167,6 +167,7 @@ func main() {
 		protected.POST("/templates", sessionHandler.UploadTemplate)
 		protected.DELETE("/templates/:id", sessionHandler.DeleteTemplate)
 		protected.PUT("/sessions/:id/template", sessionHandler.UpdateSessionTemplate)
+		protected.PUT("/sessions/:id/title", sessionHandler.UpdateSessionTitle)
 	}
 
 	// ── Background workers ─────────────────────────────────────────────

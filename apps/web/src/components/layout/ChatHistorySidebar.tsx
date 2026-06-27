@@ -3,7 +3,7 @@
 
 import { useChatStore } from "@/stores/chat-store";
 import { formatDistanceToNow } from "@/lib/date";
-import { MessageSquare, Search, Trash2, Plus, Presentation, Settings, PanelLeftOpen, PanelLeftClose, Loader2 } from "lucide-react";
+import { MessageSquare, Search, Trash2, Plus, Presentation, Settings, PanelLeftOpen, PanelLeftClose, Loader2, Edit2, X } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useLayoutStore } from "@/stores/layout-store";
 
@@ -18,6 +18,7 @@ export function ChatHistorySidebar({ collapsed = false }: ChatHistorySidebarProp
     setActiveSession,
     createSession,
     deleteSession,
+    renameSession,
     templates,
     activeMessages,
     activeEvents,
@@ -31,6 +32,8 @@ export function ChatHistorySidebar({ collapsed = false }: ChatHistorySidebarProp
                        activeEvents.some((event: any) => event.type === "thinking" || event.status === "pending");
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
 
   // ... rest of the component remains the same (filteredSessions, transformedSessions, grouped, etc.)
   // I'll copy the full component code below, but keep the logic identical to previous except for the isGenerating derivation
@@ -141,7 +144,7 @@ export function ChatHistorySidebar({ collapsed = false }: ChatHistorySidebarProp
             {items.map((session) => (
               <div
                 key={session.id}
-                onClick={() => setActiveSession(session.id)}
+                onClick={() => !editingSessionId && setActiveSession(session.id)}
                 className={`group flex items-start gap-2 px-3 py-2.5 rounded-md cursor-pointer transition-colors ${
                   activeSessionId === session.id
                     ? "bg-ice/10 text-paper border-l-2 border-ice"
@@ -150,7 +153,63 @@ export function ChatHistorySidebar({ collapsed = false }: ChatHistorySidebarProp
               >
                 <MessageSquare size={16} className="mt-0.5 shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-caption truncate">{session.title}</p>
+                  {editingSessionId === session.id ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.stopPropagation();
+                            renameSession(session.id, editTitle).then(() => {
+                              setEditingSessionId(null);
+                              setEditTitle("");
+                            }).catch(() => {
+                              setEditingSessionId(null);
+                              setEditTitle("");
+                            });
+                          } else if (e.key === "Escape") {
+                            e.stopPropagation();
+                            setEditingSessionId(null);
+                            setEditTitle("");
+                          }
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full bg-charcoal border border-ice rounded px-2 py-1 text-caption text-paper focus:outline-none focus:ring-1 focus:ring-ice"
+                        autoFocus
+                      />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          renameSession(session.id, editTitle).then(() => {
+                            setEditingSessionId(null);
+                            setEditTitle("");
+                          }).catch(() => {
+                            setEditingSessionId(null);
+                            setEditTitle("");
+                          });
+                        }}
+                        className="p-1 rounded hover:bg-green-500/20 hover:text-green-400 transition-all"
+                        title="Save"
+                      >
+                        <Presentation size={12} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingSessionId(null);
+                          setEditTitle("");
+                        }}
+                        className="p-1 rounded hover:bg-red-500/20 hover:text-red-400 transition-all"
+                        title="Cancel"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-caption truncate">{session.title}</p>
+                  )}
                   <div className="flex items-center gap-2 mt-0.5">
                     {session.templateBadge && (
                       <span className="inline-flex items-center gap-1 text-caption text-ice">
@@ -175,6 +234,19 @@ export function ChatHistorySidebar({ collapsed = false }: ChatHistorySidebarProp
                 >
                   <Trash2 size={12} />
                 </button>
+                {!editingSessionId && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingSessionId(session.id);
+                      setEditTitle(session.title);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-dark hover:text-ice transition-all"
+                    title="Rename session"
+                  >
+                    <Edit2 size={12} />
+                  </button>
+                )}
               </div>
             ))}
           </div>

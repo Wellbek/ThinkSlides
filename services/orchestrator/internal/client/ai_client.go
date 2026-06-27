@@ -127,3 +127,48 @@ func (c *AIServiceClient) ExtractTemplateDesignSystem(filePath string) (map[stri
 
 	return result, nil
 }
+
+// GenerateTitle sends a message to the AI service to generate a chat title.
+func (c *AIServiceClient) GenerateTitle(message string) (string, error) {
+	payload := map[string]interface{}{
+		"message": message,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal error: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v1/titles/generate", c.baseURL)
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("request error: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("http error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read error: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("AI service error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("unmarshal error: %w", err)
+	}
+
+	title, ok := result["title"].(string)
+	if !ok {
+		return "", nil // Title generation failed, return empty string
+	}
+
+	return title, nil
+}

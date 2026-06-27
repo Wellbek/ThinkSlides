@@ -64,6 +64,7 @@ interface ChatState {
   clearActiveSession: () => void;
   fetchTemplates: () => Promise<void>;
   setSessionTemplate: (sessionId: string, templateId: string | null) => Promise<void>;
+  renameSession: (sessionId: string, title: string) => Promise<void>;
   uploadTemplate: (file: File, name?: string) => Promise<Template>;
   deleteTemplate: (id: string) => Promise<void>;
   setSettingsOpen: (open: boolean) => void;
@@ -401,6 +402,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const updatedSession = await apiPut<ChatSession>(`/api/orchestrator/sessions/${sessionId}/template`, { template_id: templateId });
       set((state) => ({ sessions: state.sessions.map((s) => (s.id === sessionId ? updatedSession : s)) }));
     } catch (err) { console.error(err); throw err; }
+  },
+
+  renameSession: async (sessionId: string, title: string) => {
+    try {
+      await apiPut<{ success: boolean; title: string }>(`/api/orchestrator/sessions/${sessionId}/title`, { title });
+      set((state) => ({
+        sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, title } : s)),
+      }));
+    } catch (err) {
+      console.error(err);
+      throw err;
+    }
   },
 
   setSettingsOpen: (open: boolean) => set({ settingsOpen: open }),

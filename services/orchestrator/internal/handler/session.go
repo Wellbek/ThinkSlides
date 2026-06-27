@@ -575,6 +575,35 @@ func (h *SessionHandler) UpdateSessionTemplate(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
+// UpdateSessionTitle updates the title for a session.
+func (h *SessionHandler) UpdateSessionTitle(c *gin.Context) {
+	sessionID := c.Param("id")
+	var req struct {
+		Title string `json:"title" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	_, err := h.pool.Exec(ctx,
+		`UPDATE chat_sessions SET title = $1, updated_at = NOW() WHERE id = $2`,
+		req.Title, sessionID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Update failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "title": req.Title})
+}
+
 // DeleteSession deletes a chat session.
 func (h *SessionHandler) DeleteSession(c *gin.Context) {
 	sessionID := c.Param("id")
@@ -688,6 +717,35 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save user message"})
 		return
+	}
+
+	// Auto-generate title if this is the first user message in the session
+	var existingMessageCount int
+	err = h.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM chat_messages WHERE session_id = $1 AND role = 'user'`,
+		sessionID,
+	).Scan(&existingMessageCount)
+
+	if err == nil && existingMessageCount == 1 && messageContent != "" {
+		// This is the first user message - generate a title asynchronously
+		go func() {
+			// Use a separate context for the async task
+			taskCtx := context.Background()
+			title, titleErr := h.aiClient.GenerateTitle(messageContent)
+			if titleErr == nil && title != "" {
+				_, updateErr := h.pool.Exec(taskCtx,
+					`UPDATE chat_sessions SET title = $1, updated_at = NOW() WHERE id = $2`,
+					title, sessionID,
+				)
+				if updateErr != nil {
+					log.Printf("Failed to update session title: %v", updateErr)
+				} else {
+					log.Printf("Auto-generated title '%s' for session %s", title, sessionID)
+				}
+			} else if titleErr != nil {
+				log.Printf("Failed to generate title: %v", titleErr)
+			}
+		}()
 	}
 
 	// Persist assistant placeholder (empty content, will be filled later)
