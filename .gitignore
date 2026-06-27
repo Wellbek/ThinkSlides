@@ -48,3 +48,6 @@ services/orchestrator/bin/
 
 # Wellagent (Wellm)
 .wellagent
+
+# Lavish artifacts
+.lavish/
