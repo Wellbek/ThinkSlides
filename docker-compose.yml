@@ -84,9 +84,11 @@ services:
       - DATABASE_URL=postgresql://thinkslides:thinkslides_dev_password@postgres:5432/thinkslides
       - UPLOAD_DIR=/app/uploads
       - TEMPLATE_DIR=/app/templates
+      - OUTPUT_DIR=/app/output
     volumes:
       - uploads:${UPLOAD_DIR:-/app/uploads}
       - templates:${TEMPLATE_DIR:-/app/templates}
+      - output:${OUTPUT_DIR:-/app/output}
     networks:
       - thinkslides-network
     depends_on:
