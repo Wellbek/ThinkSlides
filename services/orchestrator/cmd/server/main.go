@@ -72,6 +72,11 @@ func main() {
 		aiServiceURL = "http://localhost:8000"
 	}
 
+	previewDir := os.Getenv("PREVIEW_DIR")
+	if previewDir == "" {
+		previewDir = "/app/previews"
+	}
+
 	devMode := os.Getenv("DEV_MODE") == "true"
 	if devMode {
 		log.Println("INFO: DEV_MODE enabled — /auth/dev-login endpoint is active")
@@ -144,6 +149,9 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+
+	// Serve preview images
+	r.Static("/previews", previewDir)
 
 	// Auth routes (public)
 	r.POST("/api/auth/register", authHandler.HandleRegister)

@@ -5,6 +5,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    libreoffice \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -14,7 +15,7 @@ COPY app/ ./app/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
 
-RUN mkdir -p /app/uploads /app/templates /app/output
+RUN mkdir -p /app/uploads /app/templates /app/output /app/previews
 
 EXPOSE 8000
 
