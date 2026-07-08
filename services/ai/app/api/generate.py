@@ -11,6 +11,8 @@ import uuid
 import json
 import redis.asyncio as redis
 import datetime
+import time
+import traceback
 
 logger = get_logger(__name__)
 
@@ -87,7 +89,14 @@ async def send_message(
     # In production this goes through the orchestrator Redis queue.
     # For direct AI-service invocation, run agent loop in background.
     import asyncio
-    asyncio.create_task(_run_agent(sid, user_msg.id, assistant_msg.id))
+
+    async def run_agent_with_handler():
+        try:
+            await _run_agent(sid, user_msg.id, assistant_msg.id)
+        except Exception as e:
+            logger.error("_run_agent failed", error=str(e), traceback=traceback.format_exc())
+
+    asyncio.create_task(run_agent_with_handler())
 
     # Return immediately – the real work happens in the background
     return {
