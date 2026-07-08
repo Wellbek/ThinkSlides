@@ -5,7 +5,6 @@ import { useChatStore } from "@/stores/chat-store";
 import { useLayoutStore } from "@/stores/layout-store";
 import { Download, Presentation, PanelRightOpen, PanelRightClose, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { SlideFinalizedEvent } from "@thinkslides/schemas";
 
 interface SlidePreviewSidebarProps {
   collapsed?: boolean;
@@ -22,20 +21,20 @@ export function SlidePreviewSidebar({ collapsed = false, width = 320 }: SlidePre
 
   const slidesFromActiveEvents = activeEvents
     .filter((event): event is SlideFinalizedEvent => event.type === "slide_finalized")
-    .map((event) => event.slideData as any);
+    .map((event) => ({ slide: event.slideData as any, previewUrl: event.previewUrl }));
 
   const slidesFromMessages = activeMessages.flatMap(
     (msg) =>
       (msg.agentEventStream || [])
         .filter((event): event is SlideFinalizedEvent => event.type === "slide_finalized")
-        .map((event) => event.slideData as any)
+        .map((event) => ({ slide: event.slideData as any, previewUrl: event.previewUrl }))
   );
 
-  const seenIndices = new Set(slidesFromActiveEvents.map((s: any) => s.slideIndex));
+  const seenIndices = new Set(slidesFromActiveEvents.map((s) => s.slide.slideIndex));
   const allSlides = [
     ...slidesFromActiveEvents,
-    ...slidesFromMessages.filter((s: any) => !seenIndices.has(s.slideIndex)),
-  ].sort((a: any, b: any) => a.slideIndex - b.slideIndex);
+    ...slidesFromMessages.filter((s) => !seenIndices.has(s.slide.slideIndex)),
+  ].sort((a, b) => a.slide.slideIndex - b.slide.slideIndex);
 
   const files = activeFiles.map((file) => ({
     id: file.id,
@@ -104,7 +103,7 @@ export function SlidePreviewSidebar({ collapsed = false, width = 320 }: SlidePre
               </p>
             </motion.div>
           )}
-          {allSlides.map((slide, idx) => (
+          {allSlides.map(({ slide, previewUrl }, idx) => (
             <motion.div
               key={slide.slideIndex}
               initial={{ opacity: 0, y: 12, scale: 0.95 }}
@@ -113,10 +112,10 @@ export function SlidePreviewSidebar({ collapsed = false, width = 320 }: SlidePre
               className="rounded-lg border border-iron bg-charcoal overflow-hidden hover:border-ice/30 transition-colors group"
             >
               <div className="p-3">
-                {(event as SlideFinalizedEvent).previewUrl ? (
+                {previewUrl ? (
                   <div className="bg-paper rounded-lg aspect-video relative shadow-inner overflow-hidden">
                     <img
-                      src={(event as SlideFinalizedEvent).previewUrl}
+                      src={previewUrl}
                       alt={`Slide ${slide.slideIndex + 1}`}
                       className="w-full h-full object-contain"
                     />
