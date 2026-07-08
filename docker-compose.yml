@@ -85,10 +85,12 @@ services:
       - UPLOAD_DIR=/app/uploads
       - TEMPLATE_DIR=/app/templates
       - OUTPUT_DIR=/app/output
+      - PREVIEW_DIR=/app/previews
     volumes:
       - uploads:${UPLOAD_DIR:-/app/uploads}
       - templates:${TEMPLATE_DIR:-/app/templates}
       - output:${OUTPUT_DIR:-/app/output}
+      - previews:${PREVIEW_DIR:-/app/previews}
     networks:
       - thinkslides-network
     depends_on:
@@ -121,6 +123,7 @@ services:
       - UPLOAD_DIR=${UPLOAD_DIR:-/app/uploads}
       - TEMPLATE_DIR=${TEMPLATE_DIR:-/app/templates}
       - OUTPUT_DIR=${OUTPUT_DIR:-/app/output}
+      - PREVIEW_OUTPUT_DIR=${PREVIEW_OUTPUT_DIR:-/app/previews}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - JWT_SECRET=${JWT_SECRET:-thinkslides-dev-jwt-secret-change-in-production}
     networks:
@@ -135,6 +138,7 @@ services:
       - uploads:${UPLOAD_DIR:-/app/uploads}
       - templates:${TEMPLATE_DIR:-/app/templates}
       - output:${OUTPUT_DIR:-/app/output}
+      - previews:${PREVIEW_OUTPUT_DIR:-/app/previews}
 
 volumes:
   pgdata:
@@ -142,3 +146,4 @@ volumes:
   uploads:
   templates:
   output:
+  previews:

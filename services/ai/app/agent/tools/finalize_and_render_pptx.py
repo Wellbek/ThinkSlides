@@ -3,11 +3,13 @@ Tool: finalize_and_render_pptx
 Takes validated slide JSON array and a template, then renders the final PPTX
 by cloning real layout XML from the template, filling placeholder elements
 without touching rPr formatting attributes, and repacking.
+Also generates preview images for each slide.
 """
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.renderer.pptx_renderer import PPTXRenderer
+from app.renderer.preview_generator import PreviewGenerator
 from app.observability.logging import get_logger
 import json
 import time
@@ -96,12 +98,17 @@ class FinalizeAndRenderPptxTool:
 
             file_size = os.path.getsize(result_path) if os.path.exists(result_path) else 0
 
+            # Generate preview images
+            preview_gen = PreviewGenerator()
+            preview_urls = preview_gen.generate_previews(result_path, session_id)
+
             duration_ms = int((time.time() - start) * 1000)
             logger.info(
                 "pptx_rendered",
                 session_id=session_id,
                 slide_count=len(slides),
                 file_size=file_size,
+                preview_count=len(preview_urls),
                 duration_ms=duration_ms,
             )
 
@@ -113,6 +120,7 @@ class FinalizeAndRenderPptxTool:
                     "fileSizeBytes": file_size,
                     "slideCount": len(slides),
                     "sessionId": session_id,
+                    "previewUrls": preview_urls,
                 },
                 duration_ms=duration_ms,
             )

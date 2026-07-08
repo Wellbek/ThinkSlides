@@ -113,29 +113,42 @@ export function SlidePreviewSidebar({ collapsed = false, width = 320 }: SlidePre
               className="rounded-lg border border-iron bg-charcoal overflow-hidden hover:border-ice/30 transition-colors group"
             >
               <div className="p-3">
-                <div className="bg-paper rounded-lg aspect-video flex items-center justify-center text-void text-caption relative shadow-inner overflow-hidden">
-                  <div className="absolute inset-x-3 top-3 space-y-[3px]">
-                    <div className="h-[3px] bg-iron/60 rounded-full w-4/5" />
-                    <div className="h-[2px] bg-iron/40 rounded-full w-3/5" />
-                  </div>
-                  <div className="absolute inset-x-3 bottom-2.5 space-y-[2px]">
-                    <div className="h-[2px] bg-iron/50 rounded-full w-full" />
-                    <div className="h-[2px] bg-iron/40 rounded-full w-5/6" />
-                    <div className="h-[2px] bg-iron/30 rounded-full w-2/3" />
-                  </div>
-                  <div className="text-center z-10">
-                    <p className="font-semibold text-sm text-gray-700">
+                {(event as SlideFinalizedEvent).previewUrl ? (
+                  <div className="bg-paper rounded-lg aspect-video relative shadow-inner overflow-hidden">
+                    <img
+                      src={(event as SlideFinalizedEvent).previewUrl}
+                      alt={`Slide ${slide.slideIndex + 1}`}
+                      className="w-full h-full object-contain"
+                    />
+                    <span className="absolute top-1.5 left-1.5 bg-obsidian/90 text-paper rounded-md w-5 h-5 flex items-center justify-center text-caption font-bold shadow-sm backdrop-blur-sm">
                       {slide.slideIndex + 1}
-                    </p>
-                    <p className="text-gray-400 text-[9px] mt-0.5 uppercase tracking-wider">
-                      {slide.layoutName}
-                    </p>
+                    </span>
                   </div>
-                  <span className="absolute top-1.5 left-1.5 bg-obsidian/90 text-paper rounded-md w-5 h-5 flex items-center justify-center text-caption font-bold shadow-sm backdrop-blur-sm">
-                    {slide.slideIndex + 1}
-                  </span>
-                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
-                </div>
+                ) : (
+                  <div className="bg-paper rounded-lg aspect-video flex items-center justify-center text-void text-caption relative shadow-inner overflow-hidden">
+                    <div className="absolute inset-x-3 top-3 space-y-[3px]">
+                      <div className="h-[3px] bg-iron/60 rounded-full w-4/5" />
+                      <div className="h-[2px] bg-iron/40 rounded-full w-3/5" />
+                    </div>
+                    <div className="absolute inset-x-3 bottom-2.5 space-y-[2px]">
+                      <div className="h-[2px] bg-iron/50 rounded-full w-full" />
+                      <div className="h-[2px] bg-iron/40 rounded-full w-5/6" />
+                      <div className="h-[2px] bg-iron/30 rounded-full w-2/3" />
+                    </div>
+                    <div className="text-center z-10">
+                      <p className="font-semibold text-sm text-gray-700">
+                        {slide.slideIndex + 1}
+                      </p>
+                      <p className="text-gray-400 text-[9px] mt-0.5 uppercase tracking-wider">
+                        {slide.layoutName}
+                      </p>
+                    </div>
+                    <span className="absolute top-1.5 left-1.5 bg-obsidian/90 text-paper rounded-md w-5 h-5 flex items-center justify-center text-caption font-bold shadow-sm backdrop-blur-sm">
+                      {slide.slideIndex + 1}
+                    </span>
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
+                  </div>
+                )}
               </div>
               <div className="px-3 pb-2.5">
                 <p className="text-caption text-fog truncate leading-relaxed">

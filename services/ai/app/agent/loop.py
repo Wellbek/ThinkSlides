@@ -229,14 +229,23 @@ class AgentLoop:
                     "timestamp": _iso_now(),
                 })
 
-                # If a slide was finalized, emit slide_finalized
+                # If a slide was finalized, emit slide_finalized for each slide
                 if fn_name == "finalize_and_render_pptx" and tool_result.success:
                     self.working_state.has_called_finalize = True
-                    yield _event("slide_finalized", "rendering", {
-                        "slideIndex": fn_args.get("slide_index", 0),
-                        "slideData": tool_result.data,
-                        "timestamp": _iso_now(),
-                    })
+                    preview_urls = tool_result.data.get("previewUrls", [])
+
+                    # Emit slide_finalized events for each slide with preview URL
+                    for slide_idx, preview_url in enumerate(preview_urls):
+                        slide_data = None
+                        if slide_idx < len(self.working_state.accumulated_slides):
+                            slide_data = self.working_state.accumulated_slides[slide_idx]
+
+                        yield _event("slide_finalized", "rendering", {
+                            "slideIndex": slide_idx,
+                            "slideData": slide_data,
+                            "previewUrl": preview_url,
+                            "timestamp": _iso_now(),
+                        })
 
                 # If ask_user_question was called, emit question event and pause
                 if fn_name == "ask_user_question" and tool_result.success:
