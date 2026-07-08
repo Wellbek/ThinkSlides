@@ -16,6 +16,9 @@ import tempfile
 import xml.etree.ElementTree as ET
 from typing import Any, Optional
 from app.observability.logging import get_logger
+from app.renderer.layout import LayoutEngine, LayoutType, PositionConfig
+from app.renderer.typography import TypographyEngine, TextStyle
+from app.renderer.default_template import get_default_template_path
 
 logger = get_logger(__name__)
 
@@ -129,80 +132,22 @@ class PPTXRenderer:
         from pptx import Presentation
         from pptx.util import Inches, Pt, Emu
 
-        prs = Presentation()
-        prs.slide_width = Emu(9144000)
-        prs.slide_height = Emu(6858000)
-
-        blank_layout = None
-        for layout in prs.slide_layouts:
-            if layout.name and "blank" in layout.name.lower():
-                blank_layout = layout
-                break
-        if blank_layout is None:
-            blank_layout = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[0]
+        # Use default template
+        template_path = get_default_template_path()
+        prs = Presentation(template_path)
 
         for slide_data in slides:
-            slide = prs.slides.add_slide(blank_layout)
+            # Infer layout type from slide content
+            layout_type = LayoutEngine.infer_layout_type(slide_data)
+            layout_config = LayoutEngine.get_layout(layout_type)
 
-            for content in slide_data.get("contents", []):
-                if content.get("type") == "text":
-                    runs = content.get("runs", [])
-                    if not runs:
-                        continue
+            # Find appropriate layout from template
+            layout = self._find_layout_for_type(prs, layout_type)
 
-                    left = Inches(0.5)
-                    top = Inches(0.5)
-                    width = Inches(9)
-                    height = Inches(5)
+            slide = prs.slides.add_slide(layout)
 
-                    is_title = any(
-                        r.get("bold", False) or r.get("fontSizePt", 14) >= 20
-                        for r in runs
-                    )
-                    if is_title:
-                        top = Inches(0.3)
-                        height = Inches(1.5)
-
-                    txBox = slide.shapes.add_textbox(left, top, width, height)
-                    tf = txBox.text_frame
-                    tf.word_wrap = True
-
-                    for j, run_data in enumerate(runs):
-                        if j == 0:
-                            p = tf.paragraphs[0]
-                        else:
-                            p = tf.add_paragraph()
-
-                        run = p.add_run()
-                        run.text = run_data.get("text", "")
-
-                        font_size = run_data.get("fontSizePt")
-                        if font_size:
-                            run.font.size = Pt(font_size)
-                        if run_data.get("bold"):
-                            run.font.bold = True
-                        if run_data.get("italic"):
-                            run.font.italic = True
-
-                        if run_data.get("bullet"):
-                            p.level = run_data.get("level", 0)
-
-                elif content.get("type") == "image":
-                    img = content.get("image", {})
-                    if img.get("source") == "base64":
-                        import base64
-                        img_data = base64.b64decode(img.get("data", ""))
-                        img_stream = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-                        img_stream.write(img_data)
-                        img_stream.close()
-                        try:
-                            slide.shapes.add_picture(
-                                img_stream.name,
-                                Inches(1), Inches(1.5),
-                                Inches(4), Inches(3),
-                            )
-                        finally:
-                            os.unlink(img_stream.name)
+            # Render content using intelligent positioning
+            self._render_content_on_slide(slide, slide_data, layout_config)
 
         core_props = prs.core_properties
         if metadata.get("title"):
@@ -215,6 +160,163 @@ class PPTXRenderer:
         prs.save(output_path)
         logger.info("pptx_rendered_default", slide_count=len(slides), output=output_path)
         return output_path
+
+    def _find_layout_for_type(self, prs: Presentation, layout_type: LayoutType):
+        """Find the best layout from template for a given layout type."""
+        # Simple heuristic: match by layout name
+        type_names = {
+            LayoutType.TITLE: ["title", "blank"],
+            LayoutType.CONTENT: ["content", "blank"],
+            LayoutType.TWO_COLUMN: ["two", "column", "blank"],
+            LayoutType.IMAGE: ["image", "blank"],
+            LayoutType.TABLE: ["table", "blank"],
+            LayoutType.CONCLUSION: ["conclusion", "blank"],
+        }
+
+        names = type_names.get(layout_type, ["blank"])
+
+        for layout in prs.slide_layouts:
+            layout_name = (layout.name or "").lower()
+            if any(name in layout_name for name in names):
+                return layout
+
+        # Fall back to first layout
+        return prs.slide_layouts[0] if prs.slide_layouts else None
+
+    def _render_content_on_slide(
+        self,
+        slide,
+        slide_data: dict,
+        layout_config: LayoutType,
+    ) -> None:
+        """Render slide content with intelligent positioning."""
+        contents = slide_data.get("contents", [])
+        if not contents:
+            return
+
+        # Check if slide has a title
+        has_title = any(
+            c.get("type") == "text" and
+            any(r.get("fontSizePt", 0) >= 28 or r.get("bold", False)
+                for r in c.get("runs", []))
+            for c in contents
+        )
+
+        # Separate title from other content
+        title_content = None
+        other_content = []
+
+        for content in contents:
+            if content.get("type") == "text":
+                runs = content.get("runs", [])
+                if any(r.get("fontSizePt", 0) >= 28 or r.get("bold", False)
+                      for r in runs):
+                    title_content = content
+                    continue
+            other_content.append(content)
+
+        # Render title
+        if title_content:
+            title_pos = LayoutEngine.calculate_title_position(layout_config)
+            self._add_text_box(
+                slide,
+                title_content.get("runs", []),
+                title_pos,
+                is_title=True,
+            )
+
+        # Render other content
+        top_offset = 0
+        for content in other_content:
+            if content.get("type") == "text":
+                content_pos = LayoutEngine.calculate_content_position(
+                    layout_config,
+                    has_title=has_title,
+                )
+                if top_offset > 0:
+                    content_pos.top += top_offset
+                    content_pos.height -= top_offset
+
+                self._add_text_box(
+                    slide,
+                    content.get("runs", []),
+                    content_pos,
+                    is_title=False,
+                )
+                top_offset += Inches(0.3)  # spacing between sections
+
+            elif content.get("type") == "image":
+                img_pos = LayoutEngine.calculate_image_position(
+                    layout_config,
+                    has_title=has_title,
+                )
+                self._add_image(slide, content.get("image", {}), img_pos)
+
+    def _add_text_box(
+        self,
+        slide,
+        runs: list[dict],
+        pos: PositionConfig,
+        is_title: bool = False,
+    ) -> None:
+        """Add a text box with proper styling."""
+        txBox = slide.shapes.add_textbox(
+            pos.left, pos.top, pos.width, pos.height
+        )
+        tf = txBox.text_frame
+        tf.word_wrap = True
+
+        for i, run_data in enumerate(runs):
+            if i == 0:
+                p = tf.paragraphs[0]
+            else:
+                p = tf.add_paragraph()
+
+            run = p.add_run()
+            run.text = run_data.get("text", "")
+
+            # Get proper style
+            if is_title:
+                style = TypographyEngine.get_title_style(1)
+            else:
+                level = run_data.get("level", 0)
+                style = TypographyEngine.get_body_style(level)
+
+            # Apply style
+            run.font.size = Pt(style.font_size_pt)
+            run.font.bold = style.bold or run_data.get("bold", False)
+            run.font.italic = style.italic or run_data.get("italic", False)
+            run.font.underline = style.underline or run_data.get("underline", False)
+
+            # Validate font size
+            if run.font.size:
+                requested_size = run.font.size.pt
+                adjusted_size = TypographyEngine.validate_font_size(
+                    requested_size,
+                    is_title=is_title
+                )
+                if adjusted_size != requested_size:
+                    run.font.size = Pt(adjusted_size)
+
+            # Bullet points
+            if run_data.get("bullet", False):
+                p.level = run_data.get("level", 0)
+
+    def _add_image(self, slide, img_data: dict, pos: PositionConfig) -> None:
+        """Add an image to the slide."""
+        if img_data.get("source") == "base64":
+            import base64
+            img_binary = base64.b64decode(img_data.get("data", ""))
+            img_stream = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            img_stream.write(img_binary)
+            img_stream.close()
+            try:
+                slide.shapes.add_picture(
+                    img_stream.name,
+                    pos.left, pos.top, pos.width, pos.height
+                )
+            finally:
+                os.unlink(img_stream.name)
 
     def _build_layout_map(self, working_dir: str) -> dict[str, str]:
         layout_map: dict[str, str] = {}
