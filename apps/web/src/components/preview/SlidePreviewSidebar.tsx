@@ -5,6 +5,7 @@ import { useChatStore } from "@/stores/chat-store";
 import { useLayoutStore } from "@/stores/layout-store";
 import { Download, Presentation, PanelRightOpen, PanelRightClose, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import type { SlideFinalizedEvent } from "@thinkslides/schemas";
 
 interface SlidePreviewSidebarProps {
   collapsed?: boolean;
