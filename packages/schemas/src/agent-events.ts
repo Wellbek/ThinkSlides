@@ -96,6 +96,7 @@ export interface DoneEvent {
   message_id: string;
   content: string;
   files?: FileGeneratedEvent[];
+  overallDurationMs?: number;
   timestamp: string;
 }
 

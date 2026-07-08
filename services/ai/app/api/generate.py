@@ -107,16 +107,19 @@ async def _run_agent(
 
     logger.info("_run_agent STARTED for session %s", session_id)
 
+    overall_start_time = time.time()
+
     try:
         async with async_session() as db:
             logger.info("_run_agent: got db session for %s", session_id)
-            
+
             final_content = ""
             generated_files = []
+
             try:
                 logger.info("_run_agent: creating AgentLoop for %s", session_id)
                 loop = AgentLoop(db=db)
-                
+
                 logger.info("_run_agent: starting loop.run() for %s", session_id)
                 event_count = 0
                 
@@ -247,11 +250,14 @@ async def _run_agent(
                 await db.commit()
                 logger.info("_run_agent: saved assistant message for %s", session_id)
 
+                overall_duration_ms = int((time.time() - overall_start_time) * 1000)
+
                 done_event = {
                     "type": "done",
                     "message_id": str(assistant_message_id),
                     "content": final_content,
                     "files": generated_files if generated_files else None,
+                    "overallDurationMs": overall_duration_ms,
                     "timestamp": datetime.datetime.utcnow().isoformat(),
                 }
                 pub_result = await redis_client.publish(
@@ -277,6 +283,8 @@ async def _run_agent(
         
         # Try to save fallback and publish done event even on error
         try:
+            overall_duration_ms = int((time.time() - overall_start_time) * 1000)
+
             async with async_session() as db:
                 fallback = f"An error occurred: {str(e)}"
                 await db.execute(
@@ -290,6 +298,7 @@ async def _run_agent(
                     "message_id": str(assistant_message_id),
                     "content": fallback,
                     "error": str(e),
+                    "overallDurationMs": overall_duration_ms,
                     "timestamp": datetime.datetime.utcnow().isoformat(),
                 }
                 await redis_client.publish(
