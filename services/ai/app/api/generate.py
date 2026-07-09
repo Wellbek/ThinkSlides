@@ -238,7 +238,7 @@ async def _run_agent(
                         # Store the question as a proper assistant message with metadata
                         # This ensures it appears in chat history and can be tracked
                         question_msg = ChatMessage(
-                            session_id=sid,
+                            session_id=session_id,
                             role="assistant",
                             content=question_content,
                             attachments=json.dumps({
