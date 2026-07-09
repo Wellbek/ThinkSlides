@@ -13,7 +13,8 @@ export type SSEEventType =
   | 'progress'
   | 'session_title_updated'
   | 'question'
-  | 'done';
+  | 'done'
+  | 'timer_update';
 
 export interface SSEEvent {
   id?: string;
@@ -77,6 +78,7 @@ export class SSEClient {
       'session_title_updated',
       'question',
       'done',
+      'timer_update',
     ];
 
     for (const eventType of eventTypes) {
@@ -92,8 +94,13 @@ export class SSEClient {
         this.emit(sseEvent);
 
         // Auto-close on 'done' — the agent loop has finished
+        // BUT: don't close if paused (workflow will resume)
         if (eventType === 'done') {
-          this.disconnect();
+          const eventData = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+          const isPaused = eventData.paused === true;
+          if (!isPaused) {
+            this.disconnect();
+          }
         }
       });
     }
