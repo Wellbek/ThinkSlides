@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
+import { Check } from "lucide-react";
 
 interface QuestionCardProps {
   question: string;
