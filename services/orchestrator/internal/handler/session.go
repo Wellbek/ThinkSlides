@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/thinkslides/orchestrator/internal/client"
 	"github.com/thinkslides/orchestrator/internal/queue"
@@ -21,30 +22,32 @@ import (
 )
 
 type SessionHandler struct {
-	queue    *queue.RedisQueue
-	hub      *sse.Hub
-	aiClient *client.AIServiceClient
-	dbURL    string
-	pool     *pgxpool.Pool
+	queue       *queue.RedisQueue
+	hub         *sse.Hub
+	aiClient    *client.AIServiceClient
+	dbURL       string
+	pool        *pgxpool.Pool
+	redisClient *redis.Client
 }
 
-func NewSessionHandler(q *queue.RedisQueue, hub *sse.Hub, aiClient *client.AIServiceClient, dbURL string) *SessionHandler {
-    // Create pool synchronously
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
-    
-    pool, err := pgxpool.New(ctx, dbURL)
-    if err != nil {
-        log.Printf("Failed to create connection pool: %v", err)
-    }
-    
-    return &SessionHandler{
-        queue:    q,
-        hub:      hub,
-        aiClient: aiClient,
-        dbURL:    dbURL,
-        pool:     pool,
-    }
+func NewSessionHandler(q *queue.RedisQueue, hub *sse.Hub, aiClient *client.AIServiceClient, dbURL string, redisClient *redis.Client) *SessionHandler {
+	// Create pool synchronously
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		log.Printf("Failed to create connection pool: %v", err)
+	}
+
+	return &SessionHandler{
+		queue:       q,
+		hub:         hub,
+		aiClient:    aiClient,
+		dbURL:       dbURL,
+		pool:        pool,
+		redisClient: redisClient,
+	}
 }
 // ListSessions returns all chat sessions for the current user.
 func (h *SessionHandler) ListSessions(c *gin.Context) {
@@ -766,11 +769,23 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 	}
 
 	// Enqueue generation job
+	// Check if session is paused (has working_state in Redis)
+	jobType := "generate"
+	if h.redisClient != nil {
+		ctx := c.Request.Context()
+		workingStateKey := fmt.Sprintf("working_state:%s", sessionID)
+		exists, err := h.redisClient.Exists(ctx, workingStateKey).Result()
+		if err == nil && exists > 0 {
+			log.Printf("Session %s is paused (has working_state), using resume job type", sessionID)
+			jobType = "resume"
+		}
+	}
+
 	jobID := uuid.New().String()
 	job := queue.Job{
 		ID:        jobID,
 		SessionID: sessionID,
-		Type:      "generate",
+		Type:      jobType,
 		Payload: map[string]interface{}{
 			"content":              messageContent,
 			"attachments":          attachments,

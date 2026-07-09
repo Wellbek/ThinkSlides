@@ -172,3 +172,45 @@ func (c *AIServiceClient) GenerateTitle(message string) (string, error) {
 
 	return title, nil
 }
+
+// AnswerQuestion sends a user's answer to a question to resume the agent workflow.
+func (c *AIServiceClient) AnswerQuestion(sessionID string, selectedOption string, answer string, questionText string) (map[string]interface{}, error) {
+	payload := map[string]interface{}{
+		"answer":          answer,
+		"selected_option": selectedOption,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal error: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/answer-question", c.baseURL, sessionID)
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("request error: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read error: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("AI service error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal error: %w", err)
+	}
+
+	return result, nil
+}
