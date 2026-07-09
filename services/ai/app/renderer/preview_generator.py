@@ -49,47 +49,46 @@ class PreviewGenerator:
         temp_dir = tempfile.mkdtemp(prefix="pptx_preview_")
 
         try:
-            # Use LibreOffice headless to convert PPTX to PNG
-            # LibreOffice exports each slide as a separate PNG
+            # Step 1: PPTX -> PDF via LibreOffice headless.
+            # Use an isolated user profile to avoid lock collisions with any
+            # concurrent LibreOffice instance, and set HOME so the profile is
+            # writable. Note: LibreOffice returns exit code 0 even when it
+            # fails to load the source file, so we verify the PDF was created.
+            profile_dir = os.path.join(temp_dir, "lo_profile")
             result = subprocess.run(
                 [
                     "libreoffice",
                     "--headless",
-                    "--convert-to", "png",
+                    f"-env:UserInstallation=file://{profile_dir}",
+                    "--convert-to", "pdf",
                     "--outdir", temp_dir,
                     pptx_path,
                 ],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=60,
+                env={**os.environ, "HOME": temp_dir},
             )
 
-            if result.returncode != 0:
+            base_name = os.path.splitext(os.path.basename(pptx_path))[0]
+            pdf_path = os.path.join(temp_dir, f"{base_name}.pdf")
+
+            if not os.path.exists(pdf_path):
                 logger.error(
                     "preview_failed",
-                    reason="libreoffice_error",
+                    reason="libreoffice_no_pdf",
                     stderr=result.stderr,
+                    stdout=result.stdout,
                     pptx_path=pptx_path,
                 )
-                # Fallback: return empty list but don't fail the entire render
                 return []
 
-            # Find generated PNG files and organize them
-            png_files = sorted(
-                [f for f in os.listdir(temp_dir) if f.endswith(".png")]
+            # Step 2: PDF -> one PNG per page via PyMuPDF (fitz).
+            # LibreOffice's --convert-to png only exports the first slide, so
+            # rendering via PDF is required to preview every slide.
+            preview_urls = self._render_pdf_to_pngs(
+                pdf_path, session_preview_dir, session_id
             )
-
-            preview_urls = []
-            for i, png_file in enumerate(png_files):
-                src_path = os.path.join(temp_dir, png_file)
-                dest_name = f"slide_{i+1}.png"
-                dest_path = os.path.join(session_preview_dir, dest_name)
-
-                shutil.move(src_path, dest_path)
-
-                # Generate URL path (will be served via orchestrator or S3)
-                preview_url = f"/previews/{session_id}/{dest_name}"
-                preview_urls.append(preview_url)
 
             logger.info(
                 "previews_generated",
@@ -108,6 +107,32 @@ class PreviewGenerator:
             return []
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @staticmethod
+    def _render_pdf_to_pngs(
+        pdf_path: str,
+        out_dir: str,
+        session_id: str,
+    ) -> List[str]:
+        """Render each page of a PDF to a PNG preview, return preview URLs."""
+        import fitz  # PyMuPDF
+
+        preview_urls: List[str] = []
+        doc = fitz.open(pdf_path)
+        try:
+            zoom = 2.0  # ~2x for readable thumbnails
+            matrix = fitz.Matrix(zoom, zoom)
+            for page_index in range(len(doc)):
+                page = doc[page_index]
+                pix = page.get_pixmap(matrix=matrix, alpha=False)
+                dest_name = f"slide_{page_index + 1}.png"
+                dest_path = os.path.join(out_dir, dest_name)
+                pix.save(dest_path)
+                preview_urls.append(f"/previews/{session_id}/{dest_name}")
+        finally:
+            doc.close()
+
+        return preview_urls
 
     def get_preview_url(
         self,
