@@ -11,7 +11,7 @@ export function ChatArea() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const sessions = useChatStore((s) => s.sessions);
   const createSession = useChatStore((s) => s.createSession);
-  const isGenerating = useChatStore((s) => s.isGenerating());
+  const isGenerating = useChatStore((s) => s.isGenerating);
   const toggleChat = useLayoutStore((s) => s.toggleChat);
 
   const activeSession = activeSessionId
