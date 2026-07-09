@@ -34,6 +34,155 @@ NS = {
     "rel": "http://schemas.openxmlformats.org/package/2006/relationships",
 }
 
+# Sentinel values that mean "use the built-in default design system" rather
+# than a real file path. The LLM sometimes invents paths like
+# "default_template.pptx" when the user asks for a default template; any of
+# these (empty / None / case-insensitive "default" / "none" / a missing file
+# whose name contains "default") resolve to the built-in parsed design system
+# below instead of failing.
+DEFAULT_SENTINELS = {"", "default", "none", "null", "builtin", "built-in"}
+
+
+def _inch(inches: float) -> int:
+    """Convert inches to EMU (1 inch = 914400 EMU)."""
+    return int(round(inches * 914400))
+
+
+def get_default_design_system() -> dict:
+    """Return a fully-parsed built-in default design system.
+
+    This mirrors the design produced by
+    ``app.renderer.default_template.DefaultTemplateGenerator`` (same palette,
+    fonts, slide dimensions and layout catalog) so that presentations built
+    without a user template stay visually coherent with what the renderer
+    actually emits.
+
+    It is used as a fallback whenever ``extract_template_design_system`` is
+    called without a real template file - e.g. when the user asks for a
+    "default template" - so the agent never fails with "Template not found".
+    """
+    # Palette aligned with DefaultTemplateGenerator.COLORS
+    palette_colors = [
+        {"name": "primary", "value": "#1F4E78", "type": "hex"},     # professional blue
+        {"name": "secondary", "value": "#2980B9", "type": "hex"},   # lighter blue
+        {"name": "accent", "value": "#FF7F50", "type": "hex"},      # orange accent
+        {"name": "dark", "value": "#15334F", "type": "hex"},        # dark blue
+        {"name": "light", "value": "#F0F4F8", "type": "hex"},       # light gray
+        {"name": "white", "value": "#FFFFFF", "type": "hex"},
+        {"name": "gray", "value": "#808080", "type": "hex"},
+    ]
+
+    # Slide dimensions: 10in x 5.625in (16:9), matching the renderer default
+    slide_dimensions = {
+        "widthEmu": _inch(10),
+        "heightEmu": _inch(5.625),
+        "widthPx": 960,
+        "heightPx": 540,
+    }
+
+    layouts = [
+        {
+            "layoutId": "title",
+            "layoutName": "Title Slide",
+            "masterId": "1",
+            "placeholders": [
+                {"idx": 0, "type": "title", "name": "Title",
+                 "xEmu": _inch(1.0), "yEmu": _inch(1.5), "cxEmu": _inch(8.0), "cyEmu": _inch(1.5)},
+                {"idx": 1, "type": "subtitle", "name": "Subtitle",
+                 "xEmu": _inch(1.0), "yEmu": _inch(3.0), "cxEmu": _inch(8.0), "cyEmu": _inch(1.0)},
+            ],
+            "hasBackground": False,
+            "hasDecorations": False,
+        },
+        {
+            "layoutId": "content",
+            "layoutName": "Title and Content",
+            "masterId": "1",
+            "placeholders": [
+                {"idx": 0, "type": "title", "name": "Title",
+                 "xEmu": _inch(0.6), "yEmu": _inch(0.4), "cxEmu": _inch(9.0), "cyEmu": _inch(1.0)},
+                {"idx": 1, "type": "body", "name": "Content",
+                 "xEmu": _inch(0.6), "yEmu": _inch(1.5), "cxEmu": _inch(9.0), "cyEmu": _inch(3.5)},
+            ],
+            "hasBackground": False,
+            "hasDecorations": False,
+        },
+        {
+            "layoutId": "twoColumn",
+            "layoutName": "Two Column",
+            "masterId": "1",
+            "placeholders": [
+                {"idx": 0, "type": "title", "name": "Title",
+                 "xEmu": _inch(0.6), "yEmu": _inch(0.4), "cxEmu": _inch(9.0), "cyEmu": _inch(1.0)},
+                {"idx": 1, "type": "body", "name": "Left Column",
+                 "xEmu": _inch(0.6), "yEmu": _inch(1.5), "cxEmu": _inch(4.0), "cyEmu": _inch(3.5)},
+                {"idx": 2, "type": "body", "name": "Right Column",
+                 "xEmu": _inch(5.0), "yEmu": _inch(1.5), "cxEmu": _inch(4.0), "cyEmu": _inch(3.5)},
+            ],
+            "hasBackground": False,
+            "hasDecorations": False,
+        },
+        {
+            "layoutId": "image",
+            "layoutName": "Picture with Caption",
+            "masterId": "1",
+            "placeholders": [
+                {"idx": 0, "type": "title", "name": "Title",
+                 "xEmu": _inch(0.6), "yEmu": _inch(0.4), "cxEmu": _inch(9.0), "cyEmu": _inch(1.0)},
+                {"idx": 1, "type": "image", "name": "Image",
+                 "xEmu": _inch(1.0), "yEmu": _inch(1.5), "cxEmu": _inch(4.0), "cyEmu": _inch(3.0)},
+                {"idx": 2, "type": "body", "name": "Caption",
+                 "xEmu": _inch(5.5), "yEmu": _inch(1.5), "cxEmu": _inch(4.0), "cyEmu": _inch(3.5)},
+            ],
+            "hasBackground": False,
+            "hasDecorations": False,
+        },
+        {
+            "layoutId": "table",
+            "layoutName": "Table",
+            "masterId": "1",
+            "placeholders": [
+                {"idx": 0, "type": "title", "name": "Title",
+                 "xEmu": _inch(0.6), "yEmu": _inch(0.4), "cxEmu": _inch(9.0), "cyEmu": _inch(1.0)},
+                {"idx": 1, "type": "table", "name": "Table",
+                 "xEmu": _inch(0.6), "yEmu": _inch(1.5), "cxEmu": _inch(9.0), "cyEmu": _inch(3.5)},
+            ],
+            "hasBackground": False,
+            "hasDecorations": False,
+        },
+        {
+            "layoutId": "conclusion",
+            "layoutName": "Conclusion",
+            "masterId": "1",
+            "placeholders": [
+                {"idx": 0, "type": "title", "name": "Title",
+                 "xEmu": _inch(1.0), "yEmu": _inch(1.5), "cxEmu": _inch(8.0), "cyEmu": _inch(3.0)},
+            ],
+            "hasBackground": False,
+            "hasDecorations": False,
+        },
+    ]
+
+    return {
+        "palette": {"colors": palette_colors, "schemeName": "thinkslides-default"},
+        "typography": {
+            "titleFont": {"typeface": "Arial", "sizePt": 36, "bold": True},
+            "bodyFont": {"typeface": "Arial", "sizePt": 20, "bold": False},
+            "captionFont": {"typeface": "Arial", "sizePt": 12, "bold": False},
+        },
+        "slideDimensions": slide_dimensions,
+        "layouts": layouts,
+        "spacing": {
+            "slidePaddingEmu": _inch(0.5),
+            "elementGapEmu": _inch(0.25),
+            "titleTopMarginEmu": _inch(0.3),
+            "bodyTopMarginEmu": _inch(0.2),
+        },
+        "masterElements": [],
+        "embeddedMedia": [],
+        "sourceType": "default",
+    }
+
 
 class ExtractTemplateDesignSystemTool:
     """Extract the complete design system from a PPTX/POTX template file."""
@@ -47,24 +196,60 @@ class ExtractTemplateDesignSystemTool:
                 "color palette, font scheme, slide dimensions, layout catalog with "
                 "placeholder positions, spacing tokens, master elements, and embedded media. "
                 "PPTX/POTX files are parsed via XML; PDF files are rendered to images and "
-                "analysed by a vision LLM. Returns a structured design system bundle."
+                "analysed by a vision LLM. Returns a structured design system bundle. "
+                "If the user has no template or asks for a default, omit template_path "
+                "(or pass 'default') to get the built-in default design system - do NOT "
+                "invent a filename."
             ),
             fn=cls.run,
             parameters=[
                 ToolParameter(
                     name="template_path",
                     type="string",
-                    description="Path to the PPTX/POTX/PDF template file",
+                    description=(
+                        "Path to the PPTX/POTX/PDF template file. "
+                        "Omit this (or pass 'default') to use the built-in default "
+                        "design system when the user has no template."
+                    ),
+                    required=False,
                 ),
             ],
         )
 
     @classmethod
-    async def run(cls, template_path: str) -> ToolResult:
+    async def run(cls, template_path: str = "") -> ToolResult:
         start = time.time()
         try:
+            normalized = (template_path or "").strip()
+            looks_like_default = (
+                normalized.lower() in DEFAULT_SENTINELS
+                or "default" in normalized.lower()
+            )
+
+            # No path / explicit default request -> built-in design system
+            if not normalized or normalized.lower() in DEFAULT_SENTINELS:
+                return cls._default_result(start)
+
+            # A path was given but the file does not exist. If it looks like a
+            # default request (e.g. the LLM invented "default_template.pptx"),
+            # gracefully fall back to the built-in design system instead of
+            # failing the whole generation.
             if not os.path.exists(template_path):
-                return ToolResult(success=False, error=f"Template not found: {template_path}")
+                if looks_like_default:
+                    logger.warning(
+                        "template_path_not_found_using_default",
+                        template_path=template_path,
+                    )
+                    return cls._default_result(start)
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"Template not found: {template_path}. If the user does not "
+                        "have a template, call extract_template_design_system without "
+                        "a template_path (or with 'default') to use the built-in design system."
+                    ),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
 
             ext = os.path.splitext(template_path)[1].lower()
 
@@ -96,6 +281,24 @@ class ExtractTemplateDesignSystemTool:
         except Exception as e:
             logger.error("design_system_extraction_failed", error=str(e))
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
+
+    @staticmethod
+    def _default_result(start: float) -> ToolResult:
+        """Build a successful ToolResult from the built-in default design system."""
+        design_system = get_default_design_system()
+        duration_ms = int((time.time() - start) * 1000)
+        logger.info(
+            "design_system_extracted",
+            template_path="(default)",
+            source_type="default",
+            layout_count=len(design_system.get("layouts", [])),
+            duration_ms=duration_ms,
+        )
+        return ToolResult(
+            success=True,
+            data=design_system,
+            duration_ms=duration_ms,
+        )
 
     # ── PPTX / POTX extraction (XML-based) ──────────────────────────────
 
