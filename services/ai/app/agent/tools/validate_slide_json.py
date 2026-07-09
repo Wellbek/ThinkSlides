@@ -61,6 +61,30 @@ class ValidateSlideJsonTool:
                 duration_ms=int((time.time() - start) * 1000),
             )
 
+        # Guard against non-object payloads. The LLM occasionally passes a
+        # JSON string, a bare string, or an array of slides here; crashing on
+        # ``slide.get(...)`` derails the whole agent loop.
+        if isinstance(slide, list):
+            return ToolResult(
+                success=False,
+                error=(
+                    "validate_slide_json expects a single slide object, but received an array. "
+                    "Call it once per slide with one slide object as slide_json."
+                ),
+                data={"errors": ["expected a slide object, got an array"]},
+                duration_ms=int((time.time() - start) * 1000),
+            )
+        if not isinstance(slide, dict):
+            return ToolResult(
+                success=False,
+                error=(
+                    f"validate_slide_json expects a slide object (dict), but got "
+                    f"{type(slide).__name__}. Pass a single slide object as slide_json."
+                ),
+                data={"errors": [f"expected object, got {type(slide).__name__}"]},
+                duration_ms=int((time.time() - start) * 1000),
+            )
+
         errors: list[str] = []
         warnings: list[str] = []
 
@@ -83,6 +107,15 @@ class ValidateSlideJsonTool:
             errors.append("'contents' must be an array")
         else:
             for i, item in enumerate(contents):
+                # Each content item must be an object; the LLM occasionally
+                # emits a bare string here, which would crash the .get calls
+                # below.
+                if not isinstance(item, dict):
+                    errors.append(
+                        f"Content item {i}: must be an object, got {type(item).__name__}"
+                    )
+                    continue
+
                 # Check required content fields
                 for field in REQUIRED_CONTENT_FIELDS:
                     if field not in item:
