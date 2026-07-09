@@ -42,6 +42,7 @@ class WorkingState:
     """
     Maintains the working state of the agent loop across iterations.
     Tracks accumulated slides, current step, and any pending questions.
+    Also tracks completed tool calls for context preservation on errors.
     """
 
     def __init__(self) -> None:
@@ -51,6 +52,8 @@ class WorkingState:
         self.pending_question: dict | None = None
         self.is_paused_for_user: bool = False
         self.has_called_finalize: bool = False
+        self.completed_tools: dict[str, dict] = {}  # tool_name -> {args, result, timestamp}
+        self.last_error: str | None = None
 
     def add_slide(self, slide: dict) -> None:
         """Add a slide to the accumulated list."""
@@ -60,6 +63,92 @@ class WorkingState:
         """Get accumulated slides as JSON string."""
         return json.dumps(self.accumulated_slides)
 
+    def record_completed_tool(self, name: str, args: dict, result: dict) -> None:
+        """Record a successfully completed tool call."""
+        import datetime
+        self.completed_tools[name] = {
+            "args": args,
+            "result": result,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+        }
+
+    def has_completed_tool(self, name: str) -> bool:
+        """Check if a tool has been successfully completed."""
+        return name in self.completed_tools
+
+    def get_tool_result(self, name: str) -> dict | None:
+        """Get the result of a completed tool, if available."""
+        return self.completed_tools.get(name, {}).get("result")
+
+    def get_completed_work_summary(self) -> str:
+        """Generate a summary of completed work for the LLM context."""
+        if not self.completed_tools:
+            return ""
+
+        lines = ["## Already Completed Work", ""]
+        lines.append("The following tools have already been successfully executed in this session.")
+        lines.append("You do NOT need to repeat these steps - you can use their results directly.")
+        lines.append("")
+
+        # Group by phase for clarity
+        phase_tools = {}
+        for tool_name, tool_data in self.completed_tools.items():
+            phase = TOOL_PHASES.get(tool_name, "other")
+            if phase not in phase_tools:
+                phase_tools[phase] = []
+            phase_tools[phase].append(tool_name)
+
+        # Define phase descriptions
+        phase_descriptions = {
+            "content_analysis": "Content Analysis",
+            "structure_planning": "Structure Planning",
+            "layout_selection": "Layout Selection",
+            "content_generation": "Content Generation",
+            "validation": "Validation",
+            "rendering": "Rendering",
+            "other": "Other",
+        }
+
+        for phase, tool_names in sorted(phase_tools.items(), key=lambda x: x[0]):
+            phase_desc = phase_descriptions.get(phase, phase)
+            lines.append(f"### {phase_desc}")
+            for tool_name in tool_names:
+                lines.append(f"- {tool_name}")
+            lines.append("")
+
+        # Special handling for specific tool results
+        if "plan_presentation_structure" in self.completed_tools:
+            result = self.completed_tools["plan_presentation_structure"]["result"]
+            if isinstance(result, dict) and "structure" in result:
+                lines.append("### Presentation Structure (Already Planned)")
+                lines.append("```json")
+                lines.append(json.dumps(result["structure"], indent=2))
+                lines.append("```")
+                lines.append("")
+
+        if self.presentation_structure:
+            lines.append("### Current Presentation Structure")
+            lines.append("```json")
+            lines.append(json.dumps(self.presentation_structure, indent=2))
+            lines.append("```")
+            lines.append("")
+
+        if self.accumulated_slides:
+            lines.append(f"### Slides Already Designed ({len(self.accumulated_slides)} slides)")
+            for i, slide in enumerate(self.accumulated_slides):
+                title = slide.get("contents", [{}])[0].get("runs", [{}])[0].get("text", f"Slide {i+1}")
+                layout = slide.get("layoutName", slide.get("layoutId", "Unknown"))
+                lines.append(f"{i+1}. **{title}** ({layout})")
+            lines.append("")
+
+        if self.last_error:
+            lines.append("### Last Error Encountered")
+            lines.append(f"An error occurred previously: {self.last_error}")
+            lines.append("Please review the completed work above and continue from where you left off.")
+            lines.append("")
+
+        return "\n".join(lines)
+
     def reset(self) -> None:
         """Reset the working state for a new session."""
         self.accumulated_slides = []
@@ -68,6 +157,8 @@ class WorkingState:
         self.pending_question = None
         self.is_paused_for_user = False
         self.has_called_finalize = False
+        self.completed_tools = {}
+        self.last_error = None
 
 
 class AgentLoop:
@@ -113,14 +204,18 @@ class AgentLoop:
         context = await self._load_context(session_id)
 
         # ── Phase 2: Build messages ──────────────────
-        system_prompt = self._build_system_prompt(context)
         chat_messages = await self._build_chat_messages(session_id)
-
-        messages = [{"role": "system", "content": system_prompt}] + chat_messages
 
         # ── Phase 3: ReAct loop ──────────────────────
         tool_schemas = self.registry.get_function_schemas()
         current_phase = "content_analysis"
+
+        # Function to rebuild messages with updated system prompt including completed work
+        def rebuild_messages() -> list[dict]:
+            system_prompt = self._build_system_prompt(context, self.working_state)
+            return [{"role": "system", "content": system_prompt}] + chat_messages
+
+        messages = rebuild_messages()
 
         for iteration in range(self.MAX_ITERATIONS):
             # Call LLM
@@ -275,6 +370,44 @@ class AgentLoop:
                     ),
                 })
 
+                # Record completed tool for context preservation
+                if tool_result.success:
+                    self.working_state.record_completed_tool(fn_name, fn_args, tool_result.data or {})
+
+                    # Special handling for tools that produce important state
+                    if fn_name == "plan_presentation_structure":
+                        if tool_result.data and "structure" in tool_result.data:
+                            self.working_state.presentation_structure = tool_result.data["structure"]
+
+                    if fn_name == "design_slide_content":
+                        if tool_result.data and "slide" in tool_result.data:
+                            self.working_state.add_slide(tool_result.data["slide"])
+
+                    # Rebuild system prompt with updated completed work summary
+                    # This ensures the LLM knows what's already been done
+                    messages = rebuild_messages()
+                    # Re-append the tool result that was just added
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": json.dumps(
+                            tool_result.data if tool_result.success else {"error": tool_result.error}
+                        ),
+                    })
+                else:
+                    # Record error for context
+                    self.working_state.last_error = tool_result.error
+                    # Also rebuild to include error context
+                    messages = rebuild_messages()
+                    # Re-append the tool result
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": json.dumps(
+                            tool_result.data if tool_result.success else {"error": tool_result.error}
+                        ),
+                    })
+
                 logger.info(
                     "tool_executed",
                     tool_name=fn_name,
@@ -332,7 +465,7 @@ class AgentLoop:
 
         return context
 
-    def _build_system_prompt(self, context: dict) -> str:
+    def _build_system_prompt(self, context: dict, working_state: WorkingState | None = None) -> str:
         """Build the system prompt with embedded design system context."""
         prompt_parts = [
             "You are ThinkSlides, an AI assistant that generates professional PowerPoint presentations.",
@@ -361,6 +494,12 @@ class AgentLoop:
             "9. finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
             "",
         ]
+
+        # Add completed work summary if available (critical for issue #7)
+        if working_state and working_state.completed_tools:
+            completed_summary = working_state.get_completed_work_summary()
+            if completed_summary:
+                prompt_parts.append(completed_summary)
 
         if context.get("design_system"):
             import json as _json
