@@ -7,9 +7,11 @@ interface QuestionCardProps {
   question: string;
   options?: string[];
   context?: string;
+  answered?: boolean;
+  answerText?: string;
 }
 
-export function QuestionCard({ question, options = [], context }: QuestionCardProps) {
+export function QuestionCard({ question, options = [], context, answered = false, answerText }: QuestionCardProps) {
   const sendMessage = useChatStore((s) => s.sendMessage);
   const isSending = useChatStore((s) => s.isSending);
   const [selected, setSelected] = useState<string | null>(null);
@@ -25,6 +27,33 @@ export function QuestionCard({ question, options = [], context }: QuestionCardPr
     setSelected(null);
     await sendMessage(text);
   };
+
+  // If already answered, show answered state
+  if (answered) {
+    const answeredOption = answerText ? answerText.split("\n\n")[0] : null;
+    return (
+      <div className="ws-question ws-question-answered">
+        <div className="ws-q"><Check size={14} /> {question}</div>
+        {context && <div className="ws-q-ctx">{context}</div>}
+        {options.length > 0 && answeredOption && (
+          <div className="ws-q-options">
+            <div className="ws-q-option answered">
+              <span className="radio checked">
+                <Check size={10} />
+              </span>
+              <span className="otxt">{answeredOption}</span>
+            </div>
+          </div>
+        )}
+        {answerText && !options.includes(answerText.split("\n\n")[0]) && (
+          <div className="ws-q-elab">
+            <label>Your answer:</label>
+            <div className="ws-q-answer-text">{answerText}</div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="ws-question">

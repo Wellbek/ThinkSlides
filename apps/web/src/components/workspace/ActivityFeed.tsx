@@ -250,16 +250,20 @@ export function ActivityFeed() {
         {messages.length === 0 && (
           <div className="ws-empty-note">Send a message to start the agent workflow.</div>
         )}
-        {messages.map((m) =>
-          m.role === "user" ? (
+        {messages.map((m, idx) => {
+          // Check if the next message is a user message (meaning this assistant message's questions are answered)
+          const isAnswered = idx < messages.length - 1 && messages[idx + 1].role === 'user';
+          const userAnswer = isAnswered && messages[idx + 1].role === 'user' ? messages[idx + 1].content : undefined;
+
+          return m.role === "user" ? (
             <FeedItem key={m.id} dot={<span className="ws-av indigo">WK</span>} dotClass="ws-dot-user">
               <div className="ws-feed-header"><span className="lbl">You</span><span className="ts">{fmtTime(m.created_at)}</span></div>
               <div className="ws-feed-text">{m.content}</div>
             </FeedItem>
           ) : (
-            <AssistantBlock key={m.id} message={m} />
-          )
-        )}
+            <AssistantBlock key={m.id} message={m} isAnswered={isAnswered} answerText={userAnswer} />
+          );
+        })}
       </div>
 
       {showJump && (
@@ -273,7 +277,7 @@ export function ActivityFeed() {
   );
 }
 
-function AssistantBlock({ message }: { message: any }) {
+function AssistantBlock({ message, isAnswered, answerText }: { message: any; isAnswered?: boolean; answerText?: string }) {
   const events: AgentEvent[] = useMemo(
     () => message.agentEventStream || [],
     [message.agentEventStream]
@@ -332,7 +336,7 @@ function AssistantBlock({ message }: { message: any }) {
           if (node === nodes[nodes.length - 1] && isLive) return null; // rendered via shimmer below
           return <ThoughtsBlock key={node.key} node={node} />;
         }
-        return <EventItem key={node.key} ev={node.ev} />;
+        return <EventItem key={node.key} ev={node.ev} isAnswered={isAnswered} answerText={answerText} />;
       })}
 
       {showLiveShimmer && (
@@ -504,7 +508,7 @@ function ProgressBar({ current, total }: { current?: number; total?: number }) {
   );
 }
 
-function EventItem({ ev }: { ev: any }) {
+function EventItem({ ev, isAnswered, answerText }: { ev: any; isAnswered?: boolean; answerText?: string }) {
   switch (ev.type) {
     case "slide_finalized":
       return (
@@ -530,9 +534,9 @@ function EventItem({ ev }: { ev: any }) {
     }
     case "question":
       return (
-        <FeedItem dot="?" dotClass="ws-dot-q">
-          <div className="ws-feed-header"><span className="lbl">Agent question</span><span className="ws-qbadge">needs your input</span><span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          <QuestionCard question={ev.question} options={ev.options} context={ev.context} />
+        <FeedItem dot={isAnswered ? "✓" : "?"} dotClass={isAnswered ? "ws-dot-success" : "ws-dot-q"}>
+          <div className="ws-feed-header"><span className="lbl">Agent question</span>{isAnswered ? <span className="ws-qbadge answered">answered</span> : <span className="ws-qbadge">needs your input</span>}<span className="ts">{fmtTime(ev.timestamp)}</span></div>
+          <QuestionCard question={ev.question} options={ev.options} context={ev.context} answered={isAnswered} answerText={answerText} />
         </FeedItem>
       );
     case "error":
