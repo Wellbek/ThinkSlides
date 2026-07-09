@@ -130,7 +130,6 @@ async def _run_agent(
         logger.info("Set session start time for %s", session_id)
     else:
         session_start_time = float(session_start_time)
-
     # If this is a resume (answer provided), record the answered question
     if answer and question_text:
         try:
