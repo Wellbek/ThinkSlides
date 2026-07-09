@@ -555,6 +555,24 @@ class AgentLoop:
                     duration_ms=tool_duration,
                 )
 
+        # If the loop exhausted all iterations without finalizing (and is not
+        # paused waiting for user input), emit a clear error so the UI shows a
+        # failure instead of hanging silently.
+        if not self.working_state.has_called_finalize and not self.working_state.is_paused_for_user:
+            logger.warning(
+                "agent_iteration_cap_reached",
+                iterations=self.MAX_ITERATIONS,
+                session_id=str(session_id),
+            )
+            yield _event("error", "content_analysis", {
+                "message": (
+                    f"Generation did not complete within {self.MAX_ITERATIONS} steps. "
+                    "Please try simplifying your request or try again."
+                ),
+                "code": "iteration_cap_reached",
+                "timestamp": _iso_now(),
+            })
+
     async def _execute_tool(self, name: str, args: dict) -> ToolResult:
         """Execute a registered tool by name."""
         entry = self.registry.get(name)
