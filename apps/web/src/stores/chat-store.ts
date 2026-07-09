@@ -175,7 +175,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         file_size: f.file_size ?? f.file_size_bytes,
       }));
       set({
-        activeMessages: messages.map(m => ({ ...m, isComplete: true })),
+        activeMessages: messages.map((m: any) => ({
+          ...m,
+          // The orchestrator persists the live event stream (incl. cited
+          // sources) as agent_event_stream; surface it so thoughts, tool
+          // calls, and sources render on reload, not just during live SSE.
+          agentEventStream: m.agent_event_stream ?? m.agentEventStream,
+          isComplete: true,
+        })),
         activeFiles: normalizedFiles,
         isLoading: false,
       });

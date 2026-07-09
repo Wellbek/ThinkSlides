@@ -277,6 +277,7 @@ func (h *SessionHandler) GetSessionMessages(c *gin.Context) {
 	defer rows.Close()
 
 	messages := make([]map[string]interface{}, 0)
+	messageOrder := make([]string, 0)
 	for rows.Next() {
 		var id, role, content string
 		var attachments []byte
@@ -293,6 +294,38 @@ func (h *SessionHandler) GetSessionMessages(c *gin.Context) {
 			"attachments": atts,
 			"created_at":  createdAt.Format(time.RFC3339),
 		})
+		messageOrder = append(messageOrder, id)
+	}
+
+	// Attach the persisted live-shape event stream (raw_event) to each
+	// message so the chat event stream, tool calls, and cited sources can be
+	// reconstructed when the session is reloaded (not just during live SSE).
+	eventsByMessage := make(map[string][]interface{})
+	evtRows, evtErr := h.pool.Query(ctx,
+		`SELECT message_id, raw_event
+		 FROM agent_events
+		 WHERE session_id = $1 AND message_id IS NOT NULL AND raw_event IS NOT NULL
+		 ORDER BY created_at`, sessionID,
+	)
+	if evtErr == nil {
+		for evtRows.Next() {
+			var msgID string
+			var raw []byte
+			if err := evtRows.Scan(&msgID, &raw); err != nil {
+				continue
+			}
+			var evt interface{}
+			if err := json.Unmarshal(raw, &evt); err != nil {
+				continue
+			}
+			eventsByMessage[msgID] = append(eventsByMessage[msgID], evt)
+		}
+		evtRows.Close()
+	}
+	for i, id := range messageOrder {
+		if evts, ok := eventsByMessage[id]; ok && len(evts) > 0 {
+			messages[i]["agent_event_stream"] = evts
+		}
 	}
 
 	c.JSON(http.StatusOK, messages)
