@@ -109,14 +109,41 @@ async def _run_agent(
     session_id: uuid.UUID,
     user_message_id: uuid.UUID,
     assistant_message_id: uuid.UUID,
+    answer: str = "",
+    question_text: str = "",
 ):
     from app.db.session import async_session
     import datetime
     import traceback
 
-    logger.info("_run_agent STARTED for session %s", session_id)
+    logger.info("_run_agent STARTED for session %s (answer=%s)", session_id, len(answer) > 0)
 
     overall_start_time = time.time()
+
+    # If this is a resume (answer provided), record the answered question
+    if answer and question_text:
+        try:
+            async with async_session() as db:
+                # Get the working state to add answered question
+                redis_key = f"working_state:{session_id}"
+                state_json = await redis_client.get(redis_key)
+                if state_json:
+                    state_dict = json.loads(state_json)
+                    answered_questions = state_dict.get("answered_questions", [])
+                    answered_questions.append({
+                        "question": question_text,
+                        "answer": answer,
+                        "timestamp": datetime.datetime.utcnow().isoformat(),
+                    })
+                    state_dict["answered_questions"] = answered_questions
+                    await redis_client.set(
+                        redis_key,
+                        json.dumps(state_dict),
+                        ex=3600,
+                    )
+                    logger.info("Recorded answered question in working state for session %s", session_id)
+        except Exception as e:
+            logger.error("Failed to record answered question: %s", str(e))
 
     try:
         async with async_session() as db:
@@ -174,7 +201,6 @@ async def _run_agent(
                         question_text = event.get("question", "")
                         options = event.get("options", [])
                         context = event.get("context", "")
-                        # Store the question as the assistant message so the user sees it
                         question_content = f"Question: {question_text}\n"
                         if options:
                             question_content += "\nOptions:\n"
@@ -183,6 +209,27 @@ async def _run_agent(
                         if context:
                             question_content += f"\nContext: {context}\n"
                         final_content = question_content
+
+                        # Store the question as a proper assistant message with metadata
+                        # This ensures it appears in chat history and can be tracked
+                        question_msg = ChatMessage(
+                            session_id=sid,
+                            role="assistant",
+                            content=question_content,
+                            attachments=json.dumps({
+                                "type": "question",
+                                "question": question_text,
+                                "options": options,
+                                "context": context,
+                            }),
+                        )
+                        db.add(question_msg)
+                        await db.commit()
+                        await db.refresh(question_msg)
+                        logger.info(
+                            "Stored question as assistant message for session %s",
+                            session_id
+                        )
 
                     # Track generated files from tool_result events
                     if event.get("type") == "tool_result" and event.get("toolName") == "finalize_and_render_pptx":
@@ -513,8 +560,19 @@ async def answer_question(
     await db.commit()
     await db.refresh(assistant_msg)
 
-    # Resume the agent loop
-    asyncio.create_task(_run_agent(sid, user_msg.id, assistant_msg.id))
+    # Get the pending question from working state
+    question_text = ""
+    try:
+        state_json = await redis_client.get(f"working_state:{session_id}")
+        if state_json:
+            state_dict = json.loads(state_json)
+            pending_question = state_dict.get("pending_question", {})
+            question_text = pending_question.get("question", "")
+    except Exception as e:
+        logger.warning("Failed to get pending question from working state: %s", str(e))
+
+    # Resume the agent loop with answer and question text
+    asyncio.create_task(_run_agent(sid, user_msg.id, assistant_msg.id, answer_content, question_text))
 
     logger.info(
         "answer_question: resumed workflow for session %s with answer: %s",
