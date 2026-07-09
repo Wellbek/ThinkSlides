@@ -5,7 +5,7 @@ Plans the overall slide structure and outline based on analyzed content and requ
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
-from app.llm.provider import get_llm_provider
+from app.llm.provider import get_tools_llm_provider as get_llm_provider
 from app.observability.logging import get_logger
 import json
 import time

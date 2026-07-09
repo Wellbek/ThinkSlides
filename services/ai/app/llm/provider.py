@@ -57,10 +57,10 @@ class LLMProvider(ABC):
 class ZhipuProvider(LLMProvider):
     """Zhipu GLM provider using the zhipuai SDK."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: str | None = None) -> None:
         from zhipuai import ZhipuAI
         self.client = ZhipuAI(api_key=settings.zhipu_api_key)
-        self.model = settings.zhipu_model
+        self.model = model or settings.zhipu_model
 
     async def chat(
         self,
@@ -353,6 +353,7 @@ class AzureOpenAIVisionProvider(VisionLLMProvider):
 # ── Singleton instances ────────────────────────────────────────────────
 
 _provider: LLMProvider | None = None
+_tools_provider: LLMProvider | None = None
 _vision_provider: VisionLLMProvider | None = None
 
 
@@ -367,6 +368,24 @@ def get_llm_provider() -> LLMProvider:
             _provider = ZhipuProvider()
             logger.info("llm_provider_initialized", provider="zhipu", model=settings.zhipu_model)
     return _provider
+
+
+def get_tools_llm_provider() -> LLMProvider:
+    """Provider for lower-stakes internal tool LLM calls (planning, key-data
+    extraction). Uses the cheaper/faster flash model when available so the
+    multi-step generation completes more quickly. Slide content design still
+    uses the main provider. Falls back to the main provider on Azure or if the
+    tools model equals the main model."""
+    global _tools_provider
+    if _tools_provider is None:
+        if settings.llm_provider == "azure_openai":
+            _tools_provider = get_llm_provider()
+        elif settings.zhipu_tools_model and settings.zhipu_tools_model != settings.zhipu_model:
+            _tools_provider = ZhipuProvider(model=settings.zhipu_tools_model)
+            logger.info("tools_llm_provider_initialized", provider="zhipu", model=settings.zhipu_tools_model)
+        else:
+            _tools_provider = get_llm_provider()
+    return _tools_provider
 
 
 def get_vision_llm_provider() -> VisionLLMProvider:
