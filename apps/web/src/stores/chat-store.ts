@@ -53,6 +53,7 @@ interface ChatState {
   settingsOpen: boolean;
   totalElapsedMs: number | null;
   isGenerating: boolean;
+  setIsGenerating: (generating: boolean) => void;
 
   // Computed getter (not stored)
   // isGenerating: () => boolean;  // Now a stored state
@@ -95,21 +96,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   settingsOpen: false,
   totalElapsedMs: null,
   isGenerating: false,
-    const { activeMessages, activeEvents, isSending } = get();
-    // If we are actively sending a message, that implies generation is ongoing
-    if (isSending) return true;
-    // Check if any assistant message is incomplete
-    const hasIncompleteAssistant = activeMessages.some(m => m.role === 'assistant' && !m.isComplete);
-    if (hasIncompleteAssistant) return true;
-    // Check if any events indicate ongoing processing (tool_call, progress, etc.)
-    const hasActiveEvent = activeEvents.some(e => 
-      e.type === 'tool_call' || 
-      e.type === 'progress' || 
-      e.type === 'thought' ||
-      (e as any).status === 'pending'
-    );
-    return hasActiveEvent;
-  },
+
+  // Computed getter for isGenerating
+  setIsGenerating: (generating: boolean) => set({ isGenerating: generating }),
 
   fetchSessions: async () => {
     set({ isLoading: true });
@@ -291,6 +280,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               activeMessages: updatedMessages,
               activeFiles: [...state.activeFiles, ...newFiles],
               isSending: false,
+              isGenerating: false,
               totalElapsedMs: (data as any).totalElapsedMs ?? state.totalElapsedMs,
             };
           });
@@ -320,7 +310,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sendMessage: async (content: string, files?: File[]) => {
     const { activeSessionId } = get();
     if (!activeSessionId) return;
-    set({ isSending: true });
+    set({ isSending: true, isGenerating: true });
     const optimisticUser: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
