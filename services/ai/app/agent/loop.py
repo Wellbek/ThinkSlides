@@ -391,6 +391,11 @@ class AgentLoop:
                 tool_result = await self._execute_tool(fn_name, fn_args)
                 tool_duration = int((time.time() - tool_start) * 1000)
 
+                # Extract sources from tool result data (URLs that can be displayed to user)
+                sources = []
+                if tool_result.success and tool_result.data:
+                    sources = self._extract_sources(tool_result.data)
+
                 # Yield tool_result event
                 yield _event("tool_result", current_phase, {
                     "toolName": fn_name,
@@ -400,6 +405,7 @@ class AgentLoop:
                     "success": tool_result.success,
                     "tokenCount": tool_result.token_count,
                     "timestamp": _iso_now(),
+                    "sources": sources if sources else None,
                 })
 
                 # If a slide was finalized, emit slide_finalized for each slide
@@ -610,6 +616,76 @@ class AgentLoop:
         ])
 
         return "\n".join(prompt_parts)
+
+    def _extract_sources(self, data: dict) -> list[dict]:
+        """Extract source URLs from tool result data for display in chat."""
+        import re
+        from urllib.parse import urlparse
+
+        sources = []
+
+        # Handle different data structures
+        if isinstance(data, dict):
+            # Look for URL fields in common keys
+            url_keys = [
+                "url", "source", "link", "href", "file_url", "download_url",
+                "source_url", "web_url", "website", "reference", "citation"
+            ]
+
+            for key in url_keys:
+                if key in data and data[key]:
+                    url = data[key]
+                    if isinstance(url, str) and self._is_valid_url(url):
+                        # Check if we already have this URL
+                        if not any(s.get("url") == url for s in sources):
+                            sources.append({
+                                "url": url,
+                                "title": self._extract_domain(url),
+                                "type": "web"
+                            })
+
+            # Recursively search nested dicts and lists
+            for value in data.values():
+                if isinstance(value, dict):
+                    sources.extend(self._extract_sources(value))
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict):
+                            sources.extend(self._extract_sources(item))
+
+        # Remove duplicates
+        seen_urls = set()
+        unique_sources = []
+        for s in sources:
+            if s["url"] not in seen_urls:
+                seen_urls.add(s["url"])
+                unique_sources.append(s)
+
+        return unique_sources
+
+    def _is_valid_url(self, url: str) -> bool:
+        """Check if string is a valid URL."""
+        from urllib.parse import urlparse
+
+        try:
+            result = urlparse(url)
+            return all([result.scheme, result.netloc]) and result.scheme in ("http", "https")
+        except Exception:
+            return False
+
+    def _extract_domain(self, url: str) -> str:
+        """Extract domain name from URL for display."""
+        from urllib.parse import urlparse
+
+        try:
+            parsed = urlparse(url)
+            domain = parsed.netloc
+            # Remove www. prefix
+            if domain.startswith("www."):
+                domain = domain[4:]
+            return domain
+        except Exception:
+            return url
 
     async def _build_chat_messages(self, session_id: uuid.UUID) -> list[dict]:
         """Build the chat message history for the LLM."""
