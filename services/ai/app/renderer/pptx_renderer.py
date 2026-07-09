@@ -15,6 +15,8 @@ import shutil
 import tempfile
 import xml.etree.ElementTree as ET
 from typing import Any, Optional
+from pptx import Presentation
+from pptx.util import Inches, Pt, Emu
 from app.observability.logging import get_logger
 from app.renderer.layout import LayoutEngine, LayoutType, PositionConfig
 from app.renderer.typography import TypographyEngine, TextStyle
@@ -129,9 +131,6 @@ class PPTXRenderer:
         metadata: dict,
         output_path: str,
     ) -> str:
-        from pptx import Presentation
-        from pptx.util import Inches, Pt, Emu
-
         # Use default template
         template_path = get_default_template_path()
         prs = Presentation(template_path)
