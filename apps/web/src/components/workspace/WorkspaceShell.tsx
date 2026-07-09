@@ -7,6 +7,7 @@ import { HomeView } from "./HomeView";
 import { DetailsPanel } from "./DetailsPanel";
 import { SlideStage } from "./SlideStage";
 import { ChatFlow } from "./ChatFlow";
+import { TimerDisplay } from "./TimerDisplay";
 import { Share2, Eye } from "lucide-react";
 
 type View = "home" | "workspace";
@@ -172,6 +173,7 @@ export function WorkspaceShell() {
                   <span className="here">{activeSession?.title ?? "Session"}</span>
                 </div>
                 <div className="ws-spacer" />
+                <TimerDisplay />
                 {!panes.center && (
                   <button className="ws-tb-btn primary" onClick={() => setPanes((p) => ({ ...p, center: true }))}>
                     <Eye size={13} /> Show preview

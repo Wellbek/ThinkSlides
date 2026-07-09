@@ -51,9 +51,11 @@ interface ChatState {
   isSending: boolean;
   sseClient: SSEClient | null;
   settingsOpen: boolean;
+  totalElapsedMs: number | null;
+  isGenerating: boolean;
 
   // Computed getter (not stored)
-  isGenerating: () => boolean;
+  // isGenerating: () => boolean;  // Now a stored state
 
   // Actions
   fetchSessions: () => Promise<void>;
@@ -91,8 +93,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isSending: false,
   sseClient: null,
   settingsOpen: false,
-
-  isGenerating: () => {
+  totalElapsedMs: null,
+  isGenerating: false,
     const { activeMessages, activeEvents, isSending } = get();
     // If we are actively sending a message, that implies generation is ongoing
     if (isSending) return true;
@@ -216,6 +218,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       client.on('error', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
       client.on('progress', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
       client.on('question', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
+      client.on('timer_update', (e) => {
+        try {
+          const data = JSON.parse(e.data) as { elapsedMs: number };
+          set({ totalElapsedMs: data.elapsedMs, isGenerating: true });
+        } catch (err) { console.error(err); }
+      });
       client.on('session_title_updated', (e) => {
         try {
           const data = JSON.parse(e.data) as { session_id: string; title: string };
@@ -279,7 +287,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   }
                 : msg
             );
-            return { activeMessages: updatedMessages, activeFiles: [...state.activeFiles, ...newFiles], isSending: false };
+            return {
+              activeMessages: updatedMessages,
+              activeFiles: [...state.activeFiles, ...newFiles],
+              isSending: false,
+              totalElapsedMs: (data as any).totalElapsedMs ?? state.totalElapsedMs,
+            };
           });
           // Refresh the session list so any late state changes (e.g. the
           // auto-generated title landing after this event) are reflected.
