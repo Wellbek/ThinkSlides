@@ -5,6 +5,7 @@ import { useLayoutStore } from "@/stores/layout-store";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatInput } from "./ChatInput";
 import { TemplateSelector } from "./TemplateSelector";
+import { TimerHeader } from "./TimerHeader";
 import { MessageSquarePlus, PanelRightClose, Loader2 } from "lucide-react";
 
 export function ChatArea() {
@@ -53,6 +54,9 @@ export function ChatArea() {
           </button>
         </div>
       </div>
+
+      {/* Timer Header */}
+      <TimerHeader />
 
       {/* Messages */}
       <ChatMessageList />

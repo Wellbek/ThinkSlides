@@ -14,13 +14,18 @@ export interface ChatSession {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   created_at: string;
   attachments?: string[];
   agentEventStream?: AgentEvent[];
   generatedFiles?: GeneratedFile[];
   isComplete?: boolean;
+  isCollapsed?: boolean;
+  metadata?: {
+    type?: 'completion';
+    elapsedMs?: number;
+  };
 }
 
 export interface Template {
@@ -250,6 +255,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       client.on('done', (e) => {
         try {
           const data = JSON.parse(e.data) as DoneEvent;
+          const totalElapsedMs = (data as any).totalElapsedMs;
+
           set((state) => {
             const activeMsg = findActiveAssistantMessage(state.activeMessages);
             if (!activeMsg) return { isSending: false };
@@ -276,12 +283,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   }
                 : msg
             );
+
+            // Add completion message if we have total elapsed time
+            let completionMessage: ChatMessage | null = null;
+            if (totalElapsedMs && totalElapsedMs > 0) {
+              const seconds = Math.floor(totalElapsedMs / 1000);
+              const minutes = Math.floor(seconds / 60);
+              const remainingSeconds = seconds % 60;
+              let timeString: string;
+              if (minutes > 0) {
+                timeString = `${minutes}m ${remainingSeconds}s`;
+              } else {
+                timeString = `${remainingSeconds}s`;
+              }
+              completionMessage = {
+                id: crypto.randomUUID(),
+                role: 'system',
+                content: `Finished in ${timeString}`,
+                created_at: new Date().toISOString(),
+                isCollapsed: true,
+                metadata: {
+                  type: 'completion',
+                  elapsedMs: totalElapsedMs,
+                },
+              };
+            }
+
             return {
-              activeMessages: updatedMessages,
+              activeMessages: completionMessage
+                ? [...updatedMessages, completionMessage]
+                : updatedMessages,
               activeFiles: [...state.activeFiles, ...newFiles],
               isSending: false,
               isGenerating: false,
-              totalElapsedMs: (data as any).totalElapsedMs ?? state.totalElapsedMs,
+              totalElapsedMs: totalElapsedMs ?? state.totalElapsedMs,
             };
           });
           // Refresh the session list so any late state changes (e.g. the
