@@ -56,6 +56,7 @@ class WorkingState:
         self.has_called_finalize: bool = False
         self.completed_tools: dict[str, dict] = {}  # tool_name -> {args, result, timestamp}
         self.last_error: str | None = None
+        self.answered_questions: list[dict] = []  # Track questions that have been answered
 
     def add_slide(self, slide: dict) -> None:
         """Add a slide to the accumulated list."""
@@ -84,7 +85,7 @@ class WorkingState:
 
     def get_completed_work_summary(self) -> str:
         """Generate a summary of completed work for the LLM context."""
-        if not self.completed_tools:
+        if not self.completed_tools and not self.answered_questions:
             return ""
 
         lines = ["## Already Completed Work", ""]
@@ -149,6 +150,19 @@ class WorkingState:
             lines.append("Please review the completed work above and continue from where you left off.")
             lines.append("")
 
+        # Add answered questions to prevent re-asking
+        if self.answered_questions:
+            lines.append("### Questions Already Answered")
+            lines.append("The following questions have already been asked and answered by the user:")
+            lines.append("")
+            for q in self.answered_questions:
+                question = q.get("question", "")
+                answer = q.get("answer", "")
+                lines.append(f"- **Question:** {question}")
+                lines.append(f"  **Answer:** {answer}")
+                lines.append("")
+            lines.append("Do NOT ask these questions again.")
+
         return "\n".join(lines)
 
     def reset(self) -> None:
@@ -161,6 +175,7 @@ class WorkingState:
         self.has_called_finalize = False
         self.completed_tools = {}
         self.last_error = None
+        self.answered_questions = []
 
 
 class AgentLoop:
@@ -201,6 +216,7 @@ class AgentLoop:
             "has_called_finalize": self.working_state.has_called_finalize,
             "last_error": self.working_state.last_error,
             "pending_question": self.working_state.pending_question,
+            "answered_questions": self.working_state.answered_questions,
         }
         redis_client = await self._get_redis_client()
         await redis_client.set(
@@ -226,6 +242,7 @@ class AgentLoop:
             self.working_state.has_called_finalize = state_dict.get("has_called_finalize", False)
             self.working_state.last_error = state_dict.get("last_error")
             self.working_state.pending_question = state_dict.get("pending_question")
+            self.working_state.answered_questions = state_dict.get("answered_questions", [])
             logger.info("loaded_working_state", session_id=str(session_id), tools_completed=len(state_dict.get("completed_tools", {})))
             return True
         except Exception as e:

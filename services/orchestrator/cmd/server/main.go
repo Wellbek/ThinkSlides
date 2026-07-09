@@ -137,7 +137,7 @@ func main() {
 
 	// ── Handlers ───────────────────────────────────────────────────────
 	authHandler := handler.NewAuthHandler(userRepo, jwtSecret, devMode)
-	sessionHandler := handler.NewSessionHandler(redisQueue, hub, aiClient, dbURL)
+	sessionHandler := handler.NewSessionHandler(redisQueue, hub, aiClient, dbURL, redisClient)
 
 	// ── HTTP Server ────────────────────────────────────────────────────
 	r := gin.Default()

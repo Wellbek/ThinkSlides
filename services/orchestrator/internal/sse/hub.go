@@ -110,9 +110,14 @@ func (h *Hub) listenToRedis(sessionID string) {
 		h.Broadcast(sessionID, Event{Event: eventType, Data: msg.Payload})
 
 		// If this is the final "done" event, we can stop listening
+		// BUT: don't stop if paused=True (workflow will resume)
 		if eventType == "done" {
-			log.Printf("SSE: 'done' event received for session %s, stopping listener", sessionID)
-			return
+			isPaused, _ := raw["paused"].(bool)
+			if !isPaused {
+				log.Printf("SSE: 'done' event received for session %s (not paused), stopping listener", sessionID)
+				return
+			}
+			log.Printf("SSE: 'done' event received for session %s (paused), continuing listener", sessionID)
 		}
 	}
 	log.Printf("SSE: Redis listener stopped for session %s", sessionID)
@@ -132,7 +137,7 @@ func (h *Hub) Handler() gin.HandlerFunc {
 		c.Writer.Header().Set("Cache-Control", "no-cache")
 		c.Writer.Header().Set("Connection", "keep-alive")
 		c.Writer.Header().Set("X-Accel-Buffering", "no")
-		c.Writer.WriteHeader(http.StatusOK)
+		c.Status(http.StatusOK)
 		c.Writer.Flush()
 
 		eventChan := h.Subscribe(sessionID)
