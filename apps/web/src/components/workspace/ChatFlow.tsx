@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ActivityFeed } from "./ActivityFeed";
 import { Composer } from "./Composer";
+import { TimerHeader } from "@/components/chat/TimerHeader";
 import { useChatStore, type GeneratedFile } from "@/stores/chat-store";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
 import { PanelRightClose, Download, ExternalLink, Presentation, FileDown } from "lucide-react";
@@ -22,6 +23,8 @@ export function ChatFlow({ onCollapse }: { collapsed: boolean; onCollapse: () =>
         <div className="ws-spacer" />
         <button className="ws-collapse" onClick={onCollapse} title="Collapse chat"><PanelRightClose size={15} /></button>
       </div>
+
+      <TimerHeader />
 
       {tab === "activity" && <ActivityFeed />}
       {tab === "messages" && (
