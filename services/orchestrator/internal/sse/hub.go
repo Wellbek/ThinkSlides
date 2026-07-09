@@ -137,7 +137,7 @@ func (h *Hub) Handler() gin.HandlerFunc {
 		c.Writer.Header().Set("Cache-Control", "no-cache")
 		c.Writer.Header().Set("Connection", "keep-alive")
 		c.Writer.Header().Set("X-Accel-Buffering", "no")
-		c.WriteHeader(http.StatusOK)
+		c.Status(http.StatusOK)
 		c.Writer.Flush()
 
 		eventChan := h.Subscribe(sessionID)

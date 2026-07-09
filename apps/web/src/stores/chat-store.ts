@@ -14,13 +14,18 @@ export interface ChatSession {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   created_at: string;
   attachments?: string[];
   agentEventStream?: AgentEvent[];
   generatedFiles?: GeneratedFile[];
   isComplete?: boolean;
+  isCollapsed?: boolean;
+  metadata?: {
+    type?: 'completion';
+    elapsedMs?: number;
+  };
 }
 
 export interface Template {
@@ -51,9 +56,12 @@ interface ChatState {
   isSending: boolean;
   sseClient: SSEClient | null;
   settingsOpen: boolean;
+  totalElapsedMs: number | null;
+  isGenerating: boolean;
+  setIsGenerating: (generating: boolean) => void;
 
   // Computed getter (not stored)
-  isGenerating: () => boolean;
+  // isGenerating: () => boolean;  // Now a stored state
 
   // Actions
   fetchSessions: () => Promise<void>;
@@ -91,23 +99,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isSending: false,
   sseClient: null,
   settingsOpen: false,
+  totalElapsedMs: null,
+  isGenerating: false,
 
-  isGenerating: () => {
-    const { activeMessages, activeEvents, isSending } = get();
-    // If we are actively sending a message, that implies generation is ongoing
-    if (isSending) return true;
-    // Check if any assistant message is incomplete
-    const hasIncompleteAssistant = activeMessages.some(m => m.role === 'assistant' && !m.isComplete);
-    if (hasIncompleteAssistant) return true;
-    // Check if any events indicate ongoing processing (tool_call, progress, etc.)
-    const hasActiveEvent = activeEvents.some(e => 
-      e.type === 'tool_call' || 
-      e.type === 'progress' || 
-      e.type === 'thought' ||
-      (e as any).status === 'pending'
-    );
-    return hasActiveEvent;
-  },
+  // Computed getter for isGenerating
+  setIsGenerating: (generating: boolean) => set({ isGenerating: generating }),
 
   fetchSessions: async () => {
     set({ isLoading: true });
@@ -209,13 +205,49 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return { activeMessages: updatedMessages };
         });
       };
-      client.on('thought', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
-      client.on('tool_call', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
-      client.on('tool_result', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
-      client.on('slide_finalized', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
-      client.on('error', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
-      client.on('progress', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
+      client.on('thought', (e) => {
+        try {
+          appendEventToActiveMessage(JSON.parse(e.data));
+          set({ isGenerating: true });
+        } catch (err) { console.error(err); }
+      });
+      client.on('tool_call', (e) => {
+        try {
+          appendEventToActiveMessage(JSON.parse(e.data));
+          set({ isGenerating: true });
+        } catch (err) { console.error(err); }
+      });
+      client.on('tool_result', (e) => {
+        try {
+          appendEventToActiveMessage(JSON.parse(e.data));
+          set({ isGenerating: true });
+        } catch (err) { console.error(err); }
+      });
+      client.on('slide_finalized', (e) => {
+        try {
+          appendEventToActiveMessage(JSON.parse(e.data));
+          set({ isGenerating: true });
+        } catch (err) { console.error(err); }
+      });
+      client.on('error', (e) => {
+        try {
+          appendEventToActiveMessage(JSON.parse(e.data));
+          set({ isGenerating: true });
+        } catch (err) { console.error(err); }
+      });
+      client.on('progress', (e) => {
+        try {
+          appendEventToActiveMessage(JSON.parse(e.data));
+          set({ isGenerating: true });
+        } catch (err) { console.error(err); }
+      });
       client.on('question', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
+      client.on('timer_update', (e) => {
+        try {
+          const data = JSON.parse(e.data) as { elapsedMs: number };
+          set({ totalElapsedMs: data.elapsedMs, isGenerating: true });
+        } catch (err) { console.error(err); }
+      });
       client.on('session_title_updated', (e) => {
         try {
           const data = JSON.parse(e.data) as { session_id: string; title: string };
@@ -253,6 +285,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       client.on('done', (e) => {
         try {
           const data = JSON.parse(e.data) as DoneEvent;
+          const totalElapsedMs = (data as any).totalElapsedMs;
+
           set((state) => {
             const activeMsg = findActiveAssistantMessage(state.activeMessages);
             if (!activeMsg) return { isSending: false };
@@ -279,7 +313,41 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   }
                 : msg
             );
-            return { activeMessages: updatedMessages, activeFiles: [...state.activeFiles, ...newFiles], isSending: false };
+
+            // Add completion message if we have total elapsed time
+            let completionMessage: ChatMessage | null = null;
+            if (totalElapsedMs && totalElapsedMs > 0) {
+              const seconds = Math.floor(totalElapsedMs / 1000);
+              const minutes = Math.floor(seconds / 60);
+              const remainingSeconds = seconds % 60;
+              let timeString: string;
+              if (minutes > 0) {
+                timeString = `${minutes}m ${remainingSeconds}s`;
+              } else {
+                timeString = `${remainingSeconds}s`;
+              }
+              completionMessage = {
+                id: crypto.randomUUID(),
+                role: 'system',
+                content: `Finished in ${timeString}`,
+                created_at: new Date().toISOString(),
+                isCollapsed: true,
+                metadata: {
+                  type: 'completion',
+                  elapsedMs: totalElapsedMs,
+                },
+              };
+            }
+
+            return {
+              activeMessages: completionMessage
+                ? [...updatedMessages, completionMessage]
+                : updatedMessages,
+              activeFiles: [...state.activeFiles, ...newFiles],
+              isSending: false,
+              isGenerating: false,
+              totalElapsedMs: totalElapsedMs ?? state.totalElapsedMs,
+            };
           });
           // Refresh the session list so any late state changes (e.g. the
           // auto-generated title landing after this event) are reflected.
@@ -307,7 +375,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sendMessage: async (content: string, files?: File[]) => {
     const { activeSessionId } = get();
     if (!activeSessionId) return;
-    set({ isSending: true });
+    set({ isSending: true, isGenerating: true });
     const optimisticUser: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',

@@ -621,7 +621,43 @@ function TypingIndicator() {
   );
 }
 
-// User Message 
+// System Message (e.g., completion status)
+function SystemMessage({ message }: { message: any }) {
+  const [isCollapsed, setIsCollapsed] = useState(message.isCollapsed ?? true);
+  const isCompletion = message.metadata?.type === 'completion';
+
+  if (isCompletion) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex justify-center"
+      >
+        <button
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          className="flex items-center gap-2 bg-indigo-dark/30 text-indigo px-4 py-2 rounded-full border border-indigo-light/30 hover:bg-indigo-dark/50 transition-colors text-caption font-medium"
+        >
+          <Clock size={14} />
+          {isCollapsed ? (
+            <>
+              <span>Finished in {message.content.replace("Finished in ", "")}</span>
+              <ChevronDown size={14} />
+            </>
+          ) : (
+            <>
+              <span>Finished in {message.content.replace("Finished in ", "")}</span>
+              <ChevronRight size={14} />
+            </>
+          )}
+        </button>
+      </motion.div>
+    );
+  }
+
+  return null;
+}
+
+// User Message
 function UserMessage({ content }: { content: string }) {
   return (
     <div className="flex justify-end">
@@ -762,6 +798,8 @@ export function ChatMessageList() {
       {messages.map((msg) =>
         msg.role === "user" ? (
           <UserMessage key={msg.id} content={msg.content} />
+        ) : msg.role === "system" ? (
+          <SystemMessage key={msg.id} message={msg} />
         ) : (
           <AssistantMessage key={msg.id} message={msg} />
         )

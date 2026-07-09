@@ -120,6 +120,16 @@ async def _run_agent(
 
     overall_start_time = time.time()
 
+    # Get or create session start time for timer tracking
+    session_start_time_key = f"session_start_time:{session_id}"
+    session_start_time = await redis_client.get(session_start_time_key)
+    if not session_start_time:
+        # First message in this session - set the start time
+        session_start_time = str(overall_start_time)
+        await redis_client.set(session_start_time_key, session_start_time, ex=86400)  # 24 hours
+        logger.info("Set session start time for %s", session_id)
+    else:
+        session_start_time = float(session_start_time)
     # If this is a resume (answer provided), record the answered question
     if answer and question_text:
         try:
@@ -161,6 +171,21 @@ async def _run_agent(
                 
                 async for event in loop.run(session_id=session_id):
                     event_count += 1
+
+                    # Emit timer update every 5 events
+                    if event_count % 5 == 0:
+                        elapsed_seconds = time.time() - float(session_start_time)
+                        elapsed_ms = int(elapsed_seconds * 1000)
+                        timer_event = {
+                            "type": "timer_update",
+                            "elapsedMs": elapsed_ms,
+                            "elapsedSeconds": elapsed_seconds,
+                            "eventCount": event_count,
+                        }
+                        await redis_client.publish(
+                            f"agent:events:{session_id}", json.dumps(timer_event)
+                        )
+
                     logger.info(
                         "_run_agent: got event #%d type=%s for session %s",
                         event_count, event.get("type"), session_id
@@ -322,6 +347,7 @@ async def _run_agent(
                 logger.info("_run_agent: saved assistant message for %s", session_id)
 
                 overall_duration_ms = int((time.time() - overall_start_time) * 1000)
+                total_elapsed_ms = int((time.time() - float(session_start_time)) * 1000)
 
                 done_event = {
                     "type": "done",
@@ -329,6 +355,7 @@ async def _run_agent(
                     "content": final_content,
                     "files": generated_files if generated_files else None,
                     "overallDurationMs": overall_duration_ms,
+                    "totalElapsedMs": total_elapsed_ms,
                     "timestamp": datetime.datetime.utcnow().isoformat(),
                 }
                 pub_result = await redis_client.publish(
@@ -355,6 +382,7 @@ async def _run_agent(
         # Try to save fallback and publish done event even on error
         try:
             overall_duration_ms = int((time.time() - overall_start_time) * 1000)
+            total_elapsed_ms = int((time.time() - float(session_start_time)) * 1000)
 
             async with async_session() as db:
                 fallback = f"An error occurred: {str(e)}"
@@ -370,6 +398,7 @@ async def _run_agent(
                     "content": fallback,
                     "error": str(e),
                     "overallDurationMs": overall_duration_ms,
+                    "totalElapsedMs": total_elapsed_ms,
                     "timestamp": datetime.datetime.utcnow().isoformat(),
                 }
                 await redis_client.publish(
