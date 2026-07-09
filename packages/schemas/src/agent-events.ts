@@ -39,6 +39,12 @@ export interface ToolCallEvent {
   timestamp: string;
 }
 
+export interface SourceInfo {
+  url: string;
+  title: string;
+  type: "web" | "internal";
+}
+
 export interface ToolResultEvent {
   type: "tool_result";
   phase: AgentEventPhase;
@@ -50,6 +56,7 @@ export interface ToolResultEvent {
   error?: string;        // optional error message if success is false
   tokenCount?: number;
   timestamp: string;
+  sources?: SourceInfo[];
 }
 
 export interface SlideFinalizedEvent {

@@ -27,6 +27,8 @@ import {
   X,
 } from "lucide-react";
 import { GeneratedFileCard } from "./GeneratedFileCard";
+import { Sources } from "./Sources";
+import type { SourceInfo } from "@thinkslides/schemas";
 import type { GeneratedFile } from "@/stores/chat-store";
 // Type guards 
 function isThought(e: AgentEvent): e is ThoughtEvent {
@@ -673,7 +675,7 @@ function UserMessage({ content }: { content: string }) {
   );
 }
 
-// Assistant Message (wrapper) 
+// Assistant Message (wrapper)
 function AssistantMessage({ message }: { message: any }) {
   const events: AgentEvent[] = message.agentEventStream ?? [];
   const isComplete = !!message.isComplete;
@@ -688,6 +690,11 @@ function AssistantMessage({ message }: { message: any }) {
       layoutName: "Slide",
     }))
     .sort((a, b) => a.slideIndex - b.slideIndex);
+
+  // Extract sources from tool_result events
+  const sources: SourceInfo[] = events
+    .filter((e): e is ToolResultEvent => e.type === "tool_result")
+    .flatMap((e) => e.sources || []);
 
   if (!events.length && !message.content && !isComplete) {
     return (
@@ -748,6 +755,9 @@ function AssistantMessage({ message }: { message: any }) {
             ))}
           </div>
         )}
+
+        {/* Sources */}
+        {sources.length > 0 && <Sources sources={sources} />}
       </div>
     </div>
   );
