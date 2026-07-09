@@ -169,6 +169,21 @@ async def _run_agent(
                     if event.get("type") == "message_complete":
                         final_content = event.get("content", "")
 
+                    # Capture question event for user-facing assistant message
+                    if event.get("type") == "question":
+                        question_text = event.get("question", "")
+                        options = event.get("options", [])
+                        context = event.get("context", "")
+                        # Store the question as the assistant message so the user sees it
+                        question_content = f"Question: {question_text}\n"
+                        if options:
+                            question_content += "\nOptions:\n"
+                            for i, opt in enumerate(options, 1):
+                                question_content += f"{i}. {opt}\n"
+                        if context:
+                            question_content += f"\nContext: {context}\n"
+                        final_content = question_content
+
                     # Track generated files from tool_result events
                     if event.get("type") == "tool_result" and event.get("toolName") == "finalize_and_render_pptx":
                         tool_result_data = event.get("toolResult") or event.get("result")

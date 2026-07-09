@@ -20,6 +20,8 @@ from app.config import settings
 import json
 import time
 import uuid
+import os
+import redis.asyncio as redis
 
 logger = get_logger(__name__)
 
@@ -180,6 +182,61 @@ class AgentLoop:
         self.registry = get_registry()
         self.llm = get_llm_provider()
         self.working_state = WorkingState()
+        self.redis_client = None
+
+    async def _get_redis_client(self) -> redis.Redis:
+        """Get or create Redis client."""
+        if self.redis_client is None:
+            redis_url = os.environ.get("REDIS_URL", "redis://redis:6379")
+            self.redis_client = redis.from_url(redis_url, decode_responses=False)
+        return self.redis_client
+
+    async def _save_working_state(self, session_id: uuid.UUID) -> None:
+        """Save working state to Redis for resume after user input."""
+        state_dict = {
+            "accumulated_slides": self.working_state.accumulated_slides,
+            "presentation_structure": self.working_state.presentation_structure,
+            "current_step_index": self.working_state.current_step_index,
+            "completed_tools": self.working_state.completed_tools,
+            "has_called_finalize": self.working_state.has_called_finalize,
+            "last_error": self.working_state.last_error,
+            "pending_question": self.working_state.pending_question,
+        }
+        redis_client = await self._get_redis_client()
+        await redis_client.set(
+            f"working_state:{session_id}",
+            json.dumps(state_dict),
+            ex=3600,  # Expire after 1 hour
+        )
+        logger.info("saved_working_state", session_id=str(session_id))
+
+    async def _load_working_state(self, session_id: uuid.UUID) -> bool:
+        """Load working state from Redis. Returns True if state was restored."""
+        redis_client = await self._get_redis_client()
+        state_json = await redis_client.get(f"working_state:{session_id}")
+        if not state_json:
+            return False
+
+        try:
+            state_dict = json.loads(state_json)
+            self.working_state.accumulated_slides = state_dict.get("accumulated_slides", [])
+            self.working_state.presentation_structure = state_dict.get("presentation_structure")
+            self.working_state.current_step_index = state_dict.get("current_step_index", 0)
+            self.working_state.completed_tools = state_dict.get("completed_tools", {})
+            self.working_state.has_called_finalize = state_dict.get("has_called_finalize", False)
+            self.working_state.last_error = state_dict.get("last_error")
+            self.working_state.pending_question = state_dict.get("pending_question")
+            logger.info("loaded_working_state", session_id=str(session_id), tools_completed=len(state_dict.get("completed_tools", {})))
+            return True
+        except Exception as e:
+            logger.error("failed_to_load_working_state", session_id=str(session_id), error=str(e))
+            return False
+
+    async def _clear_working_state(self, session_id: uuid.UUID) -> None:
+        """Clear saved working state from Redis."""
+        redis_client = await self._get_redis_client()
+        await redis_client.delete(f"working_state:{session_id}")
+        logger.info("cleared_working_state", session_id=str(session_id))
 
     async def run(
         self,
@@ -192,8 +249,12 @@ class AgentLoop:
         """
         import_timestamp = _iso_now()
 
-        # Reset working state for this session
-        self.working_state.reset()
+        # Try to load previous working state (from a paused question)
+        state_loaded = await self._load_working_state(session_id)
+
+        # Only reset if no previous state was found
+        if not state_loaded:
+            self.working_state.reset()
 
         # ── Phase 1: Load context ────────────────────
         yield _event("thought", "content_analysis", {
@@ -342,6 +403,9 @@ class AgentLoop:
                             "timestamp": _iso_now(),
                         })
 
+                    # Clear saved working state - presentation is complete
+                    await self._clear_working_state(session_id)
+
                 # If ask_user_question was called, emit question event and pause
                 if fn_name == "ask_user_question" and tool_result.success:
                     self.working_state.is_paused_for_user = True
@@ -352,6 +416,8 @@ class AgentLoop:
                         "context": tool_result.data.get("context", ""),
                         "timestamp": _iso_now(),
                     })
+                    # Save working state before pausing
+                    await self._save_working_state(session_id)
                     # Yield done event to signal the workflow is paused
                     yield _event("done", "user_input", {
                         "content": f"Waiting for user input: {tool_result.data.get('question')}",
@@ -491,7 +557,8 @@ class AgentLoop:
             "6. design_slide_content — Generate slide content (text, image prompts, tables, charts)",
             "7. validate_slide_json — Validate slide JSON against the schema before rendering",
             "8. generate_image_prompt — Create prompts for AI-generated images",
-            "9. finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
+            "9. ask_user_question — Ask the user for clarification or input (pauses workflow)",
+            "10. finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
             "",
         ]
 
