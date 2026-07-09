@@ -117,6 +117,7 @@ func (p *Processor) waitForCompletion(ctx context.Context, sessionID, jobID stri
 
 	ch := pubsub.Channel()
 	var assistantContent string
+	var paused bool = false
 
 	log.Printf("Job %s waiting for completion", jobID)
 
@@ -167,6 +168,7 @@ func (p *Processor) waitForCompletion(ctx context.Context, sessionID, jobID stri
 			}
 
 			if eventType == "done" {
+				paused, _ = event["paused"].(bool)
 				if assistantContent != "" {
 					if err := p.saveAssistantMessage(sessionID, assistantContent); err != nil {
 						// log.Printf("Failed to save assistant message for session %s: %v", sessionID, err)
@@ -178,8 +180,13 @@ func (p *Processor) waitForCompletion(ctx context.Context, sessionID, jobID stri
 					// Save a fallback message
 					p.saveAssistantMessage(sessionID, "Presentation generation completed. Check the preview panel for your slides.")
 				}
-				close(done)
-				return
+
+				if !paused {
+					// Only close done channel if not paused
+					close(done)
+					return
+				}
+				log.Printf("Job %s: done event with paused=true, continuing to listen", jobID)
 			}
 		}
 	}
@@ -202,46 +209,46 @@ func min(a, b int) int {
 }
 
 func (p *Processor) saveAssistantMessage(sessionID, content string) error {
-    if p.dbPool == nil {
-        log.Printf("saveAssistantMessage: database pool is nil for session %s", sessionID)
-        return fmt.Errorf("database pool not initialized")
-    }
-    ctx := context.Background()
+	if p.dbPool == nil {
+		log.Printf("saveAssistantMessage: database pool is nil for session %s", sessionID)
+		return fmt.Errorf("database pool not initialized")
+	}
+	ctx := context.Background()
 
-    result, err := p.dbPool.Exec(ctx,
-        `UPDATE chat_messages 
-         SET content = $1, created_at = NOW()
-         WHERE id = (
-             SELECT id FROM chat_messages 
-             WHERE session_id = $2 
-               AND role = 'assistant' 
-               AND (content = '' OR content IS NULL)
-             ORDER BY created_at DESC 
-             LIMIT 1
-         )`,
-        content, sessionID,
-    )
-    if err != nil {
-        log.Printf("saveAssistantMessage: update failed for session %s: %v", sessionID, err)
-        return fmt.Errorf("update failed: %w", err)
-    }
+	result, err := p.dbPool.Exec(ctx,
+		`UPDATE chat_messages
+		 SET content = $1, created_at = NOW()
+		 WHERE id = (
+		     SELECT id FROM chat_messages
+		     WHERE session_id = $2
+		       AND role = 'assistant'
+		       AND (content = '' OR content IS NULL)
+		     ORDER BY created_at DESC
+		     LIMIT 1
+		 )`,
+		content, sessionID,
+	)
+	if err != nil {
+		log.Printf("saveAssistantMessage: update failed for session %s: %v", sessionID, err)
+		return fmt.Errorf("update failed: %w", err)
+	}
 
-    if result.RowsAffected() == 0 {
-        // No placeholder found – insert a new message
-        _, err = p.dbPool.Exec(ctx,
-            `INSERT INTO chat_messages (session_id, role, content, created_at)
-             VALUES ($1, 'assistant', $2, NOW())`,
-            sessionID, content,
-        )
-        if err != nil {
-            log.Printf("saveAssistantMessage: insert failed for session %s: %v", sessionID, err)
-            return fmt.Errorf("insert failed: %w", err)
-        }
-        log.Printf("saveAssistantMessage: inserted new assistant message for session %s", sessionID)
-    } else {
-        log.Printf("saveAssistantMessage: updated assistant message for session %s, rows affected: %d", sessionID, result.RowsAffected())
-    }
-    return nil
+	if result.RowsAffected() == 0 {
+		// No placeholder found – insert a new message
+		_, err = p.dbPool.Exec(ctx,
+			`INSERT INTO chat_messages (session_id, role, content, created_at)
+			 VALUES ($1, 'assistant', $2, NOW())`,
+			sessionID, content,
+		)
+		if err != nil {
+			log.Printf("saveAssistantMessage: insert failed for session %s: %v", sessionID, err)
+			return fmt.Errorf("insert failed: %w", err)
+		}
+		log.Printf("saveAssistantMessage: inserted new assistant message for session %s", sessionID)
+	} else {
+		log.Printf("saveAssistantMessage: updated assistant message for session %s, rows affected: %d", sessionID, result.RowsAffected())
+	}
+	return nil
 }
 
 // processJob now only starts the AI job and does NOT mark it completed.
@@ -250,6 +257,8 @@ func (p *Processor) processJob(ctx context.Context, job *queue.Job) error {
 	switch job.Type {
 	case "generate":
 		return p.processGenerateJob(ctx, job)
+	case "resume":
+		return p.processResumeJob(ctx, job)
 	default:
 		log.Printf("Unknown job type: %s", job.Type)
 		return nil
@@ -280,6 +289,32 @@ func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) erro
 
 	// Call AI service – this returns immediately after the AI accepts the job.
 	_, err := p.aiClient.SendMessage(job.SessionID, content, attachments)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *Processor) processResumeJob(ctx context.Context, job *queue.Job) error {
+	answer, _ := job.Payload["answer"].(string)
+	questionText, _ := job.Payload["question_text"].(string)
+	selectedOption, _ := job.Payload["selected_option"].(string)
+
+	log.Printf("Resuming job %s for session %s with answer", job.ID, job.SessionID)
+
+	thoughtData, _ := json.Marshal(map[string]interface{}{
+		"type":      "thought",
+		"phase":     "user_input",
+		"content":   fmt.Sprintf("User answered: %s", answer),
+		"timestamp": time.Now().Format(time.RFC3339),
+	})
+	p.hub.Broadcast(job.SessionID, sse.Event{
+		Event: "thought",
+		Data:  string(thoughtData),
+	})
+
+	// Call AI service with answer – this returns immediately after the AI accepts the job
+	_, err := p.aiClient.AnswerQuestion(job.SessionID, selectedOption, answer, questionText)
 	if err != nil {
 		return err
 	}
