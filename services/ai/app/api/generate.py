@@ -201,9 +201,13 @@ async def _run_agent(
                         content=event.get("content", {}),
                         tool_name=event.get("toolName"),
                         tool_args=event.get("toolArgs"),
-                        tool_result=event.get("toolResult"),
+                        tool_result=event.get("toolResult") if event.get("toolResult") is not None else event.get("result"),
                         duration_ms=event.get("durationMs"),
                         token_count=event.get("tokenCount"),
+                        # Store the full live-shape event so the chat event
+                        # stream (tool calls, thoughts) and cited sources can
+                        # be reconstructed on session reload.
+                        raw_event=event,
                     )
                     db.add(agent_event)
                     await db.commit()

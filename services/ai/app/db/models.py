@@ -129,6 +129,10 @@ class AgentEvent(Base):
     tool_result = Column(JSONB)
     duration_ms = Column(Integer)
     token_count = Column(Integer)
+    # Full event dict in the live SSE shape (type, phase, toolName, callId,
+    # result, sources, ...). Persisted so the chat event stream and cited
+    # sources can be faithfully reconstructed when a session is reloaded.
+    raw_event = Column(JSONB)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     session = relationship("ChatSession", back_populates="events")
