@@ -137,6 +137,8 @@ class WebSearchTool:
             # labels "SEARCH_NONE" (very common for factual/definitional
             # queries), which would yield zero sources.
             "search_intent": False,
+            # Richer snippets so the agent has more content to ground slides on.
+            "content_size": settings.zhipu_web_search_content_size,
         }
         headers = {
             "Authorization": f"Bearer {token}",

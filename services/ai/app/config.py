@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     # Zhipu web search engine name (required by the web_search agent tool).
     # Configurable so it can be adjusted without a code change if Zhipu renames it.
     zhipu_web_search_engine: str = "search_std"
+    # Zhipu web search content size: "low" | "medium" | "high". Higher returns
+    # longer snippets so the agent has more to ground slide content on.
+    zhipu_web_search_content_size: str = "high"
+    # Model used for lower-stakes internal tool LLM calls (planning, key-data
+    # extraction). Defaults to the cheap/fast flash model to speed up
+    # generation; slide content design still uses the main model.
+    zhipu_tools_model: str = "glm-4.5-flash"
 
     # Azure OpenAI
     azure_openai_api_key: Optional[str] = None
