@@ -230,6 +230,9 @@
 .ws-sources { display: flex; flex-direction: column; gap: 5px; }
 .ws-src { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid var(--ws-border); border-radius: var(--ws-radius-sm); background: var(--ws-surface-1); }
 .ws-src:hover { border-color: var(--ws-border-sub); }
+a.ws-src { text-decoration: none; color: inherit; cursor: pointer; }
+a.ws-src:hover { background: var(--ws-surface-2); }
+a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10); border-color: rgba(96,165,250,0.20); }
 .ws-src .s-ic { width: 24px; height: 24px; border-radius: var(--ws-radius-sm); flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
 .ws-src .s-ic.xlsx { background: rgba(62,207,142,0.10); color: var(--ws-green-text); }
 .ws-src .s-ic.pptx { background: rgba(129,140,248,0.10); color: var(--ws-ai-text); }
@@ -483,6 +486,42 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
   max-height: 420px; overflow: auto;
 }
 .ws-step-pre.bad { color: var(--ws-red-text); }
+
+/* ---- Inline cited sources (under the step that produced them) ---- */
+.ws-step-src-badge {
+  display: inline-flex; align-items: center; margin-left: 8px;
+  color: var(--ws-ai-text); opacity: 0.85;
+}
+.ws-src-inline { margin-top: 8px; }
+.ws-src-inline-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px 4px 7px; border-radius: 999px;
+  border: 1px solid var(--ws-ai-border); background: var(--ws-ai-bg);
+  color: var(--ws-ai-text); font-size: 12px; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.ws-src-inline-btn:hover { background: #14143a; border-color: #4444a0; }
+.ws-src-inline-count {
+  font-variant-numeric: tabular-nums; font-weight: 600; line-height: 1;
+}
+.ws-src-inline-chev { transition: transform 0.14s; opacity: 0.8; }
+.ws-src-inline-chev.open { transform: rotate(180deg); }
+.ws-src-inline-list {
+  display: flex; flex-direction: column; gap: 4px; margin-top: 7px;
+}
+.ws-src-inline-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: var(--ws-radius-sm);
+  border: 1px solid var(--ws-border); background: var(--ws-surface-1);
+  color: #b9b9b9; font-size: 12px; text-decoration: none;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.ws-src-inline-item:hover { border-color: var(--ws-border-sub); background: var(--ws-surface-2); color: #e6e6e6; }
+.ws-src-inline-fav { width: 15px; height: 15px; flex-shrink: 0; border-radius: 3px; }
+.ws-src-inline-fav.fallback { color: var(--ws-blue-text); }
+.ws-src-inline-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-src-inline-ext { flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
+.ws-src-inline-item:hover .ws-src-inline-ext { opacity: 0.7; }
 
 /* ---- File cards (Files tab) ---- */
 .ws-file-card {

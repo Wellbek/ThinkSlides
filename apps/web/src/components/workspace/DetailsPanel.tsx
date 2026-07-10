@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { useChatStore, type GeneratedFile } from "@/stores/chat-store";
 import { collectPreviewSlides } from "@/lib/slides";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
-import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download } from "lucide-react";
+import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download, ExternalLink } from "lucide-react";
 
 export function DetailsPanel() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -61,20 +61,31 @@ export function DetailsPanel() {
       <div className="ws-sect-label">Sources</div>
       <div className="ws-sources">
         {sources.length === 0 && <div className="ws-empty-note">No sources attached yet.</div>}
-        {sources.map((src) => (
-          <div className="ws-src" key={src.key} title={src.name}>
-            <div className={`s-ic ${src.kind}`}>
-              {src.kind === "xlsx" && <FileSpreadsheet size={14} />}
-              {src.kind === "pptx" && <Presentation size={14} />}
-              {src.kind === "web" && <Globe size={14} />}
-            </div>
-            <div className="s-body">
-              <div className="s-name">{src.name}</div>
-              <div className="s-meta">{src.meta}</div>
-            </div>
-            <span className="s-tag">used</span>
-          </div>
-        ))}
+        {sources.map((src) => {
+          const inner = (
+            <>
+              <div className={`s-ic ${src.kind}`}>
+                {src.kind === "xlsx" && <FileSpreadsheet size={14} />}
+                {src.kind === "pptx" && <Presentation size={14} />}
+                {src.kind === "web" && <Globe size={14} />}
+              </div>
+              <div className="s-body">
+                <div className="s-name">{src.name}</div>
+                <div className="s-meta">{src.meta}</div>
+              </div>
+              {src.url
+                ? <span className="s-tag"><ExternalLink size={13} /></span>
+                : <span className="s-tag">used</span>}
+            </>
+          );
+          return src.url ? (
+            <a className="ws-src" key={src.key} href={src.url} target="_blank" rel="noopener noreferrer" title={src.url}>
+              {inner}
+            </a>
+          ) : (
+            <div className="ws-src" key={src.key} title={src.name}>{inner}</div>
+          );
+        })}
         <div className="ws-src-add"><Plus size={13} /> Attach doc or data</div>
       </div>
 
@@ -116,7 +127,7 @@ export function DetailsPanel() {
   );
 }
 
-interface SourceRow { key: string; name: string; meta: string; kind: "xlsx" | "pptx" | "web" }
+interface SourceRow { key: string; name: string; meta: string; kind: "xlsx" | "pptx" | "web"; url?: string }
 
 function collectSources(messages: any[], files: GeneratedFile[]): SourceRow[] {
   const rows: SourceRow[] = [];
@@ -142,21 +153,20 @@ function collectSources(messages: any[], files: GeneratedFile[]): SourceRow[] {
       kind: extKind(f.filename),
     });
   }
-  // Website URLs referenced in agent output
-  const urlRe = /https?:\/\/[^\s"'<>)\]]+/g;
+  // Cited web sources - the structured `sources` array the agent loop
+  // attaches to web_search tool_result events (title + url). Aggregated
+  // across the whole session and de-duplicated by URL. Replaces the old
+  // fragile regex scrape of event text, which never saw web_search results
+  // (their `result` is an object, not a string) and produced host-only names.
   for (const m of messages) {
     for (const ev of m.agentEventStream || []) {
-      const text = typeof ev.content === "string" ? ev.content
-        : typeof ev.message === "string" ? ev.message
-        : typeof ev.result === "string" ? ev.result : "";
-      let match: RegExpExecArray | null;
-      while ((match = urlRe.exec(text)) !== null) {
-        const url = match[0];
-        if (seen.has(url)) continue;
-        seen.add(url);
-        let host = url;
-        try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { /* keep raw */ }
-        rows.push({ key: `web-${url}`, name: host, meta: url.length > 60 ? url.slice(0, 60) + "..." : url, kind: "web" });
+      if (ev.type !== "tool_result" || !Array.isArray(ev.sources)) continue;
+      for (const s of ev.sources) {
+        if (!s || typeof s.url !== "string" || seen.has(s.url)) continue;
+        seen.add(s.url);
+        let host = s.url;
+        try { host = new URL(s.url).hostname.replace(/^www\./, ""); } catch { /* keep raw */ }
+        rows.push({ key: `web-${s.url}`, name: s.title || host, meta: host, kind: "web", url: s.url });
       }
     }
   }
