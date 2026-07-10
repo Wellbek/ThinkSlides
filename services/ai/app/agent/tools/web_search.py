@@ -5,16 +5,22 @@ Lets the agent look up real-world information on the web instead of relying
 solely on its parametric knowledge. Each result carries a `url`, so the
 agent loop's source extractor surfaces them as clickable sources in the chat.
 
-Backed by Zhipu's web search API (the default provider). The SDK method name
-(`web_search` vs the older `web_search_pro`) and the response shape vary
-across SDK versions, so both the call and the parsing are defensive: it works
-with either method name and tolerates a single-object or list `search_result`,
-accessing fields by attribute or by dict key.
+Supports two pluggable backends, selected via ``WEB_SEARCH_PROVIDER``:
 
-Runs the synchronous SDK call in a thread executor so it never blocks the
-event loop. On any failure it returns a clear error result (success=False) so
-the ReAct loop can continue without crashing - the LLM simply learns that
-search is unavailable and proceeds with its own knowledge.
+- ``zhipu`` (default): Zhipu's web search API. China-focused - English
+  factual queries tend to return mostly Chinese sources (Baidu, Toutiao,
+  docin). Kept as the default so existing deployments keep working.
+- ``tavily``: Tavily's search API, a Western backend that returns
+  English/international sources, giving much better factual grounding for
+  non-Chinese content.
+
+Both backends normalize results to ``{title, url, snippet, source}`` so the
+rest of the agent loop does not need to know which one was used.
+
+Network calls run in a thread executor so they never block the event loop.
+On any failure the tool returns a clear error result (success=False) so the
+ReAct loop can continue without crashing - the LLM simply learns that search
+is unavailable and proceeds with its own knowledge.
 """
 
 from __future__ import annotations
@@ -68,22 +74,29 @@ class WebSearchTool:
                     duration_ms=int((time.time() - start) * 1000),
                 )
 
-            if settings.llm_provider != "zhipu" or not settings.zhipu_api_key:
+            provider = settings.web_search_provider
+            if not cls._provider_configured(provider):
                 return ToolResult(
                     success=False,
                     error=(
-                        "Web search is only available with the Zhipu provider and a "
-                        "configured API key. Proceed using your existing knowledge."
+                        f"Web search is not configured for provider '{provider}'. "
+                        "Set WEB_SEARCH_PROVIDER and the corresponding API key "
+                        "(ZHIPU_API_KEY for zhipu, TAVILY_API_KEY for tavily). "
+                        "Proceed using your existing knowledge."
                     ),
                     duration_ms=int((time.time() - start) * 1000),
                 )
 
-            results = await cls._zhipu_search(query.strip())
+            if provider == "tavily":
+                results = await cls._tavily_search(query.strip())
+            else:
+                results = await cls._zhipu_search(query.strip())
 
             duration_ms = int((time.time() - start) * 1000)
             logger.info(
                 "web_search_completed",
                 query=query,
+                provider=provider,
                 result_count=len(results),
                 duration_ms=duration_ms,
             )
@@ -117,6 +130,17 @@ class WebSearchTool:
                 duration_ms=int((time.time() - start) * 1000),
             )
 
+    @staticmethod
+    def _provider_configured(provider: str) -> bool:
+        """Return whether the chosen backend has the credentials it needs."""
+        if provider == "tavily":
+            return bool(settings.tavily_api_key)
+        # Zhipu backend: needs an API key in the 'id.secret' format used to sign
+        # the bearer JWT for the search endpoint.
+        return settings.llm_provider == "zhipu" and bool(settings.zhipu_api_key) and "." in settings.zhipu_api_key
+
+    # ── Zhipu backend ────────────────────────────────────────────────────
+
     @classmethod
     async def _zhipu_search(cls, query: str) -> list[dict]:
         """Call the Zhipu web search REST API directly and normalize results.
@@ -147,16 +171,8 @@ class WebSearchTool:
         }
         url = "https://open.bigmodel.cn/api/paas/v4/web_search"
 
-        loop = asyncio.get_running_loop()
-
-        def _do_request() -> dict:
-            with httpx.Client(timeout=30.0) as http_client:
-                resp = http_client.post(url, headers=headers, json=body)
-                resp.raise_for_status()
-                return resp.json()
-
-        data = await loop.run_in_executor(None, _do_request)
-        return cls._parse_response(data)
+        data = await cls._post_json(url, headers, body)
+        return cls._parse_zhipu_response(data)
 
     @staticmethod
     def _build_zhipu_jwt(api_key: str) -> str:
@@ -180,7 +196,7 @@ class WebSearchTool:
         )
 
     @staticmethod
-    def _parse_response(response) -> list[dict]:
+    def _parse_zhipu_response(response) -> list[dict]:
         """Normalize the Zhipu web search response into a list of result dicts.
 
         Tolerates: attribute vs dict access; `search_result` being a list or a
@@ -231,3 +247,103 @@ class WebSearchTool:
                 "source": media,
             })
         return results
+
+    # ── Tavily backend ───────────────────────────────────────────────────
+
+    @classmethod
+    async def _tavily_search(cls, query: str) -> list[dict]:
+        """Call the Tavily search REST API and normalize results.
+
+        Tavily is a Western search backend purpose-built for LLM grounding,
+        so English/international factual queries return far better sources than
+        Zhipu's China-focused index. The API key is sent in the request body.
+        See https://docs.tavily.com/docs/rest-api/api-reference .
+        """
+        body = {
+            "api_key": settings.tavily_api_key,
+            "query": query,
+            "max_results": DEFAULT_COUNT,
+            "search_depth": settings.tavily_search_depth,
+            # We only need result snippets, not a synthesized answer.
+            "include_answer": False,
+            # Snippets as plain text, not raw HTML.
+            "include_raw_content": False,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        url = "https://api.tavily.com/search"
+
+        data = await cls._post_json(url, headers, body)
+        return cls._parse_tavily_response(data)
+
+    @staticmethod
+    def _parse_tavily_response(response) -> list[dict]:
+        """Normalize the Tavily response into a list of result dicts.
+
+        Tavily returns ``{"results": [{"title", "url", "content", "score"}]}``.
+        ``content`` maps to ``snippet``; ``source`` is derived from the URL's
+        hostname so the chat can attribute the citation.
+        """
+        if not isinstance(response, dict):
+            return []
+        items = response.get("results") or []
+        if not isinstance(items, list):
+            return []
+
+        results: list[dict] = []
+        seen: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            link = item.get("url") or ""
+            if not link:
+                continue
+            if link in seen:
+                continue
+            seen.add(link)
+            title = item.get("title") or link
+            snippet = item.get("content") or ""
+            source = WebSearchTool._host_from_url(link)
+            results.append({
+                "title": title,
+                "url": link,
+                "snippet": snippet,
+                "source": source,
+            })
+        return results
+
+    @staticmethod
+    def _host_from_url(url: str) -> str:
+        """Extract a readable hostname for source attribution.
+
+        Tavily does not return a separate source field, so we derive one from
+        the URL. Returns an empty string if the URL has no netloc.
+        """
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(url).hostname or ""
+            # Strip a leading 'www.' for cleaner attribution.
+            return host[4:] if host.startswith("www.") else host
+        except Exception:
+            return ""
+
+    # ── Shared HTTP helper ───────────────────────────────────────────────
+
+    @staticmethod
+    async def _post_json(url: str, headers: dict, body: dict) -> dict:
+        """POST JSON in a thread executor and return the parsed JSON body.
+
+        Using a synchronous httpx.Client inside run_in_executor keeps every
+        backend's network call off the event loop uniformly.
+        """
+        loop = asyncio.get_running_loop()
+
+        def _do_request() -> dict:
+            with httpx.Client(timeout=30.0) as http_client:
+                resp = http_client.post(url, headers=headers, json=body)
+                resp.raise_for_status()
+                return resp.json()
+
+        return await loop.run_in_executor(None, _do_request)

@@ -24,6 +24,20 @@ class Settings(BaseSettings):
     # Zhipu web search content size: "low" | "medium" | "high". Higher returns
     # longer snippets so the agent has more to ground slide content on.
     zhipu_web_search_content_size: str = "high"
+
+    # ── Web Search Backend ──────────────────────
+    # Which backend the web_search agent tool uses. Zhipu's search API is
+    # China-focused (English factual queries mostly return Chinese sources),
+    # so a Western backend (Tavily) is offered as an alternative for better
+    # source quality on non-Chinese content. The Zhipu backend remains the
+    # default so existing deployments keep working unchanged.
+    web_search_provider: Literal["zhipu", "tavily"] = "zhipu"
+    # Tavily API key (required when WEB_SEARCH_PROVIDER=tavily).
+    tavily_api_key: str = ""
+    # Tavily search depth: "basic" (faster, cheaper) | "advanced" (more
+    # thorough, longer snippets). Defaults to advanced so factual grounding is
+    # as strong as possible.
+    tavily_search_depth: Literal["basic", "advanced"] = "advanced"
     # Model used for lower-stakes internal tool LLM calls (planning, key-data
     # extraction). Defaults to the cheap/fast flash model to speed up
     # generation; slide content design still uses the main model.
