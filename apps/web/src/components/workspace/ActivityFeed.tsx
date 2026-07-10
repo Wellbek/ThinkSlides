@@ -3,9 +3,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
 import { QuestionCard } from "./QuestionCard";
+import { Sources } from "@/components/chat/Sources";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
 import { ChevronDown, Download } from "lucide-react";
-import type { AgentEvent } from "@thinkslides/schemas";
+import type { AgentEvent, SourceInfo } from "@thinkslides/schemas";
 
 const PHASE_LABEL: Record<string, string> = {
   content_analysis: "Analyzing",
@@ -286,6 +287,26 @@ function AssistantBlock({ message, isAnswered, answerText }: { message: any; isA
 
   const nodes = useMemo(() => buildNodes(events), [events]);
 
+  // Cited web sources are carried on tool_result events (populated by the
+  // agent loop from web_search results). Collect them across the whole
+  // message so the user always sees what the deck was grounded on - the
+  // sources arrive with the web_search step but should remain visible for
+  // the life of the message, not just while that step is expanded.
+  const sources: SourceInfo[] = useMemo(() => {
+    const seen = new Set<string>();
+    const out: SourceInfo[] = [];
+    for (const ev of events as any[]) {
+      if (ev.type !== "tool_result" || !Array.isArray(ev.sources)) continue;
+      for (const s of ev.sources) {
+        if (s && typeof s.url === "string" && !seen.has(s.url)) {
+          seen.add(s.url);
+          out.push(s);
+        }
+      }
+    }
+    return out;
+  }, [events]);
+
   // Which step is auto-expanded: a running step wins, else the most recent
   // completed step. Everything else auto-collapses to a one-line summary so
   // the feed keeps only the latest step in full detail. Manual toggles
@@ -358,6 +379,12 @@ function AssistantBlock({ message, isAnswered, answerText }: { message: any; isA
             {liveThought ? liveThought.content : "The agent is reasoning through the next step."}
             <span className="ws-ai-cursor" />
           </span>
+        </FeedItem>
+      )}
+
+      {sources.length > 0 && (
+        <FeedItem dot="↺" dotClass="ws-dot-status">
+          <Sources sources={sources} />
         </FeedItem>
       )}
     </>

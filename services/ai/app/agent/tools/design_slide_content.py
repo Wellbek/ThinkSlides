@@ -72,13 +72,28 @@ class DesignSlideContentTool:
             placeholders = layout.get("placeholders", [])
             layout_name = layout.get("layoutName", "Default")
 
+            # Resolve the title and body placeholder indices so the LLM does
+            # not have to guess. Falls back to conventional idx 0 (title) and
+            # 1 (body) when the layout did not report placeholders - this
+            # keeps content placeable even if layout selection upstream was
+            # imperfect, instead of producing an empty slide.
+            title_idx = next(
+                (p.get("idx") for p in placeholders
+                 if p.get("type") in ("title", "ctrTitle")),
+                0,
+            )
+            body_idx = next(
+                (p.get("idx") for p in placeholders if p.get("type") == "body"),
+                1,
+            )
+
             # Build placeholder description for the prompt
             ph_desc = []
             for ph in placeholders:
                 ph_desc.append(
                     f"  - idx={ph.get('idx')}, type={ph.get('type')}, name={ph.get('name')}"
                 )
-            ph_text = "\n".join(ph_desc) if ph_desc else "  No placeholders found"
+            ph_text = "\n".join(ph_desc) if ph_desc else "  No placeholders reported (using title idx=0, body idx=1)"
 
             ds_info = ""
             if ds:
@@ -89,14 +104,21 @@ Design System Context:
 - Palette: {json.dumps(ds.get('palette', {}).get('colors', [])[:5])}
 """
 
+            key_points = outline.get("keyPoints", []) if isinstance(outline, dict) else []
+            kp_list = "\n".join(f"  - {kp}" for kp in key_points) if key_points else "  (none)"
+
             prompt = f"""Generate content for a single presentation slide.
 
 Slide Outline:
 {json.dumps(outline, indent=2)}
 
+Key points to cover on this slide:
+{kp_list}
+
 Selected Layout: {layout_name}
 Available Placeholders:
 {ph_text}
+Resolved placeholder indices: title={title_idx}, body={body_idx}
 {ds_info}
 
 Return a JSON object with this exact structure:
@@ -107,9 +129,18 @@ Return a JSON object with this exact structure:
   "contents": [
     {{
       "type": "text",
-      "placeholderIdx": <matching placeholder idx>,
+      "placeholderIdx": {title_idx},
       "runs": [
-        {{"text": "Content text", "bold": false, "bullet": false, "level": 0}}
+        {{"text": "Slide title here", "bold": true, "bullet": false, "level": 0}}
+      ]
+    }},
+    {{
+      "type": "text",
+      "placeholderIdx": {body_idx},
+      "runs": [
+        {{"text": "First key point as a concise sentence", "bold": false, "bullet": true, "level": 0}},
+        {{"text": "Second key point as a concise sentence", "bold": false, "bullet": true, "level": 0}},
+        {{"text": "Third key point as a concise sentence", "bold": false, "bullet": true, "level": 0}}
       ]
     }}
   ],
@@ -117,13 +148,13 @@ Return a JSON object with this exact structure:
 }}
 
 Rules:
-- Each content item must have a placeholderIdx matching one of the available placeholders
-- Use "text" type for title and body placeholders
-- Use "image" type for pic placeholders with {{type: "image", image: {{source: "prompt", data: "description"}}}}
-- Use "table" type for tbl placeholders
-- For bullet points, set bullet: true and increment level for sub-items
-- Keep text concise — slides should not be text-heavy
-- Use the design system fonts and colors when specifying style overrides"""
+- Put the slide title in the title placeholder (placeholderIdx={title_idx}).
+- Put EVERY key point listed above into the body placeholder (placeholderIdx={body_idx}) as its OWN bullet run - one run per key point, with bullet: true and level: 0. Never collapse multiple key points into a single bullet or drop points to save space.
+- Keep each bullet to a single concise sentence; do not pad, but do not omit points.
+- Use sub-bullets (level: 1) only when a key point genuinely needs a supporting detail.
+- Use "image" type for pic placeholders with {{type: "image", image: {{source: "prompt", data: "description"}}}}.
+- Use "table" type for tbl placeholders.
+- Each content item must have a placeholderIdx matching one of the available placeholders."""
 
             response = await llm.chat(
                 messages=[{"role": "user", "content": prompt}],

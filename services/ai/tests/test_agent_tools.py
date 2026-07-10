@@ -115,3 +115,61 @@ async def test_validate_placeholder_warning():
     # Should still be valid (it's a warning, not an error)
     assert result.success is True
     assert len(result.data["warnings"]) > 0
+
+# ── select_layout ──────────────────────────────────────────────
+
+from app.agent.tools.select_layout import SelectLayoutTool
+
+LAYOUT_CATALOG = [
+    {"layoutId": "1", "layoutName": "Title Slide", "masterId": "1",
+     "placeholders": [{"idx": 0, "type": "title"}, {"idx": 1, "type": "subtitle"}]},
+    {"layoutId": "2", "layoutName": "Title and Content", "masterId": "1",
+     "placeholders": [{"idx": 0, "type": "title"}, {"idx": 1, "type": "body"}]},
+    {"layoutId": "6", "layoutName": "Conclusion", "masterId": "1",
+     "placeholders": [{"idx": 0, "type": "title"}]},
+]
+
+
+@pytest.mark.asyncio
+async def test_select_layout_accepts_wrapped_catalog():
+    """The design system passes {'layouts': [...]}; the tool must unwrap it.
+
+    Regression: previously it iterated the wrapper dict, hit KeyError(0),
+    and returned success=False with error '0' - surfacing as a failed step.
+    """
+    result = await SelectLayoutTool.run(
+        content_type="content",
+        available_layouts=json.dumps({"layouts": LAYOUT_CATALOG}),
+        slide_index=0,
+    )
+
+    assert result.success is True
+    assert result.data["layoutId"] == "2"
+    assert result.data["layoutName"] == "Title and Content"
+    assert result.data["placeholders"][0]["type"] == "title"
+
+
+@pytest.mark.asyncio
+async def test_select_layout_accepts_bare_list():
+    """A bare list of layouts is still accepted."""
+    result = await SelectLayoutTool.run(
+        content_type="title",
+        available_layouts=json.dumps(LAYOUT_CATALOG),
+        slide_index=0,
+    )
+
+    assert result.success is True
+    assert result.data["layoutName"] == "Title Slide"
+
+
+@pytest.mark.asyncio
+async def test_select_layout_picks_conclusion_layout():
+    """content_type=conclusion selects the Conclusion layout."""
+    result = await SelectLayoutTool.run(
+        content_type="conclusion",
+        available_layouts=json.dumps({"layouts": LAYOUT_CATALOG}),
+        slide_index=1,
+    )
+
+    assert result.success is True
+    assert result.data["layoutName"] == "Conclusion"

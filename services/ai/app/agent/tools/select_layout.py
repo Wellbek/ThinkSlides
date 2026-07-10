@@ -65,7 +65,17 @@ class SelectLayoutTool:
         start = time.time()
         try:
             import json
-            layouts = json.loads(available_layouts) if available_layouts else []
+            parsed = json.loads(available_layouts) if available_layouts else []
+            # The design system passes the layout catalog wrapped as
+            # ``{"layouts": [...]}``. Accept that wrapper as well as a bare
+            # list so the tool never iterates a dict by mistake (which
+            # previously raised KeyError and surfaced as a failed step).
+            if isinstance(parsed, dict):
+                layouts = parsed.get("layouts", [])
+            elif isinstance(parsed, list):
+                layouts = parsed
+            else:
+                layouts = []
 
             if not layouts:
                 return ToolResult(

@@ -86,7 +86,7 @@ class PlanPresentationStructureTool:
             available_layouts = parsed_ds.get("layouts", [])
             layout_info = ""
             if available_layouts:
-                layout_names = [l.get("layoutName", f"Layout {l.get('layoutId', '?')}") for l in available_layouts]
+                layout_names = [lt.get("layoutName", f"Layout {lt.get('layoutId', '?')}") for lt in available_layouts]
                 layout_info = f"\nAvailable layout names in template: {', '.join(layout_names)}"
 
             prompt = f"""Plan a presentation structure based on the following:
@@ -117,11 +117,12 @@ Return a JSON object with this structure:
 }}
 
 Rules:
-- First slide should be a title slide
-- Last slide should be a conclusion/summary slide
+- First slide should be a title slide (contentType "title") - it carries only a title and an optional subtitle, no body bullets, so give it 0-1 key points.
+- Last slide should be a conclusion/summary slide. If it recaps points (3-5 key points), give it contentType "content" so the points render in a body placeholder - only use contentType "conclusion" (title-only) for a slide with no body content.
+- Every slide that has key points MUST use a contentType whose layout has a body placeholder: "content" (one body), "twoColumn" (two bodies), "table", or "image". Never assign 3-5 key points to a "title" or "conclusion" slide - those layouts have no body placeholder and the points would be dropped.
 - Distribute content evenly across slides
-- Each slide should have 3-5 key points maximum
-- Choose layout names from the available layouts if a template is provided"""
+- Each content slide should have 3-5 key points maximum
+- Choose suggestedLayout names from the available layouts if a template is provided"""
 
             response = await llm.chat(
                 messages=[{"role": "user", "content": prompt}],
