@@ -3,9 +3,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
 import { QuestionCard } from "./QuestionCard";
-import { Sources } from "@/components/chat/Sources";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
-import { ChevronDown, Download } from "lucide-react";
+import { ChevronDown, Download, ExternalLink, Globe } from "lucide-react";
 import type { AgentEvent, SourceInfo } from "@thinkslides/schemas";
 
 const PHASE_LABEL: Record<string, string> = {
@@ -76,6 +75,7 @@ interface StepNode {
   durationMs?: number;
   tokenCount?: number;
   running: boolean;
+  sources?: SourceInfo[];
 }
 interface ThoughtsNode {
   kind: "thoughts";
@@ -148,6 +148,7 @@ function buildNodes(events: AgentEvent[]): FeedNode[] {
           step.error = ev.error;
           step.durationMs = ev.durationMs;
           step.tokenCount = ev.tokenCount;
+          step.sources = Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined;
           openSteps.delete(ev.callId);
         } else {
           // Orphan result (e.g. a reloaded session where the call event was
@@ -171,6 +172,7 @@ function buildNodes(events: AgentEvent[]): FeedNode[] {
             durationMs: ev.durationMs,
             tokenCount: ev.tokenCount,
             running: false,
+            sources: Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined,
           });
         }
         break;
@@ -287,26 +289,6 @@ function AssistantBlock({ message, isAnswered, answerText }: { message: any; isA
 
   const nodes = useMemo(() => buildNodes(events), [events]);
 
-  // Cited web sources are carried on tool_result events (populated by the
-  // agent loop from web_search results). Collect them across the whole
-  // message so the user always sees what the deck was grounded on - the
-  // sources arrive with the web_search step but should remain visible for
-  // the life of the message, not just while that step is expanded.
-  const sources: SourceInfo[] = useMemo(() => {
-    const seen = new Set<string>();
-    const out: SourceInfo[] = [];
-    for (const ev of events as any[]) {
-      if (ev.type !== "tool_result" || !Array.isArray(ev.sources)) continue;
-      for (const s of ev.sources) {
-        if (s && typeof s.url === "string" && !seen.has(s.url)) {
-          seen.add(s.url);
-          out.push(s);
-        }
-      }
-    }
-    return out;
-  }, [events]);
-
   // Which step is auto-expanded: a running step wins, else the most recent
   // completed step. Everything else auto-collapses to a one-line summary so
   // the feed keeps only the latest step in full detail. Manual toggles
@@ -381,12 +363,6 @@ function AssistantBlock({ message, isAnswered, answerText }: { message: any; isA
           </span>
         </FeedItem>
       )}
-
-      {sources.length > 0 && (
-        <FeedItem dot="↺" dotClass="ws-dot-status">
-          <Sources sources={sources} />
-        </FeedItem>
-      )}
     </>
   );
 }
@@ -425,6 +401,11 @@ function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: bool
           <span className="lbl">{toolLabel(step.toolName)}</span>
           {step.phase && <span className="ws-step-phase">{PHASE_LABEL[step.phase] ?? step.phase}</span>}
           <StepTimer startTs={step.startTs} endTs={step.endTs} durationMs={step.durationMs} running={step.running} />
+          {!!step.sources?.length && (
+            <span className="ws-step-src-badge" title={`${step.sources.length} cited source${step.sources.length === 1 ? "" : "s"}`}>
+              <OverlappingCirclesIcon size={13} />
+            </span>
+          )}
           <span className="ws-step-toggle">▾ expand</span>
         </div>
       </FeedItem>
@@ -474,6 +455,11 @@ function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: bool
           )
         )}
 
+        {/* Cited sources that this step produced (web_search). Sits right
+            under the step that fetched them: a compact overlapping-circles
+            icon by default, expanding downward to the titled links. */}
+        {!!step.sources?.length && <SourcesInline sources={step.sources} />}
+
         {lastThought?.phase && step.running && (
           <span className="ws-shimmer-body ws-step-live">
             {lastThought.content || "Working..."}
@@ -482,6 +468,85 @@ function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: bool
         )}
       </div>
     </FeedItem>
+  );
+}
+
+/** Two overlapping circles - the compact glyph for a cited-sources cluster. */
+function OverlappingCirclesIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={2} aria-hidden="true">
+      <circle cx="9" cy="12" r="6" />
+      <circle cx="15" cy="12" r="6" />
+    </svg>
+  );
+}
+
+function faviconFor(url: string): string | null {
+  try {
+    const domain = new URL(url).hostname;
+    return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Inline cited-sources cluster, rendered under the step that produced them.
+ * Collapsed by default to just the overlapping-circles icon (with a count);
+ * click expands downward to reveal each source's favicon + title as a link.
+ */
+function SourcesInline({ sources }: { sources: SourceInfo[] }) {
+  const [open, setOpen] = useState(false);
+  if (!sources.length) return null;
+  return (
+    <div className="ws-src-inline">
+      <button
+        type="button"
+        className="ws-src-inline-btn"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        title={`${sources.length} cited source${sources.length === 1 ? "" : "s"}`}
+      >
+        <OverlappingCirclesIcon size={17} />
+        <span className="ws-src-inline-count">{sources.length}</span>
+        <ChevronDown size={12} className={`ws-src-inline-chev ${open ? "open" : ""}`} />
+      </button>
+      {open && (
+        <div className="ws-src-inline-list">
+          {sources.map((s, i) => (
+            <SourceLink key={`${s.url}-${i}`} source={s} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SourceLink({ source }: { source: SourceInfo }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const favicon = faviconFor(source.url);
+  return (
+    <a
+      className="ws-src-inline-item"
+      href={source.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={source.url}
+    >
+      {favicon && !imgFailed ? (
+        <img
+          src={favicon}
+          alt=""
+          className="ws-src-inline-fav"
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <Globe size={13} className="ws-src-inline-fav fallback" />
+      )}
+      <span className="ws-src-inline-title">{source.title}</span>
+      <ExternalLink size={11} className="ws-src-inline-ext" />
+    </a>
   );
 }
 
