@@ -5,7 +5,6 @@ Provides configurable chunking with overlap for RAG retrieval.
 """
 
 from __future__ import annotations
-from typing import Optional
 
 
 def chunk_text(
@@ -45,6 +44,18 @@ def chunk_text(
 
     for para in paragraphs:
         para_length = len(para)
+
+        # A paragraph larger than the chunk size cannot be kept whole - the
+        # grouping logic below would just absorb it and emit one giant chunk,
+        # dominating retrieval. Flush whatever is pending, then hard-split the
+        # paragraph by characters (with overlap) into bounded pieces.
+        if para_length > chunk_size:
+            if current_chunk:
+                chunks.append(separator.join(current_chunk))
+                current_chunk = []
+                current_length = 0
+            chunks.extend(_split_oversized_paragraph(para, chunk_size, overlap))
+            continue
 
         # If adding this paragraph exceeds the limit, finalize the current chunk
         if current_length + para_length + len(separator) > chunk_size and current_chunk:
@@ -93,9 +104,11 @@ def chunk_text_simple(
     while start < len(text):
         end = start + chunk_size
         chunk = text[start:end]
+        is_final = end >= len(text)
 
-        # Try to find a sentence boundary near the end
-        if end < len(text):
+        # Try to find a sentence boundary near the end (only for non-final
+        # chunks - the final chunk is the remaining tail and is kept as-is).
+        if not is_final:
             # Look for period, question mark, or exclamation near the end
             for punct in [". ", "? ", "! ", "\n"]:
                 last_punct = chunk.rfind(punct)
@@ -104,6 +117,38 @@ def chunk_text_simple(
                     break
 
         chunks.append(chunk.strip())
-        start += len(chunk) - overlap
+
+        # The final chunk has consumed the rest of the text - stop, otherwise
+        # the loop could reprocess the tail forever.
+        if is_final:
+            break
+
+        # Always advance by at least 1 so a chunk no larger than the overlap
+        # (e.g. the last sentence snapped short) cannot stall the loop.
+        start += max(1, len(chunk) - overlap)
 
     return chunks
+
+
+def _split_oversized_paragraph(
+    text: str,
+    chunk_size: int,
+    overlap: int,
+) -> list[str]:
+    """Character-level split for a paragraph larger than ``chunk_size``.
+
+    Used by :func:`chunk_text` when a single paragraph (no separator inside)
+    exceeds the chunk size, so it is broken into bounded, overlapping pieces
+    instead of being emitted as one oversized chunk.
+    """
+    # Advance by chunk_size minus the overlap, keeping at least a 1-char step
+    # so a misconfigured overlap >= chunk_size cannot loop forever.
+    step = max(1, chunk_size - overlap)
+    pieces: list[str] = []
+    for start in range(0, len(text), step):
+        piece = text[start : start + chunk_size]
+        if piece.strip():
+            pieces.append(piece)
+        if start + chunk_size >= len(text):
+            break
+    return pieces
