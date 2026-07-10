@@ -152,6 +152,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     from app.agent.tools.analyze_document import AnalyzeDocumentTool
     from app.agent.tools.extract_key_data import ExtractKeyDataTool
     from app.agent.tools.extract_template_design_system import ExtractTemplateDesignSystemTool
+    from app.agent.tools.web_search import WebSearchTool
     from app.agent.tools.plan_presentation_structure import PlanPresentationStructureTool
     from app.agent.tools.select_layout import SelectLayoutTool
     from app.agent.tools.design_slide_content import DesignSlideContentTool
@@ -163,6 +164,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     AnalyzeDocumentTool.register(registry)
     ExtractKeyDataTool.register(registry)
     ExtractTemplateDesignSystemTool.register(registry)
+    WebSearchTool.register(registry)
     PlanPresentationStructureTool.register(registry)
     SelectLayoutTool.register(registry)
     DesignSlideContentTool.register(registry)

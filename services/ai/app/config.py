@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     zhipu_api_key: str = ""
     zhipu_model: str = "glm-4.7"
     zhipu_flash_model: str = "glm-4.5-flash"  # Cheap model for title generation
+    # Zhipu web search engine name (required by the web_search agent tool).
+    # Configurable so it can be adjusted without a code change if Zhipu renames it.
+    zhipu_web_search_engine: str = "search_std"
 
     # Azure OpenAI
     azure_openai_api_key: Optional[str] = None

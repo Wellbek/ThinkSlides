@@ -30,6 +30,7 @@ TOOL_PHASES = {
     "analyze_document": "content_analysis",
     "extract_key_data": "content_analysis",
     "extract_template_design_system": "content_analysis",
+    "web_search": "content_analysis",
     "plan_presentation_structure": "structure_planning",
     "select_layout": "layout_selection",
     "design_slide_content": "content_generation",
@@ -57,6 +58,8 @@ class WorkingState:
         self.completed_tools: dict[str, dict] = {}  # tool_name -> {args, result, timestamp}
         self.last_error: str | None = None
         self.answered_questions: list[dict] = []  # Track questions that have been answered
+        self.web_search_calls: int = 0  # Cap repeated web_search calls per run
+        self.MAX_WEB_SEARCH_CALLS = 3
 
     def add_slide(self, slide: dict) -> None:
         """Add a slide to the accumulated list."""
@@ -176,6 +179,7 @@ class WorkingState:
         self.completed_tools = {}
         self.last_error = None
         self.answered_questions = []
+        self.web_search_calls = 0
 
 
 class AgentLoop:
@@ -217,6 +221,7 @@ class AgentLoop:
             "last_error": self.working_state.last_error,
             "pending_question": self.working_state.pending_question,
             "answered_questions": self.working_state.answered_questions,
+            "web_search_calls": self.working_state.web_search_calls,
         }
         redis_client = await self._get_redis_client()
         await redis_client.set(
@@ -243,6 +248,7 @@ class AgentLoop:
             self.working_state.last_error = state_dict.get("last_error")
             self.working_state.pending_question = state_dict.get("pending_question")
             self.working_state.answered_questions = state_dict.get("answered_questions", [])
+            self.working_state.web_search_calls = state_dict.get("web_search_calls", 0)
             logger.info("loaded_working_state", session_id=str(session_id), tools_completed=len(state_dict.get("completed_tools", {})))
             return True
         except Exception as e:
@@ -388,7 +394,29 @@ class AgentLoop:
 
                 # Execute tool
                 tool_start = time.time()
-                tool_result = await self._execute_tool(fn_name, fn_args)
+                if fn_name == "web_search":
+                    # Cap repeated web searches so the agent cannot loop on
+                    # low-quality results. After the cap, return a gentle
+                    # "use existing research" result instead of executing.
+                    if self.working_state.web_search_calls >= self.working_state.MAX_WEB_SEARCH_CALLS:
+                        tool_result = ToolResult(
+                            success=True,
+                            data={
+                                "query": fn_args.get("query", ""),
+                                "results": [],
+                                "result_count": 0,
+                                "note": (
+                                    "Maximum number of web searches reached. Use the Research "
+                                    "Findings already in your context to write the content, and "
+                                    "do not call web_search again. Proceed to the next step."
+                                ),
+                            },
+                        )
+                    else:
+                        self.working_state.web_search_calls += 1
+                        tool_result = await self._execute_tool(fn_name, fn_args)
+                else:
+                    tool_result = await self._execute_tool(fn_name, fn_args)
                 tool_duration = int((time.time() - tool_start) * 1000)
 
                 # Extract sources from tool result data (URLs that can be displayed to user)
@@ -472,30 +500,53 @@ class AgentLoop:
                         if tool_result.data and "slide" in tool_result.data:
                             self.working_state.add_slide(tool_result.data["slide"])
 
-                    # Rebuild system prompt with updated completed work summary
-                    # This ensures the LLM knows what's already been done
-                    messages = rebuild_messages()
-                    # Re-append the tool result that was just added
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "content": json.dumps(
-                            tool_result.data if tool_result.success else {"error": tool_result.error}
-                        ),
-                    })
+                    # Persist the design system into context so it survives
+                    # message rebuilds and the LLM does not re-extract it.
+                    # This mirrors how uploaded templates inject their design
+                    # system, and applies to the built-in default too.
+                    if fn_name == "extract_template_design_system" and tool_result.data:
+                        context["design_system"] = tool_result.data
+
+                    # Accumulate web_search results into context so they persist
+                    # across rebuilds - the LLM can ground all slides on them
+                    # without re-searching, and the sources stay available.
+                    if fn_name == "web_search" and tool_result.data and tool_result.data.get("results"):
+                        research = context.setdefault("research", [])
+                        for item in tool_result.data["results"]:
+                            research.append({
+                                "query": tool_result.data.get("query", ""),
+                                "title": item.get("title", ""),
+                                "url": item.get("url", ""),
+                                "snippet": item.get("snippet", ""),
+                            })
+                        # Bound the research context to avoid unbounded prompt growth.
+                        if len(research) > 15:
+                            context["research"] = research[-15:]
+
+                    # Update the system prompt in place so the LLM sees the
+                    # latest completed-work summary, WITHOUT discarding the
+                    # in-progress tool conversation. Previously this called
+                    # rebuild_messages() which reset messages to
+                    # [system, chat_messages] and re-appended only the latest
+                    # tool result - that wiped all prior assistant tool_calls
+                    # and tool results, causing the LLM to lose context and
+                    # re-call tools (e.g. planning or extracting repeatedly).
+                    # The tool result was already appended above (line 482), so
+                    # we only need to refresh messages[0].
+                    if messages and messages[0].get("role") == "system":
+                        messages[0] = {
+                            "role": "system",
+                            "content": self._build_system_prompt(context, self.working_state),
+                        }
                 else:
                     # Record error for context
                     self.working_state.last_error = tool_result.error
-                    # Also rebuild to include error context
-                    messages = rebuild_messages()
-                    # Re-append the tool result
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "content": json.dumps(
-                            tool_result.data if tool_result.success else {"error": tool_result.error}
-                        ),
-                    })
+                    # Refresh the system prompt in place (preserve history).
+                    if messages and messages[0].get("role") == "system":
+                        messages[0] = {
+                            "role": "system",
+                            "content": self._build_system_prompt(context, self.working_state),
+                        }
 
                 logger.info(
                     "tool_executed",
@@ -570,18 +621,31 @@ class AgentLoop:
             "",
             "The system will NOT accept completion until finalize_and_render_pptx is called.",
             "",
+            "## Templates & Design System",
+            "",
+            "- If the user uploaded a template, its design system is already in your context below - use it directly and do NOT call extract_template_design_system.",
+            "- If the user has NO template or asks for a 'default' template, call extract_template_design_system with NO template_path (or template_path='default'). It returns a built-in default design system. NEVER invent a filename like 'default_template.pptx' - it does not exist and will fail.",
+            "- Do NOT ask the user to upload a template if they already said to use a default. Proceed with the built-in default.",
+            "",
+            "## Researching Facts & Citing Sources",
+            "",
+            "- When the topic involves real-world facts, statistics, history, or current information that you may not know precisely, call web_search FIRST and base your content on the returned results.",
+            "- Do NOT call web_search for opinions, the user's own documents, or topics you already know well - avoid unnecessary calls.",
+            "- The web_search results are shown to the user as sources, so prefer it whenever a claim benefits from a citation.",
+            "",
             "## Available Tools",
             "Use the provided function tools to accomplish each step:",
             "1. analyze_document — Extract and summarize content from uploaded documents",
             "2. extract_key_data — Pull specific data points from documents",
-            "3. extract_template_design_system — Parse a template's design system (palette, fonts, layouts)",
-            "4. plan_presentation_structure — Plan the slide structure and outline",
-            "5. select_layout — Choose the best layout for each slide based on content",
-            "6. design_slide_content — Generate slide content (text, image prompts, tables, charts)",
-            "7. validate_slide_json — Validate slide JSON against the schema before rendering",
-            "8. generate_image_prompt — Create prompts for AI-generated images",
-            "9. ask_user_question — Ask the user for clarification or input (pauses workflow)",
-            "10. finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
+            "3. extract_template_design_system — Parse a template's design system, or get the built-in default (omit template_path)",
+            "4. web_search — Search the web for real facts and return cited sources",
+            "5. plan_presentation_structure — Plan the slide structure and outline",
+            "6. select_layout — Choose the best layout for each slide based on content",
+            "7. design_slide_content — Generate slide content (text, image prompts, tables, charts)",
+            "8. validate_slide_json — Validate slide JSON against the schema before rendering",
+            "9. generate_image_prompt — Create prompts for AI-generated images",
+            "10. ask_user_question — Ask the user for clarification or input (pauses workflow)",
+            "11. finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
             "",
         ]
 
@@ -600,16 +664,38 @@ class AgentLoop:
             prompt_parts.append(_json.dumps(context["design_system"], indent=2))
             prompt_parts.append("```")
             prompt_parts.append("")
+        else:
+            prompt_parts.append("## Design System Context")
+            prompt_parts.append(
+                "No user template is attached. Call extract_template_design_system with no "
+                "template_path to load the built-in default design system before designing slides."
+            )
+            prompt_parts.append("")
+
+        if context.get("research"):
+            import json as _json2
+            prompt_parts.append("## Research Findings (from web_search)")
+            prompt_parts.append(
+                "Base your factual content on these findings. Do NOT call web_search again for "
+                "topics already covered below. These sources are shown to the user as citations."
+            )
+            for idx, r in enumerate(context["research"], 1):
+                prompt_parts.append(
+                    f"{idx}. [{r.get('title', '')}]({r.get('url', '')}) - {r.get('snippet', '')}"
+                )
+            prompt_parts.append("")
 
         prompt_parts.extend([
             "## Workflow",
             "1. If documents are provided, analyze them first with analyze_document",
             "2. Extract key data with extract_key_data",
-            "3. Plan the presentation structure with plan_presentation_structure",
-            "4. For each slide, select a layout with select_layout",
-            "5. Generate content for each slide with design_slide_content",
-            "6. Validate all slides with validate_slide_json",
-            "7. Render with finalize_and_render_pptx - THIS IS MANDATORY",
+            "3. If no design system is in your context, get the built-in default with extract_template_design_system (no template_path)",
+            "4. For factual topics, research with web_search before writing content",
+            "5. Plan the presentation structure with plan_presentation_structure",
+            "6. For each slide, select a layout with select_layout",
+            "7. Generate content for each slide with design_slide_content",
+            "8. Validate all slides with validate_slide_json",
+            "9. Render with finalize_and_render_pptx - THIS IS MANDATORY",
             "",
             "Always think step by step. Explain your reasoning before each tool call.",
             "NEVER stop until you have called finalize_and_render_pptx.",
@@ -617,43 +703,54 @@ class AgentLoop:
 
         return "\n".join(prompt_parts)
 
-    def _extract_sources(self, data: dict) -> list[dict]:
-        """Extract source URLs from tool result data for display in chat."""
-        import re
-        from urllib.parse import urlparse
+    def _extract_sources(self, data) -> list[dict]:
+        """Extract source URLs from tool result data for display in chat.
 
-        sources = []
+        Walks dicts/lists looking for URL-valued fields. When a sibling
+        ``title``/``name``/``media`` field is present on the same object, it is
+        used as the source title; otherwise the URL's domain is used.
+        """
+        sources: list[dict] = []
 
-        # Handle different data structures
-        if isinstance(data, dict):
-            # Look for URL fields in common keys
-            url_keys = [
-                "url", "source", "link", "href", "file_url", "download_url",
-                "source_url", "web_url", "website", "reference", "citation"
-            ]
+        # Keys whose string value is treated as a source URL.
+        url_keys = [
+            "url", "source", "link", "href", "file_url", "download_url",
+            "source_url", "web_url", "website", "reference", "citation"
+        ]
+        # Sibling keys that may hold a human-readable title for the URL.
+        title_keys = ["title", "name", "media", "source_name", "publisher"]
 
-            for key in url_keys:
-                if key in data and data[key]:
-                    url = data[key]
-                    if isinstance(url, str) and self._is_valid_url(url):
-                        # Check if we already have this URL
-                        if not any(s.get("url") == url for s in sources):
-                            sources.append({
-                                "url": url,
-                                "title": self._extract_domain(url),
-                                "type": "web"
-                            })
+        def add_url(url: str, owner: dict | None) -> None:
+            if not isinstance(url, str) or not self._is_valid_url(url):
+                return
+            if any(s.get("url") == url for s in sources):
+                return
+            title = self._extract_domain(url)
+            if owner:
+                for tk in title_keys:
+                    tv = owner.get(tk)
+                    if isinstance(tv, str) and tv.strip():
+                        title = tv.strip()
+                        break
+            sources.append({"url": url, "title": title, "type": "web"})
 
-            # Recursively search nested dicts and lists
-            for value in data.values():
-                if isinstance(value, dict):
-                    sources.extend(self._extract_sources(value))
-                elif isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, dict):
-                            sources.extend(self._extract_sources(item))
+        def walk(obj) -> None:
+            if isinstance(obj, dict):
+                for key in url_keys:
+                    if key in obj and obj[key]:
+                        add_url(obj[key], obj)
+                # Recurse into nested structures to find more URL fields.
+                for value in obj.values():
+                    if isinstance(value, (dict, list)):
+                        walk(value)
+            elif isinstance(obj, list):
+                for item in obj:
+                    if isinstance(item, (dict, list)):
+                        walk(item)
 
-        # Remove duplicates
+        walk(data)
+
+        # De-duplicate by URL, preserving order.
         seen_urls = set()
         unique_sources = []
         for s in sources:
