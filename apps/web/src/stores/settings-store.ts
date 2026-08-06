@@ -194,6 +194,8 @@ interface SettingsState {
   clearTestResult: (target: TestTarget) => void;
 
   status: () => ConfigurationStatus;
+  /** Whether the draft differs from what is stored. */
+  isDirty: () => boolean;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -310,4 +312,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set((s) => ({ testResults: { ...s.testResults, [target]: undefined } })),
 
   status: () => get().stored?.status ?? UNCONFIGURED_STATUS,
+
+  isDirty: () => {
+    const { stored, draft } = get();
+    if (!stored) return false;
+    const roleChanged = (
+      d: ModelRoleDraft,
+      s: { provider: string | null; model: string | null; baseUrl: string | null }
+    ) =>
+      d.provider !== (s.provider ?? "") ||
+      d.model !== (s.model ?? "") ||
+      d.baseUrl !== (s.baseUrl ?? "") ||
+      d.apiKey !== "";
+
+    return (
+      roleChanged(draft.chat, stored.chat) ||
+      roleChanged(draft.deepSearch, stored.deepSearch) ||
+      draft.searchBackend.backend !== (stored.searchBackend.backend ?? "") ||
+      draft.searchBackend.baseUrl !== (stored.searchBackend.baseUrl ?? "") ||
+      draft.searchBackend.apiKey !== ""
+    );
+  },
 }));

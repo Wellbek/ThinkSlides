@@ -35,18 +35,14 @@ export function AISettingsSection() {
     stored,
     draft,
     isLoading,
-    isSaving,
     loadError,
-    saveError,
-    savedAt,
     testing,
     testResults,
     load,
     updateChat,
     updateDeepSearch,
     updateSearchBackend,
-    resetDraft,
-    save,
+    isDirty,
     test,
   } = useSettingsStore();
 
@@ -75,22 +71,9 @@ export function AISettingsSection() {
     return providers.find((p) => p.id === id) ?? null;
   }, [providers, draft.deepSearch.provider, draft.chat.provider]);
 
-  const isDirty = useMemo(() => {
-    if (!stored) return false;
-    return (
-      draft.chat.provider !== (stored.chat.provider ?? "") ||
-      draft.chat.model !== (stored.chat.model ?? "") ||
-      draft.chat.baseUrl !== (stored.chat.baseUrl ?? "") ||
-      draft.chat.apiKey !== "" ||
-      draft.deepSearch.provider !== (stored.deepSearch.provider ?? "") ||
-      draft.deepSearch.model !== (stored.deepSearch.model ?? "") ||
-      draft.deepSearch.baseUrl !== (stored.deepSearch.baseUrl ?? "") ||
-      draft.deepSearch.apiKey !== "" ||
-      draft.searchBackend.backend !== (stored.searchBackend.backend ?? "") ||
-      draft.searchBackend.baseUrl !== (stored.searchBackend.baseUrl ?? "") ||
-      draft.searchBackend.apiKey !== ""
-    );
-  }, [stored, draft]);
+  // Recomputed on every render rather than memoised: it reads the draft, which
+  // is exactly what changes on every keystroke.
+  const dirty = isDirty();
 
   if (isLoading && !stored) {
     return (
@@ -275,7 +258,7 @@ export function AISettingsSection() {
           <TestRow
             label="Test web search"
             description={
-              isDirty
+              dirty
                 ? "Runs against your saved settings - save first to test what you just changed."
                 : "Runs a known-answer query so you can see what sources come back."
             }
@@ -287,30 +270,46 @@ export function AISettingsSection() {
         </div>
       </section>
 
-      {/* ── Save bar ───────────────────────────────────────────── */}
-      <div className="sticky bottom-0 -mx-6 px-6 py-3 bg-charcoal border-t border-iron flex items-center gap-3">
-        <button
-          className="btn-outlined !py-2 !px-4 !text-caption disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={save}
-          disabled={isSaving || !isDirty}
-        >
-          {isSaving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-          {isSaving ? "Saving…" : "Save settings"}
+    </div>
+  );
+}
+
+/**
+ * The save / discard bar.
+ *
+ * Rendered by the modal as a real footer rather than inside the scrolling
+ * body, so content cannot slide underneath it.
+ */
+export function AISettingsFooter() {
+  const { isSaving, saveError, savedAt, save, resetDraft, isDirty, stored } =
+    useSettingsStore();
+
+  if (!stored) return null;
+  const dirty = isDirty();
+
+  return (
+    <div className="px-6 py-3 border-t border-iron bg-charcoal rounded-b-xl flex items-center gap-3">
+      <button
+        className="btn-outlined !py-2 !px-4 !text-caption disabled:opacity-50 disabled:cursor-not-allowed"
+        onClick={save}
+        disabled={isSaving || !dirty}
+      >
+        {isSaving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+        {isSaving ? "Saving…" : "Save settings"}
+      </button>
+      {dirty && (
+        <button className="btn-ghost !text-caption !px-2" onClick={resetDraft} disabled={isSaving}>
+          Discard changes
         </button>
-        {isDirty && (
-          <button className="btn-ghost !text-caption !px-2" onClick={resetDraft} disabled={isSaving}>
-            Discard changes
-          </button>
-        )}
-        <div className="flex-1" />
-        {saveError ? (
-          <span className="text-caption text-error">{saveError}</span>
-        ) : savedAt && !isDirty ? (
-          <span className="text-caption text-success flex items-center gap-1.5">
-            <Check size={12} /> Saved
-          </span>
-        ) : null}
-      </div>
+      )}
+      <div className="flex-1" />
+      {saveError ? (
+        <span className="text-caption text-error">{saveError}</span>
+      ) : savedAt && !dirty ? (
+        <span className="text-caption text-success flex items-center gap-1.5">
+          <Check size={12} /> Saved
+        </span>
+      ) : null}
     </div>
   );
 }

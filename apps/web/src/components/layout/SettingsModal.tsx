@@ -4,7 +4,7 @@ import { useEffect, useCallback, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Settings, Trash2, Upload, Cpu, LayoutTemplate } from "lucide-react";
 import { useChatStore } from "@/stores/chat-store";
-import { AISettingsSection } from "@/components/settings/AISettingsSection";
+import { AISettingsSection, AISettingsFooter } from "@/components/settings/AISettingsSection";
 
 type Tab = "models" | "templates";
 
@@ -179,6 +179,10 @@ export function SettingsModal() {
                   </div>
                 )}
               </div>
+
+              {/* Anchored to the modal, outside the scrolling body, so content
+                  cannot slide underneath it. */}
+              {tab === "models" && <AISettingsFooter />}
             </div>
           </motion.div>
         </>
