@@ -410,13 +410,19 @@ async def _openai_search(config: SearchConfig, query: str, count: int) -> list[d
         client_kwargs["base_url"] = credentials.base_url
     client = AsyncOpenAI(**client_kwargs)
 
+    # Passed via extra_body rather than as a named argument: web_search_options
+    # postdates the SDK version this service pins, and a named argument the
+    # installed SDK does not know raises TypeError before any request is made.
+    # extra_body is forwarded to the API verbatim, so this works on old and new
+    # SDKs alike. The annotations come back as plain dicts on older SDKs, which
+    # parse_openai_annotations already handles.
     response = await client.chat.completions.create(
         model=credentials.model,
         messages=[{
             "role": "user",
             "content": f"Search the web for: {query}\n\nReport the key facts, citing sources.",
         }],
-        web_search_options={},
+        extra_body={"web_search_options": {}},
     )
     return parse_openai_annotations(response)
 

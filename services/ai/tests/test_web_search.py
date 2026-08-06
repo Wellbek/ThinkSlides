@@ -354,3 +354,61 @@ async def test_concurrent_runs_do_not_share_a_backend():
     )
 
     assert seen == {"a": "tavily", "b": "firecrawl"}
+
+
+@pytest.mark.asyncio
+async def test_openai_search_passes_web_search_options_via_extra_body():
+    """Regression: a named kwarg the installed SDK does not know is a TypeError.
+
+    openai==1.30.0 predates web_search_options, so passing it as a named
+    argument failed before any request was made -
+    "AsyncCompletions.create() got an unexpected keyword argument". extra_body
+    is forwarded to the API verbatim on every SDK version.
+    """
+    captured: dict = {}
+
+    class _Completions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return _Obj(choices=[_Obj(message=_Obj(content="", annotations=None))])
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.chat = _Obj(completions=_Completions())
+
+    import openai
+    with patch.object(openai, "AsyncOpenAI", _Client):
+        await search_backends._openai_search(
+            SearchConfig(
+                backend="native",
+                model=ProviderCredentials("openai", "gpt-4o-search-preview", "sk-test"),
+            ),
+            "how tall is everest",
+            5,
+        )
+
+    assert "web_search_options" not in captured, "must not be a named argument"
+    assert captured["extra_body"] == {"web_search_options": {}}
+    assert captured["model"] == "gpt-4o-search-preview"
+
+
+def test_openai_parser_accepts_dict_shaped_annotations():
+    """Older SDKs surface annotations as plain dicts, not typed models."""
+    content = "Everest is 8,849 m."
+    response = _Obj(choices=[_Obj(message=_Obj(
+        content=content,
+        annotations=[{
+            "type": "url_citation",
+            "url_citation": {
+                "url": "https://example.com/everest",
+                "title": "Everest",
+                "start_index": 0,
+                "end_index": len(content),
+            },
+        }],
+    ))])
+
+    parsed = search_backends.parse_openai_annotations(response)
+
+    assert parsed[0]["url"] == "https://example.com/everest"
+    assert parsed[0]["snippet"] == content
