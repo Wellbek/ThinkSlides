@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
+import { EffortSelector } from "./EffortSelector";
 import { Paperclip, AtSign, Code2, ArrowUp, X } from "lucide-react";
 
 export function Composer() {
@@ -62,7 +63,8 @@ export function Composer() {
           <button className="ws-cm" onClick={() => fileRef.current?.click()} title="Attach"><Paperclip size={14} /></button>
           <button className="ws-cm" title="Mention slide"><AtSign size={14} /></button>
           <button className="ws-cm" title="Code mode"><Code2 size={14} /></button>
-          <span className="ws-hint">Enter to send - Shift+Enter for newline</span>
+          <EffortSelector />
+          <span className="ws-hint ws-hint-collapsible">Enter to send</span>
           <div className="ws-spacer" />
           <button className="ws-send" disabled={!content.trim() || isSending} onClick={send}>
             <ArrowUp size={13} /> Send

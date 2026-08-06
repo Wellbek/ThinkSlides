@@ -110,7 +110,8 @@ export type TestTarget = 'chat' | 'deepSearch' | 'search';
 
 const EMPTY_ROLE: ModelRoleDraft = { provider: '', model: '', baseUrl: '', apiKey: '' };
 
-const UNCONFIGURED_STATUS: ConfigurationStatus = {
+/** What to assume before the settings have loaded: nothing is configured. */
+export const UNCONFIGURED_STATUS: ConfigurationStatus = {
   chatConfigured: false,
   chatProvider: null,
   chatModel: null,
@@ -160,6 +161,9 @@ function rolePayload(draft: ModelRoleDraft): Record<string, string | null> {
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
+
+/** De-duplicates concurrent readiness fetches (see refreshStatus). */
+let inFlightStatus: Promise<void> | null = null;
 
 interface SettingsState {
   catalog: Catalog | null;
@@ -214,16 +218,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   refreshStatus: async () => {
-    try {
-      const stored = await apiGet<StoredSettings>(`${SETTINGS_BASE}/ai`);
-      // Only adopt the draft when there is not one in flight, so a background
-      // refresh never overwrites what the user is typing.
-      const hasDraft = get().stored !== null;
-      set(hasDraft ? { stored } : { stored, draft: draftFromStored(stored) });
-    } catch {
-      // A failed status refresh must not break the app; the banner simply
-      // keeps showing whatever it last knew.
-    }
+    // Several components want the readiness summary on first paint (the setup
+    // banner, both effort selectors). Collapse those into one request.
+    if (inFlightStatus) return inFlightStatus;
+    inFlightStatus = (async () => {
+      try {
+        const stored = await apiGet<StoredSettings>(`${SETTINGS_BASE}/ai`);
+        // Only adopt the draft when there is not one already, so a background
+        // refresh never overwrites what the user is typing.
+        const hasDraft = get().stored !== null;
+        set(hasDraft ? { stored } : { stored, draft: draftFromStored(stored) });
+      } catch {
+        // A failed status refresh must not break the app; the banner simply
+        // keeps showing whatever it last knew.
+      } finally {
+        inFlightStatus = null;
+      }
+    })();
+    return inFlightStatus;
   },
 
   updateChat: (patch) => set((s) => ({ draft: { ...s.draft, chat: { ...s.draft.chat, ...patch } } })),

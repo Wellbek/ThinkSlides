@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { apiGet, apiPost, apiDelete, apiPut, apiUpload } from '@/lib/api';
 import { SSEClient } from '@/lib/sse';
-import type { AgentEvent, DoneEvent } from '@thinkslides/schemas';
+import { useSettingsStore } from '@/stores/settings-store';
+import type { AgentEvent, DoneEvent, EffortMode } from '@thinkslides/schemas';
 
 export interface ChatSession {
   id: string;
@@ -56,6 +57,12 @@ interface ChatState {
   isSending: boolean;
   sseClient: SSEClient | null;
   settingsOpen: boolean;
+  /**
+   * Effort level applied to the next message. Kept on the store rather than in
+   * component state so the home view and the in-session composer share one
+   * selection, and it survives moving between them.
+   */
+  mode: EffortMode;
   totalElapsedMs: number | null;
   isGenerating: boolean;
   setIsGenerating: (generating: boolean) => void;
@@ -76,6 +83,7 @@ interface ChatState {
   uploadTemplate: (file: File, name?: string) => Promise<Template>;
   deleteTemplate: (id: string) => Promise<void>;
   setSettingsOpen: (open: boolean) => void;
+  setMode: (mode: EffortMode) => void;
 }
 
 function findActiveAssistantMessage(messages: ChatMessage[]): ChatMessage | null {
@@ -99,6 +107,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isSending: false,
   sseClient: null,
   settingsOpen: false,
+  mode: 'simple',
   totalElapsedMs: null,
   isGenerating: false,
 
@@ -380,8 +389,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content: string, files?: File[]) => {
-    const { activeSessionId } = get();
+    const { activeSessionId, mode } = get();
     if (!activeSessionId) return;
+
+    // Deep Thinking needs a configured search backend. The selector is already
+    // disabled without one, but settings can change (or be cleared) between
+    // picking a mode and sending, so resolve it once more at send time.
+    const deepAvailable = useSettingsStore.getState().status().deepThinkingAvailable;
+    const effectiveMode: EffortMode = mode === 'deep' && deepAvailable ? 'deep' : 'simple';
+    if (effectiveMode !== mode) set({ mode: effectiveMode });
+
     set({ isSending: true, isGenerating: true });
     const optimisticUser: ChatMessage = {
       id: crypto.randomUUID(),
@@ -405,6 +422,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
         const formData = new FormData();
         formData.append('content', content);
+        formData.append('mode', effectiveMode);
         for (const file of files) formData.append('files', file);
         const res = await fetch(`/api/orchestrator/sessions/${activeSessionId}/messages`, {
           method: 'POST',
@@ -431,7 +449,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } else {
         const data = await apiPost<{ messages?: ChatMessage[] }>(
           `/api/orchestrator/sessions/${activeSessionId}/messages`,
-          { content }
+          { content, mode: effectiveMode }
         );
         const serverMessages = data?.messages;
         if (serverMessages && Array.isArray(serverMessages)) {
@@ -506,4 +524,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setSettingsOpen: (open: boolean) => set({ settingsOpen: open }),
+
+  setMode: (mode: EffortMode) => set({ mode }),
 }));

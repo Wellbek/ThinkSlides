@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
+import { EffortSelector } from "./EffortSelector";
 import { Paperclip, ArrowUp, Sparkles } from "lucide-react";
 
 const SUGGESTIONS = [
@@ -62,6 +63,7 @@ export function HomeView({ onStarted }: { onStarted: () => void }) {
             hidden
             onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
           />
+          <EffortSelector size="md" />
           {files.length > 0 && (
             <span className="ws-hint">{files.length} file(s) attached</span>
           )}
