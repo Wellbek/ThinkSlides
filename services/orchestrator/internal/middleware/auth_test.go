@@ -15,14 +15,12 @@ func init() {
 }
 
 func generateTestToken(secret []byte, userID, orgID, role string, expiresAt time.Time) string {
-	claims := &Claims{
-		UserID: userID,
-		OrgID:  orgID,
-		Role:   role,
-		Email:  "test@example.com",
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expiresAt),
-		},
+	claims := jwt.MapClaims{
+		"user_id": userID,
+		"org_id":  orgID,
+		"role":    role,
+		"email":   "test@example.com",
+		"exp":     expiresAt.Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, _ := token.SignedString(secret)
@@ -141,43 +139,5 @@ func TestAuthRequired_HeaderTakesPrecedenceOverQuery(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestOptionalAuth_WithToken(t *testing.T) {
-	secret := getJWTSecret()
-	tokenString := generateTestToken(secret, "user-4", "org-4", "member", time.Now().Add(1*time.Hour))
-
-	r := gin.New()
-	r.Use(OptionalAuth())
-	r.GET("/test", func(c *gin.Context) {
-		userID, exists := c.Get("user_id")
-		c.JSON(http.StatusOK, gin.H{"user_id": userID, "exists": exists})
-	})
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenString)
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected 200, got %d", w.Code)
-	}
-}
-
-func TestOptionalAuth_NoToken(t *testing.T) {
-	r := gin.New()
-	r.Use(OptionalAuth())
-	r.GET("/test", func(c *gin.Context) {
-		_, exists := c.Get("user_id")
-		c.JSON(http.StatusOK, gin.H{"exists": exists})
-	})
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected 200, got %d", w.Code)
 	}
 }

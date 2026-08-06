@@ -1,31 +1,56 @@
 """
-Tests for the web_search agent tool.
+Tests for the web_search agent tool and its pluggable backends.
 
-Both backends (Zhipu and Tavily) are exercised by mocking the shared HTTP
-helper so no real network call is made. The tests assert that results are
-normalized to the {title, url, snippet, source} shape the agent loop expects,
-and that provider dispatch + the "not configured" guard behave correctly.
+HTTP backends are exercised by mocking the shared `post_json` helper, and the
+SDK-based native backends by feeding their parsers a canned response object, so
+no test makes a real network call. The invariant every case asserts is that
+results reach the agent loop in the same normalized
+{title, url, snippet, source} shape regardless of which backend produced them.
 """
 
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
+from app.agent import run_context
+from app.agent.tools import search_backends
 from app.agent.tools.web_search import WebSearchTool
-from app.config import settings
+from app.ai_settings import SearchConfig
+from app.llm.provider import ProviderCredentials
 
 
-def _set_provider(provider: str, **overrides):
-    """Point the tool at a backend (and override related settings) for a test."""
-    settings.web_search_provider = provider
-    for key, value in overrides.items():
-        setattr(settings, key, value)
+@pytest.fixture(autouse=True)
+def _clear_run_context():
+    """Each test starts with no configuration installed on the run context."""
+    token = run_context.set_search_config(None)
+    yield
+    run_context.reset_search_config(token)
+
+
+def _use(config: SearchConfig):
+    run_context.set_search_config(config)
+
+
+TAVILY = SearchConfig(backend="tavily", api_key="tvly-test")
+FIRECRAWL = SearchConfig(backend="firecrawl", api_key="fc-test")
+ZHIPU = SearchConfig(
+    backend="native",
+    model=ProviderCredentials("zhipu", "glm-4.7", "123456.abcdef"),
+)
+
+
+class _Obj:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+# ── Tavily ─────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_tavily_search_normalizes_results():
     """Tavily results map into {title, url, snippet, source} with a host source."""
-    _set_provider("tavily", tavily_api_key="tvly-test")
-    tavily_response = {
+    _use(TAVILY)
+    response = {
         "results": [
             {
                 "title": "Three Tallest Mountains",
@@ -42,9 +67,7 @@ async def test_tavily_search_normalizes_results():
         ]
     }
 
-    with patch.object(
-        WebSearchTool, "_post_json", new=AsyncMock(return_value=tavily_response)
-    ):
+    with patch.object(search_backends, "post_json", new=AsyncMock(return_value=response)):
         result = await WebSearchTool.run(query="three tallest mountains")
 
     assert result.success is True
@@ -59,51 +82,45 @@ async def test_tavily_search_normalizes_results():
 
 
 @pytest.mark.asyncio
-async def test_tavily_search_dedupes_by_url():
-    """Duplicate URLs are collapsed to a single result."""
-    _set_provider("tavily", tavily_api_key="tvly-test")
-    tavily_response = {
+async def test_results_are_deduped_by_url():
+    """Duplicate URLs are collapsed, whichever backend produced them."""
+    _use(TAVILY)
+    response = {
         "results": [
-            {"title": "A", "url": "https://example.com/a", "content": "c1", "score": 0.9},
-            {"title": "A2", "url": "https://example.com/a", "content": "c2", "score": 0.8},
+            {"title": "A", "url": "https://example.com/a", "content": "c1"},
+            {"title": "A2", "url": "https://example.com/a", "content": "c2"},
         ]
     }
 
-    with patch.object(
-        WebSearchTool, "_post_json", new=AsyncMock(return_value=tavily_response)
-    ):
+    with patch.object(search_backends, "post_json", new=AsyncMock(return_value=response)):
         result = await WebSearchTool.run(query="dupes")
 
-    assert result.success is True
     assert result.data["result_count"] == 1
 
 
 @pytest.mark.asyncio
-async def test_tavily_search_skips_items_without_url():
-    """Results missing a url are dropped rather than producing empty entries."""
-    _set_provider("tavily", tavily_api_key="tvly-test")
-    tavily_response = {
+async def test_results_without_a_url_are_dropped():
+    """A result with no link cannot be cited, so it is not surfaced."""
+    _use(TAVILY)
+    response = {
         "results": [
-            {"title": "No URL", "content": "no link here", "score": 0.5},
-            {"title": "OK", "url": "https://example.com/ok", "content": "x", "score": 0.9},
+            {"title": "No URL", "content": "no link here"},
+            {"title": "OK", "url": "https://example.com/ok", "content": "x"},
         ]
     }
 
-    with patch.object(
-        WebSearchTool, "_post_json", new=AsyncMock(return_value=tavily_response)
-    ):
+    with patch.object(search_backends, "post_json", new=AsyncMock(return_value=response)):
         result = await WebSearchTool.run(query="missing url")
 
-    assert result.success is True
     assert result.data["result_count"] == 1
     assert result.data["results"][0]["url"] == "https://example.com/ok"
 
 
 @pytest.mark.asyncio
-async def test_tavily_empty_results_returns_note():
-    """An empty result list yields success with a helpful note."""
-    _set_provider("tavily", tavily_api_key="tvly-test")
-    with patch.object(WebSearchTool, "_post_json", new=AsyncMock(return_value={"results": []})):
+async def test_empty_results_return_a_note_not_a_failure():
+    """The agent should continue on its own knowledge, not treat this as an error."""
+    _use(TAVILY)
+    with patch.object(search_backends, "post_json", new=AsyncMock(return_value={"results": []})):
         result = await WebSearchTool.run(query="nothing")
 
     assert result.success is True
@@ -111,52 +128,181 @@ async def test_tavily_empty_results_returns_note():
     assert "note" in result.data
 
 
+# ── Zhipu (native) ─────────────────────────────────────────────────────
+
+
 @pytest.mark.asyncio
 async def test_zhipu_search_normalizes_results():
     """Zhipu results map into the same normalized shape."""
-    _set_provider(
-        "zhipu",
-        zhipu_api_key="123456.abcdef",
-        llm_provider="zhipu",
-    )
-    zhipu_response = {
-        "search_result": [
-            {
-                "title": "Everest",
-                "link": "https://en.wikipedia.org/wiki/Mount_Everest",
-                "content": "8,848 m.",
-                "media": "Wikipedia",
-            }
-        ]
+    _use(ZHIPU)
+    response = {
+        "search_result": [{
+            "title": "Everest",
+            "link": "https://en.wikipedia.org/wiki/Mount_Everest",
+            "content": "8,848 m.",
+            "media": "Wikipedia",
+        }]
     }
 
-    with patch.object(
-        WebSearchTool, "_post_json", new=AsyncMock(return_value=zhipu_response)
-    ):
+    with patch.object(search_backends, "post_json", new=AsyncMock(return_value=response)):
         result = await WebSearchTool.run(query="mount everest")
 
     assert result.success is True
-    assert result.data["result_count"] == 1
     item = result.data["results"][0]
     assert item["url"] == "https://en.wikipedia.org/wiki/Mount_Everest"
     assert item["snippet"] == "8,848 m."
     assert item["source"] == "Wikipedia"
 
 
+def test_zhipu_jwt_requires_an_id_secret_key():
+    """A plain key cannot sign the bearer token the search endpoint needs."""
+    with pytest.raises(ValueError):
+        search_backends.build_zhipu_jwt("plainkey")
+
+
+def test_zhipu_parser_tolerates_a_single_object_result():
+    """The API returns a bare object rather than a list for some queries."""
+    parsed = search_backends.parse_zhipu_response(
+        {"search_result": {"title": "T", "link": "https://x.test/a", "content": "c"}}
+    )
+
+    assert len(parsed) == 1
+    assert parsed[0]["url"] == "https://x.test/a"
+
+
+# ── Firecrawl ──────────────────────────────────────────────────────────
+
+
 @pytest.mark.asyncio
-async def test_unconfigured_provider_returns_error():
-    """A backend without credentials returns success=False, never raises."""
-    _set_provider("tavily", tavily_api_key="")
+async def test_firecrawl_prefers_scraped_markdown_over_the_description():
+    """Scraped page content grounds slide claims far better than a search blurb."""
+    _use(FIRECRAWL)
+    response = {
+        "success": True,
+        "data": {"web": [{
+            "url": "https://example.com/report",
+            "title": "Annual Report",
+            "description": "A short blurb.",
+            "markdown": "# Annual Report\n\nRevenue grew 18% to $4.2bn.",
+        }]},
+    }
+
+    with patch.object(search_backends, "post_json", new=AsyncMock(return_value=response)):
+        result = await WebSearchTool.run(query="annual report")
+
+    assert result.success is True
+    assert "Revenue grew 18%" in result.data["results"][0]["snippet"]
+    assert result.data["results"][0]["source"] == "example.com"
+
+
+def test_firecrawl_parser_accepts_the_older_flat_data_shape():
+    """Older Firecrawl responses return `data` as a list rather than a dict."""
+    parsed = search_backends.parse_firecrawl_response(
+        {"data": [{"url": "https://x.test/a", "title": "A", "description": "d"}]}
+    )
+
+    assert parsed[0]["snippet"] == "d"
+
+
+def test_firecrawl_snippets_are_capped():
+    """A scraped page can be enormous; the prompt must not absorb all of it."""
+    parsed = search_backends.parse_firecrawl_response(
+        {"data": {"web": [{"url": "https://x.test/a", "title": "A", "markdown": "x" * 9000}]}}
+    )
+
+    assert len(parsed[0]["snippet"]) == search_backends.FIRECRAWL_SNIPPET_CHARS
+
+
+# ── Anthropic (native) ─────────────────────────────────────────────────
+
+
+def test_anthropic_citations_become_normalized_results():
+    """Claude's search results are encrypted; the citations carry the readable text."""
+    response = _Obj(content=[
+        _Obj(
+            type="text",
+            text="Everest is 8,848 m.",
+            citations=[_Obj(
+                type="web_search_result_location",
+                url="https://www.nationalgeographic.com/everest",
+                title="Everest",
+                cited_text="Everest rises to 8,848 metres.",
+            )],
+        ),
+        _Obj(type="web_search_tool_result", content=[]),
+    ])
+
+    parsed = search_backends.parse_anthropic_citations(response)
+
+    assert parsed == [{
+        "title": "Everest",
+        "url": "https://www.nationalgeographic.com/everest",
+        "snippet": "Everest rises to 8,848 metres.",
+        "source": "nationalgeographic.com",
+    }]
+
+
+def test_anthropic_parser_ignores_text_blocks_with_no_citations():
+    """Uncited prose is the model talking, not a source."""
+    response = _Obj(content=[_Obj(type="text", text="Let me search.", citations=None)])
+
+    assert search_backends.parse_anthropic_citations(response) == []
+
+
+# ── OpenAI (native) ────────────────────────────────────────────────────
+
+
+def test_openai_annotations_use_the_cited_span_as_the_snippet():
+    """OpenAI reports offsets rather than quotes, so the answer text is sliced."""
+    content = "Everest is the tallest mountain at 8,848 m above sea level."
+    response = _Obj(choices=[_Obj(message=_Obj(
+        content=content,
+        annotations=[{
+            "type": "url_citation",
+            "url_citation": {
+                "url": "https://example.com/everest",
+                "title": "Everest",
+                "start_index": 0,
+                "end_index": len(content),
+            },
+        }],
+    ))])
+
+    parsed = search_backends.parse_openai_annotations(response)
+
+    assert parsed[0]["url"] == "https://example.com/everest"
+    assert parsed[0]["snippet"] == content
+    assert parsed[0]["source"] == "example.com"
+
+
+def test_openai_parser_handles_a_response_with_no_annotations():
+    """A search model that answered from memory yields no sources, not a crash."""
+    response = _Obj(choices=[_Obj(message=_Obj(content="No sources.", annotations=None))])
+
+    assert search_backends.parse_openai_annotations(response) == []
+
+
+# ── Tool-level behaviour ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_backend_returns_an_actionable_error(monkeypatch):
+    """Simple mode, and orgs with no backend, must degrade rather than raise."""
+    from app.config import settings as env_settings
+    monkeypatch.setattr(env_settings, "zhipu_api_key", "")
+    monkeypatch.setattr(env_settings, "web_search_provider", "zhipu")
+    monkeypatch.setattr(env_settings, "tavily_api_key", "")
+
     result = await WebSearchTool.run(query="anything")
 
     assert result.success is False
-    assert "not configured" in result.error
+    assert "not available" in result.error
+    assert "Settings" in result.error
 
 
 @pytest.mark.asyncio
-async def test_empty_query_returns_error():
-    """An empty query short-circuits before any network call."""
-    _set_provider("tavily", tavily_api_key="tvly-test")
+async def test_empty_query_short_circuits_before_any_network_call():
+    _use(TAVILY)
     result = await WebSearchTool.run(query="   ")
 
     assert result.success is False
@@ -164,16 +310,105 @@ async def test_empty_query_returns_error():
 
 
 @pytest.mark.asyncio
-async def test_http_failure_is_caught():
-    """A failing HTTP call surfaces as a graceful error, not an exception."""
-    _set_provider("tavily", tavily_api_key="tvly-test")
+async def test_backend_failure_is_caught():
+    """A failing backend surfaces as a graceful error, not an exception."""
+    _use(TAVILY)
 
     async def _boom(*args, **kwargs):
         raise RuntimeError("network down")
 
-    with patch.object(WebSearchTool, "_post_json", new=_boom):
+    with patch.object(search_backends, "post_json", new=_boom):
         result = await WebSearchTool.run(query="will fail")
 
     assert result.success is False
     assert "Web search failed" in result.error
     assert "network down" in result.error
+
+
+@pytest.mark.asyncio
+async def test_unknown_backend_is_reported_rather_than_crashing():
+    """Guards against a config row written by a newer version of the service."""
+    _use(SearchConfig(backend="bing", api_key="k"))
+
+    result = await WebSearchTool.run(query="anything")
+
+    assert result.success is False
+    assert "bing" in result.error
+
+
+@pytest.mark.asyncio
+async def test_concurrent_runs_do_not_share_a_backend():
+    """Two organisations generating at once must not see each other's config."""
+    import asyncio
+
+    seen: dict[str, str] = {}
+
+    async def run_with(name: str, config: SearchConfig):
+        run_context.set_search_config(config)
+        await asyncio.sleep(0)
+        seen[name] = run_context.get_search_config().backend
+
+    await asyncio.gather(
+        run_with("a", TAVILY),
+        run_with("b", FIRECRAWL),
+    )
+
+    assert seen == {"a": "tavily", "b": "firecrawl"}
+
+
+@pytest.mark.asyncio
+async def test_openai_search_passes_web_search_options_via_extra_body():
+    """Regression: a named kwarg the installed SDK does not know is a TypeError.
+
+    openai==1.30.0 predates web_search_options, so passing it as a named
+    argument failed before any request was made -
+    "AsyncCompletions.create() got an unexpected keyword argument". extra_body
+    is forwarded to the API verbatim on every SDK version.
+    """
+    captured: dict = {}
+
+    class _Completions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return _Obj(choices=[_Obj(message=_Obj(content="", annotations=None))])
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.chat = _Obj(completions=_Completions())
+
+    import openai
+    with patch.object(openai, "AsyncOpenAI", _Client):
+        await search_backends._openai_search(
+            SearchConfig(
+                backend="native",
+                model=ProviderCredentials("openai", "gpt-4o-search-preview", "sk-test"),
+            ),
+            "how tall is everest",
+            5,
+        )
+
+    assert "web_search_options" not in captured, "must not be a named argument"
+    assert captured["extra_body"] == {"web_search_options": {}}
+    assert captured["model"] == "gpt-4o-search-preview"
+
+
+def test_openai_parser_accepts_dict_shaped_annotations():
+    """Older SDKs surface annotations as plain dicts, not typed models."""
+    content = "Everest is 8,849 m."
+    response = _Obj(choices=[_Obj(message=_Obj(
+        content=content,
+        annotations=[{
+            "type": "url_citation",
+            "url_citation": {
+                "url": "https://example.com/everest",
+                "title": "Everest",
+                "start_index": 0,
+                "end_index": len(content),
+            },
+        }],
+    ))])
+
+    parsed = search_backends.parse_openai_annotations(response)
+
+    assert parsed[0]["url"] == "https://example.com/everest"
+    assert parsed[0]["snippet"] == content

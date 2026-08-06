@@ -388,13 +388,36 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-composer-box:focus-within { border-color: var(--ws-ai-border); }
 .ws-composer-box textarea { width: 100%; resize: none; border: none; outline: none; background: transparent; color: var(--ws-text-primary); font-family: var(--ws-font-ui); font-size: 13px; line-height: 1.5; min-height: 44px; max-height: 120px; }
 .ws-composer-box textarea::placeholder { color: #444; }
-.ws-composer-bar { display: flex; align-items: center; gap: 8px; }
+/* Wraps rather than overflowing: the chat panel can be dragged down to ~300px,
+   which is narrower than the icons, effort selector, and send button together. */
+.ws-composer-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 6px; }
+/* First thing to go when the bar is tight - the shortcut is discoverable. */
+.ws-hint-collapsible { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
 .ws-cm { width: 26px; height: 26px; border-radius: var(--ws-radius-sm); display: flex; align-items: center; justify-content: center; color: #555; cursor: pointer; background: transparent; border: none; }
 .ws-cm:hover { background: var(--ws-surface-3); color: #999; }
 .ws-hint { font-size: 11px; color: #3A3A3A; }
 .ws-send { display: inline-flex; align-items: center; gap: 6px; background: var(--ws-ai-text); color: #0D0D0D; border: none; border-radius: var(--ws-radius-sm); padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .ws-send:hover { background: #9aa0f9; }
 .ws-send:disabled { background: #2A2A3A; color: #555; cursor: not-allowed; }
+
+/* Setup banner - spans the full width above the topbar so it is unmissable
+   without displacing the workspace layout. */
+.ws-setup-banner { flex-shrink: 0; display: flex; align-items: center; gap: 9px; padding: 8px 16px; background: var(--ws-orange-bg); border-bottom: 1px solid var(--ws-orange-border); }
+.ws-setup-banner-icon { color: var(--ws-orange-text); flex-shrink: 0; }
+.ws-setup-banner-text { flex: 1; min-width: 0; font-family: var(--ws-font-ui); font-size: 12px; line-height: 1.4; color: #E8C9A8; }
+.ws-setup-banner-cta { flex-shrink: 0; padding: 4px 10px; font-family: var(--ws-font-ui); font-size: 11px; font-weight: 500; line-height: 1; color: var(--ws-orange-text); background: transparent; border: 1px solid var(--ws-orange-border); border-radius: var(--ws-radius-sm); cursor: pointer; transition: background 120ms ease, border-color 120ms ease; }
+.ws-setup-banner-cta:hover { background: rgba(249, 115, 22, 0.16); border-color: var(--ws-orange-text); }
+
+/* Effort selector (Simple / Deep Thinking) - a segmented control that reads
+   as one unit, so the two levels are compared rather than scanned. */
+.ws-effort { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--ws-border-sub); border-radius: var(--ws-radius-sm); background: var(--ws-surface-2); }
+.ws-effort-opt { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; font-family: var(--ws-font-ui); font-size: 11px; font-weight: 500; line-height: 1; color: var(--ws-text-muted); background: transparent; border: none; border-radius: 3px; cursor: pointer; white-space: nowrap; transition: color 120ms ease, background 120ms ease; }
+.ws-effort-opt:hover:not(:disabled) { color: #999; background: var(--ws-surface-3); }
+.ws-effort-opt.active { color: var(--ws-ai-text); background: var(--ws-ai-bg); box-shadow: inset 0 0 0 1px var(--ws-ai-border); }
+.ws-effort-opt:disabled { color: var(--ws-text-ghost); cursor: not-allowed; }
+.ws-effort-setup { margin-left: 4px; margin-right: 2px; padding: 0; font-family: var(--ws-font-ui); font-size: 11px; color: var(--ws-ai-text); background: none; border: none; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.ws-effort-setup:hover { color: #a5aefb; }
+.ws-effort.md .ws-effort-opt { padding: 6px 11px; font-size: 12px; }
 
 /* ---------- Home view ---------- */
 .ws-home { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px; background: radial-gradient(circle at 50% 0%, #141420 0%, var(--ws-bg) 60%); }

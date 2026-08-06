@@ -18,14 +18,33 @@ through vision models like GLM-4.6V.
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Optional
 from app.config import settings
+from app.llm.catalog import PROVIDERS_BY_ID
 from app.observability.logging import get_logger
 import asyncio
 import json
 import time
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class ProviderCredentials:
+    """A fully-resolved provider configuration.
+
+    Built either from an organisation's saved settings or from environment
+    defaults, then handed to :func:`build_chat_provider`. Keeping this explicit
+    is what lets one process serve several organisations with different
+    providers - unlike the module-level singletons below, which exist only for
+    the env-configured legacy call sites.
+    """
+
+    provider: str
+    model: str
+    api_key: str
+    base_url: str | None = None
 
 
 class LLMProvider(ABC):
@@ -57,9 +76,17 @@ class LLMProvider(ABC):
 class ZhipuProvider(LLMProvider):
     """Zhipu GLM provider using the zhipuai SDK."""
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
         from zhipuai import ZhipuAI
-        self.client = ZhipuAI(api_key=settings.zhipu_api_key)
+        kwargs: dict[str, Any] = {"api_key": api_key or settings.zhipu_api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = ZhipuAI(**kwargs)
         self.model = model or settings.zhipu_model
 
     async def chat(
@@ -198,6 +225,309 @@ class AzureOpenAIProvider(LLMProvider):
         )
 
         return result
+
+
+class OpenAIProvider(LLMProvider):
+    """OpenAI (ChatGPT) provider using the openai SDK.
+
+    Also serves any OpenAI-compatible endpoint via ``base_url``.
+    """
+
+    def __init__(self, model: str, api_key: str, base_url: str | None = None) -> None:
+        from openai import AsyncOpenAI
+        kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = AsyncOpenAI(**kwargs)
+        self.model = model
+
+    async def chat(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> dict:
+        start_time = time.time()
+
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }
+        # The web-search-preview models reject `temperature`; every other model
+        # accepts it. Omitting it there costs nothing but avoids a hard 400.
+        if "search-preview" not in self.model:
+            kwargs["temperature"] = temperature
+
+        if tools:
+            kwargs["tools"] = tools
+
+        try:
+            response = await self.client.chat.completions.create(**kwargs)
+        except Exception as e:
+            logger.error("openai_api_error", error=str(e), model=self.model)
+            raise
+
+        result = _parse_openai_choice(response)
+        logger.info(
+            "llm_call_completed",
+            provider="openai",
+            model=self.model,
+            duration_ms=int((time.time() - start_time) * 1000),
+            has_tool_calls=len(result["tool_calls"]) > 0,
+        )
+        return result
+
+
+class AnthropicProvider(LLMProvider):
+    """Claude provider using the anthropic SDK.
+
+    Anthropic's Messages API differs from the OpenAI shape in three ways that
+    this class hides from the agent loop:
+
+    - The system prompt is a top-level argument, not a message.
+    - Tools are ``{name, description, input_schema}``, and calls/results are
+      ``tool_use`` / ``tool_result`` content blocks rather than a ``tool_calls``
+      array and ``role: "tool"`` messages.
+    - Sampling parameters (``temperature``, ``top_p``, ``top_k``) are rejected
+      by current models, so none are sent.
+    """
+
+    # Current Claude models think by default, and `max_tokens` caps thinking
+    # plus the reply together. A 4k budget - fine for a non-thinking provider -
+    # can truncate mid-answer, so the floor is raised. This stays under the
+    # ~16k mark where non-streaming requests risk an HTTP timeout.
+    MIN_MAX_TOKENS = 16000
+
+    def __init__(self, model: str, api_key: str, base_url: str | None = None) -> None:
+        from anthropic import AsyncAnthropic
+        kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = AsyncAnthropic(**kwargs)
+        self.model = model
+
+    async def chat(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> dict:
+        start_time = time.time()
+
+        system, converted = anthropic_messages_from_openai(messages)
+
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": converted,
+            "max_tokens": max(max_tokens, self.MIN_MAX_TOKENS),
+        }
+        if system:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = anthropic_tools_from_openai(tools)
+
+        try:
+            response = await self.client.messages.create(**kwargs)
+        except Exception as e:
+            logger.error("anthropic_api_error", error=str(e), model=self.model)
+            raise
+
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        if getattr(response, "stop_reason", None) == "refusal":
+            details = getattr(response, "stop_details", None)
+            category = getattr(details, "category", None) if details else None
+            logger.warning("anthropic_refusal", model=self.model, category=category)
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": (
+                        "The model declined this request"
+                        + (f" ({category})" if category else "")
+                        + "."
+                    ),
+                },
+                "tool_calls": [],
+            }
+
+        result = anthropic_response_to_openai(response)
+        logger.info(
+            "llm_call_completed",
+            provider="anthropic",
+            model=self.model,
+            duration_ms=duration_ms,
+            has_tool_calls=len(result["tool_calls"]) > 0,
+            stop_reason=getattr(response, "stop_reason", None),
+        )
+        return result
+
+
+# ── OpenAI <-> Anthropic translation helpers ───────────────────────────
+#
+# Module-level (not methods) so they can be unit-tested without constructing a
+# client or holding an API key.
+
+
+def _parse_openai_choice(response) -> dict:
+    """Normalize an OpenAI-shaped chat completion into the provider contract."""
+    choice = response.choices[0] if response.choices else None
+    if not choice:
+        return {"message": {"role": "assistant", "content": ""}, "tool_calls": []}
+
+    assistant_message = choice.message
+    result: dict[str, Any] = {
+        "message": {"role": "assistant", "content": assistant_message.content or ""},
+        "tool_calls": [],
+    }
+    for tc in getattr(assistant_message, "tool_calls", None) or []:
+        result["tool_calls"].append({
+            "id": tc.id,
+            "type": "function",
+            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+        })
+    return result
+
+
+def anthropic_tools_from_openai(tools: list[dict]) -> list[dict]:
+    """Convert OpenAI function-calling schemas to Anthropic tool definitions."""
+    converted: list[dict] = []
+    for tool in tools:
+        fn = tool.get("function", tool)
+        converted.append({
+            "name": fn.get("name", ""),
+            "description": fn.get("description", ""),
+            "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+        })
+    return converted
+
+
+def anthropic_messages_from_openai(messages: list[dict]) -> tuple[str, list[dict]]:
+    """Split OpenAI-shaped messages into (system prompt, Anthropic messages).
+
+    Every system message is folded into the top-level system prompt. The agent
+    loop injects a mid-conversation system message to push the agent to keep
+    going; hoisting it to the top rather than sending it inline keeps this
+    working on every Claude model (mid-conversation system messages are not
+    supported across the whole family).
+
+    Consecutive same-role messages are left as-is - the Messages API merges
+    them into one turn.
+    """
+    system_parts: list[str] = []
+    converted: list[dict] = []
+
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content") or ""
+
+        if role == "system":
+            if content:
+                system_parts.append(content)
+            continue
+
+        if role == "tool":
+            converted.append({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "content": content if isinstance(content, str) else json.dumps(content),
+                }],
+            })
+            continue
+
+        if role == "assistant":
+            blocks: list[dict] = []
+            if content:
+                blocks.append({"type": "text", "text": content})
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                raw_args = fn.get("arguments") or "{}"
+                try:
+                    parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except json.JSONDecodeError:
+                    parsed_args = {}
+                blocks.append({
+                    "type": "tool_use",
+                    "id": tc.get("id", ""),
+                    "name": fn.get("name", ""),
+                    "input": parsed_args,
+                })
+            # Anthropic rejects an assistant turn with no content blocks.
+            if blocks:
+                converted.append({"role": "assistant", "content": blocks})
+            continue
+
+        converted.append({"role": "user", "content": content})
+
+    # The Messages API requires the conversation to open on a user turn.
+    if converted and converted[0]["role"] != "user":
+        converted.insert(0, {"role": "user", "content": "Begin."})
+
+    return "\n\n".join(system_parts), converted
+
+
+def anthropic_response_to_openai(response) -> dict:
+    """Convert an Anthropic Message into the provider contract shape."""
+    text_parts: list[str] = []
+    tool_calls: list[dict] = []
+
+    for block in getattr(response, "content", None) or []:
+        block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+        if block_type == "text":
+            text = block.get("text") if isinstance(block, dict) else getattr(block, "text", "")
+            if text:
+                text_parts.append(text)
+        elif block_type == "tool_use":
+            if isinstance(block, dict):
+                block_id, name, tool_input = block.get("id"), block.get("name"), block.get("input")
+            else:
+                block_id, name, tool_input = block.id, block.name, block.input
+            tool_calls.append({
+                "id": block_id or "",
+                "type": "function",
+                "function": {"name": name or "", "arguments": json.dumps(tool_input or {})},
+            })
+
+    return {
+        "message": {"role": "assistant", "content": "\n".join(text_parts)},
+        "tool_calls": tool_calls,
+    }
+
+
+def build_chat_provider(credentials: ProviderCredentials) -> LLMProvider:
+    """Construct a provider from an explicit config, bypassing the singletons.
+
+    Raises:
+        ValueError: If the provider id is unknown or the credentials are empty.
+    """
+    if credentials.provider not in PROVIDERS_BY_ID:
+        raise ValueError(f"Unknown LLM provider '{credentials.provider}'")
+    if not credentials.api_key:
+        raise ValueError(f"No API key configured for provider '{credentials.provider}'")
+    if not credentials.model:
+        raise ValueError(f"No model configured for provider '{credentials.provider}'")
+
+    if credentials.provider == "anthropic":
+        return AnthropicProvider(
+            model=credentials.model,
+            api_key=credentials.api_key,
+            base_url=credentials.base_url,
+        )
+    if credentials.provider == "openai":
+        return OpenAIProvider(
+            model=credentials.model,
+            api_key=credentials.api_key,
+            base_url=credentials.base_url,
+        )
+    return ZhipuProvider(
+        model=credentials.model,
+        api_key=credentials.api_key,
+        base_url=credentials.base_url,
+    )
 
 
 class VisionLLMProvider:

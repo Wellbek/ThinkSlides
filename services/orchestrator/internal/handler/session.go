@@ -49,6 +49,7 @@ func NewSessionHandler(q *queue.RedisQueue, hub *sse.Hub, aiClient *client.AISer
 		redisClient: redisClient,
 	}
 }
+
 // ListSessions returns all chat sessions for the current user.
 func (h *SessionHandler) ListSessions(c *gin.Context) {
 	userID := c.GetString("user_id")
@@ -674,6 +675,10 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 	contentType := c.GetHeader("Content-Type")
 	var messageContent string
 	var attachments []map[string]interface{}
+	// Effort level: "simple" answers from the base model, "deep" enables
+	// web-search-backed research. Anything unrecognised falls back to simple,
+	// so an old client that sends nothing keeps working.
+	mode := ModeSimple
 
 	// Handle multipart/form-data (file uploads) vs JSON
 	if len(contentType) > 0 && contentType[:10] == "multipart/" {
@@ -688,6 +693,11 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		contentValues := form.Value["content"]
 		if len(contentValues) > 0 {
 			messageContent = contentValues[0]
+		}
+
+		// Effort level chosen in the composer.
+		if modeValues := form.Value["mode"]; len(modeValues) > 0 {
+			mode = modeValues[0]
 		}
 
 		// Process uploaded files
@@ -724,6 +734,7 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		var req struct {
 			Content     string                   `json:"content" binding:"required"`
 			Attachments []map[string]interface{} `json:"attachments"`
+			Mode        string                   `json:"mode"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
@@ -731,6 +742,7 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		}
 		messageContent = req.Content
 		attachments = req.Attachments
+		mode = req.Mode
 	}
 
 	if messageContent == "" && len(attachments) == 0 {
@@ -824,6 +836,18 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 			"attachments":          attachments,
 			"user_message_id":      userMsgID,
 			"assistant_message_id": assistantMsgID,
+			"mode":                 NormalizeMode(mode),
+			// A resume job answers a pending ask_user_question. The worker
+			// reads the answer under its own keys, so send it under both -
+			// previously only "content" was set and the resume posted an
+			// empty answer to the AI service.
+			"answer":          messageContent,
+			"selected_option": messageContent,
+			// The worker runs outside the request context, so the caller's
+			// identity has to travel on the job for the AI service to know
+			// whose provider settings to load.
+			"org_id":  c.GetString("org_id"),
+			"user_id": c.GetString("user_id"),
 		},
 	}
 
@@ -835,19 +859,19 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{
 		"messages": []map[string]interface{}{
 			{
-				"id":         userMsgID,
-				"session_id": sessionID,
-				"role":       "user",
-				"content":    messageContent,
+				"id":          userMsgID,
+				"session_id":  sessionID,
+				"role":        "user",
+				"content":     messageContent,
 				"attachments": attachments,
-				"created_at": time.Now().Format(time.RFC3339),
+				"created_at":  time.Now().Format(time.RFC3339),
 			},
 			{
-				"id":          assistantMsgID,
-				"session_id":  sessionID,
-				"role":        "assistant",
-				"content":     "",
-				"created_at":  time.Now().Format(time.RFC3339),
+				"id":         assistantMsgID,
+				"session_id": sessionID,
+				"role":       "assistant",
+				"content":    "",
+				"created_at": time.Now().Format(time.RFC3339),
 			},
 		},
 		"job_id": jobID,

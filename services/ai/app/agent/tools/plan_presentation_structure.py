@@ -5,6 +5,7 @@ Plans the overall slide structure and outline based on analyzed content and requ
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.run_context import get_chat_provider
 from app.llm.provider import get_tools_llm_provider as get_llm_provider
 from app.observability.logging import get_logger
 import json
@@ -71,7 +72,10 @@ class PlanPresentationStructureTool:
     ) -> ToolResult:
         start = time.time()
         try:
-            llm = get_llm_provider()
+            # An organisation that configured its own provider gets it here
+            # too: its explicit choice outranks the environment's cheaper
+            # tools-tier model, which only exists for the default provider.
+            llm = get_chat_provider() or get_llm_provider()
 
             try:
                 parsed_data = json.loads(key_data) if key_data else {}

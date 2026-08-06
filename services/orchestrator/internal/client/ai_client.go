@@ -24,24 +24,44 @@ func NewAIServiceClient(baseURL string) *AIServiceClient {
 	}
 }
 
-// SendMessage sends a message to the AI service for processing.
-func (c *AIServiceClient) SendMessage(sessionID string, content string, attachments []map[string]interface{}) (map[string]interface{}, error) {
-	payload := map[string]interface{}{
-		"content":     content,
-		"attachments": attachments,
-	}
+// Identity of the caller, forwarded to the AI service so it can load the
+// right organisation's configured providers and credentials. The background
+// worker has no HTTP request context, so identity travels on the queue job and
+// is re-attached here as headers.
+type Identity struct {
+	OrgID  string
+	UserID string
+}
 
+// GenerateRequest is the payload for a chat message. Mode is the effort level
+// the user picked in the composer: "simple" answers from the base model,
+// "deep" enables web-search-backed research.
+type GenerateRequest struct {
+	SessionID   string
+	Content     string
+	Attachments []map[string]interface{}
+	Mode        string
+	Identity    Identity
+}
+
+// postJSON issues an authenticated JSON POST and decodes the response.
+func (c *AIServiceClient) postJSON(url string, payload map[string]interface{}, identity Identity) (map[string]interface{}, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal error: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/messages", c.baseURL, sessionID)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("request error: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if identity.OrgID != "" {
+		req.Header.Set("X-Org-Id", identity.OrgID)
+	}
+	if identity.UserID != "" {
+		req.Header.Set("X-User-Id", identity.UserID)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -64,6 +84,21 @@ func (c *AIServiceClient) SendMessage(sessionID string, content string, attachme
 	}
 
 	return result, nil
+}
+
+// SendMessage sends a message to the AI service for processing.
+func (c *AIServiceClient) SendMessage(gen GenerateRequest) (map[string]interface{}, error) {
+	mode := gen.Mode
+	if mode == "" {
+		mode = "simple"
+	}
+	payload := map[string]interface{}{
+		"content":     gen.Content,
+		"attachments": gen.Attachments,
+		"mode":        mode,
+	}
+	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/messages", c.baseURL, gen.SessionID)
+	return c.postJSON(url, payload, gen.Identity)
 }
 
 // ListTemplates fetches templates from the AI service.
@@ -174,43 +209,14 @@ func (c *AIServiceClient) GenerateTitle(message string) (string, error) {
 }
 
 // AnswerQuestion sends a user's answer to a question to resume the agent workflow.
-func (c *AIServiceClient) AnswerQuestion(sessionID string, selectedOption string, answer string, questionText string) (map[string]interface{}, error) {
+// The mode the run started in is restored from the agent's saved working state,
+// so it does not need to be re-sent here.
+func (c *AIServiceClient) AnswerQuestion(sessionID string, selectedOption string, answer string, questionText string, identity Identity) (map[string]interface{}, error) {
 	payload := map[string]interface{}{
 		"answer":          answer,
 		"selected_option": selectedOption,
+		"question_text":   questionText,
 	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshal error: %w", err)
-	}
-
 	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/answer-question", c.baseURL, sessionID)
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("request error: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http error: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read error: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("AI service error %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal error: %w", err)
-	}
-
-	return result, nil
+	return c.postJSON(url, payload, identity)
 }

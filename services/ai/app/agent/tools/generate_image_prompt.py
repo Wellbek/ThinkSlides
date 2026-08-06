@@ -5,6 +5,7 @@ Creates a detailed prompt for AI image generation that matches the slide's desig
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.run_context import get_chat_provider
 from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
 import json
@@ -64,7 +65,9 @@ class GenerateImagePromptTool:
     ) -> ToolResult:
         start = time.time()
         try:
-            llm = get_llm_provider()
+            # The organisation's configured model when a run published one,
+            # otherwise the process-wide provider from the environment.
+            llm = get_chat_provider() or get_llm_provider()
 
             try:
                 palette = json.loads(design_palette) if design_palette else {}

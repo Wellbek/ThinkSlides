@@ -1,12 +1,21 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Settings, Trash2, Upload, Loader2 } from "lucide-react";
+import { X, Settings, Trash2, Upload, Cpu, LayoutTemplate } from "lucide-react";
 import { useChatStore } from "@/stores/chat-store";
+import { AISettingsSection, AISettingsFooter } from "@/components/settings/AISettingsSection";
+
+type Tab = "models" | "templates";
+
+const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
+  { id: "models", label: "AI models", icon: <Cpu size={13} /> },
+  { id: "templates", label: "Templates", icon: <LayoutTemplate size={13} /> },
+];
 
 export function SettingsModal() {
   const { settingsOpen, setSettingsOpen, templates, fetchTemplates, deleteTemplate, uploadTemplate } = useChatStore();
+  const [tab, setTab] = useState<Tab>("models");
 
   useEffect(() => {
     if (settingsOpen) {
@@ -71,7 +80,7 @@ export function SettingsModal() {
             className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none"
           >
             <div
-              className="bg-charcoal border border-iron rounded-xl shadow-subtle-2 w-full max-w-lg max-h-[80vh] flex flex-col pointer-events-auto"
+              className="bg-charcoal border border-iron rounded-xl shadow-subtle-2 w-full max-w-2xl max-h-[85vh] flex flex-col pointer-events-auto"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
@@ -91,71 +100,89 @@ export function SettingsModal() {
                 </button>
               </div>
 
+              {/* Tabs */}
+              <div className="flex items-center gap-1 px-6 pt-3 border-b border-iron">
+                {TABS.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setTab(t.id)}
+                    className={`flex items-center gap-1.5 px-3 py-2 -mb-px text-caption font-medium border-b-2 transition-colors ${
+                      tab === t.id
+                        ? "border-ice text-paper"
+                        : "border-transparent text-fog hover:text-paper"
+                    }`}
+                  >
+                    {t.icon}
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
               {/* Content */}
               <div className="flex-1 overflow-y-auto px-6 py-5">
-                {/* Templates Section */}
-                <div className="mb-6">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-body font-medium text-paper">Templates</h3>
-                    <button
-                      onClick={() => document.getElementById("settings-template-upload")?.click()}
-                      className="btn-outlined !py-1.5 !px-3 !text-caption"
-                    >
-                      <Upload size={12} />
-                      Upload
-                    </button>
-                    <input
-                      id="settings-template-upload"
-                      type="file"
-                      accept=".pptx,.potx,.pdf"
-                      className="hidden"
-                      onChange={handleFileUpload}
-                    />
-                  </div>
-
-                  <p className="text-caption text-fog mb-3">
-                    Templates define the visual style and layout of generated presentations. Upload a PPTX or POTX file to create a new template.
-                  </p>
-
-                  {templates.length === 0 ? (
-                    <div className="border border-dashed border-iron rounded-lg py-8 flex flex-col items-center gap-2 bg-charcoal">
-                      <Upload size={20} className="text-fog" />
-                      <p className="text-caption text-fog">No templates yet</p>
-                      <p className="text-caption text-fog/60">Upload a PPTX file to get started</p>
+                {tab === "models" ? (
+                  <AISettingsSection />
+                ) : (
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-body font-medium text-paper">Templates</h3>
+                      <button
+                        onClick={() => document.getElementById("settings-template-upload")?.click()}
+                        className="btn-outlined !py-1.5 !px-3 !text-caption"
+                      >
+                        <Upload size={12} />
+                        Upload
+                      </button>
+                      <input
+                        id="settings-template-upload"
+                        type="file"
+                        accept=".pptx,.potx,.pdf"
+                        className="hidden"
+                        onChange={handleFileUpload}
+                      />
                     </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {templates.map((tpl) => (
-                        <div
-                          key={tpl.id}
-                          className="flex items-center justify-between p-3 bg-graphite/50 rounded-lg border border-iron hover:border-iron/80 transition-colors"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <p className="text-body text-paper truncate">{tpl.name}</p>
-                            <p className="text-caption text-fog font-mono">
-                              v{tpl.version} · {tpl.tags?.join(", ") || "no tags"}
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => handleDelete(tpl.id)}
-                            className="p-1.5 rounded-md hover:bg-error/20 text-fog hover:text-error transition-colors shrink-0 ml-2"
-                            title="Delete template"
+
+                    <p className="text-caption text-fog mb-3">
+                      Templates define the visual style and layout of generated presentations. Upload a PPTX or POTX file to create a new template.
+                    </p>
+
+                    {templates.length === 0 ? (
+                      <div className="border border-dashed border-iron rounded-lg py-8 flex flex-col items-center gap-2 bg-charcoal">
+                        <Upload size={20} className="text-fog" />
+                        <p className="text-caption text-fog">No templates yet</p>
+                        <p className="text-caption text-fog/60">Upload a PPTX file to get started</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {templates.map((tpl) => (
+                          <div
+                            key={tpl.id}
+                            className="flex items-center justify-between p-3 bg-graphite/50 rounded-lg border border-iron hover:border-iron/80 transition-colors"
                           >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-body text-paper truncate">{tpl.name}</p>
+                              <p className="text-caption text-fog font-mono">
+                                v{tpl.version} · {tpl.tags?.join(", ") || "no tags"}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => handleDelete(tpl.id)}
+                              className="p-1.5 rounded-md hover:bg-error/20 text-fog hover:text-error transition-colors shrink-0 ml-2"
+                              title="Delete template"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {/* Footer */}
-              <div className="px-6 py-3 border-t border-iron bg-obsidian/30 rounded-b-xl">
-                <p className="text-caption text-fog text-center">
-                  ThinkSlides Settings
-                </p>
-              </div>
+              {/* Anchored to the modal, outside the scrolling body, so content
+                  cannot slide underneath it. */}
+              {tab === "models" && <AISettingsFooter />}
             </div>
           </motion.div>
         </>
@@ -163,4 +190,3 @@ export function SettingsModal() {
     </AnimatePresence>
   );
 }
-

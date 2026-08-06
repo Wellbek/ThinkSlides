@@ -16,8 +16,18 @@ export interface CreateSessionResponse {
   createdAt: string;
 }
 
+/**
+ * Effort level for a message.
+ *
+ * `simple` answers from the configured chat model alone; `deep` additionally
+ * lets the agent research the topic with web search. The server treats any
+ * unrecognised value - including the field being absent - as `simple`.
+ */
+export type EffortMode = 'simple' | 'deep';
+
 export interface SendMessageRequest {
   content: string;
+  mode?: EffortMode;
   attachments?: Array<{
     fileName: string;
     mimeType: string;

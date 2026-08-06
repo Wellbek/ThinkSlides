@@ -3,7 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from app.db.session import get_db
 from app.db.models import ChatSession, ChatMessage, AgentEvent
-from app.agent.loop import AgentLoop
+from app.agent.loop import AgentLoop, MODE_SIMPLE, normalize_mode
+from app.api.tenancy import resolve_org_id
 from app.observability.logging import get_logger
 from pydantic import BaseModel
 from typing import Optional
@@ -30,6 +31,9 @@ redis_client = redis.from_url("redis://redis:6379", decode_responses=True)
 class SendMessageRequest(BaseModel):
     content: str
     attachments: list = []
+    # Effort level chosen in the composer: "simple" or "deep". Anything else
+    # (including the field being absent, as older clients send) means simple.
+    mode: str = MODE_SIMPLE
 
 
 class SimplePresentationRequest(BaseModel):
@@ -44,12 +48,17 @@ class SimplePresentationRequest(BaseModel):
 class AnswerQuestionRequest(BaseModel):
     answer: str
     selected_option: str = ""
+    # The question being answered. The orchestrator knows it from the SSE
+    # event it relayed; when it is omitted we fall back to the pending
+    # question recorded in the working state.
+    question_text: str = ""
 
 
 @router.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: str,
     req: SendMessageRequest,
+    org_id: uuid.UUID = Depends(resolve_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Send a message to a chat session and trigger agent generation."""
@@ -93,7 +102,13 @@ async def send_message(
 
     async def run_agent_with_handler():
         try:
-            await _run_agent(sid, user_msg.id, assistant_msg.id)
+            await _run_agent(
+                sid,
+                user_msg.id,
+                assistant_msg.id,
+                mode=normalize_mode(req.mode),
+                org_id=org_id,
+            )
         except Exception as e:
             logger.error("_run_agent failed", error=str(e), traceback=traceback.format_exc())
 
@@ -112,7 +127,15 @@ async def _run_agent(
     assistant_message_id: uuid.UUID,
     answer: str = "",
     question_text: str = "",
+    mode: str | None = None,
+    org_id: uuid.UUID | None = None,
 ):
+    """Run the agent loop for a session and stream its events to Redis.
+
+    ``mode`` is None on the resume path so the loop picks the effort level back
+    up from the saved working state; ``org_id`` selects whose configured models
+    and search backend the run uses.
+    """
     from app.db.session import async_session
     import datetime
     import traceback
@@ -165,7 +188,7 @@ async def _run_agent(
 
             try:
                 logger.info("_run_agent: creating AgentLoop for %s", session_id)
-                loop = AgentLoop(db=db)
+                loop = AgentLoop(db=db, mode=mode, org_id=org_id)
 
                 logger.info("_run_agent: starting loop.run() for %s", session_id)
                 event_count = 0
@@ -554,6 +577,7 @@ async def simple_fallback(
 async def answer_question(
     session_id: str,
     req: AnswerQuestionRequest,
+    org_id: uuid.UUID = Depends(resolve_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -595,18 +619,30 @@ async def answer_question(
     await db.refresh(assistant_msg)
 
     # Get the pending question from working state
-    question_text = ""
-    try:
-        state_json = await redis_client.get(f"working_state:{session_id}")
-        if state_json:
-            state_dict = json.loads(state_json)
-            pending_question = state_dict.get("pending_question", {})
-            question_text = pending_question.get("question", "")
-    except Exception as e:
-        logger.warning("Failed to get pending question from working state: %s", str(e))
+    question_text = req.question_text
+    if not question_text:
+        try:
+            state_json = await redis_client.get(f"working_state:{session_id}")
+            if state_json:
+                state_dict = json.loads(state_json)
+                pending_question = state_dict.get("pending_question", {})
+                question_text = pending_question.get("question", "")
+        except Exception as e:
+            logger.warning("Failed to get pending question from working state: %s", str(e))
 
-    # Resume the agent loop with answer and question text
-    asyncio.create_task(_run_agent(sid, user_msg.id, assistant_msg.id, answer_content, question_text))
+    # Resume the agent loop. mode stays None so the loop inherits the effort
+    # level of the run that paused, which it saved in the working state.
+    asyncio.create_task(
+        _run_agent(
+            sid,
+            user_msg.id,
+            assistant_msg.id,
+            answer_content,
+            question_text,
+            mode=None,
+            org_id=org_id,
+        )
+    )
 
     logger.info(
         "answer_question: resumed workflow for session %s with answer: %s",

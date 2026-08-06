@@ -25,6 +25,52 @@ class Organisation(Base):
     templates = relationship("Template", back_populates="organisation")
 
 
+class OrganisationAISettings(Base):
+    """Per-organisation configuration of the chat and deep-search providers.
+
+    Split into two roles so an organisation can, for example, run a cheap model
+    for everyday chat and a stronger one for research-heavy Deep Thinking runs:
+
+    - ``chat_*``   - the generic chat model used for every message.
+    - ``search_*`` - the model used for Deep Thinking runs.
+    - ``search_backend*`` - where Deep Thinking's web results come from:
+      ``native`` (the provider's own search API), ``tavily`` or ``firecrawl``.
+
+    API keys are stored only as AES-256-GCM envelopes (see
+    ``app.security.crypto``). The ``*_hint`` columns hold the last four
+    characters so the UI can show *which* key is configured without the
+    plaintext ever leaving the service.
+    """
+
+    __tablename__ = "organisation_ai_settings"
+
+    organisation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organisations.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    chat_provider = Column(String(50))
+    chat_model = Column(String(200))
+    chat_base_url = Column(String(500))
+    chat_api_key_encrypted = Column(Text)
+    chat_api_key_hint = Column(String(16))
+
+    search_provider = Column(String(50))
+    search_model = Column(String(200))
+    search_base_url = Column(String(500))
+    search_api_key_encrypted = Column(Text)
+    search_api_key_hint = Column(String(16))
+
+    search_backend = Column(String(50))
+    search_backend_base_url = Column(String(500))
+    search_backend_api_key_encrypted = Column(Text)
+    search_backend_api_key_hint = Column(String(16))
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
 class User(Base):
     __tablename__ = "users"
 

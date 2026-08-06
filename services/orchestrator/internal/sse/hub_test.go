@@ -6,7 +6,7 @@ import (
 )
 
 func TestHubSubscribe(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(nil)
 
 	ch := hub.Subscribe("session-1")
 	if ch == nil {
@@ -17,7 +17,7 @@ func TestHubSubscribe(t *testing.T) {
 }
 
 func TestHubBroadcast(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(nil)
 
 	ch := hub.Subscribe("session-1")
 
@@ -41,7 +41,7 @@ func TestHubBroadcast(t *testing.T) {
 }
 
 func TestHubBroadcastNoSubscribers(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(nil)
 
 	// Should not panic when broadcasting to a session with no subscribers
 	event := Event{
@@ -52,7 +52,7 @@ func TestHubBroadcastNoSubscribers(t *testing.T) {
 }
 
 func TestHubMultipleSubscribers(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(nil)
 
 	ch1 := hub.Subscribe("session-1")
 	ch2 := hub.Subscribe("session-1")
@@ -82,7 +82,7 @@ func TestHubMultipleSubscribers(t *testing.T) {
 }
 
 func TestHubSessionIsolation(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(nil)
 
 	ch1 := hub.Subscribe("session-1")
 	ch2 := hub.Subscribe("session-2")
@@ -114,7 +114,7 @@ func TestHubSessionIsolation(t *testing.T) {
 }
 
 func TestHubUnsubscribeCleansUp(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(nil)
 
 	ch := hub.Subscribe("session-1")
 	hub.Unsubscribe("session-1", ch)

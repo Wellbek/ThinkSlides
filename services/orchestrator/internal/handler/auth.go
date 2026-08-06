@@ -240,6 +240,10 @@ func (h *AuthHandler) HandleDevLogin(c *gin.Context) {
 
 	// First time: create dev org + dev user in a transaction.
 	db := h.store.DB()
+	if db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database not available"})
+		return
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to begin transaction"})
