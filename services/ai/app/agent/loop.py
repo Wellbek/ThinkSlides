@@ -19,7 +19,9 @@ from app.agent.registry import get_registry, ToolResult
 from app.llm.provider import build_chat_provider, get_llm_provider
 from app.observability.logging import get_logger
 from app.config import settings
+import asyncio
 import json
+import re
 import time
 import uuid
 import os
@@ -42,6 +44,46 @@ DEEP_ONLY_TOOLS = {"web_search"}
 def normalize_mode(mode: str | None) -> str:
     """Map any caller-supplied value onto a known mode, defaulting to simple."""
     return MODE_DEEP if mode == MODE_DEEP else MODE_SIMPLE
+
+
+# Substrings identifying errors worth retrying. Provider SDKs raise their own
+# exception types but all surface an HTTP status; 429 and 5xx are transient,
+# everything else (a bad key, an unknown model) will fail again identically.
+_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _status_of(exc: Exception) -> int | None:
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status
+
+
+def _is_retryable(exc: Exception) -> bool:
+    status = _status_of(exc)
+    if status in _RETRYABLE_STATUSES:
+        return True
+    if status is not None:
+        return False
+    # Some SDKs stringify the status instead of exposing it.
+    text = str(exc).lower()
+    return "rate limit" in text or "429" in text or "timeout" in text
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Honour the provider's own advice about when to try again."""
+    match = re.search(r"try again in (\d+(?:\.\d+)?)s", str(exc))
+    if match:
+        # A small margin, because the window is measured on their clock.
+        return float(match.group(1)) + 0.5
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers:
+        raw = headers.get("retry-after") or headers.get("Retry-After")
+        try:
+            return float(raw) if raw else None
+        except (TypeError, ValueError):
+            return None
+    return None
 
 # Map tool names to logical phases
 TOOL_PHASES = {
@@ -213,6 +255,11 @@ class AgentLoop:
     """
 
     MAX_ITERATIONS = 25
+
+    # A rate limit is a wait, not a failure. Three retries covers the usual
+    # per-minute window without letting a genuinely broken key hang the run.
+    MAX_LLM_RETRIES = 3
+    RETRY_BASE_SECONDS = 5.0
 
     def __init__(
         self,
@@ -428,7 +475,7 @@ class AgentLoop:
             # Call LLM
             start_time = time.time()
             try:
-                response = await self.llm.chat(
+                response = await self._chat_with_retry(
                     messages=messages,
                     tools=tool_schemas if tool_schemas else None,
                 )
@@ -745,6 +792,32 @@ class AgentLoop:
                 }
 
         return context
+
+    async def _chat_with_retry(self, messages: list[dict], tools: list[dict] | None):
+        """Call the chat model, retrying transient rate limits.
+
+        A 429 part-way through a generation used to abandon the whole run, and
+        with it every slide already designed - which on a low-tier API key
+        happens routinely, since one presentation makes dozens of calls in a
+        couple of minutes. Providers tell us how long to wait; when they do not,
+        exponential backoff is a reasonable guess.
+        """
+        delay = self.RETRY_BASE_SECONDS
+        for attempt in range(self.MAX_LLM_RETRIES + 1):
+            try:
+                return await self.llm.chat(messages=messages, tools=tools)
+            except Exception as e:
+                if attempt == self.MAX_LLM_RETRIES or not _is_retryable(e):
+                    raise
+                wait = _retry_after_seconds(e) or delay
+                logger.warning(
+                    "llm_call_retrying",
+                    attempt=attempt + 1,
+                    wait_seconds=round(wait, 2),
+                    error=str(e)[:200],
+                )
+                await asyncio.sleep(wait)
+                delay *= 2
 
     def _tool_schemas_for_mode(self) -> list[dict]:
         """The tool schemas this run may call, filtered by effort level."""

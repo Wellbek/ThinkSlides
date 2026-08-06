@@ -323,3 +323,132 @@ async def test_run_clears_the_provider_it_installed():
             pass
 
     assert run_context.get_chat_provider() is None
+
+
+# ── Search-only models and rate limits ─────────────────────────────────
+
+
+def test_search_only_models_are_not_valid_chat_models():
+    """A model that rejects `tools` cannot drive a tool-calling agent."""
+    from app.llm.catalog import supports_tool_calling
+
+    assert supports_tool_calling("openai", "gpt-4o") is True
+    assert supports_tool_calling("openai", "gpt-4o-search-preview") is False
+    assert supports_tool_calling("openai", "gpt-4o-mini-search-preview") is False
+    assert supports_tool_calling("anthropic", "claude-opus-5") is True
+    # An unknown provider is assumed capable rather than blocked.
+    assert supports_tool_calling("someone-else", "their-model") is True
+
+
+def test_saving_a_search_only_model_as_the_chat_model_is_rejected():
+    """Caught at save time, naming the field it does belong in."""
+    from fastapi import HTTPException
+    from app.api.settings import ModelRoleInput, _validate_chat_model
+
+    with pytest.raises(HTTPException) as exc:
+        _validate_chat_model(
+            ModelRoleInput(provider="openai", model="gpt-4o-search-preview")
+        )
+
+    assert exc.value.status_code == 400
+    assert "Deep Thinking model" in exc.value.detail
+    _validate_chat_model(ModelRoleInput(provider="openai", model="gpt-4o"))
+
+
+def test_native_search_reason_names_the_field_to_change():
+    """Regression: "requires one of ..." read as "change your chat model"."""
+    from app.ai_settings import _native_search_supported
+    from app.llm.provider import ProviderCredentials
+
+    ok, reason = _native_search_supported(
+        ProviderCredentials("openai", "gpt-4o", "sk-test")
+    )
+
+    assert ok is False
+    assert "Deep Thinking model" in reason
+    assert "gpt-4o-search-preview" in reason
+
+
+@pytest.mark.parametrize(
+    "exc,retryable",
+    [
+        (type("E", (Exception,), {"status_code": 429})(), True),
+        (type("E", (Exception,), {"status_code": 503})(), True),
+        (type("E", (Exception,), {"status_code": 401})(), False),
+        (type("E", (Exception,), {"status_code": 404})(), False),
+        (Exception("Rate limit reached for gpt-4o"), True),
+        (Exception("invalid x-api-key"), False),
+    ],
+)
+def test_only_transient_failures_are_retried(exc, retryable):
+    from app.agent.loop import _is_retryable
+
+    assert _is_retryable(exc) is retryable
+
+
+def test_the_provider_s_own_retry_advice_is_honoured():
+    """OpenAI puts the wait in the message; obeying it beats guessing."""
+    from app.agent.loop import _retry_after_seconds
+
+    exc = Exception(
+        "Rate limit reached for gpt-4o ... Please try again in 7.696s. Visit ..."
+    )
+
+    assert _retry_after_seconds(exc) == pytest.approx(8.196)
+    assert _retry_after_seconds(Exception("no advice here")) is None
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_call_is_retried_rather_than_abandoning_the_run(monkeypatch):
+    """Regression: one 429 threw away every slide designed so far."""
+    import app.agent.loop as loop_module
+
+    sleeps: list[float] = []
+
+    async def _no_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(loop_module.asyncio, "sleep", _no_sleep)
+
+    attempts = {"n": 0}
+
+    class _Flaky:
+        async def chat(self, **kwargs):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                err = Exception("Rate limit reached. Please try again in 2s.")
+                err.status_code = 429
+                raise err
+            return {"message": {"content": "done"}, "tool_calls": []}
+
+    loop = _loop(MODE_SIMPLE)
+    loop.llm = _Flaky()
+
+    result = await loop._chat_with_retry(messages=[], tools=None)
+
+    assert result["message"]["content"] == "done"
+    assert attempts["n"] == 2
+    assert sleeps == [pytest.approx(2.5)]
+
+
+@pytest.mark.asyncio
+async def test_a_bad_key_is_not_retried(monkeypatch):
+    """Retrying an auth failure just wastes the user's time."""
+    import app.agent.loop as loop_module
+
+    async def _no_sleep(seconds):
+        raise AssertionError("should not have slept")
+
+    monkeypatch.setattr(loop_module.asyncio, "sleep", _no_sleep)
+
+    class _BadKey:
+        async def chat(self, **kwargs):
+            err = Exception("invalid x-api-key")
+            err.status_code = 401
+            raise err
+
+    loop = _loop(MODE_SIMPLE)
+    loop.llm = _BadKey()
+
+    with pytest.raises(Exception, match="invalid x-api-key"):
+        await loop._chat_with_retry(messages=[], tools=None)
