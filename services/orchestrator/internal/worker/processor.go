@@ -265,8 +265,18 @@ func (p *Processor) processJob(ctx context.Context, job *queue.Job) error {
 	}
 }
 
+// jobIdentity rebuilds the caller's identity from the queued job. The worker
+// has no HTTP request, so this is the only place the AI service can learn which
+// organisation's provider settings to use.
+func jobIdentity(job *queue.Job) client.Identity {
+	orgID, _ := job.Payload["org_id"].(string)
+	userID, _ := job.Payload["user_id"].(string)
+	return client.Identity{OrgID: orgID, UserID: userID}
+}
+
 func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) error {
 	content, _ := job.Payload["content"].(string)
+	mode, _ := job.Payload["mode"].(string)
 	attachmentsRaw, _ := job.Payload["attachments"].([]interface{})
 
 	attachments := make([]map[string]interface{}, 0)
@@ -288,7 +298,13 @@ func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) erro
 	})
 
 	// Call AI service – this returns immediately after the AI accepts the job.
-	_, err := p.aiClient.SendMessage(job.SessionID, content, attachments)
+	_, err := p.aiClient.SendMessage(client.GenerateRequest{
+		SessionID:   job.SessionID,
+		Content:     content,
+		Attachments: attachments,
+		Mode:        mode,
+		Identity:    jobIdentity(job),
+	})
 	if err != nil {
 		return err
 	}
@@ -314,7 +330,7 @@ func (p *Processor) processResumeJob(ctx context.Context, job *queue.Job) error 
 	})
 
 	// Call AI service with answer – this returns immediately after the AI accepts the job
-	_, err := p.aiClient.AnswerQuestion(job.SessionID, selectedOption, answer, questionText)
+	_, err := p.aiClient.AnswerQuestion(job.SessionID, selectedOption, answer, questionText, jobIdentity(job))
 	if err != nil {
 		return err
 	}

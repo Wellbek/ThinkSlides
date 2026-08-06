@@ -13,8 +13,10 @@ All intermediate steps are yielded as typed events for SSE streaming.
 from __future__ import annotations
 from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession
+from app import ai_settings
+from app.agent import run_context
 from app.agent.registry import get_registry, ToolResult
-from app.llm.provider import get_llm_provider
+from app.llm.provider import build_chat_provider, get_llm_provider
 from app.observability.logging import get_logger
 from app.config import settings
 import json
@@ -24,6 +26,22 @@ import os
 import redis.asyncio as redis
 
 logger = get_logger(__name__)
+
+# Effort levels a message can be sent with. Simple answers from the chat model
+# alone; deep additionally lets the agent research the topic with web_search.
+# These mirror the orchestrator's handler.ModeSimple / handler.ModeDeep.
+MODE_SIMPLE = "simple"
+MODE_DEEP = "deep"
+
+# Tools that only exist in deep mode. Removing them from the schema list is
+# what actually enforces the mode - the model cannot call a tool it was never
+# offered, which is more reliable than asking it not to in the prompt.
+DEEP_ONLY_TOOLS = {"web_search"}
+
+
+def normalize_mode(mode: str | None) -> str:
+    """Map any caller-supplied value onto a known mode, defaulting to simple."""
+    return MODE_DEEP if mode == MODE_DEEP else MODE_SIMPLE
 
 # Map tool names to logical phases
 TOOL_PHASES = {
@@ -196,12 +214,79 @@ class AgentLoop:
 
     MAX_ITERATIONS = 25
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        mode: str | None = None,
+        org_id: uuid.UUID | None = None,
+    ) -> None:
+        """
+        ``mode`` is the effort level the user picked in the composer. Pass None
+        to inherit the mode of the run being resumed (see _load_working_state),
+        which is what the answer-a-question path does - the resume request has
+        no composer of its own to read a mode from.
+
+        ``org_id`` selects whose configured models and search backend this run
+        uses. None falls back to the environment configuration, keeping
+        deployments that predate the settings API working unchanged.
+        """
         self.db = db
         self.registry = get_registry()
+        # Replaced in _configure() once the organisation's settings are known.
         self.llm = get_llm_provider()
         self.working_state = WorkingState()
         self.redis_client = None
+        self.mode = normalize_mode(mode) if mode is not None else None
+        self.org_id = org_id
+        self.search_config: ai_settings.SearchConfig | None = None
+        self._search_token = None
+
+    async def _configure(self) -> None:
+        """Resolve the organisation's settings into this run's provider and mode.
+
+        Deep mode is downgraded to simple when no search backend is usable, so
+        a stale client that asks for Deep Thinking on an unconfigured
+        organisation still produces a presentation rather than an error.
+        """
+        if self.mode is None:
+            self.mode = MODE_SIMPLE
+
+        row = None
+        if self.org_id is not None:
+            try:
+                row = await ai_settings.load_row(self.db, self.org_id)
+            except Exception as e:  # noqa: BLE001 - never fail a run over settings
+                logger.error(
+                    "settings_load_failed", organisation_id=str(self.org_id), error=str(e)
+                )
+
+        credentials = ai_settings.resolve_chat_credentials(row)
+        if credentials is not None:
+            try:
+                self.llm = build_chat_provider(credentials)
+            except ValueError as e:
+                logger.error(
+                    "configured_chat_provider_unusable",
+                    provider=credentials.provider,
+                    error=str(e),
+                )
+
+        if self.mode == MODE_DEEP:
+            config, reason = ai_settings.resolve_search_config(row)
+            if config is None:
+                logger.info("deep_mode_downgraded", reason=reason)
+                self.mode = MODE_SIMPLE
+            else:
+                self.search_config = config
+                self._search_token = run_context.set_search_config(config)
+
+        logger.info(
+            "agent_run_configured",
+            mode=self.mode,
+            organisation_id=str(self.org_id) if self.org_id else None,
+            chat_provider=credentials.provider if credentials else None,
+            search_backend=self.search_config.backend if self.search_config else None,
+        )
 
     async def _get_redis_client(self) -> redis.Redis:
         """Get or create Redis client."""
@@ -222,6 +307,9 @@ class AgentLoop:
             "pending_question": self.working_state.pending_question,
             "answered_questions": self.working_state.answered_questions,
             "web_search_calls": self.working_state.web_search_calls,
+            # Carried so a run paused on a question resumes at the same effort
+            # level - the resume request has no mode of its own.
+            "mode": self.mode,
         }
         redis_client = await self._get_redis_client()
         await redis_client.set(
@@ -249,6 +337,11 @@ class AgentLoop:
             self.working_state.pending_question = state_dict.get("pending_question")
             self.working_state.answered_questions = state_dict.get("answered_questions", [])
             self.working_state.web_search_calls = state_dict.get("web_search_calls", 0)
+            # Only inherit the saved mode when the caller did not pick one, so
+            # a resumed run keeps its effort level while a fresh message is
+            # free to change it.
+            if self.mode is None:
+                self.mode = normalize_mode(state_dict.get("mode"))
             logger.info("loaded_working_state", session_id=str(session_id), tools_completed=len(state_dict.get("completed_tools", {})))
             return True
         except Exception as e:
@@ -269,7 +362,23 @@ class AgentLoop:
         Run the full agent loop for a session.
         Yields typed SSE events as dictionaries.
         Does NOT publish to Redis – that is the caller's responsibility.
+
+        Thin wrapper around _run so the search configuration installed on the
+        run context is torn down however the loop ends - including when the
+        consumer stops iterating early.
         """
+        try:
+            async for event in self._run(session_id):
+                yield event
+        finally:
+            if self._search_token is not None:
+                run_context.reset_search_config(self._search_token)
+                self._search_token = None
+
+    async def _run(
+        self,
+        session_id: uuid.UUID,
+    ) -> AsyncIterator[dict]:
         import_timestamp = _iso_now()
 
         # Try to load previous working state (from a paused question)
@@ -278,6 +387,10 @@ class AgentLoop:
         # Only reset if no previous state was found
         if not state_loaded:
             self.working_state.reset()
+
+        # Resolve models, search backend, and the effective mode. Must run
+        # after the working state load, which can supply the mode on a resume.
+        await self._configure()
 
         # ── Phase 1: Load context ────────────────────
         yield _event("thought", "content_analysis", {
@@ -291,7 +404,7 @@ class AgentLoop:
         chat_messages = await self._build_chat_messages(session_id)
 
         # ── Phase 3: ReAct loop ──────────────────────
-        tool_schemas = self.registry.get_function_schemas()
+        tool_schemas = self._tool_schemas_for_mode()
         current_phase = "content_analysis"
 
         # Function to rebuild messages with updated system prompt including completed work
@@ -623,6 +736,17 @@ class AgentLoop:
 
         return context
 
+    def _tool_schemas_for_mode(self) -> list[dict]:
+        """The tool schemas this run may call, filtered by effort level."""
+        schemas = self.registry.get_function_schemas()
+        if self.mode == MODE_DEEP:
+            return schemas
+
+        def name_of(schema: dict) -> str:
+            return schema.get("function", {}).get("name", schema.get("name", ""))
+
+        return [s for s in schemas if name_of(s) not in DEEP_ONLY_TOOLS]
+
     def _build_system_prompt(self, context: dict, working_state: WorkingState | None = None) -> str:
         """Build the system prompt with embedded design system context."""
         prompt_parts = [
@@ -645,27 +769,49 @@ class AgentLoop:
             "- If the user has NO template or asks for a 'default' template, call extract_template_design_system with NO template_path (or template_path='default'). It returns a built-in default design system. NEVER invent a filename like 'default_template.pptx' - it does not exist and will fail.",
             "- Do NOT ask the user to upload a template if they already said to use a default. Proceed with the built-in default.",
             "",
-            "## Researching Facts & Citing Sources",
-            "",
-            "- When the topic involves real-world facts, statistics, history, or current information that you may not know precisely, call web_search FIRST and base your content on the returned results.",
-            "- Do NOT call web_search for opinions, the user's own documents, or topics you already know well - avoid unnecessary calls.",
-            "- The web_search results are shown to the user as sources, so prefer it whenever a claim benefits from a citation.",
-            "",
-            "## Available Tools",
-            "Use the provided function tools to accomplish each step:",
-            "1. analyze_document — Extract and summarize content from uploaded documents",
-            "2. extract_key_data — Pull specific data points from documents",
-            "3. extract_template_design_system — Parse a template's design system, or get the built-in default (omit template_path)",
-            "4. web_search — Search the web for real facts and return cited sources",
-            "5. plan_presentation_structure — Plan the slide structure and outline",
-            "6. select_layout — Choose the best layout for each slide based on content",
-            "7. design_slide_content — Generate slide content (text, image prompts, tables, charts)",
-            "8. validate_slide_json — Validate slide JSON against the schema before rendering",
-            "9. generate_image_prompt — Create prompts for AI-generated images",
-            "10. ask_user_question — Ask the user for clarification or input (pauses workflow)",
-            "11. finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
-            "",
         ]
+
+        # The two effort levels differ in whether the agent may research the
+        # topic on the web. Describing only the tools it actually has keeps the
+        # prompt honest - in simple mode web_search is not in the schema list.
+        if self.mode == MODE_DEEP:
+            prompt_parts.extend([
+                "## Researching Facts & Citing Sources (Deep Thinking is ON)",
+                "",
+                "- When the topic involves real-world facts, statistics, history, or current information that you may not know precisely, call web_search FIRST and base your content on the returned results.",
+                "- Do NOT call web_search for opinions, the user's own documents, or topics you already know well - avoid unnecessary calls.",
+                "- The web_search results are shown to the user as sources, so prefer it whenever a claim benefits from a citation.",
+                "",
+            ])
+        else:
+            prompt_parts.extend([
+                "## Sourcing Content (Deep Thinking is OFF)",
+                "",
+                "- You have no web access on this run. Write from the user's documents, the conversation, and your own knowledge.",
+                "- Do NOT invent precise statistics, dates, or quotations you are not confident in. Prefer qualitative statements over fabricated numbers.",
+                "- If the request genuinely needs current or verifiable facts, say so in your slides' framing rather than guessing.",
+                "",
+            ])
+
+        research_tool = ["web_search — Search the web for real facts and return cited sources"] \
+            if self.mode == MODE_DEEP else []
+        tool_lines = [
+            "analyze_document — Extract and summarize content from uploaded documents",
+            "extract_key_data — Pull specific data points from documents",
+            "extract_template_design_system — Parse a template's design system, or get the built-in default (omit template_path)",
+            *research_tool,
+            "plan_presentation_structure — Plan the slide structure and outline",
+            "select_layout — Choose the best layout for each slide based on content",
+            "design_slide_content — Generate slide content (text, image prompts, tables, charts)",
+            "validate_slide_json — Validate slide JSON against the schema before rendering",
+            "generate_image_prompt — Create prompts for AI-generated images",
+            "ask_user_question — Ask the user for clarification or input (pauses workflow)",
+            "finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
+        ]
+        prompt_parts.append("## Available Tools")
+        prompt_parts.append("Use the provided function tools to accomplish each step:")
+        prompt_parts.extend(f"{i}. {line}" for i, line in enumerate(tool_lines, 1))
+        prompt_parts.append("")
 
         # Add completed work summary if available (critical for issue #7)
         if working_state and working_state.completed_tools:
@@ -703,17 +849,22 @@ class AgentLoop:
                 )
             prompt_parts.append("")
 
+        research_step = ["For factual topics, research with web_search before writing content"] \
+            if self.mode == MODE_DEEP else []
+        workflow_steps = [
+            "If documents are provided, analyze them first with analyze_document",
+            "Extract key data with extract_key_data",
+            "If no design system is in your context, get the built-in default with extract_template_design_system (no template_path)",
+            *research_step,
+            "Plan the presentation structure with plan_presentation_structure",
+            "For each slide, select a layout with select_layout",
+            "Generate content for each slide with design_slide_content",
+            "Validate all slides with validate_slide_json",
+            "Render with finalize_and_render_pptx - THIS IS MANDATORY",
+        ]
+        prompt_parts.append("## Workflow")
+        prompt_parts.extend(f"{i}. {step}" for i, step in enumerate(workflow_steps, 1))
         prompt_parts.extend([
-            "## Workflow",
-            "1. If documents are provided, analyze them first with analyze_document",
-            "2. Extract key data with extract_key_data",
-            "3. If no design system is in your context, get the built-in default with extract_template_design_system (no template_path)",
-            "4. For factual topics, research with web_search before writing content",
-            "5. Plan the presentation structure with plan_presentation_structure",
-            "6. For each slide, select a layout with select_layout",
-            "7. Generate content for each slide with design_slide_content",
-            "8. Validate all slides with validate_slide_json",
-            "9. Render with finalize_and_render_pptx - THIS IS MANDATORY",
             "",
             "Always think step by step. Explain your reasoning before each tool call.",
             "NEVER stop until you have called finalize_and_render_pptx.",

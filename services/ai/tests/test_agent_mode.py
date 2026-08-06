@@ -1,0 +1,229 @@
+"""
+Tests for the Simple / Deep Thinking effort levels in the agent loop.
+
+The mode decides two things: whether the agent is offered the web_search tool,
+and what the system prompt tells it about researching facts. It also has to
+survive the pause/resume round trip, because the resume request carries no mode
+of its own.
+
+No database is used - AgentLoop is constructed with db=None and org_id=None,
+which is the environment-configuration path and never touches the session.
+"""
+
+import json
+import uuid
+
+import pytest
+
+from app.agent.loop import (
+    MODE_DEEP,
+    MODE_SIMPLE,
+    AgentLoop,
+    normalize_mode,
+)
+
+
+def _loop(mode: str | None = None) -> AgentLoop:
+    return AgentLoop(db=None, mode=mode)
+
+
+def _tool_names(schemas: list[dict]) -> set[str]:
+    return {s["function"]["name"] for s in schemas}
+
+
+# ── normalize_mode ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("deep", MODE_DEEP),
+        ("simple", MODE_SIMPLE),
+        ("", MODE_SIMPLE),
+        (None, MODE_SIMPLE),
+        ("Deep", MODE_SIMPLE),
+        ("turbo", MODE_SIMPLE),
+    ],
+)
+def test_normalize_mode_falls_back_to_simple(value, expected):
+    """Only an exact "deep" opts in; anything else is the safe default."""
+    assert normalize_mode(value) == expected
+
+
+# ── Tool gating ────────────────────────────────────────────────────────
+
+
+def test_simple_mode_does_not_offer_web_search():
+    """The model cannot call a tool it was never given."""
+    loop = _loop(MODE_SIMPLE)
+
+    names = _tool_names(loop._tool_schemas_for_mode())
+
+    assert "web_search" not in names
+    # The rest of the toolset is untouched.
+    assert "finalize_and_render_pptx" in names
+    assert "plan_presentation_structure" in names
+
+
+def test_deep_mode_offers_web_search():
+    loop = _loop(MODE_DEEP)
+
+    assert "web_search" in _tool_names(loop._tool_schemas_for_mode())
+
+
+def test_gating_removes_only_the_deep_only_tools():
+    """Simple mode is the full toolset minus web_search, nothing else."""
+    simple = _tool_names(_loop(MODE_SIMPLE)._tool_schemas_for_mode())
+    deep = _tool_names(_loop(MODE_DEEP)._tool_schemas_for_mode())
+
+    assert deep - simple == {"web_search"}
+
+
+# ── System prompt ──────────────────────────────────────────────────────
+
+
+def test_simple_mode_prompt_tells_the_model_it_has_no_web_access():
+    prompt = _loop(MODE_SIMPLE)._build_system_prompt({})
+
+    assert "Deep Thinking is OFF" in prompt
+    assert "no web access" in prompt
+    # web_search must not appear in the tool list or the workflow.
+    assert "web_search" not in prompt
+
+
+def test_deep_mode_prompt_asks_the_model_to_research_first():
+    prompt = _loop(MODE_DEEP)._build_system_prompt({})
+
+    assert "Deep Thinking is ON" in prompt
+    assert "call web_search FIRST" in prompt
+
+
+def test_tool_and_workflow_lists_stay_contiguously_numbered_in_simple_mode():
+    """Dropping web_search must renumber the lists, not leave a gap."""
+    prompt = _loop(MODE_SIMPLE)._build_system_prompt({})
+    lines = prompt.splitlines()
+
+    tools_start = lines.index("## Available Tools") + 2
+    tool_numbers = []
+    for line in lines[tools_start:]:
+        if not line or not line[0].isdigit():
+            break
+        tool_numbers.append(int(line.split(".", 1)[0]))
+
+    assert tool_numbers == list(range(1, len(tool_numbers) + 1))
+    assert len(tool_numbers) == 10  # 11 in deep mode, minus web_search
+
+
+# ── Mode resolution and persistence ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_configure_defaults_to_simple_when_no_mode_was_given():
+    loop = _loop(None)
+
+    await loop._configure()
+
+    assert loop.mode == MODE_SIMPLE
+
+
+@pytest.mark.asyncio
+async def test_deep_mode_is_downgraded_when_no_search_backend_is_usable(monkeypatch):
+    """An unconfigured organisation still generates, just without research."""
+    from app.config import settings as env_settings
+    monkeypatch.setattr(env_settings, "web_search_provider", "tavily")
+    monkeypatch.setattr(env_settings, "tavily_api_key", "")
+    monkeypatch.setattr(env_settings, "zhipu_api_key", "")
+
+    loop = _loop(MODE_DEEP)
+    await loop._configure()
+
+    assert loop.mode == MODE_SIMPLE
+    assert loop.search_config is None
+    assert "web_search" not in _tool_names(loop._tool_schemas_for_mode())
+
+
+@pytest.mark.asyncio
+async def test_deep_mode_installs_the_search_config_on_the_run_context(monkeypatch):
+    """The web_search tool reads its backend off the run context, not a param."""
+    from app.agent import run_context
+    from app.config import settings as env_settings
+    monkeypatch.setattr(env_settings, "web_search_provider", "tavily")
+    monkeypatch.setattr(env_settings, "tavily_api_key", "tvly-test")
+
+    loop = _loop(MODE_DEEP)
+    try:
+        await loop._configure()
+
+        assert loop.mode == MODE_DEEP
+        assert run_context.get_search_config().backend == "tavily"
+    finally:
+        if loop._search_token is not None:
+            run_context.reset_search_config(loop._search_token)
+
+
+class _FakeRedis:
+    """Just enough of the Redis client for the working-state round trip."""
+
+    def __init__(self, initial: dict | None = None):
+        self.store = dict(initial or {})
+
+    async def set(self, key, value, ex=None):
+        self.store[key] = value
+
+    async def get(self, key):
+        return self.store.get(key)
+
+    async def delete(self, key):
+        self.store.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_mode_is_saved_into_the_working_state():
+    session_id = uuid.uuid4()
+    loop = _loop(MODE_DEEP)
+    loop.redis_client = _FakeRedis()
+
+    await loop._save_working_state(session_id)
+
+    saved = json.loads(loop.redis_client.store[f"working_state:{session_id}"])
+    assert saved["mode"] == MODE_DEEP
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_run_inherits_the_paused_run_s_mode():
+    """The resume request has no composer, so the saved mode is the only source."""
+    session_id = uuid.uuid4()
+    state = json.dumps({"mode": MODE_DEEP, "completed_tools": {}})
+
+    loop = _loop(None)  # None = "inherit"
+    loop.redis_client = _FakeRedis({f"working_state:{session_id}": state})
+
+    assert await loop._load_working_state(session_id) is True
+    assert loop.mode == MODE_DEEP
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_mode_wins_over_a_stale_working_state():
+    """A fresh Simple message must not be dragged into Deep by leftover state."""
+    session_id = uuid.uuid4()
+    state = json.dumps({"mode": MODE_DEEP, "completed_tools": {}})
+
+    loop = _loop(MODE_SIMPLE)
+    loop.redis_client = _FakeRedis({f"working_state:{session_id}": state})
+
+    await loop._load_working_state(session_id)
+
+    assert loop.mode == MODE_SIMPLE
+
+
+@pytest.mark.asyncio
+async def test_working_state_written_before_modes_existed_resumes_as_simple():
+    session_id = uuid.uuid4()
+    state = json.dumps({"completed_tools": {}})
+
+    loop = _loop(None)
+    loop.redis_client = _FakeRedis({f"working_state:{session_id}": state})
+
+    await loop._load_working_state(session_id)
+
+    assert loop.mode == MODE_SIMPLE
