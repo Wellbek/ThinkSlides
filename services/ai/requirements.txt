@@ -30,6 +30,10 @@ redis==5.0.4
 pydantic==2.7.2
 pydantic-settings==2.2.1
 python-jose[cryptography]==3.3.0
+# AES-256-GCM envelope encryption for provider credentials at rest
+cryptography==42.0.8
+# Signs the bearer token for Zhipu's web search REST endpoint
+PyJWT==2.8.0
 python-multipart==0.0.9
 httpx==0.27.0
 zhipuai==2.0.1

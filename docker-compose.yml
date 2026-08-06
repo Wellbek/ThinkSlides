@@ -131,6 +131,11 @@ services:
       - PREVIEW_OUTPUT_DIR=${PREVIEW_OUTPUT_DIR:-/app/previews}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - JWT_SECRET=${JWT_SECRET:-thinkslides-dev-jwt-secret-change-in-production}
+      # Key-encryption key for provider credentials stored via the Settings UI.
+      # Deliberately has no default: without it the settings API refuses to
+      # store credentials rather than persisting them unencrypted.
+      - SETTINGS_ENCRYPTION_KEY=${SETTINGS_ENCRYPTION_KEY}
+      - SETTINGS_ENCRYPTION_KEYS_RETIRED=${SETTINGS_ENCRYPTION_KEYS_RETIRED}
     networks:
       - thinkslides-network
     depends_on:
