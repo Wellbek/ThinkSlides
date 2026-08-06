@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -32,8 +33,10 @@ func (m *mockUserStore) GetByEmail(_ context.Context, email string) (*repository
 	return u, nil
 }
 
-func (m *mockUserStore) DB() interface{ ExecContext(context.Context, string, ...interface{}) (interface{}, error) } {
-	return nil // not used in unit tests — dev-login + register need *repository.UserRepository
+// DB is part of UserStore but is only exercised by register/dev-login, which
+// need a real database. Returning nil keeps the mock satisfying the interface.
+func (m *mockUserStore) DB() *sql.DB {
+	return nil
 }
 
 func seedUser(m *mockUserStore, email, password, role string) {
@@ -44,7 +47,7 @@ func seedUser(m *mockUserStore, email, password, role string) {
 		OrganisationID: &orgID,
 		Email:          email,
 		PasswordHash:   string(hash),
-		Name:           "Test User",
+		DisplayName:    "Test User",
 		Role:           role,
 	}
 }

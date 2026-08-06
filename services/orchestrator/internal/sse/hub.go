@@ -43,8 +43,12 @@ func (h *Hub) Subscribe(sessionID string) chan Event {
 
 	if h.subscribers[sessionID] == nil {
 		h.subscribers[sessionID] = make(map[chan Event]struct{})
-		// Start Redis listener only for the first subscriber
-		go h.listenToRedis(sessionID)
+		// Start Redis listener only for the first subscriber. A nil client
+		// means local-only fan-out (direct Broadcast, and tests) - subscribing
+		// on it would panic.
+		if h.redisClient != nil {
+			go h.listenToRedis(sessionID)
+		}
 	}
 	h.subscribers[sessionID][ch] = struct{}{}
 	return ch
