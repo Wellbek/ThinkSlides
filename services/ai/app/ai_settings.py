@@ -271,9 +271,14 @@ def _native_search_supported(credentials: ProviderCredentials | None) -> tuple[b
         return False, f"{credentials.provider} has no built-in web search."
     if spec.native_web_search_models and credentials.model not in spec.native_web_search_models:
         allowed = ", ".join(spec.native_web_search_models)
+        # Name the field, because the obvious reading - "change my model to
+        # one of those" - puts a search-only model in the chat role, where it
+        # breaks every generation.
         return False, (
-            f"{spec.label}'s built-in web search requires one of: {allowed}. "
-            f"'{credentials.model}' is configured."
+            f"Set the Deep Thinking model to one of: {allowed}. "
+            f"{spec.label}'s built-in web search does not work with "
+            f"'{credentials.model}'. Leave the chat model as it is - those "
+            "search models cannot drive the agent."
         )
     if credentials.provider == "zhipu" and "." not in credentials.api_key:
         return False, "Zhipu web search needs an API key in 'id.secret' form."

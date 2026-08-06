@@ -20,7 +20,12 @@ from app import ai_settings
 from app.agent.tools.search_backends import run_search
 from app.api.tenancy import resolve_org_id
 from app.db.session import get_db
-from app.llm.catalog import PROVIDER_IDS, SEARCH_BACKEND_IDS, catalog_payload
+from app.llm.catalog import (
+    PROVIDER_IDS,
+    SEARCH_BACKEND_IDS,
+    catalog_payload,
+    supports_tool_calling,
+)
 from app.llm.provider import ProviderCredentials, build_chat_provider
 from app.observability.logging import get_logger
 from app.security.crypto import EncryptionNotConfiguredError
@@ -92,6 +97,29 @@ def _validate_role(role: ModelRoleInput | None, label: str) -> None:
             detail=f"Unknown {label} provider '{role.provider}'. "
                    f"Expected one of: {', '.join(PROVIDER_IDS)}.",
         )
+
+
+def _validate_chat_model(role: ModelRoleInput | None) -> None:
+    """Reject a chat model that cannot drive the agent.
+
+    The agent only makes progress by calling tools, so a search-only model in
+    this role fails every single generation with "tools is not supported in
+    this model". Catching it at save time - with the field it *does* belong in
+    named - is far kinder than letting the first generation blow up.
+    """
+    if role is None or not role.model:
+        return
+    if supports_tool_calling(role.provider, role.model):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"'{role.model}' cannot be the chat model: it does not support tool "
+            "calling, which the agent needs for every step of a generation. "
+            "Set it as the Deep Thinking model instead, and choose a "
+            "tool-calling model (such as gpt-4o) for chat."
+        ),
+    )
 
 
 def _to_section(role: ModelRoleInput | None) -> dict | None:
@@ -173,6 +201,7 @@ async def update_ai_settings(
     """Apply a partial settings update."""
     _validate_role(update.chat, "chat")
     _validate_role(update.deepSearch, "deep search")
+    _validate_chat_model(update.chat)
 
     backend_section = None
     if update.searchBackend is not None:

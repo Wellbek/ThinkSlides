@@ -23,6 +23,8 @@ export interface ProviderSpec {
   nativeWebSearch: boolean;
   nativeWebSearchNote: string;
   nativeWebSearchModels: string[];
+  /** Search-only models: valid for Deep Thinking, never for chat. */
+  noToolCallingModels: string[];
   apiKeyHelp: string;
 }
 

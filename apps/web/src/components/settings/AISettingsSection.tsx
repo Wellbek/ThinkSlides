@@ -236,6 +236,7 @@ export function AISettingsSection() {
               providers={providers}
               onChange={updateDeepSearch}
               blankLabel="Same as chat model"
+              purpose="search"
             />
           </div>
 
@@ -368,14 +369,29 @@ function ProviderPicker({
   providers,
   onChange,
   blankLabel = "Not configured",
+  purpose = "chat",
 }: {
   role: ModelRoleDraft;
   providers: ProviderSpec[];
   onChange: (patch: Partial<ModelRoleDraft>) => void;
   blankLabel?: string;
+  /** Chat models must support tool calling; Deep Thinking models need not. */
+  purpose?: "chat" | "search";
 }) {
   const spec = providers.find((p) => p.id === role.provider) ?? null;
   const listId = `models-${role.provider || "none"}-${blankLabel.replace(/\s/g, "")}`;
+
+  // Search-only models are offered for Deep Thinking and kept out of the chat
+  // suggestions, because one of them in the chat role fails every generation.
+  const noToolCalling = spec?.noToolCallingModels ?? [];
+  const suggestions = (spec?.suggestedModels ?? []).filter(
+    (m) => purpose === "search" || !noToolCalling.includes(m)
+  );
+  const searchOnlyExtras =
+    purpose === "search" ? (spec?.nativeWebSearchModels ?? []) : [];
+  const allSuggestions = Array.from(new Set([...suggestions, ...searchOnlyExtras]));
+  const chatModelIsSearchOnly =
+    purpose === "chat" && !!role.model && noToolCalling.includes(role.model);
 
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -388,8 +404,14 @@ function ProviderPicker({
             const provider = e.target.value;
             const next = providers.find((p) => p.id === provider);
             // Switching provider carries the old model id over as garbage, so
-            // reset to that provider's default.
-            onChange({ provider, model: next?.defaultModel ?? "" });
+            // reset to that provider's default. In the search role, prefer a
+            // model its built-in search actually works with - otherwise
+            // picking OpenAI here lands on gpt-4o, which cannot search.
+            const model =
+              (purpose === "search" ? next?.nativeWebSearchModels?.[0] : undefined) ??
+              next?.defaultModel ??
+              "";
+            onChange({ provider, model });
           }}
         >
           <option value="">{blankLabel}</option>
@@ -413,10 +435,16 @@ function ProviderPicker({
           onChange={(e) => onChange({ model: e.target.value })}
         />
         <datalist id={listId}>
-          {(spec?.suggestedModels ?? []).map((m) => (
+          {allSuggestions.map((m) => (
             <option key={m} value={m} />
           ))}
         </datalist>
+        {chatModelIsSearchOnly && (
+          <p className="field-hint text-error">
+            {role.model} is a search-only model and cannot drive the agent. Use it as the
+            Deep Thinking model below and pick a tool-calling model here.
+          </p>
+        )}
       </div>
     </div>
   );
