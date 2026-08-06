@@ -7,6 +7,7 @@ import { HomeView } from "./HomeView";
 import { DetailsPanel } from "./DetailsPanel";
 import { SlideStage } from "./SlideStage";
 import { ChatFlow } from "./ChatFlow";
+import { SettingsModal } from "@/components/layout/SettingsModal";
 import { Share2, Eye } from "lucide-react";
 
 type View = "home" | "workspace";
@@ -238,6 +239,10 @@ export function WorkspaceShell() {
           )}
         </div>
       </div>
+
+      {/* Rendered once at the shell level so the nav rail's settings button
+          works from both the home view and an open session. */}
+      <SettingsModal />
     </div>
   );
 }

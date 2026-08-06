@@ -138,6 +138,7 @@ func main() {
 	// ── Handlers ───────────────────────────────────────────────────────
 	authHandler := handler.NewAuthHandler(userRepo, jwtSecret, devMode)
 	sessionHandler := handler.NewSessionHandler(redisQueue, hub, aiClient, dbURL, redisClient)
+	settingsHandler := handler.NewSettingsHandler(aiServiceURL)
 
 	// ── HTTP Server ────────────────────────────────────────────────────
 	r := gin.Default()
@@ -176,6 +177,10 @@ func main() {
 		protected.DELETE("/templates/:id", sessionHandler.DeleteTemplate)
 		protected.PUT("/sessions/:id/template", sessionHandler.UpdateSessionTemplate)
 		protected.PUT("/sessions/:id/title", sessionHandler.UpdateSessionTitle)
+
+		// AI settings live in the Python service; the orchestrator proxies
+		// them so the frontend has a single authenticated origin.
+		protected.Any("/settings/*path", settingsHandler.Proxy)
 	}
 
 	// ── Background workers ─────────────────────────────────────────────
