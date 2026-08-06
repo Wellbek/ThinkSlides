@@ -100,6 +100,8 @@ export interface TestResult {
   model?: string;
   backend?: string;
   reply?: string;
+  /** Set when the call succeeded but the outcome needs explaining. */
+  note?: string;
   latencyMs?: number;
   query?: string;
   resultCount?: number;

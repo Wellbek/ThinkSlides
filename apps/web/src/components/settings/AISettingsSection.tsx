@@ -540,6 +540,7 @@ function TestRow({
                 {result.reply && (
                   <p className="text-fog font-mono mt-1 truncate">{result.reply}</p>
                 )}
+                {result.note && <p className="text-fog mt-1">{result.note}</p>}
                 {result.sources && result.sources.length > 0 && (
                   <ul className="mt-2 space-y-1">
                     {result.sources.map((s) => (

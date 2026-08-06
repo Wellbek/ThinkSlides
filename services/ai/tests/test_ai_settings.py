@@ -278,3 +278,27 @@ def test_provider_errors_are_translated_into_actionable_messages(status, expecte
 def test_connection_errors_point_at_the_base_url():
     """The most common misconfiguration for self-hosted or proxied endpoints."""
     assert "base URL" in describe_provider_error(Exception("Connection timeout"))
+
+
+def test_the_test_prompt_budget_survives_a_reasoning_preamble():
+    """Regression: a 32-token budget made valid GLM credentials look broken.
+
+    The model spent every token on its thinking preamble and returned
+    finish_reason=length with empty content, so a working key reported an
+    empty reply. See TEST_MAX_TOKENS in app/api/settings.py.
+    """
+    from app.api.settings import TEST_MAX_TOKENS
+
+    assert TEST_MAX_TOKENS >= 128
+
+
+def test_the_search_test_query_is_phrased_as_a_question():
+    """Regression: keyword phrasing returned irrelevant sources.
+
+    "height of Mount Everest in metres" made Tavily key off "height" and
+    return pages about human height, which reads as a broken backend.
+    Backends tuned for LLM grounding answer natural questions far better.
+    """
+    from app.api.settings import TEST_SEARCH_QUERY
+
+    assert TEST_SEARCH_QUERY.endswith("?")

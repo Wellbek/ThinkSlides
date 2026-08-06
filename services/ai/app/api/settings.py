@@ -29,13 +29,19 @@ logger = get_logger(__name__)
 
 router = APIRouter(tags=["settings"])
 
-# Kept short so a credential check fails fast instead of hanging the UI.
 TEST_PROMPT = "Reply with exactly: OK"
-TEST_MAX_TOKENS = 32
 
-# A query with an unambiguous, verifiable answer, so the user can eyeball
-# whether the backend returned sensible sources.
-TEST_SEARCH_QUERY = "height of Mount Everest in metres"
+# Generous enough that a reasoning model still has room to answer after its
+# thinking preamble. A tight budget looks like a broken credential: GLM spends
+# every one of 32 tokens thinking and returns finish_reason=length with empty
+# content, even though the key is perfectly valid.
+TEST_MAX_TOKENS = 256
+
+# Phrased as a natural question rather than keywords. Search APIs tuned for LLM
+# grounding answer questions well but key off individual words otherwise -
+# "height of Mount Everest in metres" returns pages about human height, which
+# makes a working backend look broken.
+TEST_SEARCH_QUERY = "How tall is Mount Everest?"
 
 
 class ModelRoleInput(BaseModel):
@@ -284,14 +290,25 @@ async def test_chat_credentials(
         organisation_id=str(org_id),
         provider=provider,
         model=model,
+        empty_reply=not reply,
     )
-    return {
+    result = {
         "ok": True,
         "provider": provider,
         "model": model,
         "latencyMs": int((time.time() - start) * 1000),
         "reply": reply[:200],
     }
+    if not reply:
+        # The credentials are demonstrably fine - the call was accepted and
+        # billed - so this stays a success, but silently showing nothing would
+        # read as a failure.
+        result["note"] = (
+            "The model accepted the request but returned no text. The "
+            "credentials work; this usually means the model spent its whole "
+            "token budget reasoning."
+        )
+    return result
 
 
 @router.post("/ai/test-search")
