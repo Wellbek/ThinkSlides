@@ -227,3 +227,99 @@ async def test_working_state_written_before_modes_existed_resumes_as_simple():
     await loop._load_working_state(session_id)
 
     assert loop.mode == MODE_SIMPLE
+
+
+# ── The configured provider reaches the tools ──────────────────────────
+
+
+class _StubProvider:
+    """Stands in for a provider built from an organisation's credentials."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, **kwargs):
+        self.calls += 1
+        return {"message": {"content": "{}"}, "tool_calls": []}
+
+
+@pytest.mark.asyncio
+async def test_tools_use_the_run_s_configured_provider_not_the_environment():
+    """Regression: choosing a provider in Settings only changed the agent loop.
+
+    design_slide_content, generate_image_prompt, extract_key_data and
+    plan_presentation_structure each call get_llm_provider() directly, which
+    returns the process-wide provider built from environment variables. An
+    organisation that configured OpenAI still had its slides written by the
+    env-configured Zhipu model - and an organisation with no env key at all
+    could not generate anything.
+    """
+    from app.agent import run_context
+    from app.agent.tools import (
+        design_slide_content,
+        extract_key_data,
+        generate_image_prompt,
+        plan_presentation_structure,
+    )
+
+    modules = [
+        design_slide_content,
+        generate_image_prompt,
+        extract_key_data,
+        plan_presentation_structure,
+    ]
+
+    # Every one of them must prefer the run context over its module-level
+    # getter, so a run's provider is what actually makes the call.
+    for module in modules:
+        assert hasattr(module, "get_chat_provider"), (
+            f"{module.__name__} does not consult the run context"
+        )
+
+    stub = _StubProvider()
+    token = run_context.set_chat_provider(stub)
+    try:
+        assert run_context.get_chat_provider() is stub
+        for module in modules:
+            assert module.get_chat_provider() is stub
+    finally:
+        run_context.reset_chat_provider(token)
+
+    # Outside a run the context is empty, so the env provider still applies.
+    assert run_context.get_chat_provider() is None
+
+
+@pytest.mark.asyncio
+async def test_configure_publishes_the_chat_provider_on_the_run_context(monkeypatch):
+    """The loop is what installs it, so a tool called mid-run can find it."""
+    from app.agent import run_context
+
+    loop = _loop(MODE_SIMPLE)
+    await loop._configure()
+    try:
+        assert run_context.get_chat_provider() is loop.llm
+    finally:
+        if loop._provider_token is not None:
+            run_context.reset_chat_provider(loop._provider_token)
+
+
+@pytest.mark.asyncio
+async def test_run_clears_the_provider_it_installed():
+    """A finished run must not leak its provider into the next one."""
+    from app.agent import run_context
+
+    loop = _loop(MODE_SIMPLE)
+    loop.redis_client = _FakeRedis()
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("context load failed")
+
+    monkey = loop._load_context if hasattr(loop, "_load_context") else None
+    assert monkey is not None
+    loop._load_context = _boom
+
+    with pytest.raises(RuntimeError):
+        async for _ in loop.run(uuid.uuid4()):
+            pass
+
+    assert run_context.get_chat_provider() is None

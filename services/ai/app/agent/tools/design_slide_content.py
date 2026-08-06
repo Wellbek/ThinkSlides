@@ -6,6 +6,7 @@ The renderer will consume this to clone layout XML and fill placeholders.
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.run_context import get_chat_provider
 from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
 import json
@@ -63,7 +64,11 @@ class DesignSlideContentTool:
     ) -> ToolResult:
         start = time.time()
         try:
-            llm = get_llm_provider()
+            # The organisation's configured model when a run published one,
+            # otherwise the process-wide provider from the environment. This
+            # tool writes the actual slide copy, so it is the call that most
+            # needs to honour the model chosen in Settings.
+            llm = get_chat_provider() or get_llm_provider()
 
             outline = json.loads(slide_outline) if slide_outline else {}
             layout = json.loads(layout_info) if layout_info else {}

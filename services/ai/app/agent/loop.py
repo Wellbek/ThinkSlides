@@ -240,6 +240,7 @@ class AgentLoop:
         self.org_id = org_id
         self.search_config: ai_settings.SearchConfig | None = None
         self._search_token = None
+        self._provider_token = None
 
     async def _configure(self) -> None:
         """Resolve the organisation's settings into this run's provider and mode.
@@ -264,6 +265,12 @@ class AgentLoop:
         if credentials is not None:
             try:
                 self.llm = build_chat_provider(credentials)
+                # Tools make their own LLM calls (slide content, planning, key
+                # data, image prompts) and cannot be passed a provider through
+                # the registry. Publishing it on the run context is what makes
+                # the Settings choice apply to the whole generation rather than
+                # only to the loop's own reasoning.
+                self._provider_token = run_context.set_chat_provider(self.llm)
             except ValueError as e:
                 logger.error(
                     "configured_chat_provider_unusable",
@@ -374,6 +381,9 @@ class AgentLoop:
             if self._search_token is not None:
                 run_context.reset_search_config(self._search_token)
                 self._search_token = None
+            if self._provider_token is not None:
+                run_context.reset_chat_provider(self._provider_token)
+                self._provider_token = None
 
     async def _run(
         self,
