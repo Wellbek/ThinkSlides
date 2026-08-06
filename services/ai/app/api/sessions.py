@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.db.session import get_db
-from app.db.models import ChatSession, ChatMessage, AgentEvent, GeneratedFile, Organisation, User
+from app.db.models import ChatSession, ChatMessage, AgentEvent, GeneratedFile
+from app.api.tenancy import get_or_create_default_org_id, get_or_create_default_user_id
 from pydantic import BaseModel
 from typing import Optional
 import uuid
@@ -44,8 +45,8 @@ async def create_session(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new chat session."""
-    org_id = await _get_default_org_id(db)
-    user_id = await _get_default_user_id(db, org_id)
+    org_id = await get_or_create_default_org_id(db)
+    user_id = await get_or_create_default_user_id(db, org_id)
 
     template_uuid = uuid.UUID(req.template_id) if req.template_id else None
 
@@ -160,35 +161,3 @@ async def delete_session(
     await db.commit()
 
     return {"deleted": True}
-
-
-async def _get_default_org_id(db: AsyncSession) -> uuid.UUID:
-    """Get or create default organisation. TODO: extract from JWT."""
-    result = await db.execute(select(Organisation).limit(1))
-    org = result.scalar_one_or_none()
-    if org:
-        return org.id
-    org = Organisation(name="Default", slug="default")
-    db.add(org)
-    await db.commit()
-    await db.refresh(org)
-    return org.id
-
-
-async def _get_default_user_id(db: AsyncSession, org_id: uuid.UUID) -> uuid.UUID:
-    """Get or create default user. TODO: extract from JWT."""
-    result = await db.execute(select(User).limit(1))
-    user = result.scalar_one_or_none()
-    if user:
-        return user.id
-    user = User(
-        organisation_id=org_id,
-        email="admin@thinkslides.dev",
-        password_hash="$2b$12$placeholder_not_for_production",
-        display_name="Admin",
-        role="admin",
-    )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-    return user.id
