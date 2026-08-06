@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import ai_settings
+from app.agent.tools.search_backends import run_search
 from app.api.tenancy import resolve_org_id
 from app.db.session import get_db
 from app.llm.catalog import PROVIDER_IDS, SEARCH_BACKEND_IDS, catalog_payload
@@ -31,6 +32,10 @@ router = APIRouter(tags=["settings"])
 # Kept short so a credential check fails fast instead of hanging the UI.
 TEST_PROMPT = "Reply with exactly: OK"
 TEST_MAX_TOKENS = 32
+
+# A query with an unambiguous, verifiable answer, so the user can eyeball
+# whether the backend returned sensible sources.
+TEST_SEARCH_QUERY = "height of Mount Everest in metres"
 
 
 class ModelRoleInput(BaseModel):
@@ -286,4 +291,55 @@ async def test_chat_credentials(
         "model": model,
         "latencyMs": int((time.time() - start) * 1000),
         "reply": reply[:200],
+    }
+
+
+@router.post("/ai/test-search")
+async def test_search_backend(
+    org_id: uuid.UUID = Depends(resolve_org_id),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Run a known-answer query through the configured deep-search backend.
+
+    Reports the sources it came back with, so the user can see at a glance
+    whether the backend returns results relevant to their content - which is
+    the whole point of making the backend configurable (issue #25).
+    """
+    row = await ai_settings.load_row(db, org_id)
+    config, reason = ai_settings.resolve_search_config(row)
+    if config is None:
+        return {"ok": False, "error": reason or "No deep-search backend is configured."}
+
+    start = time.time()
+    try:
+        results = await run_search(config, TEST_SEARCH_QUERY, count=5)
+    except Exception as exc:  # noqa: BLE001 - backends raise their own types
+        logger.warning(
+            "search_test_failed",
+            organisation_id=str(org_id),
+            backend=config.backend,
+            error=str(exc),
+        )
+        return {
+            "ok": False,
+            "backend": config.backend,
+            "error": describe_provider_error(exc),
+        }
+
+    logger.info(
+        "search_test_succeeded",
+        organisation_id=str(org_id),
+        backend=config.backend,
+        result_count=len(results),
+    )
+    return {
+        "ok": True,
+        "backend": config.backend,
+        "query": TEST_SEARCH_QUERY,
+        "latencyMs": int((time.time() - start) * 1000),
+        "resultCount": len(results),
+        "sources": [
+            {"title": r["title"][:120], "url": r["url"], "source": r["source"]}
+            for r in results[:5]
+        ],
     }
