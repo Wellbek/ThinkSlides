@@ -22,6 +22,7 @@ type Event struct {
 type Hub struct {
 	mu          sync.RWMutex
 	subscribers map[string]map[chan Event]struct{}
+	listeners   map[string]context.CancelFunc
 	redisClient *redis.Client
 }
 
@@ -29,11 +30,20 @@ type Hub struct {
 func NewHub(redisClient *redis.Client) *Hub {
 	return &Hub{
 		subscribers: make(map[string]map[chan Event]struct{}),
+		listeners:   make(map[string]context.CancelFunc),
 		redisClient: redisClient,
 	}
 }
 
 // Subscribe registers a channel and starts listening to Redis for that session.
+//
+// The Redis listener's lifetime is bound to the subscriber set: it runs while
+// at least one client is attached and is cancelled when the last one leaves.
+// It deliberately does not inspect event contents to decide when to stop. An
+// agent run pauses and resumes (ask_user_question), so "the stream said done"
+// is not the same as "this session will never emit again" - ending the listener
+// on a done event left sessions with live subscribers and nothing feeding them,
+// silently dropping every event until the user reloaded the page.
 func (h *Hub) Subscribe(sessionID string) chan Event {
 	log.Printf("SSE: Subscribe called for session %s", sessionID)
 	h.mu.Lock()
@@ -47,14 +57,18 @@ func (h *Hub) Subscribe(sessionID string) chan Event {
 		// means local-only fan-out (direct Broadcast, and tests) - subscribing
 		// on it would panic.
 		if h.redisClient != nil {
-			go h.listenToRedis(sessionID)
+			ctx, cancel := context.WithCancel(context.Background())
+			h.listeners[sessionID] = cancel
+			go h.listenToRedis(ctx, sessionID)
 		}
 	}
 	h.subscribers[sessionID][ch] = struct{}{}
 	return ch
 }
 
-// Unsubscribe removes a channel and cleans up.
+// Unsubscribe removes a channel and cleans up. When the last subscriber for a
+// session leaves, the session's Redis listener is cancelled so neither the
+// goroutine nor the Redis subscription outlives the clients it feeds.
 func (h *Hub) Unsubscribe(sessionID string, ch chan Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -63,6 +77,10 @@ func (h *Hub) Unsubscribe(sessionID string, ch chan Event) {
 		delete(subs, ch)
 		if len(subs) == 0 {
 			delete(h.subscribers, sessionID)
+			if cancel, ok := h.listeners[sessionID]; ok {
+				delete(h.listeners, sessionID)
+				cancel()
+			}
 		}
 	}
 	close(ch)
@@ -84,9 +102,9 @@ func (h *Hub) Broadcast(sessionID string, event Event) {
 	}
 }
 
-// listenToRedis subscribes to the Redis channel and forwards messages.
-func (h *Hub) listenToRedis(sessionID string) {
-	ctx := context.Background()
+// listenToRedis subscribes to the Redis channel and forwards messages until
+// ctx is cancelled by the last subscriber leaving.
+func (h *Hub) listenToRedis(ctx context.Context, sessionID string) {
 	channel := fmt.Sprintf("agent:events:%s", sessionID)
 	pubsub := h.redisClient.Subscribe(ctx, channel)
 	defer pubsub.Close()
@@ -97,34 +115,31 @@ func (h *Hub) listenToRedis(sessionID string) {
 		return
 	}
 	log.Printf("SSE: Redis listener started for session %s", sessionID)
+	defer log.Printf("SSE: Redis listener stopped for session %s", sessionID)
 
 	ch := pubsub.Channel()
-	for msg := range ch {
-		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(msg.Payload), &raw); err != nil {
-			log.Printf("SSE: malformed JSON for session %s: %v", sessionID, err)
-			continue
-		}
-		eventType, _ := raw["type"].(string)
-		if eventType == "" {
-			eventType = "message" // fallback
-		}
-
-		// Broadcast to all local SSE subscribers
-		h.Broadcast(sessionID, Event{Event: eventType, Data: msg.Payload})
-
-		// If this is the final "done" event, we can stop listening
-		// BUT: don't stop if paused=True (workflow will resume)
-		if eventType == "done" {
-			isPaused, _ := raw["paused"].(bool)
-			if !isPaused {
-				log.Printf("SSE: 'done' event received for session %s (not paused), stopping listener", sessionID)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-ch:
+			if !ok {
 				return
 			}
-			log.Printf("SSE: 'done' event received for session %s (paused), continuing listener", sessionID)
+			var raw map[string]interface{}
+			if err := json.Unmarshal([]byte(msg.Payload), &raw); err != nil {
+				log.Printf("SSE: malformed JSON for session %s: %v", sessionID, err)
+				continue
+			}
+			eventType, _ := raw["type"].(string)
+			if eventType == "" {
+				eventType = "message" // fallback
+			}
+
+			// Broadcast to all local SSE subscribers
+			h.Broadcast(sessionID, Event{Event: eventType, Data: msg.Payload})
 		}
 	}
-	log.Printf("SSE: Redis listener stopped for session %s", sessionID)
 }
 
 // Handler returns a Gin handler that streams SSE for a session.

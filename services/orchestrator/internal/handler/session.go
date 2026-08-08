@@ -891,48 +891,21 @@ func (h *SessionHandler) StreamEvents(c *gin.Context) {
 	eventChan := h.hub.Subscribe(sessionID)
 	defer h.hub.Unsubscribe(sessionID, eventChan)
 
-	// Replay historical events from database
-	if h.pool != nil {
-		ctx := c.Request.Context()
-		rows, err := h.pool.Query(ctx,
-			`SELECT event_type, content, created_at
-			 FROM agent_events
-			 WHERE session_id = $1
-			 ORDER BY created_at
-			 LIMIT 100`, sessionID,
-		)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var eventType string
-				var content []byte
-				var createdAt time.Time
-				if err := rows.Scan(&eventType, &content, &createdAt); err != nil {
-					continue
-				}
-				log.Printf("SSE: replaying event=%s", eventType)
-				fmt.Fprintf(c.Writer, "event: %s\n", eventType)
-				fmt.Fprintf(c.Writer, "data: %s\n\n", content)
-				c.Writer.(http.Flusher).Flush()
-			}
-		}
-	}
+	// Commit the response head immediately so EventSource reports the stream
+	// as open even when the session is idle (an agent paused on a question can
+	// sit silent for minutes before the next event).
+	c.Status(http.StatusOK)
+	c.Writer.Flush()
 
-	// Stream live events
-	// c.Stream(func(w io.Writer) bool {
-	// 	select {
-	// 	case event, ok := <-eventChan:
-	// 		if !ok {
-	// 			return false
-	// 		}
-	// 		c.SSEvent(event.Event, event.Data)
-	// 		return true
-	// 	case <-c.Request.Context().Done():
-	// 		return false
-	// 	}
-	// })
+	// Past events are not replayed here. The messages endpoint already returns
+	// each message's persisted agent_event_stream in its live shape, whereas
+	// agent_events.content holds only an event's content field - replaying that
+	// emitted payloads the client cannot interpret, and would duplicate the
+	// history the client just loaded.
 
 	ctx := c.Request.Context()
+	heartbeat := time.NewTicker(20 * time.Second)
+	defer heartbeat.Stop()
 
 	for {
 		select {
@@ -946,6 +919,13 @@ func (h *SessionHandler) StreamEvents(c *gin.Context) {
 			fmt.Fprintf(c.Writer, "event: %s\n", event.Event)
 			fmt.Fprintf(c.Writer, "data: %s\n\n", event.Data)
 
+			c.Writer.Flush()
+
+		case <-heartbeat.C:
+			// A comment line keeps idle connections from being reaped by the
+			// browser or any proxy in between, and surfaces a dead peer as a
+			// write error so the client can reconnect.
+			fmt.Fprint(c.Writer, ": ping\n\n")
 			c.Writer.Flush()
 
 		case <-ctx.Done():

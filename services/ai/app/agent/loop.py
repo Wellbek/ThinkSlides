@@ -111,6 +111,12 @@ class WorkingState:
     def __init__(self) -> None:
         self.accumulated_slides: list[dict] = []
         self.presentation_structure: dict | None = None
+        # slide_index -> the select_layout result for that slide. Lets the
+        # loop auto-supply design_slide_content's layout_info instead of
+        # requiring the LLM to copy the full layout object it just received
+        # back verbatim in the next call - the same class of JSON-escaping
+        # mistake as available_layouts (see _run's tool-dispatch injection).
+        self.selected_layouts: dict[int, dict] = {}
         self.current_step_index: int = 0
         self.pending_question: dict | None = None
         self.is_paused_for_user: bool = False
@@ -122,7 +128,15 @@ class WorkingState:
         self.MAX_WEB_SEARCH_CALLS = 3
 
     def add_slide(self, slide: dict) -> None:
-        """Add a slide to the accumulated list."""
+        """Add a slide to the accumulated list, or replace it if this slideIndex
+        was already designed - the LLM may legitimately redesign a slide it got
+        wrong, and that must overwrite rather than duplicate."""
+        idx = slide.get("slideIndex")
+        if idx is not None:
+            for i, existing in enumerate(self.accumulated_slides):
+                if existing.get("slideIndex") == idx:
+                    self.accumulated_slides[i] = slide
+                    return
         self.accumulated_slides.append(slide)
 
     def get_slides_json(self) -> str:
@@ -182,16 +196,6 @@ class WorkingState:
                 lines.append(f"- {tool_name}")
             lines.append("")
 
-        # Special handling for specific tool results
-        if "plan_presentation_structure" in self.completed_tools:
-            result = self.completed_tools["plan_presentation_structure"]["result"]
-            if isinstance(result, dict) and "structure" in result:
-                lines.append("### Presentation Structure (Already Planned)")
-                lines.append("```json")
-                lines.append(json.dumps(result["structure"], indent=2))
-                lines.append("```")
-                lines.append("")
-
         if self.presentation_structure:
             lines.append("### Current Presentation Structure")
             lines.append("```json")
@@ -202,7 +206,9 @@ class WorkingState:
         if self.accumulated_slides:
             lines.append(f"### Slides Already Designed ({len(self.accumulated_slides)} slides)")
             for i, slide in enumerate(self.accumulated_slides):
-                title = slide.get("contents", [{}])[0].get("runs", [{}])[0].get("text", f"Slide {i+1}")
+                contents = slide.get("contents") or [{}]
+                runs = contents[0].get("runs") or [{}]
+                title = runs[0].get("text", f"Slide {i+1}")
                 layout = slide.get("layoutName", slide.get("layoutId", "Unknown"))
                 lines.append(f"{i+1}. **{title}** ({layout})")
             lines.append("")
@@ -232,6 +238,7 @@ class WorkingState:
         """Reset the working state for a new session."""
         self.accumulated_slides = []
         self.presentation_structure = None
+        self.selected_layouts = {}
         self.current_step_index = 0
         self.pending_question = None
         self.is_paused_for_user = False
@@ -282,6 +289,12 @@ class AgentLoop:
         # Replaced in _configure() once the organisation's settings are known.
         self.llm = get_llm_provider()
         self.working_state = WorkingState()
+        # Set once _load_context runs; referenced by _save_working_state so the
+        # design system and research accumulated mid-run survive a pause/resume
+        # cycle (issue #20) the same way WorkingState fields already do.
+        self.context: dict = {}
+        self._resumed_design_system: dict | None = None
+        self._resumed_research: list | None = None
         self.redis_client = None
         self.mode = normalize_mode(mode) if mode is not None else None
         self.org_id = org_id
@@ -354,6 +367,7 @@ class AgentLoop:
         state_dict = {
             "accumulated_slides": self.working_state.accumulated_slides,
             "presentation_structure": self.working_state.presentation_structure,
+            "selected_layouts": self.working_state.selected_layouts,
             "current_step_index": self.working_state.current_step_index,
             "completed_tools": self.working_state.completed_tools,
             "has_called_finalize": self.working_state.has_called_finalize,
@@ -364,6 +378,11 @@ class AgentLoop:
             # Carried so a run paused on a question resumes at the same effort
             # level - the resume request has no mode of its own.
             "mode": self.mode,
+            # Issue #20: without these, resuming after ask_user_question forced
+            # a re-extraction of the design system and lost all accumulated web
+            # research, since only WorkingState (not context) was persisted.
+            "design_system": self.context.get("design_system"),
+            "research": self.context.get("research"),
         }
         redis_client = await self._get_redis_client()
         await redis_client.set(
@@ -384,6 +403,11 @@ class AgentLoop:
             state_dict = json.loads(state_json)
             self.working_state.accumulated_slides = state_dict.get("accumulated_slides", [])
             self.working_state.presentation_structure = state_dict.get("presentation_structure")
+            # JSON round-trips dict keys as strings; slide_index is looked up
+            # as an int everywhere else, so convert back on load.
+            self.working_state.selected_layouts = {
+                int(k): v for k, v in state_dict.get("selected_layouts", {}).items()
+            }
             self.working_state.current_step_index = state_dict.get("current_step_index", 0)
             self.working_state.completed_tools = state_dict.get("completed_tools", {})
             self.working_state.has_called_finalize = state_dict.get("has_called_finalize", False)
@@ -396,6 +420,10 @@ class AgentLoop:
             # free to change it.
             if self.mode is None:
                 self.mode = normalize_mode(state_dict.get("mode"))
+            # Issue #20: stashed here since context itself is rebuilt fresh by
+            # _load_context after this call - _run merges these in afterwards.
+            self._resumed_design_system = state_dict.get("design_system")
+            self._resumed_research = state_dict.get("research")
             logger.info("loaded_working_state", session_id=str(session_id), tools_completed=len(state_dict.get("completed_tools", {})))
             return True
         except Exception as e:
@@ -456,6 +484,19 @@ class AgentLoop:
         })
 
         context = await self._load_context(session_id)
+
+        # Issue #20: restore design system / research accumulated before the
+        # pause, so a resumed run does not re-extract the default design system
+        # or lose grounding for facts it already looked up. A template's design
+        # system (just loaded above) always wins, since it reflects the current
+        # session rather than a potentially-stale resume snapshot.
+        if state_loaded:
+            if "design_system" not in context and self._resumed_design_system:
+                context["design_system"] = self._resumed_design_system
+            if self._resumed_research:
+                context["research"] = self._resumed_research
+
+        self.context = context
 
         # ── Phase 2: Build messages ──────────────────
         chat_messages = await self._build_chat_messages(session_id)
@@ -554,6 +595,27 @@ class AgentLoop:
                 except json.JSONDecodeError:
                     fn_args = {}
 
+                # Auto-supply large JSON blobs the loop already tracks in
+                # context/working_state, rather than trusting the LLM to
+                # reproduce them verbatim as an escaped JSON string - a
+                # parameter shape LLMs reliably mis-escape once it's larger
+                # than a couple of fields (observed failure: "Expecting
+                # property name enclosed in double quotes", from the model
+                # double-escaping the embedded quotes). The LLM does not need
+                # to pass these at all; whatever it sends is overridden.
+                design_system = context.get("design_system") or {}
+                if fn_name == "select_layout":
+                    fn_args["available_layouts"] = json.dumps(design_system.get("layouts", []))
+                elif fn_name == "plan_presentation_structure":
+                    fn_args["design_system_summary"] = json.dumps(design_system)
+                elif fn_name == "design_slide_content":
+                    fn_args["design_system_context"] = json.dumps(design_system)
+                    slide_index = fn_args.get("slide_index")
+                    if slide_index in self.working_state.selected_layouts:
+                        fn_args["layout_info"] = json.dumps(
+                            self.working_state.selected_layouts[slide_index]
+                        )
+
                 # Yield tool_call event
                 yield _event("tool_call", current_phase, {
                     "toolName": fn_name,
@@ -564,7 +626,18 @@ class AgentLoop:
 
                 # Execute tool
                 tool_start = time.time()
-                if fn_name == "web_search":
+                precondition_error = self._check_precondition(fn_name, fn_args)
+                if precondition_error:
+                    tool_result = ToolResult(success=False, error=precondition_error)
+                elif fn_name == "finalize_and_render_pptx" and self.working_state.accumulated_slides:
+                    # Trust the slides actually designed via design_slide_content
+                    # over whatever the LLM re-typed as the argument string - the
+                    # latter is a verbatim re-serialization of the whole deck and
+                    # is the single biggest truncation/drift risk on multi-slide
+                    # presentations.
+                    fn_args["slides_json"] = self.working_state.get_slides_json()
+                    tool_result = await self._execute_tool(fn_name, fn_args)
+                elif fn_name == "web_search":
                     # Cap repeated web searches so the agent cannot loop on
                     # low-quality results. After the cap, return a gentle
                     # "use existing research" result instead of executing.
@@ -645,8 +718,22 @@ class AgentLoop:
                         "paused": True,
                         "timestamp": _iso_now(),
                     })
-                    # Break the loop - workflow will resume on next user message
-                    break
+                    # Stop the whole run, not just this tool-calls batch. A
+                    # bare `break` here only exited the inner "for tool_call"
+                    # loop - the outer "for iteration" loop then continued to
+                    # its next pass and called the LLM again immediately,
+                    # with the just-appended assistant message's tool_calls
+                    # still unanswered (ask_user_question's own tool_call_id
+                    # never got a paired tool-role response, since that
+                    # append happens right after this block and was never
+                    # reached). Strict providers (OpenAI) reject that
+                    # outright: "An assistant message with 'tool_calls' must
+                    # be followed by tool messages responding to each
+                    # 'tool_call_id'" - visible as an error immediately after
+                    # the question. Lenient providers might not reject it,
+                    # but the run was never supposed to keep going here
+                    # regardless - it must wait for the resume request.
+                    return
 
                 # Feed result back to conversation (tool role message)
                 messages.append({
@@ -661,14 +748,29 @@ class AgentLoop:
                 if tool_result.success:
                     self.working_state.record_completed_tool(fn_name, fn_args, tool_result.data or {})
 
-                    # Special handling for tools that produce important state
+                    # Special handling for tools that produce important state.
+                    # Both tools return their payload directly as tool_result.data
+                    # (not nested under a "structure"/"slide" key) - a mismatch
+                    # here previously left presentation_structure/accumulated_slides
+                    # empty for the whole run, which is why finalize_and_render_pptx
+                    # had no tracked state to fall back on and the "Slides Already
+                    # Designed" prompt recap never appeared.
                     if fn_name == "plan_presentation_structure":
-                        if tool_result.data and "structure" in tool_result.data:
-                            self.working_state.presentation_structure = tool_result.data["structure"]
+                        if tool_result.data and "totalSlides" in tool_result.data:
+                            self.working_state.presentation_structure = tool_result.data
 
                     if fn_name == "design_slide_content":
-                        if tool_result.data and "slide" in tool_result.data:
-                            self.working_state.add_slide(tool_result.data["slide"])
+                        if tool_result.data and "slideIndex" in tool_result.data:
+                            self.working_state.add_slide(tool_result.data)
+
+                    # Recorded by slide_index so design_slide_content's
+                    # layout_info can be auto-supplied later (see the
+                    # tool-dispatch injection above) instead of requiring the
+                    # LLM to copy this object verbatim into the next call.
+                    if fn_name == "select_layout" and tool_result.data:
+                        slide_index = fn_args.get("slide_index")
+                        if slide_index is not None:
+                            self.working_state.selected_layouts[slide_index] = tool_result.data
 
                     # Persist the design system into context so it survives
                     # message rebuilds and the LLM does not re-extract it.
@@ -742,6 +844,63 @@ class AgentLoop:
                 "code": "iteration_cap_reached",
                 "timestamp": _iso_now(),
             })
+
+    def _check_precondition(self, fn_name: str, fn_args: dict) -> str | None:
+        """Block a tool call that is out of order, returning a corrective
+        error message the LLM sees as the tool's result (same mechanism as the
+        web_search cap below). This is what actually stops the loop from
+        "jumping around" - illegal transitions never reach the tool at all,
+        instead of being merely discouraged in the system prompt.
+
+        Deliberately not a rigid phase counter: tools may still interleave
+        (e.g. select_layout/design_slide_content per slide, or ask_user_question
+        at any point) - only the transitions that would silently corrupt state
+        are blocked.
+        """
+        ws = self.working_state
+
+        if fn_name == "plan_presentation_structure" and ws.accumulated_slides:
+            return (
+                "Presentation structure cannot be replanned - slide content has "
+                "already been designed using the current structure. If the "
+                "structure genuinely needs to change, ask the user with "
+                "ask_user_question before restructuring; otherwise continue "
+                "designing the remaining slides in the existing plan."
+            )
+
+        if fn_name in ("select_layout", "design_slide_content", "generate_image_prompt"):
+            if not ws.presentation_structure:
+                return (
+                    f"{fn_name} requires a presentation structure. Call "
+                    "plan_presentation_structure first."
+                )
+
+        if fn_name == "design_slide_content":
+            slide_index = fn_args.get("slide_index")
+            if slide_index is not None and slide_index not in ws.selected_layouts:
+                return (
+                    f"No layout has been selected for slide {slide_index} yet. Call "
+                    f"select_layout for slide_index={slide_index} first - its result "
+                    "is passed to design_slide_content automatically."
+                )
+
+        if fn_name == "finalize_and_render_pptx":
+            if not ws.presentation_structure:
+                return (
+                    "finalize_and_render_pptx requires a presentation structure. "
+                    "Call plan_presentation_structure first."
+                )
+            total = ws.presentation_structure.get("totalSlides", 0)
+            designed = {s.get("slideIndex") for s in ws.accumulated_slides}
+            missing = [i for i in range(total) if i not in designed]
+            if missing:
+                return (
+                    f"Cannot finalize yet: {len(missing)} of {total} planned slides "
+                    f"have not been designed (missing slideIndex: {missing}). Call "
+                    "design_slide_content for each missing slide first."
+                )
+
+        return None
 
     async def _execute_tool(self, name: str, args: dict) -> ToolResult:
         """Execute a registered tool by name."""
@@ -841,8 +1000,45 @@ class AgentLoop:
             "1. You MUST always call tools until you complete the presentation.",
             "2. You MUST call finalize_and_render_pptx as the final step to generate the PPTX file.",
             "3. NEVER respond with only text and stop - this will cause the generation to fail.",
-            "4. If you need clarification, use the ask_user_question tool (if available).",
-            "5. If you don't have enough information, make reasonable assumptions and proceed.",
+            "4. DEFAULT TO ASKING, NOT GUESSING, at every real decision point. This includes at least: "
+            "target audience; desired scope/slide count; tone; WHICH PARTS OF THE SOURCE MATERIAL TO "
+            "FOCUS ON OR EMPHASIZE when it covers more than can reasonably fit; how to resolve ambiguous "
+            "or conflicting information in what was provided; and VISUAL STYLE / COLOR PREFERENCE "
+            "whenever no template was uploaded (so the built-in default design system will be used) and "
+            "the user hasn't already indicated one. Call ask_user_question rather than guessing whenever "
+            "a wrong assumption would produce a presentation the user did not want. This is the default; "
+            "only skip asking when you are genuinely confident in the answer, not merely when an answer "
+            "is possible.",
+            "5. EVERY ask_user_question call MUST include well-chosen suggested options via the "
+            "'options' parameter (a real array, 2-5 items) - concrete, mutually distinct choices the "
+            "user can pick in one tap, not just an open-ended question with nothing to react to. "
+            "OPTIONS MUST BE TAILORED TO THE ACTUAL REQUEST, never generic placeholders: for content "
+            "focus, name the 2-4 candidate angles/sections you actually saw in the material (not "
+            "'Option A/B/C') and let the user pick or say 'cover them all'.",
+            "6. Color/style questions ONLY when no template was uploaded - never ask about colors if "
+            "the user gave a template, since its own colors are always used as-is and the question "
+            "would be meaningless. When you do ask: if the topic clearly implies a real brand/entity "
+            "with a known color (e.g. a presentation about a specific company), offer that brand's "
+            "actual color as one option using its real hex code (e.g. 'Starbucks green (#00704A)'), "
+            "alongside 2-3 of these general presets as other options - Professional, Warm, Monochrome, "
+            "Bold, Nature. Whatever is chosen, pass the SAME value (the hex code, or the preset's "
+            "lowercase name) as color_theme to BOTH extract_template_design_system and "
+            "finalize_and_render_pptx so the design system you see and what actually renders agree.",
+            "7. EXCEPTION: if the user has explicitly said not to ask questions (e.g. 'don't ask me "
+            "anything', 'just build it', 'use your best judgment', 'no more questions'), make the most "
+            "reasonable assumption yourself and proceed without asking - briefly note any significant "
+            "assumption in the relevant slide's notes instead.",
+            "8. Prefer asking before planning, batching multiple uncertainties into ONE consolidated "
+            "ask_user_question rather than asking one at a time. But do not suppress a genuine question "
+            "just because planning has already started - if a new ambiguity only becomes apparent "
+            "partway through (e.g. conflicting figures in an uploaded document), ask then too rather "
+            "than silently guessing.",
+            "9. Do NOT ask about things you can already infer confidently from the conversation or "
+            "uploaded documents, or about minor stylistic choices with no real stakes - that is noise, "
+            "not the kind of question this rule is asking for.",
+            "10. Tool calls that are out of order (e.g. finalizing before every planned slide is "
+            "designed) will be rejected with an explanation - read it and follow the corrective "
+            "instruction rather than retrying the same call.",
             "",
             "The system will NOT accept completion until finalize_and_render_pptx is called.",
             "",
@@ -939,6 +1135,7 @@ class AgentLoop:
             "Extract key data with extract_key_data",
             "If no design system is in your context, get the built-in default with extract_template_design_system (no template_path)",
             *research_step,
+            "If anything about the request is genuinely unsure/ambiguous, ask ONE consolidated question with ask_user_question before planning, unless the user already said not to ask (see CRITICAL RULES above)",
             "Plan the presentation structure with plan_presentation_structure",
             "For each slide, select a layout with select_layout",
             "Generate content for each slide with design_slide_content",

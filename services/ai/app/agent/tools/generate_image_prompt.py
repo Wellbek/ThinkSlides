@@ -6,6 +6,7 @@ Creates a detailed prompt for AI image generation that matches the slide's desig
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import get_chat_provider
+from app.agent.tools._json_extract import coerce_json_arg
 from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
 import json
@@ -69,10 +70,11 @@ class GenerateImagePromptTool:
             # otherwise the process-wide provider from the environment.
             llm = get_chat_provider() or get_llm_provider()
 
-            try:
-                palette = json.loads(design_palette) if design_palette else {}
-            except json.JSONDecodeError:
-                palette = {}
+            # coerce_json_arg, not a bare json.loads: a tool-calling model
+            # may send a native JSON object here despite the declared
+            # "string" type, which raises TypeError rather than the
+            # JSONDecodeError this used to guard against.
+            palette = coerce_json_arg(design_palette, {})
 
             accent_colors = []
             if palette.get("colors"):

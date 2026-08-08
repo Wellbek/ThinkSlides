@@ -14,7 +14,7 @@ import pytest
 from pptx import Presentation
 from pptx.util import Emu
 
-from app.design_system import get_default_design_system
+from app.design_system import COLOR_THEMES, get_default_design_system, normalize_color_theme
 from app.renderer.default_template import DefaultTemplateGenerator, _hex_to_rgbcolor
 
 
@@ -101,3 +101,106 @@ def test_hex_to_rgbcolor_rejects_invalid():
         _hex_to_rgbcolor("nope")
     with pytest.raises(ValueError):
         _hex_to_rgbcolor("#123")
+
+
+# ── Color themes ────────────────────────────────────────────────────────
+
+
+def test_normalize_color_theme_accepts_known_names_case_insensitively():
+    for name in COLOR_THEMES:
+        assert normalize_color_theme(name) == name
+        assert normalize_color_theme(name.upper()) == name
+        assert normalize_color_theme(f"  {name}  ") == name
+
+
+def test_normalize_color_theme_falls_back_to_professional():
+    assert normalize_color_theme(None) == "professional"
+    assert normalize_color_theme("") == "professional"
+    assert normalize_color_theme("neon") == "professional"
+
+
+def test_every_theme_has_the_same_color_names_as_the_default():
+    """design_slide_content and the renderer both look up colors by name
+    (e.g. 'primary', 'white') - every theme must define the same set, or
+    switching themes could silently drop a color some code expects."""
+    default_names = {c["name"] for c in COLOR_THEMES["professional"]}
+    for theme, colors in COLOR_THEMES.items():
+        assert {c["name"] for c in colors} == default_names, theme
+
+
+def test_every_theme_color_is_valid_hex():
+    for theme, colors in COLOR_THEMES.items():
+        for entry in colors:
+            _hex_to_rgbcolor(entry["value"])  # raises ValueError if malformed
+
+
+def test_get_default_design_system_applies_the_requested_theme():
+    ds = get_default_design_system(color_theme="warm")
+    assert ds["colorTheme"] == "warm"
+    primary = next(c["value"] for c in ds["palette"]["colors"] if c["name"] == "primary")
+    assert primary == COLOR_THEMES["warm"][0]["value"]
+
+
+def test_get_default_design_system_unknown_theme_falls_back_to_professional():
+    ds = get_default_design_system(color_theme="not-a-real-theme")
+    assert ds["colorTheme"] == "professional"
+
+
+def test_get_default_design_system_no_theme_defaults_to_professional():
+    ds = get_default_design_system()
+    assert ds["colorTheme"] == "professional"
+    assert ds["palette"]["colors"] == COLOR_THEMES["professional"]
+
+
+# ── Brand-specific hex colors ────────────────────────────────────────────
+# A named preset can't represent "Starbucks green" specifically - a hex
+# color lets a context-aware suggestion (e.g. from ask_user_question) be
+# genuinely applied instead of approximated to the nearest preset.
+
+
+def test_resolve_palette_accepts_a_hex_color():
+    from app.design_system import resolve_palette
+
+    label, palette = resolve_palette("#00704A")
+    assert label == "#00704A"
+    primary = next(c["value"] for c in palette if c["name"] == "primary")
+    assert primary == "#00704A"
+
+
+def test_resolve_palette_hex_without_leading_hash():
+    from app.design_system import resolve_palette
+
+    label, palette = resolve_palette("00704A")
+    assert label == "#00704A"
+
+
+def test_resolve_palette_hex_is_uppercased_and_only_overrides_primary():
+    from app.design_system import resolve_palette
+
+    _, palette = resolve_palette("#00704a")
+    by_name = {c["name"]: c["value"] for c in palette}
+    assert by_name["primary"] == "#00704A"
+    # Everything else still comes from the professional base palette.
+    assert by_name["secondary"] == COLOR_THEMES["professional"][1]["value"]
+    assert by_name["white"] == "#FFFFFF"
+
+
+def test_resolve_palette_named_theme_still_works():
+    from app.design_system import resolve_palette
+
+    label, palette = resolve_palette("warm")
+    assert label == "warm"
+    assert palette == COLOR_THEMES["warm"]
+
+
+def test_get_default_design_system_accepts_a_hex_color_theme():
+    ds = get_default_design_system(color_theme="#00704A")
+    assert ds["colorTheme"] == "#00704A"
+    primary = next(c["value"] for c in ds["palette"]["colors"] if c["name"] == "primary")
+    assert primary == "#00704A"
+
+
+def test_invalid_hex_like_string_falls_back_to_professional():
+    """Not a real hex (wrong length / bad chars) must not be treated as one."""
+    ds = get_default_design_system(color_theme="#GGGGGG")
+    assert ds["colorTheme"] == "professional"

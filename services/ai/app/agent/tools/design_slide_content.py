@@ -7,6 +7,7 @@ The renderer will consume this to clone layout XML and fill placeholders.
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import get_chat_provider
+from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
 import json
@@ -38,12 +39,21 @@ class DesignSlideContentTool:
                 ToolParameter(
                     name="layout_info",
                     type="string",
-                    description="JSON string of the selected layout with placeholder positions",
+                    description=(
+                        "JSON string of the selected layout with placeholder positions. "
+                        "Optional - the system supplies the layout you selected via "
+                        "select_layout for this slide_index automatically."
+                    ),
+                    required=False,
                 ),
                 ToolParameter(
                     name="design_system_context",
                     type="string",
-                    description="JSON string of the design system (palette, typography, spacing)",
+                    description=(
+                        "JSON string of the design system (palette, typography, spacing). "
+                        "Optional - the system supplies the current design system "
+                        "automatically, so you do not need to pass this."
+                    ),
                     required=False,
                 ),
                 ToolParameter(
@@ -58,8 +68,8 @@ class DesignSlideContentTool:
     async def run(
         cls,
         slide_outline: str,
-        layout_info: str,
         slide_index: int,
+        layout_info: str = "{}",
         design_system_context: str = "{}",
     ) -> ToolResult:
         start = time.time()
@@ -70,9 +80,27 @@ class DesignSlideContentTool:
             # needs to honour the model chosen in Settings.
             llm = get_chat_provider() or get_llm_provider()
 
-            outline = json.loads(slide_outline) if slide_outline else {}
-            layout = json.loads(layout_info) if layout_info else {}
-            ds = json.loads(design_system_context) if design_system_context else {}
+            # coerce_json_arg (not a bare json.loads) because tool-calling
+            # models frequently send a native JSON object here despite the
+            # parameter's declared "string" type, which crashes json.loads
+            # with a TypeError rather than the JSONDecodeError this used to
+            # (harmlessly) propagate as a tool failure. A genuinely
+            # unparseable slide_outline must still fail the call rather than
+            # silently proceeding with no key points - that's the same
+            # empty-slide failure mode already fixed for the model's overall
+            # response below, just one level up in the argument itself.
+            outline = coerce_json_arg(slide_outline, None)
+            if outline is None:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Could not parse slide_outline as JSON "
+                        f"(got: {str(slide_outline)[:200]!r}). Retry with a valid JSON object."
+                    ),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
+            layout = coerce_json_arg(layout_info, {})
+            ds = coerce_json_arg(design_system_context, {})
 
             placeholders = layout.get("placeholders", [])
             layout_name = layout.get("layoutName", "Default")
@@ -167,21 +195,40 @@ Rules:
             )
 
             result_text = response.get("message", {}).get("content", "{}")
-            try:
-                slide_data = json.loads(result_text)
-            except json.JSONDecodeError:
-                import re
-                json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', result_text, re.DOTALL)
-                if json_match:
-                    slide_data = json.loads(json_match.group(1))
-                else:
-                    slide_data = {"raw_content": result_text, "slideIndex": slide_index}
+            slide_data = extract_json_object(result_text)
+            if slide_data is None:
+                # Fail loudly instead of silently falling back to an
+                # object with no "contents" - that previously produced a
+                # "successful" tool call for a slide with zero content,
+                # the exact "right slide count, no content" symptom. A
+                # failure here surfaces as a retryable tool_result, so the
+                # LLM sees the problem and tries again.
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Could not parse the model's response as slide JSON "
+                        f"(response started with: {result_text[:200]!r}). Retry and "
+                        "respond with ONLY the JSON object - no prose before or after it."
+                    ),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
 
             # Ensure required fields
             slide_data.setdefault("slideIndex", slide_index)
             slide_data.setdefault("layoutId", layout.get("layoutId", "1"))
             slide_data.setdefault("layoutName", layout_name)
             slide_data.setdefault("contents", [])
+
+            if not slide_data["contents"]:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "The generated slide has no content items. Include a text "
+                        f"item for placeholderIdx={title_idx} (title) and one for "
+                        f"placeholderIdx={body_idx} (body, one run per key point)."
+                    ),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
 
             duration_ms = int((time.time() - start) * 1000)
             logger.info(
