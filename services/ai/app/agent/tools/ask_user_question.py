@@ -6,8 +6,8 @@ The workflow can only resume when the user provides an answer or additional cont
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
-import json
 import time
 
 logger = get_logger(__name__)
@@ -34,8 +34,15 @@ class AskUserQuestionTool:
                 ),
                 ToolParameter(
                     name="options",
-                    type="string",
-                    description='JSON array of option strings, e.g., ["Option A", "Option B", "Option C"]',
+                    type="array",
+                    items={"type": "string"},
+                    description=(
+                        "2-5 concrete, mutually distinct suggested answers the user can pick "
+                        "in one tap - not a placeholder list. Tailor them to what you actually "
+                        "know about the request (e.g. for a Starbucks presentation with no "
+                        "template, suggest 'Starbucks green' alongside other real options, not "
+                        "generic labels)."
+                    ),
                 ),
                 ToolParameter(
                     name="context",
@@ -50,16 +57,23 @@ class AskUserQuestionTool:
     async def run(
         cls,
         question: str,
-        options: str,
+        options: list[str] | str,
         context: str = "",
     ) -> ToolResult:
         start = time.time()
         try:
-            # Parse options
-            try:
-                option_list = json.loads(options) if options else []
-            except json.JSONDecodeError:
-                option_list = [options] if options else []
+            # coerce_json_arg handles the now-expected case (a native list,
+            # matching the "array" schema type below) and, defensively, a
+            # JSON-encoded string some providers might still send. A plain
+            # non-JSON string is treated as a single option rather than
+            # dropped - the model occasionally sends just one choice.
+            coerced = coerce_json_arg(options, None)
+            if isinstance(coerced, list):
+                option_list = [str(o) for o in coerced]
+            elif isinstance(options, str) and options:
+                option_list = [options]
+            else:
+                option_list = []
 
             duration_ms = int((time.time() - start) * 1000)
 

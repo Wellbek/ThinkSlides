@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { apiGet, apiPost, apiDelete, apiPut, apiUpload } from '@/lib/api';
 import { SSEClient } from '@/lib/sse';
 import { useSettingsStore } from '@/stores/settings-store';
-import type { AgentEvent, DoneEvent, EffortMode } from '@thinkslides/schemas';
+import type { AgentEvent, DetailLevel, DoneEvent, EffortMode } from '@thinkslides/schemas';
 
 export interface ChatSession {
   id: string;
@@ -63,6 +63,12 @@ interface ChatState {
    * selection, and it survives moving between them.
    */
   mode: EffortMode;
+  /**
+   * How much content depth the next generation should aim for. Kept on the
+   * store for the same reason as `mode` - shared between the home view and
+   * the in-session composer.
+   */
+  detailLevel: DetailLevel;
   totalElapsedMs: number | null;
   isGenerating: boolean;
   setIsGenerating: (generating: boolean) => void;
@@ -84,6 +90,51 @@ interface ChatState {
   deleteTemplate: (id: string) => Promise<void>;
   setSettingsOpen: (open: boolean) => void;
   setMode: (mode: EffortMode) => void;
+  setDetailLevel: (detailLevel: DetailLevel) => void;
+}
+
+/**
+ * Reconciles the optimistic user/assistant pair with the server's response,
+ * carrying forward anything SSE already attached to the optimistic assistant
+ * message (agentEventStream, generatedFiles, a genuine isComplete/content
+ * from a done event) rather than discarding it.
+ *
+ * Why this matters: the POST that creates the message rows and the SSE
+ * events for the resulting generation race independently. On a fast path -
+ * most visibly resuming after ask_user_question, where the first event can
+ * land within tens of milliseconds - SSE events reliably arrive and get
+ * appended to the optimistic assistant message *before* this POST response
+ * comes back. The old code then swapped in the server's freshly-created (and
+ * necessarily event-less) row wholesale, silently erasing everything that
+ * had just arrived - the chat looked permanently stuck on "Working..." even
+ * though the run had already finished successfully.
+ */
+function reconcileServerMessages(
+  currentMessages: ChatMessage[],
+  optimisticUserId: string,
+  optimisticAssistantId: string,
+  serverMessages: ChatMessage[]
+): ChatMessage[] {
+  const optimisticAssistant = currentMessages.find((m) => m.id === optimisticAssistantId);
+
+  const reconciled = serverMessages.map((m) => {
+    if (m.role !== 'assistant') return { ...m, isComplete: true };
+    return {
+      ...m,
+      agentEventStream: optimisticAssistant?.agentEventStream ?? m.agentEventStream,
+      generatedFiles: optimisticAssistant?.generatedFiles ?? m.generatedFiles,
+      // A done event may have already raced ahead and completed the
+      // optimistic message - don't regress a genuine completion back to
+      // "in progress".
+      isComplete: optimisticAssistant?.isComplete ?? false,
+      content: optimisticAssistant?.isComplete ? optimisticAssistant.content : m.content,
+    };
+  });
+
+  return [
+    ...currentMessages.filter((m) => m.id !== optimisticUserId && m.id !== optimisticAssistantId),
+    ...reconciled,
+  ];
 }
 
 function findActiveAssistantMessage(messages: ChatMessage[]): ChatMessage | null {
@@ -108,6 +159,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sseClient: null,
   settingsOpen: false,
   mode: 'simple',
+  detailLevel: 'detailed',
   totalElapsedMs: null,
   isGenerating: false,
 
@@ -302,6 +354,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         try {
           const data = JSON.parse(e.data) as DoneEvent;
           const totalElapsedMs = (data as any).totalElapsedMs;
+          // A done event fires on ask_user_question too - the run has
+          // paused, not finished, and will continue once the user answers
+          // (see sendMessage's resume path). Marking the message complete
+          // here would be wrong even though nothing currently depends on it
+          // staying false, since the run genuinely isn't done yet.
+          const isPaused = (data as any).paused === true;
 
           set((state) => {
             const activeMsg = findActiveAssistantMessage(state.activeMessages);
@@ -323,16 +381,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
               msg.id === activeMsg.id
                 ? {
                     ...msg,
-                    ...(data.content ? { content: data.content } : {}),
+                    ...(data.content && !isPaused ? { content: data.content } : {}),
                     generatedFiles: [...existingFiles, ...newFiles],
-                    isComplete: true,
+                    isComplete: !isPaused,
                   }
                 : msg
             );
 
-            // Add completion message if we have total elapsed time
+            // Add completion message if we have total elapsed time. A paused
+            // run is still going, so it gets no "Finished in ..." footer.
             let completionMessage: ChatMessage | null = null;
-            if (totalElapsedMs && totalElapsedMs > 0) {
+            if (!isPaused && totalElapsedMs && totalElapsedMs > 0) {
               const seconds = Math.floor(totalElapsedMs / 1000);
               const minutes = Math.floor(seconds / 60);
               const remainingSeconds = seconds % 60;
@@ -389,7 +448,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content: string, files?: File[]) => {
-    const { activeSessionId, mode } = get();
+    const { activeSessionId, mode, detailLevel } = get();
     if (!activeSessionId) return;
 
     // Deep Thinking needs a configured search backend. The selector is already
@@ -415,7 +474,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isComplete: false,
     };
     set((state) => ({
-      activeMessages: [...state.activeMessages, optimisticUser, optimisticAssistant],
+      // Close out any earlier assistant turn before opening a new one. A turn
+      // that ended on a question stays deliberately incomplete so its "done"
+      // does not read as finished - but once the user replies it is over, and
+      // leaving it live would keep its spinner running for the rest of the
+      // session and confuse findActiveAssistantMessage about where events go.
+      activeMessages: [
+        ...state.activeMessages.map((m) =>
+          m.role === 'assistant' && !m.isComplete ? { ...m, isComplete: true } : m
+        ),
+        optimisticUser,
+        optimisticAssistant,
+      ],
     }));
     try {
       if (files && files.length > 0) {
@@ -423,6 +493,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const formData = new FormData();
         formData.append('content', content);
         formData.append('mode', effectiveMode);
+        formData.append('detail_level', detailLevel);
         for (const file of files) formData.append('files', file);
         const res = await fetch(`/api/orchestrator/sessions/${activeSessionId}/messages`, {
           method: 'POST',
@@ -440,24 +511,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const serverMessages: ChatMessage[] | undefined = data.messages;
         if (serverMessages && Array.isArray(serverMessages)) {
           set((state) => ({
-            activeMessages: [
-              ...state.activeMessages.filter(m => m.id !== optimisticUser.id && m.id !== optimisticAssistant.id),
-              ...serverMessages.map(m => ({ ...m, isComplete: m.role === 'assistant' ? false : true })),
-            ],
+            activeMessages: reconcileServerMessages(
+              state.activeMessages, optimisticUser.id, optimisticAssistant.id, serverMessages
+            ),
           }));
         }
       } else {
         const data = await apiPost<{ messages?: ChatMessage[] }>(
           `/api/orchestrator/sessions/${activeSessionId}/messages`,
-          { content, mode: effectiveMode }
+          { content, mode: effectiveMode, detail_level: detailLevel }
         );
         const serverMessages = data?.messages;
         if (serverMessages && Array.isArray(serverMessages)) {
           set((state) => ({
-            activeMessages: [
-              ...state.activeMessages.filter(m => m.id !== optimisticUser.id && m.id !== optimisticAssistant.id),
-              ...serverMessages.map(m => ({ ...m, isComplete: m.role === 'assistant' ? false : true })),
-            ],
+            activeMessages: reconcileServerMessages(
+              state.activeMessages, optimisticUser.id, optimisticAssistant.id, serverMessages
+            ),
           }));
         }
       }
@@ -526,4 +595,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setSettingsOpen: (open: boolean) => set({ settingsOpen: open }),
 
   setMode: (mode: EffortMode) => set({ mode }),
+
+  setDetailLevel: (detailLevel: DetailLevel) => set({ detailLevel }),
 }));

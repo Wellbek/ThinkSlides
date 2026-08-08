@@ -277,6 +277,7 @@ func jobIdentity(job *queue.Job) client.Identity {
 func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) error {
 	content, _ := job.Payload["content"].(string)
 	mode, _ := job.Payload["mode"].(string)
+	detailLevel, _ := job.Payload["detail_level"].(string)
 	attachmentsRaw, _ := job.Payload["attachments"].([]interface{})
 
 	attachments := make([]map[string]interface{}, 0)
@@ -303,6 +304,7 @@ func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) erro
 		Content:     content,
 		Attachments: attachments,
 		Mode:        mode,
+		DetailLevel: detailLevel,
 		Identity:    jobIdentity(job),
 	})
 	if err != nil {

@@ -19,6 +19,9 @@ class ToolParameter(BaseModel):
     description: str = ""
     required: bool = True
     enum: Optional[list[str]] = None
+    # Required by JSON Schema when type == "array" (e.g. {"type": "string"}
+    # for an array of strings). Ignored for other types.
+    items: Optional[dict] = None
 
 
 class ToolDefinition(BaseModel):
@@ -115,6 +118,8 @@ class ToolRegistry:
                 }
                 if param.enum:
                     prop["enum"] = param.enum
+                if param.items:
+                    prop["items"] = param.items
                 properties[param.name] = prop
                 if param.required:
                     required.append(param.name)

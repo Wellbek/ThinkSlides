@@ -6,12 +6,34 @@ Plans the overall slide structure and outline based on analyzed content and requ
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import get_chat_provider
+from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.llm.provider import get_tools_llm_provider as get_llm_provider
 from app.observability.logging import get_logger
 import json
 import time
 
 logger = get_logger(__name__)
+
+# How much content depth to plan for, keyed by the composer's detail_level.
+_DETAIL_GUIDANCE = {
+    "concise": (
+        "Each content slide should have 3-4 key points maximum. Favor fewer, "
+        "punchier slides over splitting a topic further than it needs."
+    ),
+    "detailed": (
+        "Each content slide should have 4-6 key points. When a topic has more "
+        "to say than comfortably fits one slide's points, add another slide "
+        "rather than cramming everything in - err toward a few more slides "
+        "over thin ones."
+    ),
+    "comprehensive": (
+        "Each content slide should have 5-8 key points, using the twoColumn "
+        "contentType to fit them when the layout catalog offers it. Break "
+        "large topics into multiple slides freely - a comprehensive deck is "
+        "expected to run longer than a concise one, and totalSlides should "
+        "reflect that."
+    ),
+}
 
 
 class PlanPresentationStructureTool:
@@ -55,7 +77,17 @@ class PlanPresentationStructureTool:
                 ToolParameter(
                     name="design_system_summary",
                     type="string",
-                    description="JSON summary of the design system layout catalog",
+                    description=(
+                        "JSON summary of the design system layout catalog. Optional - "
+                        "the system supplies the current design system automatically, "
+                        "so you do not need to pass this."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
+                    name="detail_level",
+                    type="string",
+                    description="Content depth: concise, detailed, or comprehensive",
                     required=False,
                 ),
             ],
@@ -69,6 +101,7 @@ class PlanPresentationStructureTool:
         target_slide_count: int = 0,
         audience: str = "general",
         design_system_summary: str = "{}",
+        detail_level: str = "detailed",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -77,21 +110,22 @@ class PlanPresentationStructureTool:
             # tools-tier model, which only exists for the default provider.
             llm = get_chat_provider() or get_llm_provider()
 
-            try:
-                parsed_data = json.loads(key_data) if key_data else {}
-            except json.JSONDecodeError:
-                parsed_data = {}
-
-            try:
-                parsed_ds = json.loads(design_system_summary) if design_system_summary else {}
-            except json.JSONDecodeError:
-                parsed_ds = {}
+            # coerce_json_arg, not a bare json.loads: a tool-calling model may
+            # send a native JSON object for these despite their declared
+            # "string" type, which raises TypeError rather than the
+            # JSONDecodeError this used to guard against. Both are
+            # supplementary context (not required for the plan to succeed),
+            # so a soft {} fallback on genuine failure is fine here.
+            parsed_data = coerce_json_arg(key_data, {})
+            parsed_ds = coerce_json_arg(design_system_summary, {})
 
             available_layouts = parsed_ds.get("layouts", [])
             layout_info = ""
             if available_layouts:
                 layout_names = [lt.get("layoutName", f"Layout {lt.get('layoutId', '?')}") for lt in available_layouts]
                 layout_info = f"\nAvailable layout names in template: {', '.join(layout_names)}"
+
+            detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
 
             prompt = f"""Plan a presentation structure based on the following:
 
@@ -125,7 +159,7 @@ Rules:
 - Last slide should be a conclusion/summary slide. If it recaps points (3-5 key points), give it contentType "content" so the points render in a body placeholder - only use contentType "conclusion" (title-only) for a slide with no body content.
 - Every slide that has key points MUST use a contentType whose layout has a body placeholder: "content" (one body), "twoColumn" (two bodies), "table", or "image". Never assign 3-5 key points to a "title" or "conclusion" slide - those layouts have no body placeholder and the points would be dropped.
 - Distribute content evenly across slides
-- Each content slide should have 3-5 key points maximum
+- {detail_guidance}
 - Choose suggestedLayout names from the available layouts if a template is provided"""
 
             response = await llm.chat(
@@ -134,16 +168,21 @@ Rules:
             )
 
             result_text = response.get("message", {}).get("content", "{}")
-            try:
-                structure = json.loads(result_text)
-            except json.JSONDecodeError:
-                # Try to extract JSON from markdown code block
-                import re
-                json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', result_text, re.DOTALL)
-                if json_match:
-                    structure = json.loads(json_match.group(1))
-                else:
-                    structure = {"raw_plan": result_text}
+            structure = extract_json_object(result_text)
+            if structure is None or not structure.get("slides"):
+                # Fail loudly rather than silently proceeding with a
+                # {"raw_plan": ...} object that has no totalSlides/slides -
+                # every downstream step depends on this structure existing.
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Could not parse the model's response as a presentation "
+                        f"structure (response started with: {result_text[:200]!r}). "
+                        "Retry and respond with ONLY the JSON object - no prose "
+                        "before or after it - including a non-empty 'slides' array."
+                    ),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
 
             duration_ms = int((time.time() - start) * 1000)
             logger.info(

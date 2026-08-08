@@ -419,6 +419,43 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-effort-setup:hover { color: #a5aefb; }
 .ws-effort.md .ws-effort-opt { padding: 6px 11px; font-size: 12px; }
 
+/* ---------- Detail-level dropdown ---------- */
+.ws-dd { position: relative; display: inline-flex; }
+.ws-dd-trigger {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 8px; border-radius: var(--ws-radius-sm);
+  border: 1px solid var(--ws-border-sub); background: var(--ws-surface-2);
+  color: var(--ws-text-muted); font-family: var(--ws-font-ui); font-size: 11px;
+  font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.ws-dd-trigger:hover { color: #999; background: var(--ws-surface-3); }
+.ws-dd-trigger.open { color: var(--ws-ai-text); background: var(--ws-ai-bg); border-color: var(--ws-ai-border); }
+.ws-dd.md .ws-dd-trigger { padding: 6px 11px; font-size: 12px; }
+.ws-dd-chev { transition: transform 0.14s; opacity: 0.8; }
+.ws-dd-chev.open { transform: rotate(180deg); }
+
+.ws-dd-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30;
+  min-width: 240px; padding: 4px;
+  background: var(--ws-surface-1); border: 1px solid var(--ws-border);
+  border-radius: var(--ws-radius-md); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.ws-dd-item {
+  display: flex; align-items: flex-start; gap: 8px; width: 100%;
+  padding: 7px 8px; border-radius: var(--ws-radius-sm);
+  border: none; background: transparent; color: var(--ws-text-body);
+  font-family: var(--ws-font-ui); text-align: left; cursor: pointer;
+  transition: background 0.12s;
+}
+.ws-dd-item:hover { background: var(--ws-surface-3); }
+.ws-dd-item.active { background: var(--ws-ai-bg); }
+.ws-dd-item-icon { display: inline-flex; margin-top: 2px; color: var(--ws-ai-text); flex-shrink: 0; }
+.ws-dd-item-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ws-dd-item-label { font-size: 12px; font-weight: 600; color: var(--ws-text-primary); }
+.ws-dd-item-desc { font-size: 11px; color: var(--ws-text-muted); line-height: 1.4; }
+.ws-dd-item-check { flex-shrink: 0; margin-top: 2px; color: var(--ws-ai-text); }
+
 /* ---------- Home view ---------- */
 .ws-home { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px; background: radial-gradient(circle at 50% 0%, #141420 0%, var(--ws-bg) 60%); }
 .ws-home-greet { font-size: 26px; font-weight: 600; color: var(--ws-text-primary); }
@@ -511,11 +548,19 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
 .ws-step-pre.bad { color: var(--ws-red-text); }
 
 /* ---- Inline cited sources (under the step that produced them) ---- */
-.ws-step-src-badge {
-  display: inline-flex; align-items: center; margin-left: 8px;
-  color: var(--ws-ai-text); opacity: 0.85;
-}
 .ws-src-inline { margin-top: 8px; }
+/* In the collapsed step summary the badge sits inline in a single row
+   alongside the timer/toggle, rather than stacked below block content.
+   The opened list is anchored as a popover instead of pushing the row's
+   flex layout (which previously wrapped the step label). */
+.ws-step-summary .ws-src-inline { margin-top: 0; position: relative; }
+.ws-step-summary .ws-src-inline-list {
+  position: absolute; top: 100%; right: 0; margin-top: 6px; z-index: 20;
+  min-width: 220px; max-width: 320px;
+  background: var(--ws-surface-1); border: 1px solid var(--ws-border);
+  border-radius: var(--ws-radius-sm); padding: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
 .ws-src-inline-btn {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 9px 4px 7px; border-radius: 999px;

@@ -679,6 +679,8 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 	// web-search-backed research. Anything unrecognised falls back to simple,
 	// so an old client that sends nothing keeps working.
 	mode := ModeSimple
+	// Content depth requested for the generation. See detail_level.go.
+	detailLevel := DetailLevelDetailed
 
 	// Handle multipart/form-data (file uploads) vs JSON
 	if len(contentType) > 0 && contentType[:10] == "multipart/" {
@@ -698,6 +700,11 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		// Effort level chosen in the composer.
 		if modeValues := form.Value["mode"]; len(modeValues) > 0 {
 			mode = modeValues[0]
+		}
+
+		// Content depth chosen in the composer.
+		if levelValues := form.Value["detail_level"]; len(levelValues) > 0 {
+			detailLevel = levelValues[0]
 		}
 
 		// Process uploaded files
@@ -735,6 +742,7 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 			Content     string                   `json:"content" binding:"required"`
 			Attachments []map[string]interface{} `json:"attachments"`
 			Mode        string                   `json:"mode"`
+			DetailLevel string                   `json:"detail_level"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
@@ -743,6 +751,7 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		messageContent = req.Content
 		attachments = req.Attachments
 		mode = req.Mode
+		detailLevel = req.DetailLevel
 	}
 
 	if messageContent == "" && len(attachments) == 0 {
@@ -837,6 +846,7 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 			"user_message_id":      userMsgID,
 			"assistant_message_id": assistantMsgID,
 			"mode":                 NormalizeMode(mode),
+			"detail_level":         NormalizeDetailLevel(detailLevel),
 			// A resume job answers a pending ask_user_question. The worker
 			// reads the answer under its own keys, so send it under both -
 			// previously only "content" was set and the resume posted an
@@ -891,48 +901,21 @@ func (h *SessionHandler) StreamEvents(c *gin.Context) {
 	eventChan := h.hub.Subscribe(sessionID)
 	defer h.hub.Unsubscribe(sessionID, eventChan)
 
-	// Replay historical events from database
-	if h.pool != nil {
-		ctx := c.Request.Context()
-		rows, err := h.pool.Query(ctx,
-			`SELECT event_type, content, created_at
-			 FROM agent_events
-			 WHERE session_id = $1
-			 ORDER BY created_at
-			 LIMIT 100`, sessionID,
-		)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var eventType string
-				var content []byte
-				var createdAt time.Time
-				if err := rows.Scan(&eventType, &content, &createdAt); err != nil {
-					continue
-				}
-				log.Printf("SSE: replaying event=%s", eventType)
-				fmt.Fprintf(c.Writer, "event: %s\n", eventType)
-				fmt.Fprintf(c.Writer, "data: %s\n\n", content)
-				c.Writer.(http.Flusher).Flush()
-			}
-		}
-	}
+	// Commit the response head immediately so EventSource reports the stream
+	// as open even when the session is idle (an agent paused on a question can
+	// sit silent for minutes before the next event).
+	c.Status(http.StatusOK)
+	c.Writer.Flush()
 
-	// Stream live events
-	// c.Stream(func(w io.Writer) bool {
-	// 	select {
-	// 	case event, ok := <-eventChan:
-	// 		if !ok {
-	// 			return false
-	// 		}
-	// 		c.SSEvent(event.Event, event.Data)
-	// 		return true
-	// 	case <-c.Request.Context().Done():
-	// 		return false
-	// 	}
-	// })
+	// Past events are not replayed here. The messages endpoint already returns
+	// each message's persisted agent_event_stream in its live shape, whereas
+	// agent_events.content holds only an event's content field - replaying that
+	// emitted payloads the client cannot interpret, and would duplicate the
+	// history the client just loaded.
 
 	ctx := c.Request.Context()
+	heartbeat := time.NewTicker(20 * time.Second)
+	defer heartbeat.Stop()
 
 	for {
 		select {
@@ -946,6 +929,13 @@ func (h *SessionHandler) StreamEvents(c *gin.Context) {
 			fmt.Fprintf(c.Writer, "event: %s\n", event.Event)
 			fmt.Fprintf(c.Writer, "data: %s\n\n", event.Data)
 
+			c.Writer.Flush()
+
+		case <-heartbeat.C:
+			// A comment line keeps idle connections from being reaped by the
+			// browser or any proxy in between, and surfaces a dead peer as a
+			// write error so the client can reconnect.
+			fmt.Fprint(c.Writer, ": ping\n\n")
 			c.Writer.Flush()
 
 		case <-ctx.Done():

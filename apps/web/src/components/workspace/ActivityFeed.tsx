@@ -401,9 +401,13 @@ function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: bool
           <span className="lbl">{toolLabel(step.toolName)}</span>
           {step.phase && <span className="ws-step-phase">{PHASE_LABEL[step.phase] ?? step.phase}</span>}
           <StepTimer startTs={step.startTs} endTs={step.endTs} durationMs={step.durationMs} running={step.running} />
+          {/* Sources stay visible and independently expandable even while the
+              step itself is collapsed - previously this was a static icon
+              with no way to open it, so cited sources effectively vanished
+              the moment the next step became the auto-expanded one. */}
           {!!step.sources?.length && (
-            <span className="ws-step-src-badge" title={`${step.sources.length} cited source${step.sources.length === 1 ? "" : "s"}`}>
-              <OverlappingCirclesIcon size={13} />
+            <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+              <SourcesInline sources={step.sources} />
             </span>
           )}
           <span className="ws-step-toggle">▾ expand</span>

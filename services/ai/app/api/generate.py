@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from app.db.session import get_db
 from app.db.models import ChatSession, ChatMessage, AgentEvent
-from app.agent.loop import AgentLoop, MODE_SIMPLE, normalize_mode
+from app.agent.loop import AgentLoop, MODE_SIMPLE, DETAIL_LEVEL_DETAILED, normalize_mode, normalize_detail_level
 from app.api.tenancy import resolve_org_id
 from app.observability.logging import get_logger
 from pydantic import BaseModel
@@ -34,6 +34,9 @@ class SendMessageRequest(BaseModel):
     # Effort level chosen in the composer: "simple" or "deep". Anything else
     # (including the field being absent, as older clients send) means simple.
     mode: str = MODE_SIMPLE
+    # Content depth chosen in the composer. Anything unrecognised (including
+    # the field being absent) means detailed.
+    detail_level: str = DETAIL_LEVEL_DETAILED
 
 
 class SimplePresentationRequest(BaseModel):
@@ -108,6 +111,7 @@ async def send_message(
                 assistant_msg.id,
                 mode=normalize_mode(req.mode),
                 org_id=org_id,
+                detail_level=normalize_detail_level(req.detail_level),
             )
         except Exception as e:
             logger.error("_run_agent failed", error=str(e), traceback=traceback.format_exc())
@@ -129,6 +133,7 @@ async def _run_agent(
     question_text: str = "",
     mode: str | None = None,
     org_id: uuid.UUID | None = None,
+    detail_level: str | None = None,
 ):
     """Run the agent loop for a session and stream its events to Redis.
 
@@ -185,16 +190,24 @@ async def _run_agent(
 
             final_content = ""
             generated_files = []
+            # The loop's generator also returns when it pauses on
+            # ask_user_question. The wrapper's own terminal "done" below must
+            # carry that fact forward, or downstream consumers read it as
+            # "run over" and tear the event pipe down mid-conversation.
+            run_paused = False
 
             try:
                 logger.info("_run_agent: creating AgentLoop for %s", session_id)
-                loop = AgentLoop(db=db, mode=mode, org_id=org_id)
+                loop = AgentLoop(db=db, mode=mode, org_id=org_id, detail_level=detail_level)
 
                 logger.info("_run_agent: starting loop.run() for %s", session_id)
                 event_count = 0
                 
                 async for event in loop.run(session_id=session_id):
                     event_count += 1
+
+                    if event.get("type") == "done":
+                        run_paused = bool(event.get("paused"))
 
                     # Emit timer update every 5 events
                     if event_count % 5 == 0:
@@ -384,6 +397,7 @@ async def _run_agent(
                     "files": generated_files if generated_files else None,
                     "overallDurationMs": overall_duration_ms,
                     "totalElapsedMs": total_elapsed_ms,
+                    "paused": run_paused,
                     "timestamp": datetime.datetime.utcnow().isoformat(),
                 }
                 pub_result = await redis_client.publish(
