@@ -14,6 +14,27 @@ import time
 
 logger = get_logger(__name__)
 
+# How much content depth to plan for, keyed by the composer's detail_level.
+_DETAIL_GUIDANCE = {
+    "concise": (
+        "Each content slide should have 3-4 key points maximum. Favor fewer, "
+        "punchier slides over splitting a topic further than it needs."
+    ),
+    "detailed": (
+        "Each content slide should have 4-6 key points. When a topic has more "
+        "to say than comfortably fits one slide's points, add another slide "
+        "rather than cramming everything in - err toward a few more slides "
+        "over thin ones."
+    ),
+    "comprehensive": (
+        "Each content slide should have 5-8 key points, using the twoColumn "
+        "contentType to fit them when the layout catalog offers it. Break "
+        "large topics into multiple slides freely - a comprehensive deck is "
+        "expected to run longer than a concise one, and totalSlides should "
+        "reflect that."
+    ),
+}
+
 
 class PlanPresentationStructureTool:
     """Plan the slide structure and outline for a presentation."""
@@ -63,6 +84,12 @@ class PlanPresentationStructureTool:
                     ),
                     required=False,
                 ),
+                ToolParameter(
+                    name="detail_level",
+                    type="string",
+                    description="Content depth: concise, detailed, or comprehensive",
+                    required=False,
+                ),
             ],
         )
 
@@ -74,6 +101,7 @@ class PlanPresentationStructureTool:
         target_slide_count: int = 0,
         audience: str = "general",
         design_system_summary: str = "{}",
+        detail_level: str = "detailed",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -96,6 +124,8 @@ class PlanPresentationStructureTool:
             if available_layouts:
                 layout_names = [lt.get("layoutName", f"Layout {lt.get('layoutId', '?')}") for lt in available_layouts]
                 layout_info = f"\nAvailable layout names in template: {', '.join(layout_names)}"
+
+            detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
 
             prompt = f"""Plan a presentation structure based on the following:
 
@@ -129,7 +159,7 @@ Rules:
 - Last slide should be a conclusion/summary slide. If it recaps points (3-5 key points), give it contentType "content" so the points render in a body placeholder - only use contentType "conclusion" (title-only) for a slide with no body content.
 - Every slide that has key points MUST use a contentType whose layout has a body placeholder: "content" (one body), "twoColumn" (two bodies), "table", or "image". Never assign 3-5 key points to a "title" or "conclusion" slide - those layouts have no body placeholder and the points would be dropped.
 - Distribute content evenly across slides
-- Each content slide should have 3-5 key points maximum
+- {detail_guidance}
 - Choose suggestedLayout names from the available layouts if a template is provided"""
 
             response = await llm.chat(

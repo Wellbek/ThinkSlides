@@ -15,6 +15,33 @@ import time
 
 logger = get_logger(__name__)
 
+# How much depth each bullet/note should carry, keyed by the composer's
+# detail_level. Concise mirrors the original single-sentence-only behaviour;
+# the others progressively ask for more elaboration and richer notes.
+_DETAIL_GUIDANCE = {
+    "concise": (
+        "Keep each bullet to a single short, concise sentence; do not pad, "
+        "but do not omit points. Speaker notes should be a brief 1-2 sentence "
+        "summary."
+    ),
+    "detailed": (
+        "Write each bullet as a fuller sentence that includes a concrete "
+        "supporting detail (a number, a cause, an implication) rather than "
+        "a bare label - but stay to one sentence per bullet; use sub-bullets "
+        "(level: 1) for a second layer of detail when a point warrants it. "
+        "Speaker notes should be 2-4 sentences that add context beyond what "
+        "the bullets already say."
+    ),
+    "comprehensive": (
+        "Write each bullet as a fuller sentence with concrete supporting "
+        "detail, and add a sub-bullet (level: 1) under most points to "
+        "elaborate further - aim for real depth, not just restating the key "
+        "point in longer words. Speaker notes should be a thorough paragraph "
+        "giving the presenter everything they'd need to talk through the "
+        "slide without reading it verbatim."
+    ),
+}
+
 
 class DesignSlideContentTool:
     """Generate structured slide content JSON for a single slide."""
@@ -61,6 +88,12 @@ class DesignSlideContentTool:
                     type="integer",
                     description="0-based index of this slide in the presentation",
                 ),
+                ToolParameter(
+                    name="detail_level",
+                    type="string",
+                    description="Content depth: concise, detailed, or comprehensive",
+                    required=False,
+                ),
             ],
         )
 
@@ -71,6 +104,7 @@ class DesignSlideContentTool:
         slide_index: int,
         layout_info: str = "{}",
         design_system_context: str = "{}",
+        detail_level: str = "detailed",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -140,6 +174,8 @@ Design System Context:
             key_points = outline.get("keyPoints", []) if isinstance(outline, dict) else []
             kp_list = "\n".join(f"  - {kp}" for kp in key_points) if key_points else "  (none)"
 
+            detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
+
             prompt = f"""Generate content for a single presentation slide.
 
 Slide Outline:
@@ -183,8 +219,7 @@ Return a JSON object with this exact structure:
 Rules:
 - Put the slide title in the title placeholder (placeholderIdx={title_idx}).
 - Put EVERY key point listed above into the body placeholder (placeholderIdx={body_idx}) as its OWN bullet run - one run per key point, with bullet: true and level: 0. Never collapse multiple key points into a single bullet or drop points to save space.
-- Keep each bullet to a single concise sentence; do not pad, but do not omit points.
-- Use sub-bullets (level: 1) only when a key point genuinely needs a supporting detail.
+- {detail_guidance}
 - Use "image" type for pic placeholders with {{type: "image", image: {{source: "prompt", data: "description"}}}}.
 - Use "table" type for tbl placeholders.
 - Each content item must have a placeholderIdx matching one of the available placeholders."""

@@ -25,9 +25,21 @@ export interface CreateSessionResponse {
  */
 export type EffortMode = 'simple' | 'deep';
 
+/**
+ * How much content depth the generated presentation should aim for.
+ *
+ * `concise` keeps today's terse, single-sentence bullets; `detailed` (the
+ * default) raises the baseline to fuller bullets with supporting detail;
+ * `comprehensive` goes further still, encouraging sub-bullets and richer
+ * speaker notes. The server treats any unrecognised value - including the
+ * field being absent - as `detailed`.
+ */
+export type DetailLevel = 'concise' | 'detailed' | 'comprehensive';
+
 export interface SendMessageRequest {
   content: string;
   mode?: EffortMode;
+  detailLevel?: DetailLevel;
   attachments?: Array<{
     fileName: string;
     mimeType: string;
