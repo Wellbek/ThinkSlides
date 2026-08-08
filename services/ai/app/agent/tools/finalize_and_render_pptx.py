@@ -56,6 +56,16 @@ class FinalizeAndRenderPptxTool:
                     type="string",
                     description="The chat session ID for associating the generated file",
                 ),
+                ToolParameter(
+                    name="color_theme",
+                    type="string",
+                    description=(
+                        "Color palette to use, one of: professional, warm, monochrome, "
+                        "bold, nature. Only takes effect when no template_path is given "
+                        "- an uploaded template's own colors are always preserved."
+                    ),
+                    required=False,
+                ),
             ],
         )
 
@@ -66,6 +76,7 @@ class FinalizeAndRenderPptxTool:
         session_id: str,
         template_path: str = "",
         presentation_metadata: str = "{}",
+        color_theme: str = "",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -101,6 +112,7 @@ class FinalizeAndRenderPptxTool:
                 try:
                     renderer = PPTXRenderer(
                         template_path=template_path if template_path and os.path.exists(template_path) else None,
+                        color_theme=color_theme or None,
                     )
                     result_path = renderer.render(
                         slides=slides,

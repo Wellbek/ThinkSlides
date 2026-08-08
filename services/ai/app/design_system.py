@@ -22,7 +22,68 @@ def _inch(inches: float) -> int:
     return int(round(inches * 914400))
 
 
-def get_default_design_system() -> dict:
+# Named palettes a user can pick between when no template was uploaded (so
+# this default design system is what actually gets rendered). Each entry
+# has the same shape as the default's own palette_colors so it can be
+# swapped in directly. Keep names matching the options the system prompt
+# tells the LLM to offer via ask_user_question.
+COLOR_THEMES: dict[str, list[dict]] = {
+    "professional": [
+        {"name": "primary", "value": "#1F4E78", "type": "hex"},
+        {"name": "secondary", "value": "#2980B9", "type": "hex"},
+        {"name": "accent", "value": "#FF7F50", "type": "hex"},
+        {"name": "dark", "value": "#15334F", "type": "hex"},
+        {"name": "light", "value": "#F0F4F8", "type": "hex"},
+        {"name": "white", "value": "#FFFFFF", "type": "hex"},
+        {"name": "gray", "value": "#808080", "type": "hex"},
+    ],
+    "warm": [
+        {"name": "primary", "value": "#C0392B", "type": "hex"},
+        {"name": "secondary", "value": "#E67E22", "type": "hex"},
+        {"name": "accent", "value": "#F1C40F", "type": "hex"},
+        {"name": "dark", "value": "#7B241C", "type": "hex"},
+        {"name": "light", "value": "#FDEBD0", "type": "hex"},
+        {"name": "white", "value": "#FFFFFF", "type": "hex"},
+        {"name": "gray", "value": "#808080", "type": "hex"},
+    ],
+    "monochrome": [
+        {"name": "primary", "value": "#2C2C2C", "type": "hex"},
+        {"name": "secondary", "value": "#595959", "type": "hex"},
+        {"name": "accent", "value": "#8C8C8C", "type": "hex"},
+        {"name": "dark", "value": "#141414", "type": "hex"},
+        {"name": "light", "value": "#F2F2F2", "type": "hex"},
+        {"name": "white", "value": "#FFFFFF", "type": "hex"},
+        {"name": "gray", "value": "#B0B0B0", "type": "hex"},
+    ],
+    "bold": [
+        {"name": "primary", "value": "#6C3483", "type": "hex"},
+        {"name": "secondary", "value": "#E74C3C", "type": "hex"},
+        {"name": "accent", "value": "#F39C12", "type": "hex"},
+        {"name": "dark", "value": "#4A235A", "type": "hex"},
+        {"name": "light", "value": "#F4ECF7", "type": "hex"},
+        {"name": "white", "value": "#FFFFFF", "type": "hex"},
+        {"name": "gray", "value": "#808080", "type": "hex"},
+    ],
+    "nature": [
+        {"name": "primary", "value": "#1E8449", "type": "hex"},
+        {"name": "secondary", "value": "#52BE80", "type": "hex"},
+        {"name": "accent", "value": "#F4D03F", "type": "hex"},
+        {"name": "dark", "value": "#145A32", "type": "hex"},
+        {"name": "light", "value": "#EAFAF1", "type": "hex"},
+        {"name": "white", "value": "#FFFFFF", "type": "hex"},
+        {"name": "gray", "value": "#808080", "type": "hex"},
+    ],
+}
+DEFAULT_COLOR_THEME = "professional"
+
+
+def normalize_color_theme(theme: str | None) -> str:
+    """Map any caller-supplied value onto a known theme, defaulting to professional."""
+    key = (theme or "").strip().lower()
+    return key if key in COLOR_THEMES else DEFAULT_COLOR_THEME
+
+
+def get_default_design_system(color_theme: str | None = None) -> dict:
     """Return the fully-parsed built-in default design system.
 
     This is the single source of truth consumed by both
@@ -30,16 +91,11 @@ def get_default_design_system() -> dict:
     and ``app.renderer.default_template.DefaultTemplateGenerator`` (rendered
     PPTX fallback), so presentations built without a user template stay
     visually coherent with what the renderer actually emits.
+
+    ``color_theme`` selects one of ``COLOR_THEMES`` (see there); an
+    unrecognised value falls back to the original "professional" palette.
     """
-    palette_colors = [
-        {"name": "primary", "value": "#1F4E78", "type": "hex"},     # professional blue
-        {"name": "secondary", "value": "#2980B9", "type": "hex"},   # lighter blue
-        {"name": "accent", "value": "#FF7F50", "type": "hex"},      # orange accent
-        {"name": "dark", "value": "#15334F", "type": "hex"},        # dark blue
-        {"name": "light", "value": "#F0F4F8", "type": "hex"},       # light gray
-        {"name": "white", "value": "#FFFFFF", "type": "hex"},
-        {"name": "gray", "value": "#808080", "type": "hex"},
-    ]
+    palette_colors = COLOR_THEMES[normalize_color_theme(color_theme)]
 
     # Slide dimensions: 10in x 5.625in (16:9), matching the renderer default
     slide_dimensions = {
@@ -150,4 +206,5 @@ def get_default_design_system() -> dict:
         "masterElements": [],
         "embeddedMedia": [],
         "sourceType": "default",
+        "colorTheme": normalize_color_theme(color_theme),
     }

@@ -79,11 +79,22 @@ class ExtractTemplateDesignSystemTool:
                     ),
                     required=False,
                 ),
+                ToolParameter(
+                    name="color_theme",
+                    type="string",
+                    description=(
+                        "Color palette for the built-in default design system, one of: "
+                        "professional, warm, monochrome, bold, nature. Only applies when "
+                        "template_path is omitted - an uploaded template's own colors are "
+                        "always used as-is."
+                    ),
+                    required=False,
+                ),
             ],
         )
 
     @classmethod
-    async def run(cls, template_path: str = "") -> ToolResult:
+    async def run(cls, template_path: str = "", color_theme: str = "") -> ToolResult:
         start = time.time()
         try:
             normalized = (template_path or "").strip()
@@ -94,7 +105,7 @@ class ExtractTemplateDesignSystemTool:
 
             # No path / explicit default request -> built-in design system
             if not normalized or normalized.lower() in DEFAULT_SENTINELS:
-                return cls._default_result(start)
+                return cls._default_result(start, color_theme)
 
             # A path was given but the file does not exist. If it looks like a
             # default request (e.g. the LLM invented "default_template.pptx"),
@@ -106,7 +117,7 @@ class ExtractTemplateDesignSystemTool:
                         "template_path_not_found_using_default",
                         template_path=template_path,
                     )
-                    return cls._default_result(start)
+                    return cls._default_result(start, color_theme)
                 return ToolResult(
                     success=False,
                     error=(
@@ -149,14 +160,15 @@ class ExtractTemplateDesignSystemTool:
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
 
     @staticmethod
-    def _default_result(start: float) -> ToolResult:
+    def _default_result(start: float, color_theme: str = "") -> ToolResult:
         """Build a successful ToolResult from the built-in default design system."""
-        design_system = get_default_design_system()
+        design_system = get_default_design_system(color_theme=color_theme or None)
         duration_ms = int((time.time() - start) * 1000)
         logger.info(
             "design_system_extracted",
             template_path="(default)",
             source_type="default",
+            color_theme=design_system.get("colorTheme"),
             layout_count=len(design_system.get("layouts", [])),
             duration_ms=duration_ms,
         )

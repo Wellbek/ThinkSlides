@@ -986,26 +986,37 @@ class AgentLoop:
             "1. You MUST always call tools until you complete the presentation.",
             "2. You MUST call finalize_and_render_pptx as the final step to generate the PPTX file.",
             "3. NEVER respond with only text and stop - this will cause the generation to fail.",
-            "4. DEFAULT TO ASKING, NOT GUESSING. Whenever you are unsure about a choice that would "
-            "meaningfully affect the presentation - target audience, desired scope/slide count, tone, "
-            "which parts of the source material to emphasize, how to resolve ambiguous or conflicting "
-            "information in what was provided, a structural or design choice not implied by context, "
-            "or anything else where a wrong assumption would produce a presentation the user did not "
-            "want - call ask_user_question rather than guessing. This is the default; only skip asking "
-            "when you are genuinely confident in the answer, not merely when an answer is possible.",
-            "5. EXCEPTION: if the user has explicitly said not to ask questions (e.g. 'don't ask me "
+            "4. DEFAULT TO ASKING, NOT GUESSING, at every real decision point. This includes at least: "
+            "target audience; desired scope/slide count; tone; WHICH PARTS OF THE SOURCE MATERIAL TO "
+            "FOCUS ON OR EMPHASIZE when it covers more than can reasonably fit; how to resolve ambiguous "
+            "or conflicting information in what was provided; and VISUAL STYLE / COLOR PREFERENCE "
+            "whenever no template was uploaded (so the built-in default design system will be used) and "
+            "the user hasn't already indicated one. Call ask_user_question rather than guessing whenever "
+            "a wrong assumption would produce a presentation the user did not want. This is the default; "
+            "only skip asking when you are genuinely confident in the answer, not merely when an answer "
+            "is possible.",
+            "5. EVERY ask_user_question call MUST include well-chosen suggested options via the "
+            "'options' parameter - concrete, mutually distinct choices (roughly 3-5) the user can pick "
+            "in one tap, not just an open-ended question with nothing to react to. E.g. for content "
+            "focus: name the 2-4 candidate angles/sections you saw in the material and let the user pick "
+            "or say 'cover them all'. For color/style (only when no template is uploaded), offer these "
+            "exact five as options - Professional, Warm, Monochrome, Bold, Nature - since those are the "
+            "only palettes the renderer actually supports; if the user picks one, pass its lowercase name "
+            "as color_theme to BOTH extract_template_design_system and finalize_and_render_pptx so the "
+            "design system you see and what actually renders stay in sync.",
+            "6. EXCEPTION: if the user has explicitly said not to ask questions (e.g. 'don't ask me "
             "anything', 'just build it', 'use your best judgment', 'no more questions'), make the most "
             "reasonable assumption yourself and proceed without asking - briefly note any significant "
             "assumption in the relevant slide's notes instead.",
-            "6. Prefer asking before planning, batching multiple uncertainties into ONE consolidated "
+            "7. Prefer asking before planning, batching multiple uncertainties into ONE consolidated "
             "ask_user_question rather than asking one at a time. But do not suppress a genuine question "
             "just because planning has already started - if a new ambiguity only becomes apparent "
             "partway through (e.g. conflicting figures in an uploaded document), ask then too rather "
             "than silently guessing.",
-            "7. Do NOT ask about things you can already infer confidently from the conversation or "
+            "8. Do NOT ask about things you can already infer confidently from the conversation or "
             "uploaded documents, or about minor stylistic choices with no real stakes - that is noise, "
             "not the kind of question this rule is asking for.",
-            "8. Tool calls that are out of order (e.g. finalizing before every planned slide is "
+            "9. Tool calls that are out of order (e.g. finalizing before every planned slide is "
             "designed) will be rejected with an explanation - read it and follow the corrective "
             "instruction rather than retrying the same call.",
             "",
