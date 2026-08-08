@@ -173,3 +173,142 @@ async def test_select_layout_picks_conclusion_layout():
 
     assert result.success is True
     assert result.data["layoutName"] == "Conclusion"
+
+
+# ── design_slide_content / plan_presentation_structure: fail loudly on ────
+# unparseable or empty LLM output, instead of silently succeeding with no
+# content (previously "right slide count, no content" in the rendered deck).
+
+from app.agent import run_context
+from app.agent.tools.design_slide_content import DesignSlideContentTool
+from app.agent.tools.plan_presentation_structure import PlanPresentationStructureTool
+
+
+class _ScriptedProvider:
+    def __init__(self, content: str):
+        self.content = content
+
+    async def chat(self, messages, tools=None):
+        return {"message": {"content": self.content}}
+
+
+@pytest.mark.asyncio
+async def test_design_slide_content_fails_when_response_is_not_json():
+    token = run_context.set_chat_provider(_ScriptedProvider("Sorry, I can't do that."))
+    try:
+        result = await DesignSlideContentTool.run(
+            slide_outline="{}", layout_info="{}", slide_index=0,
+        )
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is False
+    assert "parse" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_design_slide_content_fails_when_contents_is_empty():
+    """Regression: valid JSON but with no contents previously still
+    succeeded, producing a slide with nothing on it."""
+    token = run_context.set_chat_provider(_ScriptedProvider('{"slideIndex": 0, "contents": []}'))
+    try:
+        result = await DesignSlideContentTool.run(
+            slide_outline="{}", layout_info="{}", slide_index=0,
+        )
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is False
+    assert "no content" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_design_slide_content_recovers_json_wrapped_in_prose():
+    content = 'Sure, here you go:\n\n{"slideIndex": 0, "contents": [{"type": "text", "placeholderIdx": 0, "runs": [{"text": "Hi"}]}]}\n\nHope that helps!'
+    token = run_context.set_chat_provider(_ScriptedProvider(content))
+    try:
+        result = await DesignSlideContentTool.run(
+            slide_outline="{}", layout_info="{}", slide_index=0,
+        )
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is True
+    assert result.data["contents"][0]["runs"][0]["text"] == "Hi"
+
+
+@pytest.mark.asyncio
+async def test_plan_presentation_structure_fails_when_response_is_not_json():
+    token = run_context.set_chat_provider(_ScriptedProvider("I need more information first."))
+    try:
+        result = await PlanPresentationStructureTool.run(content_summary="x")
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is False
+    assert "parse" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_presentation_structure_fails_when_slides_is_empty():
+    token = run_context.set_chat_provider(_ScriptedProvider('{"title": "T", "totalSlides": 0, "slides": []}'))
+    try:
+        result = await PlanPresentationStructureTool.run(content_summary="x")
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is False
+
+
+# ── ask_user_question: options as a native list ─────────────────────────
+# Regression: reported production crash - "the JSON object must be str,
+# bytes or bytearray, not list" - the model sent a real JSON array for
+# "options" (matching its now-corrected "array" schema type) rather than a
+# JSON-encoded string, and the tool's old bare json.loads(options) raised
+# TypeError on it.
+
+from app.agent.tools.ask_user_question import AskUserQuestionTool
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_accepts_options_as_a_native_list():
+    result = await AskUserQuestionTool.run(
+        question="What should the presentation focus on?",
+        options=["History and Growth", "Menu and Offerings", "Brand Strategy"],
+    )
+
+    assert result.success is True
+    assert result.data["options"] == ["History and Growth", "Menu and Offerings", "Brand Strategy"]
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_still_accepts_a_json_encoded_string():
+    result = await AskUserQuestionTool.run(
+        question="What should the presentation focus on?",
+        options='["A", "B", "C"]',
+    )
+
+    assert result.success is True
+    assert result.data["options"] == ["A", "B", "C"]
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_treats_a_plain_string_as_one_option():
+    result = await AskUserQuestionTool.run(question="Pick one", options="Only choice")
+
+    assert result.success is True
+    assert result.data["options"] == ["Only choice"]
+
+
+# ── registry: array-typed parameters get an items schema ────────────────
+
+
+def test_ask_user_question_schema_declares_options_as_a_string_array():
+    from app.agent.registry import get_registry
+
+    schemas = get_registry().get_function_schemas()
+    schema = next(s for s in schemas if s["function"]["name"] == "ask_user_question")
+    options_prop = schema["function"]["parameters"]["properties"]["options"]
+
+    assert options_prop["type"] == "array"
+    assert options_prop["items"] == {"type": "string"}

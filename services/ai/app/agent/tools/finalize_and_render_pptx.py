@@ -8,10 +8,10 @@ Also generates preview images for each slide.
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.tools._json_extract import coerce_json_arg
 from app.renderer.pptx_renderer import PPTXRenderer
 from app.renderer.preview_generator import PreviewGenerator
 from app.observability.logging import get_logger
-import json
 import time
 import os
 import uuid
@@ -56,6 +56,18 @@ class FinalizeAndRenderPptxTool:
                     type="string",
                     description="The chat session ID for associating the generated file",
                 ),
+                ToolParameter(
+                    name="color_theme",
+                    type="string",
+                    description=(
+                        "Color palette to use: either one of professional, warm, monochrome, "
+                        "bold, nature, OR a specific brand hex color like '#00704A' - must "
+                        "match whatever was passed to extract_template_design_system earlier "
+                        "in this run. Only takes effect when no template_path is given - an "
+                        "uploaded template's own colors are always preserved."
+                    ),
+                    required=False,
+                ),
             ],
         )
 
@@ -66,11 +78,17 @@ class FinalizeAndRenderPptxTool:
         session_id: str,
         template_path: str = "",
         presentation_metadata: str = "{}",
+        color_theme: str = "",
     ) -> ToolResult:
         start = time.time()
         try:
-            slides = json.loads(slides_json) if slides_json else []
-            metadata = json.loads(presentation_metadata) if presentation_metadata else {}
+            # coerce_json_arg, not a bare json.loads: a tool-calling model may
+            # send a native JSON value here despite the declared "string"
+            # type, which raises TypeError rather than JSONDecodeError. A
+            # coercion failure on slides falls through to the existing
+            # "No slides provided" check below, which already fails loudly.
+            slides = coerce_json_arg(slides_json, [])
+            metadata = coerce_json_arg(presentation_metadata, {})
 
             if not slides:
                 return ToolResult(
@@ -101,6 +119,7 @@ class FinalizeAndRenderPptxTool:
                 try:
                     renderer = PPTXRenderer(
                         template_path=template_path if template_path and os.path.exists(template_path) else None,
+                        color_theme=color_theme or None,
                     )
                     result_path = renderer.render(
                         slides=slides,

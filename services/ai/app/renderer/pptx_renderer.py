@@ -20,7 +20,8 @@ from pptx.util import Inches, Pt, Emu
 from app.observability.logging import get_logger
 from app.renderer.layout import LayoutEngine, LayoutType, PositionConfig
 from app.renderer.typography import TypographyEngine, TextStyle
-from app.renderer.default_template import get_default_template_path
+from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
+from app.design_system import get_default_design_system
 
 logger = get_logger(__name__)
 
@@ -53,8 +54,16 @@ class PPTXRenderer:
     5. Repack as a valid PPTX ZIP.
     """
 
-    def __init__(self, template_path: Optional[str] = None) -> None:
+    def __init__(self, template_path: Optional[str] = None, color_theme: Optional[str] = None) -> None:
         self.template_path = template_path
+        # Only meaningful on the no-template path (_render_from_default): an
+        # uploaded template's own colors are preserved untouched to keep
+        # template fidelity, per this renderer's whole design (see module
+        # docstring) - color_theme only picks a palette for the built-in
+        # default design system when there is no template to be faithful to.
+        self.color_theme = color_theme
+        # Set by _render_from_default before it adds any slides.
+        self._title_rgb = None
 
     def render(
         self,
@@ -134,6 +143,17 @@ class PPTXRenderer:
         # Use default template
         template_path = get_default_template_path()
         prs = Presentation(template_path)
+
+        # Resolve the chosen color theme's primary color for title text.
+        # The default template file itself doesn't need to change per theme
+        # (its master background is white in every theme) - only the title
+        # color applied here, at render time, actually varies.
+        palette = get_default_design_system(color_theme=self.color_theme)["palette"]["colors"]
+        primary_hex = next((c["value"] for c in palette if c.get("name") == "primary"), None)
+        try:
+            self._title_rgb = _hex_to_rgbcolor(primary_hex) if primary_hex else None
+        except ValueError:
+            self._title_rgb = None
 
         for slide_data in slides:
             # Infer layout type from slide content
@@ -225,7 +245,7 @@ class PPTXRenderer:
             )
 
         # Render other content
-        top_offset = 0
+        top_offset = 0.0  # inches, matching PositionConfig's unit
         for content in other_content:
             if content.get("type") == "text":
                 content_pos = LayoutEngine.calculate_content_position(
@@ -242,7 +262,7 @@ class PPTXRenderer:
                     content_pos,
                     is_title=False,
                 )
-                top_offset += Inches(0.3)  # spacing between sections
+                top_offset += 0.3  # inches, spacing between sections
 
             elif content.get("type") == "image":
                 img_pos = LayoutEngine.calculate_image_position(
@@ -259,8 +279,16 @@ class PPTXRenderer:
         is_title: bool = False,
     ) -> None:
         """Add a text box with proper styling."""
+        # PositionConfig fields are inches (plain floats, see layout.py) -
+        # python-pptx's shape-creation calls take EMU Length values, and
+        # silently treat a raw int/float as EMU rather than raising. Passing
+        # pos.left/top/etc. directly - as this used to - produced textboxes a
+        # few EMU wide (1 inch = 914400 EMU), i.e. invisible: every slide on
+        # the no-template render path had its content positioned into a
+        # sub-pixel box. This is the "right slide count, no visible content"
+        # bug.
         txBox = slide.shapes.add_textbox(
-            pos.left, pos.top, pos.width, pos.height
+            Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
         )
         tf = txBox.text_frame
         tf.word_wrap = True
@@ -286,6 +314,8 @@ class PPTXRenderer:
             run.font.bold = style.bold or run_data.get("bold", False)
             run.font.italic = style.italic or run_data.get("italic", False)
             run.font.underline = style.underline or run_data.get("underline", False)
+            if is_title and self._title_rgb is not None:
+                run.font.color.rgb = self._title_rgb
 
             # Validate font size
             if run.font.size:
@@ -312,7 +342,7 @@ class PPTXRenderer:
             try:
                 slide.shapes.add_picture(
                     img_stream.name,
-                    pos.left, pos.top, pos.width, pos.height
+                    Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
                 )
             finally:
                 os.unlink(img_stream.name)

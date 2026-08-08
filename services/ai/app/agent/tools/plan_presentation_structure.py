@@ -6,6 +6,7 @@ Plans the overall slide structure and outline based on analyzed content and requ
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import get_chat_provider
+from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.llm.provider import get_tools_llm_provider as get_llm_provider
 from app.observability.logging import get_logger
 import json
@@ -76,7 +77,11 @@ class PlanPresentationStructureTool:
                 ToolParameter(
                     name="design_system_summary",
                     type="string",
-                    description="JSON summary of the design system layout catalog",
+                    description=(
+                        "JSON summary of the design system layout catalog. Optional - "
+                        "the system supplies the current design system automatically, "
+                        "so you do not need to pass this."
+                    ),
                     required=False,
                 ),
                 ToolParameter(
@@ -105,15 +110,14 @@ class PlanPresentationStructureTool:
             # tools-tier model, which only exists for the default provider.
             llm = get_chat_provider() or get_llm_provider()
 
-            try:
-                parsed_data = json.loads(key_data) if key_data else {}
-            except json.JSONDecodeError:
-                parsed_data = {}
-
-            try:
-                parsed_ds = json.loads(design_system_summary) if design_system_summary else {}
-            except json.JSONDecodeError:
-                parsed_ds = {}
+            # coerce_json_arg, not a bare json.loads: a tool-calling model may
+            # send a native JSON object for these despite their declared
+            # "string" type, which raises TypeError rather than the
+            # JSONDecodeError this used to guard against. Both are
+            # supplementary context (not required for the plan to succeed),
+            # so a soft {} fallback on genuine failure is fine here.
+            parsed_data = coerce_json_arg(key_data, {})
+            parsed_ds = coerce_json_arg(design_system_summary, {})
 
             available_layouts = parsed_ds.get("layouts", [])
             layout_info = ""
@@ -164,16 +168,21 @@ Rules:
             )
 
             result_text = response.get("message", {}).get("content", "{}")
-            try:
-                structure = json.loads(result_text)
-            except json.JSONDecodeError:
-                # Try to extract JSON from markdown code block
-                import re
-                json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', result_text, re.DOTALL)
-                if json_match:
-                    structure = json.loads(json_match.group(1))
-                else:
-                    structure = {"raw_plan": result_text}
+            structure = extract_json_object(result_text)
+            if structure is None or not structure.get("slides"):
+                # Fail loudly rather than silently proceeding with a
+                # {"raw_plan": ...} object that has no totalSlides/slides -
+                # every downstream step depends on this structure existing.
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Could not parse the model's response as a presentation "
+                        f"structure (response started with: {result_text[:200]!r}). "
+                        "Retry and respond with ONLY the JSON object - no prose "
+                        "before or after it - including a non-empty 'slides' array."
+                    ),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
 
             duration_ms = int((time.time() - start) * 1000)
             logger.info(

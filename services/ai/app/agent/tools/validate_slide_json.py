@@ -6,8 +6,8 @@ Ensures all required fields exist and placeholder indices are valid.
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
-import json
 import time
 
 logger = get_logger(__name__)
@@ -52,12 +52,15 @@ class ValidateSlideJsonTool:
         layout_placeholders: str = "[]",
     ) -> ToolResult:
         start = time.time()
-        try:
-            slide = json.loads(slide_json)
-        except json.JSONDecodeError as e:
+        # coerce_json_arg, not a bare json.loads: a tool-calling model may
+        # send a native JSON value here despite the declared "string" type,
+        # which raises TypeError - a plain `except json.JSONDecodeError`
+        # does not catch that and would crash the whole agent loop.
+        slide = coerce_json_arg(slide_json, None)
+        if slide is None:
             return ToolResult(
                 success=False,
-                error=f"Invalid JSON: {str(e)}",
+                error=f"Invalid JSON: could not parse slide_json (got: {str(slide_json)[:200]!r})",
                 duration_ms=int((time.time() - start) * 1000),
             )
 
@@ -158,15 +161,13 @@ class ValidateSlideJsonTool:
                 # Validate placeholder index against layout
                 ph_idx = item.get("placeholderIdx")
                 if ph_idx is not None and layout_placeholders:
-                    try:
-                        valid_phs = json.loads(layout_placeholders)
+                    valid_phs = coerce_json_arg(layout_placeholders, None)
+                    if isinstance(valid_phs, list):
                         valid_indices = [p.get("idx") for p in valid_phs]
                         if ph_idx not in valid_indices:
                             warnings.append(
                                 f"Content item {i}: placeholderIdx {ph_idx} not in layout placeholders {valid_indices}"
                             )
-                    except json.JSONDecodeError:
-                        pass
 
         # Validate slide index
         if not isinstance(slide.get("slideIndex"), int):
