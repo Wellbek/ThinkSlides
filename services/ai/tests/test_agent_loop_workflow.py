@@ -66,7 +66,7 @@ def test_add_slide_replaces_an_existing_index_instead_of_duplicating():
 def test_design_slide_content_blocked_without_a_plan():
     loop = _loop()
 
-    error = loop._check_precondition("design_slide_content")
+    error = loop._check_precondition("design_slide_content", {})
 
     assert error is not None
     assert "plan_presentation_structure" in error
@@ -76,9 +76,9 @@ def test_design_slide_content_allowed_once_structure_exists():
     loop = _loop()
     loop.working_state.presentation_structure = {"totalSlides": 2}
 
-    assert loop._check_precondition("design_slide_content") is None
-    assert loop._check_precondition("select_layout") is None
-    assert loop._check_precondition("generate_image_prompt") is None
+    assert loop._check_precondition("design_slide_content", {}) is None
+    assert loop._check_precondition("select_layout", {}) is None
+    assert loop._check_precondition("generate_image_prompt", {}) is None
 
 
 def test_replanning_blocked_once_slides_have_been_designed():
@@ -86,7 +86,7 @@ def test_replanning_blocked_once_slides_have_been_designed():
     loop.working_state.presentation_structure = {"totalSlides": 2}
     loop.working_state.add_slide({"slideIndex": 0})
 
-    error = loop._check_precondition("plan_presentation_structure")
+    error = loop._check_precondition("plan_presentation_structure", {})
 
     assert error is not None
     assert "ask_user_question" in error
@@ -96,7 +96,7 @@ def test_replanning_allowed_before_any_slide_is_designed():
     loop = _loop()
     loop.working_state.presentation_structure = {"totalSlides": 2}
 
-    assert loop._check_precondition("plan_presentation_structure") is None
+    assert loop._check_precondition("plan_presentation_structure", {}) is None
 
 
 def test_finalize_blocked_until_every_planned_slide_is_designed():
@@ -104,7 +104,7 @@ def test_finalize_blocked_until_every_planned_slide_is_designed():
     loop.working_state.presentation_structure = {"totalSlides": 3}
     loop.working_state.add_slide({"slideIndex": 0})
 
-    error = loop._check_precondition("finalize_and_render_pptx")
+    error = loop._check_precondition("finalize_and_render_pptx", {})
 
     assert error is not None
     assert "1 and 2" in error or "[1, 2]" in error
@@ -116,16 +116,38 @@ def test_finalize_allowed_once_all_planned_slides_are_designed():
     loop.working_state.add_slide({"slideIndex": 0})
     loop.working_state.add_slide({"slideIndex": 1})
 
-    assert loop._check_precondition("finalize_and_render_pptx") is None
+    assert loop._check_precondition("finalize_and_render_pptx", {}) is None
 
 
 def test_finalize_blocked_without_a_plan_at_all():
     loop = _loop()
 
-    error = loop._check_precondition("finalize_and_render_pptx")
+    error = loop._check_precondition("finalize_and_render_pptx", {})
 
     assert error is not None
     assert "plan_presentation_structure" in error
+
+
+def test_design_slide_content_blocked_without_a_layout_for_that_slide():
+    loop = _loop()
+    loop.working_state.presentation_structure = {"totalSlides": 2}
+    loop.working_state.selected_layouts[0] = {"layoutId": "content"}
+
+    # Slide 0 has a layout, slide 1 does not.
+    assert loop._check_precondition("design_slide_content", {"slide_index": 0}) is None
+    error = loop._check_precondition("design_slide_content", {"slide_index": 1})
+    assert error is not None
+    assert "select_layout" in error
+    assert "slide_index=1" in error
+
+
+def test_design_slide_content_with_no_slide_index_is_not_blocked_by_layout_check():
+    """A malformed call missing slide_index shouldn't be blocked by the
+    layout check specifically - the tool itself will reject it."""
+    loop = _loop()
+    loop.working_state.presentation_structure = {"totalSlides": 2}
+
+    assert loop._check_precondition("design_slide_content", {}) is None
 
 
 def test_completed_work_summary_handles_a_slide_with_empty_contents():
@@ -146,7 +168,23 @@ def test_tools_with_no_precondition_are_never_blocked():
     loop = _loop()
 
     for name in ("analyze_document", "extract_key_data", "web_search", "ask_user_question", "validate_slide_json"):
-        assert loop._check_precondition(name) is None
+        assert loop._check_precondition(name, {}) is None
+
+
+# ── System prompt: ask-by-default with an explicit opt-out ────────────────
+
+
+def test_prompt_defaults_to_asking_when_unsure():
+    prompt = _loop(MODE_SIMPLE)._build_system_prompt({})
+
+    assert "DEFAULT TO ASKING, NOT GUESSING" in prompt
+
+
+def test_prompt_states_the_explicit_opt_out():
+    prompt = _loop(MODE_SIMPLE)._build_system_prompt({})
+
+    assert "don't ask me anything" in prompt
+    assert "EXCEPTION" in prompt
 
 
 # ── design_slide_content / plan_presentation_structure result handling ────
@@ -171,15 +209,19 @@ async def test_run_tracks_structure_and_slides_and_auto_assembles_finalize_paylo
     monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
 
     structure = {"title": "Cats", "totalSlides": 2, "slides": [{"slideIndex": 0}, {"slideIndex": 1}]}
+    layout0 = {"layoutId": "1", "layoutName": "Content"}
+    layout1 = {"layoutId": "1", "layoutName": "Content"}
     slide0 = {"slideIndex": 0, "layoutId": "1", "layoutName": "Content", "contents": []}
     slide1 = {"slideIndex": 1, "layoutId": "1", "layoutName": "Content", "contents": []}
 
-    # Scripted tool calls: plan -> design slide 0 -> design slide 1 -> finalize -> stop.
+    # Scripted tool calls: plan -> (select layout, design) per slide -> finalize -> stop.
     script = [
         [{"id": "1", "function": {"name": "plan_presentation_structure", "arguments": "{}"}}],
-        [{"id": "2", "function": {"name": "design_slide_content", "arguments": "{}"}}],
-        [{"id": "3", "function": {"name": "design_slide_content", "arguments": "{}"}}],
-        [{"id": "4", "function": {"name": "finalize_and_render_pptx", "arguments": json.dumps({"slides_json": "[]", "session_id": str(session_id)})}}],
+        [{"id": "2", "function": {"name": "select_layout", "arguments": json.dumps({"content_type": "content", "slide_index": 0})}}],
+        [{"id": "3", "function": {"name": "design_slide_content", "arguments": json.dumps({"slide_index": 0})}}],
+        [{"id": "4", "function": {"name": "select_layout", "arguments": json.dumps({"content_type": "content", "slide_index": 1})}}],
+        [{"id": "5", "function": {"name": "design_slide_content", "arguments": json.dumps({"slide_index": 1})}}],
+        [{"id": "6", "function": {"name": "finalize_and_render_pptx", "arguments": json.dumps({"slides_json": "[]", "session_id": str(session_id)})}}],
         [],
     ]
     calls = {"n": 0}
@@ -198,9 +240,11 @@ async def test_run_tracks_structure_and_slides_and_auto_assembles_finalize_paylo
     async def _execute_tool(name, args):
         if name == "plan_presentation_structure":
             return ToolResult(success=True, data=structure)
+        if name == "select_layout":
+            layout = layout0 if args.get("slide_index") == 0 else layout1
+            return ToolResult(success=True, data=layout)
         if name == "design_slide_content":
-            n = calls["n"]
-            slide = slide0 if n <= 2 else slide1
+            slide = slide0 if args.get("slide_index") == 0 else slide1
             return ToolResult(success=True, data=slide)
         if name == "finalize_and_render_pptx":
             captured_finalize_args.update(args)
@@ -213,6 +257,7 @@ async def test_run_tracks_structure_and_slides_and_auto_assembles_finalize_paylo
 
     assert loop.working_state.presentation_structure == structure
     assert [s["slideIndex"] for s in loop.working_state.accumulated_slides] == [0, 1]
+    assert loop.working_state.selected_layouts == {0: layout0, 1: layout1}
     assert loop.working_state.has_called_finalize is True
 
     # finalize_and_render_pptx must have been called with the accumulated
@@ -221,6 +266,120 @@ async def test_run_tracks_structure_and_slides_and_auto_assembles_finalize_paylo
 
     tool_results = [e for e in events if e["type"] == "tool_result"]
     assert all(e["success"] for e in tool_results)
+
+
+@pytest.mark.asyncio
+async def test_design_system_blobs_are_server_supplied_not_trusted_from_the_llm(monkeypatch):
+    """Regression: select_layout/design_slide_content/plan_presentation_structure
+    ask for large design-system JSON blobs as string parameters, which the LLM
+    reliably mis-escapes once they're non-trivial (observed: "Expecting
+    property name enclosed in double quotes", from double-escaped quotes).
+    The loop must override whatever the LLM sends with its own json.dumps of
+    the tracked design system / selected layout, so a malformed value from
+    the LLM never reaches the tool."""
+    session_id = uuid.uuid4()
+    loop = _loop()
+    # Seeded via Redis (not assigned directly to loop.working_state) so that
+    # _run's state_loaded check is True and skips working_state.reset(),
+    # which would otherwise wipe presentation_structure before the script runs.
+    seeded_state = json.dumps({"completed_tools": {}, "presentation_structure": {"totalSlides": 1}})
+    loop.redis_client = _FakeRedis({f"working_state:{session_id}": seeded_state})
+
+    design_system = {"layouts": [{"layoutId": "content", "layoutName": "Content"}], "palette": {}}
+
+    async def _with_design_system(*args, **kwargs):
+        return {"design_system": design_system}
+
+    async def _no_messages(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(loop, "_load_context", _with_design_system)
+    monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
+
+    garbage = '[{\\\\"layoutId\\\\":\\\\"content\\\\"'  # the exact double-escaped shape reported in production
+    script = [
+        [{"id": "1", "function": {"name": "select_layout", "arguments": json.dumps({
+            "content_type": "content", "slide_index": 0, "available_layouts": garbage,
+        })}}],
+        [],
+    ]
+    calls = {"n": 0}
+
+    async def _chat(*args, **kwargs):
+        idx = calls["n"]
+        calls["n"] += 1
+        tool_calls = script[idx] if idx < len(script) else []
+        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+    loop.MAX_ITERATIONS = 2
+
+    captured_args: dict = {}
+
+    async def _execute_tool(name, args):
+        captured_args.update(args)
+        return ToolResult(success=True, data={"layoutId": "content"})
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    async for _ in loop.run(session_id):
+        pass
+
+    # The loop's own json.dumps of the tracked design system, not the
+    # LLM-supplied garbage string.
+    assert json.loads(captured_args["available_layouts"]) == design_system["layouts"]
+
+
+@pytest.mark.asyncio
+async def test_design_slide_content_receives_the_select_layout_result_automatically(monkeypatch):
+    """The loop must not require the LLM to copy the select_layout result
+    back verbatim into design_slide_content - same escaping risk as
+    available_layouts, for the same reason."""
+    session_id = uuid.uuid4()
+    loop = _loop()
+    the_layout = {"layoutId": "content", "layoutName": "Content", "placeholders": []}
+    # Seeded via Redis so _run's state_loaded check is True and skips
+    # working_state.reset(), which would otherwise wipe these before the
+    # script runs.
+    seeded_state = json.dumps({
+        "completed_tools": {},
+        "presentation_structure": {"totalSlides": 1},
+        "selected_layouts": {"0": the_layout},
+    })
+    loop.redis_client = _FakeRedis({f"working_state:{session_id}": seeded_state})
+
+    monkeypatch.setattr(loop, "_load_context", lambda *a, **k: _async({}))
+    monkeypatch.setattr(loop, "_build_chat_messages", lambda *a, **k: _async([]))
+
+    script = [
+        [{"id": "1", "function": {"name": "design_slide_content", "arguments": json.dumps({
+            "slide_outline": "{}", "slide_index": 0, "layout_info": "not even json",
+        })}}],
+        [],
+    ]
+    calls = {"n": 0}
+
+    async def _chat(*args, **kwargs):
+        idx = calls["n"]
+        calls["n"] += 1
+        tool_calls = script[idx] if idx < len(script) else []
+        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+    loop.MAX_ITERATIONS = 2
+
+    captured_args: dict = {}
+
+    async def _execute_tool(name, args):
+        captured_args.update(args)
+        return ToolResult(success=True, data={"slideIndex": 0, "contents": []})
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    async for _ in loop.run(session_id):
+        pass
+
+    assert json.loads(captured_args["layout_info"]) == the_layout
 
 
 @pytest.mark.asyncio
