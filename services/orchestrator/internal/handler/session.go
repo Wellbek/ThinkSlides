@@ -983,5 +983,16 @@ func (h *SessionHandler) DownloadFile(c *gin.Context) {
 		return
 	}
 
+	// c.FileAttachment sets the Content-Disposition header before checking
+	// the file exists, so a stale DB row pointing at a since-removed file
+	// downloaded as a tiny "404 page not found" text body under the
+	// original .pptx filename - indistinguishable from a corrupt download.
+	// Mirrors the AI service's own app/api/files.py, which already guards
+	// this case.
+	if _, err := os.Stat(filePath); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File no longer exists on disk"})
+		return
+	}
+
 	c.FileAttachment(filePath, fileName)
 }
