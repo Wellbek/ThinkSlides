@@ -9,7 +9,7 @@ slide with zero content items. Rendered decks then had the right slide
 count but nothing on them.
 """
 
-from app.agent.tools._json_extract import extract_json_object
+from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 
 
 def test_plain_json_object():
@@ -54,3 +54,32 @@ def test_empty_string_returns_none():
 def test_json_array_at_top_level_returns_none():
     """Callers need a dict; a bare array isn't a valid slide/structure object."""
     assert extract_json_object('[{"a": 1}]') is None
+
+
+# ── coerce_json_arg ─────────────────────────────────────────────────────
+# Regression: ask_user_question crashed in production with "the JSON object
+# must be str, bytes or bytearray, not list" - the model sent a native JSON
+# array for "options" despite its declared "string" type, and a bare
+# json.loads(options) raises TypeError (not JSONDecodeError) on a list.
+
+
+def test_coerce_json_arg_passes_through_a_native_list():
+    assert coerce_json_arg(["a", "b"], []) == ["a", "b"]
+
+
+def test_coerce_json_arg_passes_through_a_native_dict():
+    assert coerce_json_arg({"a": 1}, {}) == {"a": 1}
+
+
+def test_coerce_json_arg_parses_a_json_string():
+    assert coerce_json_arg('["a", "b"]', []) == ["a", "b"]
+    assert coerce_json_arg('{"a": 1}', {}) == {"a": 1}
+
+
+def test_coerce_json_arg_falls_back_on_unparseable_string():
+    assert coerce_json_arg("not json", "fallback") == "fallback"
+
+
+def test_coerce_json_arg_falls_back_on_empty_or_none():
+    assert coerce_json_arg("", "fallback") == "fallback"
+    assert coerce_json_arg(None, "fallback") == "fallback"

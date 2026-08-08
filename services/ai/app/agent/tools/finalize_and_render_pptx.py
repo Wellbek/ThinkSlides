@@ -8,10 +8,10 @@ Also generates preview images for each slide.
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.tools._json_extract import coerce_json_arg
 from app.renderer.pptx_renderer import PPTXRenderer
 from app.renderer.preview_generator import PreviewGenerator
 from app.observability.logging import get_logger
-import json
 import time
 import os
 import uuid
@@ -80,8 +80,13 @@ class FinalizeAndRenderPptxTool:
     ) -> ToolResult:
         start = time.time()
         try:
-            slides = json.loads(slides_json) if slides_json else []
-            metadata = json.loads(presentation_metadata) if presentation_metadata else {}
+            # coerce_json_arg, not a bare json.loads: a tool-calling model may
+            # send a native JSON value here despite the declared "string"
+            # type, which raises TypeError rather than JSONDecodeError. A
+            # coercion failure on slides falls through to the existing
+            # "No slides provided" check below, which already fails loudly.
+            slides = coerce_json_arg(slides_json, [])
+            metadata = coerce_json_arg(presentation_metadata, {})
 
             if not slides:
                 return ToolResult(

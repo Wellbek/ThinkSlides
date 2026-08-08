@@ -5,6 +5,7 @@ Chooses the best slide layout from the template's layout catalog based on conten
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
 import time
 
@@ -69,8 +70,10 @@ class SelectLayoutTool:
     ) -> ToolResult:
         start = time.time()
         try:
-            import json
-            parsed = json.loads(available_layouts) if available_layouts else []
+            # coerce_json_arg, not a bare json.loads: this is always
+            # server-supplied now (see loop.py's tool-dispatch injection),
+            # but stays defensive against a native list/dict too.
+            parsed = coerce_json_arg(available_layouts, [])
             # The design system passes the layout catalog wrapped as
             # ``{"layouts": [...]}``. Accept that wrapper as well as a bare
             # list so the tool never iterates a dict by mistake (which

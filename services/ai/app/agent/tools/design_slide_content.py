@@ -7,7 +7,7 @@ The renderer will consume this to clone layout XML and fill placeholders.
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import get_chat_provider
-from app.agent.tools._json_extract import extract_json_object
+from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
 import json
@@ -80,9 +80,27 @@ class DesignSlideContentTool:
             # needs to honour the model chosen in Settings.
             llm = get_chat_provider() or get_llm_provider()
 
-            outline = json.loads(slide_outline) if slide_outline else {}
-            layout = json.loads(layout_info) if layout_info else {}
-            ds = json.loads(design_system_context) if design_system_context else {}
+            # coerce_json_arg (not a bare json.loads) because tool-calling
+            # models frequently send a native JSON object here despite the
+            # parameter's declared "string" type, which crashes json.loads
+            # with a TypeError rather than the JSONDecodeError this used to
+            # (harmlessly) propagate as a tool failure. A genuinely
+            # unparseable slide_outline must still fail the call rather than
+            # silently proceeding with no key points - that's the same
+            # empty-slide failure mode already fixed for the model's overall
+            # response below, just one level up in the argument itself.
+            outline = coerce_json_arg(slide_outline, None)
+            if outline is None:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Could not parse slide_outline as JSON "
+                        f"(got: {str(slide_outline)[:200]!r}). Retry with a valid JSON object."
+                    ),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
+            layout = coerce_json_arg(layout_info, {})
+            ds = coerce_json_arg(design_system_context, {})
 
             placeholders = layout.get("placeholders", [])
             layout_name = layout.get("layoutName", "Default")

@@ -15,6 +15,31 @@ import json
 import re
 
 
+def coerce_json_arg(value, default=None):
+    """Accept a tool-call argument that's declared as a JSON string but may
+    arrive as an already-native Python list/dict instead.
+
+    Tool-calling models frequently ignore a parameter's declared "string"
+    type and emit a real JSON array/object as the argument value directly -
+    especially for arrays (see ask_user_question's "options", which
+    reliably arrives as a native list). Since the loop's own
+    ``json.loads(fn_args_str)`` has already turned the *outer* tool-call
+    arguments into a Python dict by the time a tool sees them, a nested
+    value that was sent natively is already a list/dict - calling
+    ``json.loads`` on that raises ``TypeError: ... not list``, not the
+    ``JSONDecodeError`` callers usually guard against. This normalizes
+    both shapes to the same result.
+    """
+    if isinstance(value, (list, dict)):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return default
+    return default
+
+
 def extract_json_object(text: str) -> dict | None:
     """Best-effort extraction of a single top-level JSON object from ``text``.
 
