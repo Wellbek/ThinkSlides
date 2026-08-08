@@ -996,27 +996,33 @@ class AgentLoop:
             "only skip asking when you are genuinely confident in the answer, not merely when an answer "
             "is possible.",
             "5. EVERY ask_user_question call MUST include well-chosen suggested options via the "
-            "'options' parameter - concrete, mutually distinct choices (roughly 3-5) the user can pick "
-            "in one tap, not just an open-ended question with nothing to react to. E.g. for content "
-            "focus: name the 2-4 candidate angles/sections you saw in the material and let the user pick "
-            "or say 'cover them all'. For color/style (only when no template is uploaded), offer these "
-            "exact five as options - Professional, Warm, Monochrome, Bold, Nature - since those are the "
-            "only palettes the renderer actually supports; if the user picks one, pass its lowercase name "
-            "as color_theme to BOTH extract_template_design_system and finalize_and_render_pptx so the "
-            "design system you see and what actually renders stay in sync.",
-            "6. EXCEPTION: if the user has explicitly said not to ask questions (e.g. 'don't ask me "
+            "'options' parameter (a real array, 2-5 items) - concrete, mutually distinct choices the "
+            "user can pick in one tap, not just an open-ended question with nothing to react to. "
+            "OPTIONS MUST BE TAILORED TO THE ACTUAL REQUEST, never generic placeholders: for content "
+            "focus, name the 2-4 candidate angles/sections you actually saw in the material (not "
+            "'Option A/B/C') and let the user pick or say 'cover them all'.",
+            "6. Color/style questions ONLY when no template was uploaded - never ask about colors if "
+            "the user gave a template, since its own colors are always used as-is and the question "
+            "would be meaningless. When you do ask: if the topic clearly implies a real brand/entity "
+            "with a known color (e.g. a presentation about a specific company), offer that brand's "
+            "actual color as one option using its real hex code (e.g. 'Starbucks green (#00704A)'), "
+            "alongside 2-3 of these general presets as other options - Professional, Warm, Monochrome, "
+            "Bold, Nature. Whatever is chosen, pass the SAME value (the hex code, or the preset's "
+            "lowercase name) as color_theme to BOTH extract_template_design_system and "
+            "finalize_and_render_pptx so the design system you see and what actually renders agree.",
+            "7. EXCEPTION: if the user has explicitly said not to ask questions (e.g. 'don't ask me "
             "anything', 'just build it', 'use your best judgment', 'no more questions'), make the most "
             "reasonable assumption yourself and proceed without asking - briefly note any significant "
             "assumption in the relevant slide's notes instead.",
-            "7. Prefer asking before planning, batching multiple uncertainties into ONE consolidated "
+            "8. Prefer asking before planning, batching multiple uncertainties into ONE consolidated "
             "ask_user_question rather than asking one at a time. But do not suppress a genuine question "
             "just because planning has already started - if a new ambiguity only becomes apparent "
             "partway through (e.g. conflicting figures in an uploaded document), ask then too rather "
             "than silently guessing.",
-            "8. Do NOT ask about things you can already infer confidently from the conversation or "
+            "9. Do NOT ask about things you can already infer confidently from the conversation or "
             "uploaded documents, or about minor stylistic choices with no real stakes - that is noise, "
             "not the kind of question this rule is asking for.",
-            "9. Tool calls that are out of order (e.g. finalizing before every planned slide is "
+            "10. Tool calls that are out of order (e.g. finalizing before every planned slide is "
             "designed) will be rejected with an explanation - read it and follow the corrective "
             "instruction rather than retrying the same call.",
             "",

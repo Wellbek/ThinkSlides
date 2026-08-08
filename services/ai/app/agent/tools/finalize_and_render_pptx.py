@@ -60,9 +60,11 @@ class FinalizeAndRenderPptxTool:
                     name="color_theme",
                     type="string",
                     description=(
-                        "Color palette to use, one of: professional, warm, monochrome, "
-                        "bold, nature. Only takes effect when no template_path is given "
-                        "- an uploaded template's own colors are always preserved."
+                        "Color palette to use: either one of professional, warm, monochrome, "
+                        "bold, nature, OR a specific brand hex color like '#00704A' - must "
+                        "match whatever was passed to extract_template_design_system earlier "
+                        "in this run. Only takes effect when no template_path is given - an "
+                        "uploaded template's own colors are always preserved."
                     ),
                     required=False,
                 ),

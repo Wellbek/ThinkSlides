@@ -83,10 +83,12 @@ class ExtractTemplateDesignSystemTool:
                     name="color_theme",
                     type="string",
                     description=(
-                        "Color palette for the built-in default design system, one of: "
-                        "professional, warm, monochrome, bold, nature. Only applies when "
-                        "template_path is omitted - an uploaded template's own colors are "
-                        "always used as-is."
+                        "Color palette for the built-in default design system: either one of "
+                        "professional, warm, monochrome, bold, nature, OR a specific brand hex "
+                        "color like '#00704A' when the topic implies one (e.g. a well-known "
+                        "brand's actual color) - prefer the exact hex over the nearest named "
+                        "preset when you know it. Only applies when template_path is omitted - "
+                        "an uploaded template's own colors are always used as-is."
                     ),
                     required=False,
                 ),
