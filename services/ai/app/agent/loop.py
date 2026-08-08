@@ -46,6 +46,19 @@ def normalize_mode(mode: str | None) -> str:
     return MODE_DEEP if mode == MODE_DEEP else MODE_SIMPLE
 
 
+# How much content depth a generation should aim for. Mirrors the
+# orchestrator's handler.DetailLevel* constants.
+DETAIL_LEVEL_CONCISE = "concise"
+DETAIL_LEVEL_DETAILED = "detailed"
+DETAIL_LEVEL_COMPREHENSIVE = "comprehensive"
+DETAIL_LEVELS = {DETAIL_LEVEL_CONCISE, DETAIL_LEVEL_DETAILED, DETAIL_LEVEL_COMPREHENSIVE}
+
+
+def normalize_detail_level(level: str | None) -> str:
+    """Map any caller-supplied value onto a known level, defaulting to detailed."""
+    return level if level in DETAIL_LEVELS else DETAIL_LEVEL_DETAILED
+
+
 # Substrings identifying errors worth retrying. Provider SDKs raise their own
 # exception types but all surface an HTTP status; 429 and 5xx are transient,
 # everything else (a bad key, an unknown model) will fail again identically.
@@ -266,6 +279,7 @@ class AgentLoop:
         db: AsyncSession,
         mode: str | None = None,
         org_id: uuid.UUID | None = None,
+        detail_level: str | None = None,
     ) -> None:
         """
         ``mode`` is the effort level the user picked in the composer. Pass None
@@ -276,6 +290,9 @@ class AgentLoop:
         ``org_id`` selects whose configured models and search backend this run
         uses. None falls back to the environment configuration, keeping
         deployments that predate the settings API working unchanged.
+
+        ``detail_level`` is the content depth chosen in the composer, and
+        follows the same None-means-inherit-on-resume convention as ``mode``.
         """
         self.db = db
         self.registry = get_registry()
@@ -284,6 +301,7 @@ class AgentLoop:
         self.working_state = WorkingState()
         self.redis_client = None
         self.mode = normalize_mode(mode) if mode is not None else None
+        self.detail_level = normalize_detail_level(detail_level) if detail_level is not None else None
         self.org_id = org_id
         self.search_config: ai_settings.SearchConfig | None = None
         self._search_token = None
@@ -298,6 +316,8 @@ class AgentLoop:
         """
         if self.mode is None:
             self.mode = MODE_SIMPLE
+        if self.detail_level is None:
+            self.detail_level = DETAIL_LEVEL_DETAILED
 
         row = None
         if self.org_id is not None:
@@ -364,6 +384,7 @@ class AgentLoop:
             # Carried so a run paused on a question resumes at the same effort
             # level - the resume request has no mode of its own.
             "mode": self.mode,
+            "detail_level": self.detail_level,
         }
         redis_client = await self._get_redis_client()
         await redis_client.set(
@@ -396,6 +417,8 @@ class AgentLoop:
             # free to change it.
             if self.mode is None:
                 self.mode = normalize_mode(state_dict.get("mode"))
+            if self.detail_level is None:
+                self.detail_level = normalize_detail_level(state_dict.get("detail_level"))
             logger.info("loaded_working_state", session_id=str(session_id), tools_completed=len(state_dict.get("completed_tools", {})))
             return True
         except Exception as e:
@@ -553,6 +576,11 @@ class AgentLoop:
                     fn_args = json.loads(fn_args_str)
                 except json.JSONDecodeError:
                     fn_args = {}
+
+                # Supply the composer-chosen content depth server-side rather
+                # than relying on the LLM to pass it through consistently.
+                if fn_name in ("plan_presentation_structure", "design_slide_content"):
+                    fn_args["detail_level"] = self.detail_level
 
                 # Yield tool_call event
                 yield _event("tool_call", current_phase, {
@@ -851,6 +879,13 @@ class AgentLoop:
             "- If the user uploaded a template, its design system is already in your context below - use it directly and do NOT call extract_template_design_system.",
             "- If the user has NO template or asks for a 'default' template, call extract_template_design_system with NO template_path (or template_path='default'). It returns a built-in default design system. NEVER invent a filename like 'default_template.pptx' - it does not exist and will fail.",
             "- Do NOT ask the user to upload a template if they already said to use a default. Proceed with the built-in default.",
+            "",
+            "## Presentation Detail Level",
+            "",
+            f"The user has selected the **{self.detail_level or DETAIL_LEVEL_DETAILED}** detail level. "
+            "plan_presentation_structure and design_slide_content are told this automatically - "
+            "you do not need to pass it yourself - but keep your own reasoning and notes "
+            "consistent with it rather than defaulting to the shortest possible phrasing.",
             "",
         ]
 
