@@ -282,6 +282,12 @@ class AgentLoop:
         # Replaced in _configure() once the organisation's settings are known.
         self.llm = get_llm_provider()
         self.working_state = WorkingState()
+        # Set once _load_context runs; referenced by _save_working_state so the
+        # design system and research accumulated mid-run survive a pause/resume
+        # cycle (issue #20) the same way WorkingState fields already do.
+        self.context: dict = {}
+        self._resumed_design_system: dict | None = None
+        self._resumed_research: list | None = None
         self.redis_client = None
         self.mode = normalize_mode(mode) if mode is not None else None
         self.org_id = org_id
@@ -364,6 +370,11 @@ class AgentLoop:
             # Carried so a run paused on a question resumes at the same effort
             # level - the resume request has no mode of its own.
             "mode": self.mode,
+            # Issue #20: without these, resuming after ask_user_question forced
+            # a re-extraction of the design system and lost all accumulated web
+            # research, since only WorkingState (not context) was persisted.
+            "design_system": self.context.get("design_system"),
+            "research": self.context.get("research"),
         }
         redis_client = await self._get_redis_client()
         await redis_client.set(
@@ -396,6 +407,10 @@ class AgentLoop:
             # free to change it.
             if self.mode is None:
                 self.mode = normalize_mode(state_dict.get("mode"))
+            # Issue #20: stashed here since context itself is rebuilt fresh by
+            # _load_context after this call - _run merges these in afterwards.
+            self._resumed_design_system = state_dict.get("design_system")
+            self._resumed_research = state_dict.get("research")
             logger.info("loaded_working_state", session_id=str(session_id), tools_completed=len(state_dict.get("completed_tools", {})))
             return True
         except Exception as e:
@@ -456,6 +471,19 @@ class AgentLoop:
         })
 
         context = await self._load_context(session_id)
+
+        # Issue #20: restore design system / research accumulated before the
+        # pause, so a resumed run does not re-extract the default design system
+        # or lose grounding for facts it already looked up. A template's design
+        # system (just loaded above) always wins, since it reflects the current
+        # session rather than a potentially-stale resume snapshot.
+        if state_loaded:
+            if "design_system" not in context and self._resumed_design_system:
+                context["design_system"] = self._resumed_design_system
+            if self._resumed_research:
+                context["research"] = self._resumed_research
+
+        self.context = context
 
         # ── Phase 2: Build messages ──────────────────
         chat_messages = await self._build_chat_messages(session_id)
