@@ -111,6 +111,12 @@ class WorkingState:
     def __init__(self) -> None:
         self.accumulated_slides: list[dict] = []
         self.presentation_structure: dict | None = None
+        # slide_index -> the select_layout result for that slide. Lets the
+        # loop auto-supply design_slide_content's layout_info instead of
+        # requiring the LLM to copy the full layout object it just received
+        # back verbatim in the next call - the same class of JSON-escaping
+        # mistake as available_layouts (see _run's tool-dispatch injection).
+        self.selected_layouts: dict[int, dict] = {}
         self.current_step_index: int = 0
         self.pending_question: dict | None = None
         self.is_paused_for_user: bool = False
@@ -232,6 +238,7 @@ class WorkingState:
         """Reset the working state for a new session."""
         self.accumulated_slides = []
         self.presentation_structure = None
+        self.selected_layouts = {}
         self.current_step_index = 0
         self.pending_question = None
         self.is_paused_for_user = False
@@ -360,6 +367,7 @@ class AgentLoop:
         state_dict = {
             "accumulated_slides": self.working_state.accumulated_slides,
             "presentation_structure": self.working_state.presentation_structure,
+            "selected_layouts": self.working_state.selected_layouts,
             "current_step_index": self.working_state.current_step_index,
             "completed_tools": self.working_state.completed_tools,
             "has_called_finalize": self.working_state.has_called_finalize,
@@ -395,6 +403,11 @@ class AgentLoop:
             state_dict = json.loads(state_json)
             self.working_state.accumulated_slides = state_dict.get("accumulated_slides", [])
             self.working_state.presentation_structure = state_dict.get("presentation_structure")
+            # JSON round-trips dict keys as strings; slide_index is looked up
+            # as an int everywhere else, so convert back on load.
+            self.working_state.selected_layouts = {
+                int(k): v for k, v in state_dict.get("selected_layouts", {}).items()
+            }
             self.working_state.current_step_index = state_dict.get("current_step_index", 0)
             self.working_state.completed_tools = state_dict.get("completed_tools", {})
             self.working_state.has_called_finalize = state_dict.get("has_called_finalize", False)
@@ -582,6 +595,27 @@ class AgentLoop:
                 except json.JSONDecodeError:
                     fn_args = {}
 
+                # Auto-supply large JSON blobs the loop already tracks in
+                # context/working_state, rather than trusting the LLM to
+                # reproduce them verbatim as an escaped JSON string - a
+                # parameter shape LLMs reliably mis-escape once it's larger
+                # than a couple of fields (observed failure: "Expecting
+                # property name enclosed in double quotes", from the model
+                # double-escaping the embedded quotes). The LLM does not need
+                # to pass these at all; whatever it sends is overridden.
+                design_system = context.get("design_system") or {}
+                if fn_name == "select_layout":
+                    fn_args["available_layouts"] = json.dumps(design_system.get("layouts", []))
+                elif fn_name == "plan_presentation_structure":
+                    fn_args["design_system_summary"] = json.dumps(design_system)
+                elif fn_name == "design_slide_content":
+                    fn_args["design_system_context"] = json.dumps(design_system)
+                    slide_index = fn_args.get("slide_index")
+                    if slide_index in self.working_state.selected_layouts:
+                        fn_args["layout_info"] = json.dumps(
+                            self.working_state.selected_layouts[slide_index]
+                        )
+
                 # Yield tool_call event
                 yield _event("tool_call", current_phase, {
                     "toolName": fn_name,
@@ -592,7 +626,7 @@ class AgentLoop:
 
                 # Execute tool
                 tool_start = time.time()
-                precondition_error = self._check_precondition(fn_name)
+                precondition_error = self._check_precondition(fn_name, fn_args)
                 if precondition_error:
                     tool_result = ToolResult(success=False, error=precondition_error)
                 elif fn_name == "finalize_and_render_pptx" and self.working_state.accumulated_slides:
@@ -715,6 +749,15 @@ class AgentLoop:
                         if tool_result.data and "slideIndex" in tool_result.data:
                             self.working_state.add_slide(tool_result.data)
 
+                    # Recorded by slide_index so design_slide_content's
+                    # layout_info can be auto-supplied later (see the
+                    # tool-dispatch injection above) instead of requiring the
+                    # LLM to copy this object verbatim into the next call.
+                    if fn_name == "select_layout" and tool_result.data:
+                        slide_index = fn_args.get("slide_index")
+                        if slide_index is not None:
+                            self.working_state.selected_layouts[slide_index] = tool_result.data
+
                     # Persist the design system into context so it survives
                     # message rebuilds and the LLM does not re-extract it.
                     # This mirrors how uploaded templates inject their design
@@ -788,7 +831,7 @@ class AgentLoop:
                 "timestamp": _iso_now(),
             })
 
-    def _check_precondition(self, fn_name: str) -> str | None:
+    def _check_precondition(self, fn_name: str, fn_args: dict) -> str | None:
         """Block a tool call that is out of order, returning a corrective
         error message the LLM sees as the tool's result (same mechanism as the
         web_search cap below). This is what actually stops the loop from
@@ -816,6 +859,15 @@ class AgentLoop:
                 return (
                     f"{fn_name} requires a presentation structure. Call "
                     "plan_presentation_structure first."
+                )
+
+        if fn_name == "design_slide_content":
+            slide_index = fn_args.get("slide_index")
+            if slide_index is not None and slide_index not in ws.selected_layouts:
+                return (
+                    f"No layout has been selected for slide {slide_index} yet. Call "
+                    f"select_layout for slide_index={slide_index} first - its result "
+                    "is passed to design_slide_content automatically."
                 )
 
         if fn_name == "finalize_and_render_pptx":

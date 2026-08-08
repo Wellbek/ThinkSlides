@@ -55,7 +55,11 @@ class PlanPresentationStructureTool:
                 ToolParameter(
                     name="design_system_summary",
                     type="string",
-                    description="JSON summary of the design system layout catalog",
+                    description=(
+                        "JSON summary of the design system layout catalog. Optional - "
+                        "the system supplies the current design system automatically, "
+                        "so you do not need to pass this."
+                    ),
                     required=False,
                 ),
             ],

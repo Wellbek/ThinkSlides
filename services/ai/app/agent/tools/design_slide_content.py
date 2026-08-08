@@ -38,12 +38,21 @@ class DesignSlideContentTool:
                 ToolParameter(
                     name="layout_info",
                     type="string",
-                    description="JSON string of the selected layout with placeholder positions",
+                    description=(
+                        "JSON string of the selected layout with placeholder positions. "
+                        "Optional - the system supplies the layout you selected via "
+                        "select_layout for this slide_index automatically."
+                    ),
+                    required=False,
                 ),
                 ToolParameter(
                     name="design_system_context",
                     type="string",
-                    description="JSON string of the design system (palette, typography, spacing)",
+                    description=(
+                        "JSON string of the design system (palette, typography, spacing). "
+                        "Optional - the system supplies the current design system "
+                        "automatically, so you do not need to pass this."
+                    ),
                     required=False,
                 ),
                 ToolParameter(
@@ -58,8 +67,8 @@ class DesignSlideContentTool:
     async def run(
         cls,
         slide_outline: str,
-        layout_info: str,
         slide_index: int,
+        layout_info: str = "{}",
         design_system_context: str = "{}",
     ) -> ToolResult:
         start = time.time()

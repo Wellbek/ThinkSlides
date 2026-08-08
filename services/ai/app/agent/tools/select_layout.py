@@ -45,7 +45,12 @@ class SelectLayoutTool:
                 ToolParameter(
                     name="available_layouts",
                     type="string",
-                    description="JSON string of the layout catalog from the design system",
+                    description=(
+                        "JSON string of the layout catalog from the design system. "
+                        "Optional - the system supplies the current design system's "
+                        "layout catalog automatically, so you do not need to pass this."
+                    ),
+                    required=False,
                 ),
                 ToolParameter(
                     name="slide_index",
@@ -59,8 +64,8 @@ class SelectLayoutTool:
     async def run(
         cls,
         content_type: str,
-        available_layouts: str,
         slide_index: int,
+        available_layouts: str = "[]",
     ) -> ToolResult:
         start = time.time()
         try:
