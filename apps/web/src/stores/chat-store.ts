@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { apiGet, apiPost, apiDelete, apiPut, apiUpload } from '@/lib/api';
 import { SSEClient } from '@/lib/sse';
 import { useSettingsStore } from '@/stores/settings-store';
-import type { AgentEvent, DoneEvent, EffortMode } from '@thinkslides/schemas';
+import type { AgentEvent, DetailLevel, DoneEvent, EffortMode } from '@thinkslides/schemas';
 
 export interface ChatSession {
   id: string;
@@ -63,6 +63,12 @@ interface ChatState {
    * selection, and it survives moving between them.
    */
   mode: EffortMode;
+  /**
+   * How much content depth the next generation should aim for. Kept on the
+   * store for the same reason as `mode` - shared between the home view and
+   * the in-session composer.
+   */
+  detailLevel: DetailLevel;
   totalElapsedMs: number | null;
   isGenerating: boolean;
   setIsGenerating: (generating: boolean) => void;
@@ -84,6 +90,7 @@ interface ChatState {
   deleteTemplate: (id: string) => Promise<void>;
   setSettingsOpen: (open: boolean) => void;
   setMode: (mode: EffortMode) => void;
+  setDetailLevel: (detailLevel: DetailLevel) => void;
 }
 
 function findActiveAssistantMessage(messages: ChatMessage[]): ChatMessage | null {
@@ -108,6 +115,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sseClient: null,
   settingsOpen: false,
   mode: 'simple',
+  detailLevel: 'detailed',
   totalElapsedMs: null,
   isGenerating: false,
 
@@ -389,7 +397,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content: string, files?: File[]) => {
-    const { activeSessionId, mode } = get();
+    const { activeSessionId, mode, detailLevel } = get();
     if (!activeSessionId) return;
 
     // Deep Thinking needs a configured search backend. The selector is already
@@ -423,6 +431,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const formData = new FormData();
         formData.append('content', content);
         formData.append('mode', effectiveMode);
+        formData.append('detail_level', detailLevel);
         for (const file of files) formData.append('files', file);
         const res = await fetch(`/api/orchestrator/sessions/${activeSessionId}/messages`, {
           method: 'POST',
@@ -449,7 +458,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } else {
         const data = await apiPost<{ messages?: ChatMessage[] }>(
           `/api/orchestrator/sessions/${activeSessionId}/messages`,
-          { content, mode: effectiveMode }
+          { content, mode: effectiveMode, detail_level: detailLevel }
         );
         const serverMessages = data?.messages;
         if (serverMessages && Array.isArray(serverMessages)) {
@@ -526,4 +535,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setSettingsOpen: (open: boolean) => set({ settingsOpen: open }),
 
   setMode: (mode: EffortMode) => set({ mode }),
+
+  setDetailLevel: (detailLevel: DetailLevel) => set({ detailLevel }),
 }));
