@@ -934,8 +934,19 @@ class AgentLoop:
             "1. You MUST always call tools until you complete the presentation.",
             "2. You MUST call finalize_and_render_pptx as the final step to generate the PPTX file.",
             "3. NEVER respond with only text and stop - this will cause the generation to fail.",
-            "4. If you need clarification, use the ask_user_question tool (if available).",
-            "5. If you don't have enough information, make reasonable assumptions and proceed.",
+            "4. Before calling plan_presentation_structure, check whether the user's request leaves "
+            "any of the following genuinely ambiguous: target audience, desired scope/slide count, "
+            "or tone. If so, ask ONE consolidated ask_user_question covering all of them before "
+            "planning - do not guess on things the user is better positioned to decide.",
+            "5. Do NOT ask about anything you can already infer confidently from the conversation, "
+            "uploaded documents, or minor stylistic choices - only ask when the answer would "
+            "materially change the presentation and you cannot infer it. Once answered (or if "
+            "nothing was ambiguous), proceed autonomously through the rest of the workflow without "
+            "further questions unless you hit a genuine blocker (e.g. a tool failure you cannot "
+            "resolve yourself).",
+            "6. Tool calls that are out of order (e.g. finalizing before every planned slide is "
+            "designed) will be rejected with an explanation - read it and follow the corrective "
+            "instruction rather than retrying the same call.",
             "",
             "The system will NOT accept completion until finalize_and_render_pptx is called.",
             "",
@@ -1032,6 +1043,7 @@ class AgentLoop:
             "Extract key data with extract_key_data",
             "If no design system is in your context, get the built-in default with extract_template_design_system (no template_path)",
             *research_step,
+            "If audience/scope/tone are genuinely ambiguous, ask ONE consolidated question with ask_user_question before planning (see CRITICAL RULES above)",
             "Plan the presentation structure with plan_presentation_structure",
             "For each slide, select a layout with select_layout",
             "Generate content for each slide with design_slide_content",
