@@ -380,9 +380,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 : msg
             );
 
-            // Add completion message if we have total elapsed time
+            // Add completion message if we have total elapsed time. A paused
+            // run is still going, so it gets no "Finished in ..." footer.
             let completionMessage: ChatMessage | null = null;
-            if (totalElapsedMs && totalElapsedMs > 0) {
+            if (!isPaused && totalElapsedMs && totalElapsedMs > 0) {
               const seconds = Math.floor(totalElapsedMs / 1000);
               const minutes = Math.floor(seconds / 60);
               const remainingSeconds = seconds % 60;
@@ -465,7 +466,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isComplete: false,
     };
     set((state) => ({
-      activeMessages: [...state.activeMessages, optimisticUser, optimisticAssistant],
+      // Close out any earlier assistant turn before opening a new one. A turn
+      // that ended on a question stays deliberately incomplete so its "done"
+      // does not read as finished - but once the user replies it is over, and
+      // leaving it live would keep its spinner running for the rest of the
+      // session and confuse findActiveAssistantMessage about where events go.
+      activeMessages: [
+        ...state.activeMessages.map((m) =>
+          m.role === 'assistant' && !m.isComplete ? { ...m, isComplete: true } : m
+        ),
+        optimisticUser,
+        optimisticAssistant,
+      ],
     }));
     try {
       if (files && files.length > 0) {
