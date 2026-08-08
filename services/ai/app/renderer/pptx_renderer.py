@@ -379,9 +379,27 @@ class PPTXRenderer:
                                 para.remove(excess_run)
 
                     if len(runs) > len(paragraphs):
+                        # Extra bullets beyond what the template placeholder
+                        # itself had paragraphs for. Clone the last template
+                        # paragraph's formatting - pPr (bullet marker/indent)
+                        # and its first run's rPr (font/size/color) - onto
+                        # each new one. Previously these were created bare,
+                        # so bullets past the placeholder's own paragraph
+                        # count silently lost the template's bullet styling
+                        # and typography, making multi-point slides look
+                        # thinner/plainer than the template's design.
+                        template_para = paragraphs[-1] if paragraphs else None
+                        template_pPr = template_para.find("a:pPr", NS) if template_para is not None else None
+                        template_run = template_para.find("a:r", NS) if template_para is not None else None
+                        template_rPr = template_run.find("a:rPr", NS) if template_run is not None else None
+
                         for run_data in runs[len(paragraphs):]:
                             new_para = ET.SubElement(txBody, f"{{{NS['a']}}}p")
+                            if template_pPr is not None:
+                                new_para.append(copy.deepcopy(template_pPr))
                             a_r = ET.SubElement(new_para, f"{{{NS['a']}}}r")
+                            if template_rPr is not None:
+                                a_r.append(copy.deepcopy(template_rPr))
                             a_t = ET.SubElement(a_r, f"{{{NS['a']}}}t")
                             a_t.text = run_data.get("text", "")
 
