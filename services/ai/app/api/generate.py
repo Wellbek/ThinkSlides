@@ -185,6 +185,11 @@ async def _run_agent(
 
             final_content = ""
             generated_files = []
+            # The loop's generator also returns when it pauses on
+            # ask_user_question. The wrapper's own terminal "done" below must
+            # carry that fact forward, or downstream consumers read it as
+            # "run over" and tear the event pipe down mid-conversation.
+            run_paused = False
 
             try:
                 logger.info("_run_agent: creating AgentLoop for %s", session_id)
@@ -195,6 +200,9 @@ async def _run_agent(
                 
                 async for event in loop.run(session_id=session_id):
                     event_count += 1
+
+                    if event.get("type") == "done":
+                        run_paused = bool(event.get("paused"))
 
                     # Emit timer update every 5 events
                     if event_count % 5 == 0:
@@ -384,6 +392,7 @@ async def _run_agent(
                     "files": generated_files if generated_files else None,
                     "overallDurationMs": overall_duration_ms,
                     "totalElapsedMs": total_elapsed_ms,
+                    "paused": run_paused,
                     "timestamp": datetime.datetime.utcnow().isoformat(),
                 }
                 pub_result = await redis_client.publish(
