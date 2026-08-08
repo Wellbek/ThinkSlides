@@ -6,6 +6,7 @@ Plans the overall slide structure and outline based on analyzed content and requ
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import get_chat_provider
+from app.agent.tools._json_extract import extract_json_object
 from app.llm.provider import get_tools_llm_provider as get_llm_provider
 from app.observability.logging import get_logger
 import json
@@ -138,16 +139,21 @@ Rules:
             )
 
             result_text = response.get("message", {}).get("content", "{}")
-            try:
-                structure = json.loads(result_text)
-            except json.JSONDecodeError:
-                # Try to extract JSON from markdown code block
-                import re
-                json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', result_text, re.DOTALL)
-                if json_match:
-                    structure = json.loads(json_match.group(1))
-                else:
-                    structure = {"raw_plan": result_text}
+            structure = extract_json_object(result_text)
+            if structure is None or not structure.get("slides"):
+                # Fail loudly rather than silently proceeding with a
+                # {"raw_plan": ...} object that has no totalSlides/slides -
+                # every downstream step depends on this structure existing.
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Could not parse the model's response as a presentation "
+                        f"structure (response started with: {result_text[:200]!r}). "
+                        "Retry and respond with ONLY the JSON object - no prose "
+                        "before or after it - including a non-empty 'slides' array."
+                    ),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
 
             duration_ms = int((time.time() - start) * 1000)
             logger.info(

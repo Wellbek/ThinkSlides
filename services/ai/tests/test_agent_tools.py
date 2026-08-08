@@ -173,3 +173,88 @@ async def test_select_layout_picks_conclusion_layout():
 
     assert result.success is True
     assert result.data["layoutName"] == "Conclusion"
+
+
+# ── design_slide_content / plan_presentation_structure: fail loudly on ────
+# unparseable or empty LLM output, instead of silently succeeding with no
+# content (previously "right slide count, no content" in the rendered deck).
+
+from app.agent import run_context
+from app.agent.tools.design_slide_content import DesignSlideContentTool
+from app.agent.tools.plan_presentation_structure import PlanPresentationStructureTool
+
+
+class _ScriptedProvider:
+    def __init__(self, content: str):
+        self.content = content
+
+    async def chat(self, messages, tools=None):
+        return {"message": {"content": self.content}}
+
+
+@pytest.mark.asyncio
+async def test_design_slide_content_fails_when_response_is_not_json():
+    token = run_context.set_chat_provider(_ScriptedProvider("Sorry, I can't do that."))
+    try:
+        result = await DesignSlideContentTool.run(
+            slide_outline="{}", layout_info="{}", slide_index=0,
+        )
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is False
+    assert "parse" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_design_slide_content_fails_when_contents_is_empty():
+    """Regression: valid JSON but with no contents previously still
+    succeeded, producing a slide with nothing on it."""
+    token = run_context.set_chat_provider(_ScriptedProvider('{"slideIndex": 0, "contents": []}'))
+    try:
+        result = await DesignSlideContentTool.run(
+            slide_outline="{}", layout_info="{}", slide_index=0,
+        )
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is False
+    assert "no content" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_design_slide_content_recovers_json_wrapped_in_prose():
+    content = 'Sure, here you go:\n\n{"slideIndex": 0, "contents": [{"type": "text", "placeholderIdx": 0, "runs": [{"text": "Hi"}]}]}\n\nHope that helps!'
+    token = run_context.set_chat_provider(_ScriptedProvider(content))
+    try:
+        result = await DesignSlideContentTool.run(
+            slide_outline="{}", layout_info="{}", slide_index=0,
+        )
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is True
+    assert result.data["contents"][0]["runs"][0]["text"] == "Hi"
+
+
+@pytest.mark.asyncio
+async def test_plan_presentation_structure_fails_when_response_is_not_json():
+    token = run_context.set_chat_provider(_ScriptedProvider("I need more information first."))
+    try:
+        result = await PlanPresentationStructureTool.run(content_summary="x")
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is False
+    assert "parse" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_presentation_structure_fails_when_slides_is_empty():
+    token = run_context.set_chat_provider(_ScriptedProvider('{"title": "T", "totalSlides": 0, "slides": []}'))
+    try:
+        result = await PlanPresentationStructureTool.run(content_summary="x")
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is False
