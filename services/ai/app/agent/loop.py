@@ -122,7 +122,15 @@ class WorkingState:
         self.MAX_WEB_SEARCH_CALLS = 3
 
     def add_slide(self, slide: dict) -> None:
-        """Add a slide to the accumulated list."""
+        """Add a slide to the accumulated list, or replace it if this slideIndex
+        was already designed - the LLM may legitimately redesign a slide it got
+        wrong, and that must overwrite rather than duplicate."""
+        idx = slide.get("slideIndex")
+        if idx is not None:
+            for i, existing in enumerate(self.accumulated_slides):
+                if existing.get("slideIndex") == idx:
+                    self.accumulated_slides[i] = slide
+                    return
         self.accumulated_slides.append(slide)
 
     def get_slides_json(self) -> str:
@@ -182,16 +190,6 @@ class WorkingState:
                 lines.append(f"- {tool_name}")
             lines.append("")
 
-        # Special handling for specific tool results
-        if "plan_presentation_structure" in self.completed_tools:
-            result = self.completed_tools["plan_presentation_structure"]["result"]
-            if isinstance(result, dict) and "structure" in result:
-                lines.append("### Presentation Structure (Already Planned)")
-                lines.append("```json")
-                lines.append(json.dumps(result["structure"], indent=2))
-                lines.append("```")
-                lines.append("")
-
         if self.presentation_structure:
             lines.append("### Current Presentation Structure")
             lines.append("```json")
@@ -202,7 +200,9 @@ class WorkingState:
         if self.accumulated_slides:
             lines.append(f"### Slides Already Designed ({len(self.accumulated_slides)} slides)")
             for i, slide in enumerate(self.accumulated_slides):
-                title = slide.get("contents", [{}])[0].get("runs", [{}])[0].get("text", f"Slide {i+1}")
+                contents = slide.get("contents") or [{}]
+                runs = contents[0].get("runs") or [{}]
+                title = runs[0].get("text", f"Slide {i+1}")
                 layout = slide.get("layoutName", slide.get("layoutId", "Unknown"))
                 lines.append(f"{i+1}. **{title}** ({layout})")
             lines.append("")
@@ -689,14 +689,20 @@ class AgentLoop:
                 if tool_result.success:
                     self.working_state.record_completed_tool(fn_name, fn_args, tool_result.data or {})
 
-                    # Special handling for tools that produce important state
+                    # Special handling for tools that produce important state.
+                    # Both tools return their payload directly as tool_result.data
+                    # (not nested under a "structure"/"slide" key) - a mismatch
+                    # here previously left presentation_structure/accumulated_slides
+                    # empty for the whole run, which is why finalize_and_render_pptx
+                    # had no tracked state to fall back on and the "Slides Already
+                    # Designed" prompt recap never appeared.
                     if fn_name == "plan_presentation_structure":
-                        if tool_result.data and "structure" in tool_result.data:
-                            self.working_state.presentation_structure = tool_result.data["structure"]
+                        if tool_result.data and "totalSlides" in tool_result.data:
+                            self.working_state.presentation_structure = tool_result.data
 
                     if fn_name == "design_slide_content":
-                        if tool_result.data and "slide" in tool_result.data:
-                            self.working_state.add_slide(tool_result.data["slide"])
+                        if tool_result.data and "slideIndex" in tool_result.data:
+                            self.working_state.add_slide(tool_result.data)
 
                     # Persist the design system into context so it survives
                     # message rebuilds and the LLM does not re-extract it.
