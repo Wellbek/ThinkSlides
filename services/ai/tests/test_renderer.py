@@ -5,7 +5,9 @@ Tests for the PPTX renderer.
 import pytest
 import os
 import tempfile
-from app.renderer.pptx_renderer import PPTXRenderer
+import zipfile
+import xml.etree.ElementTree as ET
+from app.renderer.pptx_renderer import PPTXRenderer, NS
 
 
 class TestPPTXRendererDefault:
@@ -119,3 +121,214 @@ class TestPPTXRendererDefault:
             assert len(prs.slides) == 2
         finally:
             os.unlink(output_path)
+
+
+def _write_minimal_rels(rels_path: str, extra_relationships: str = "") -> None:
+    os.makedirs(os.path.dirname(rels_path), exist_ok=True)
+    with open(rels_path, "w", encoding="utf-8") as f:
+        f.write(
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
+            '<Relationship Id="rId1" Type=".../slideMaster" Target="slideMasters/slideMaster1.xml"/>\n'
+            f"{extra_relationships}"
+            "</Relationships>"
+        )
+
+
+class TestPresentationRelsRidAllocation:
+    """Regression tests: rId{i+2} was hardcoded, assuming rId1 is always the
+    slideMaster and rId2..N+1 are free - any template whose
+    presentation.xml.rels already used those IDs for something else (a
+    theme, printerSettings, ...) got duplicate Id attributes, which is
+    invalid OOXML and makes PowerPoint report the file as needing repair.
+    """
+
+    @pytest.fixture
+    def renderer(self):
+        return PPTXRenderer(template_path=None)
+
+    def test_new_slide_rids_do_not_collide_with_existing_relationships(self, renderer, tmp_path):
+        working_dir = str(tmp_path)
+        rels_path = os.path.join(working_dir, "ppt", "_rels", "presentation.xml.rels")
+        # A theme relationship already occupies rId2 - the exact ID the old
+        # hardcoded scheme would have reassigned to the first new slide.
+        _write_minimal_rels(
+            rels_path,
+            '<Relationship Id="rId2" Type=".../theme" Target="theme/theme1.xml"/>\n',
+        )
+
+        rids = renderer._update_presentation_rels(working_dir, slide_count=2)
+
+        assert rids == ["rId3", "rId4"]
+
+        tree = ET.parse(rels_path)
+        ids = [rel.get("Id") for rel in tree.getroot()]
+        assert len(ids) == len(set(ids)), f"duplicate relationship IDs: {ids}"
+        assert "rId2" in ids  # the pre-existing theme relationship survives untouched
+
+    def test_creates_sldidlst_when_the_template_omits_it_entirely(self, renderer, tmp_path):
+        """Regression: our own generated default template (0 slides) omits
+        <p:sldIdLst> rather than emitting it empty. The renderer used to
+        bail out silently here, producing a 0-slide package that still
+        reported success - the "downloaded pptx is empty" failure mode."""
+        working_dir = str(tmp_path)
+        rels_path = os.path.join(working_dir, "ppt", "_rels", "presentation.xml.rels")
+        _write_minimal_rels(rels_path)
+        pres_path = os.path.join(working_dir, "ppt", "presentation.xml")
+        os.makedirs(os.path.dirname(pres_path), exist_ok=True)
+        with open(pres_path, "w", encoding="utf-8") as f:
+            f.write(
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                '<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>'
+                '<p:sldSz cx="9144000" cy="6858000"/>'
+                "</p:presentation>"
+            )
+
+        renderer._update_presentation_xml(working_dir, slide_count=2)
+
+        tree = ET.parse(pres_path)
+        root = tree.getroot()
+        sldIdLst = root.find("p:sldIdLst", NS)
+        assert sldIdLst is not None
+        assert len(list(sldIdLst)) == 2
+        # Schema order: sldIdLst must land between sldMasterIdLst and sldSz.
+        tags = [el.tag.split("}")[-1] for el in root]
+        assert tags.index("sldMasterIdLst") < tags.index("sldIdLst") < tags.index("sldSz")
+
+    def test_presentation_xml_and_rels_agree_on_the_same_rids(self, renderer, tmp_path):
+        working_dir = str(tmp_path)
+        rels_path = os.path.join(working_dir, "ppt", "_rels", "presentation.xml.rels")
+        _write_minimal_rels(
+            rels_path,
+            '<Relationship Id="rId2" Type=".../theme" Target="theme/theme1.xml"/>\n',
+        )
+        pres_path = os.path.join(working_dir, "ppt", "presentation.xml")
+        os.makedirs(os.path.dirname(pres_path), exist_ok=True)
+        with open(pres_path, "w", encoding="utf-8") as f:
+            f.write(
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                "<p:sldIdLst/></p:presentation>"
+            )
+
+        renderer._update_presentation_xml(working_dir, slide_count=2)
+
+        tree = ET.parse(pres_path)
+        sldIdLst = tree.getroot().find(".//p:sldIdLst", NS)
+        xml_rids = [sldId.get(f"{{{NS['r']}}}id") for sldId in sldIdLst]
+
+        rels_tree = ET.parse(rels_path)
+        rels_ids = {rel.get("Id") for rel in rels_tree.getroot()}
+
+        assert xml_rids == ["rId3", "rId4"]
+        assert set(xml_rids).issubset(rels_ids)
+
+
+class TestCloneLayoutPreservesFormatting:
+    """Regression: bullets beyond what the template placeholder itself had
+    paragraphs for were created with no pPr/rPr at all, so they silently
+    lost the template's bullet marker, indent, and typography - making
+    multi-point slides look thinner/plainer than the template's design.
+    """
+
+    @pytest.fixture
+    def renderer(self):
+        return PPTXRenderer(template_path=None)
+
+    @pytest.fixture
+    def default_template_layout2(self, tmp_path):
+        """The bundled default template's slideLayout2.xml ("Title and
+        Content") ships 5 pre-existing body paragraphs (levels 0-4) under
+        placeholder idx=1 - real template content, not a synthetic fixture."""
+        from app.renderer.default_template import get_default_template_path
+
+        template_path = get_default_template_path(output_dir=str(tmp_path / "templates"))
+        working_dir = tmp_path / "extracted"
+        with zipfile.ZipFile(template_path) as zf:
+            zf.extractall(working_dir)
+        return str(working_dir / "ppt" / "slideLayouts" / "slideLayout2.xml")
+
+    def test_extra_bullets_inherit_the_template_s_paragraph_and_run_formatting(
+        self, renderer, default_template_layout2, tmp_path
+    ):
+        # 7 runs against a placeholder whose layout only has 5 paragraphs -
+        # runs 6 and 7 must be freshly created and cloned-formatted.
+        runs = [{"text": f"Point {i}", "bullet": True, "level": 0} for i in range(7)]
+        slide_data = {
+            "slideIndex": 0,
+            "layoutId": "2",
+            "contents": [{"type": "text", "placeholderIdx": 1, "runs": runs}],
+        }
+
+        xml_bytes = renderer._clone_layout_as_slide(
+            default_template_layout2, slide_data, str(tmp_path), slide_num=1
+        )
+
+        root = ET.fromstring(xml_bytes)
+        txBody = None
+        for sp in root.findall(".//p:sp", NS):
+            ph = sp.find(".//p:ph", NS)
+            if ph is not None and ph.get("idx") == "1":
+                txBody = sp.find(".//p:txBody", NS)
+                break
+        assert txBody is not None
+
+        paragraphs = txBody.findall("a:p", NS)
+        assert len(paragraphs) == 7
+
+        # The two newly-created paragraphs (index 5, 6) must carry cloned
+        # formatting, not bare <a:p><a:r><a:t> with nothing else.
+        for extra_para in paragraphs[5:]:
+            assert extra_para.find("a:pPr", NS) is not None, "new paragraph lost the template's pPr (bullet/indent)"
+            run = extra_para.find("a:r", NS)
+            assert run is not None
+            assert run.find("a:rPr", NS) is not None, "new run lost the template's rPr (font/size/color)"
+            assert run.find("a:t", NS).text == "Point 5" or run.find("a:t", NS).text == "Point 6"
+
+        # And the reused paragraphs (0-4) still just get their text swapped in.
+        for i, para in enumerate(paragraphs[:5]):
+            run = para.find("a:r", NS)
+            assert run.find("a:t", NS).text == f"Point {i}"
+
+
+class TestPPTXRendererFromTemplate:
+    """End-to-end coverage for the template-clone path (_render_from_template),
+    which previously had zero test coverage even though it's the path real
+    uploaded templates and the default template both go through."""
+
+    @pytest.fixture
+    def template_path(self, tmp_path):
+        from app.renderer.default_template import get_default_template_path
+        return get_default_template_path(output_dir=str(tmp_path / "templates"))
+
+    def test_render_with_more_bullets_than_the_layout_has_paragraphs(self, template_path, tmp_path):
+        renderer = PPTXRenderer(template_path=template_path)
+        runs = [{"text": f"Point {i}", "bullet": True, "level": 0} for i in range(7)]
+        slides = [
+            {
+                "slideIndex": 0,
+                "layoutId": "2",
+                "layoutName": "Title and Content",
+                "contents": [{"type": "text", "placeholderIdx": 1, "runs": runs}],
+            }
+        ]
+        output_path = str(tmp_path / "out.pptx")
+
+        result = renderer.render(slides=slides, metadata={"title": "Test"}, output_path=output_path)
+
+        assert os.path.exists(result)
+        assert os.path.getsize(result) > 0
+
+        from pptx import Presentation
+        prs = Presentation(result)
+        assert len(prs.slides) == 1
+
+        # No duplicate relationship IDs anywhere in the repacked package.
+        with zipfile.ZipFile(result) as zf:
+            rels_xml = zf.read("ppt/_rels/presentation.xml.rels")
+            rels_root = ET.fromstring(rels_xml)
+            ids = [rel.get("Id") for rel in rels_root]
+            assert len(ids) == len(set(ids)), f"duplicate relationship IDs: {ids}"
