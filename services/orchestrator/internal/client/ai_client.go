@@ -41,6 +41,7 @@ type GenerateRequest struct {
 	Content     string
 	Attachments []map[string]interface{}
 	Mode        string
+	DetailLevel string
 	Identity    Identity
 }
 
@@ -92,10 +93,15 @@ func (c *AIServiceClient) SendMessage(gen GenerateRequest) (map[string]interface
 	if mode == "" {
 		mode = "simple"
 	}
+	detailLevel := gen.DetailLevel
+	if detailLevel == "" {
+		detailLevel = "detailed"
+	}
 	payload := map[string]interface{}{
-		"content":     gen.Content,
-		"attachments": gen.Attachments,
-		"mode":        mode,
+		"content":      gen.Content,
+		"attachments":  gen.Attachments,
+		"mode":         mode,
+		"detail_level": detailLevel,
 	}
 	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/messages", c.baseURL, gen.SessionID)
 	return c.postJSON(url, payload, gen.Identity)
