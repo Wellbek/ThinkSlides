@@ -986,17 +986,26 @@ class AgentLoop:
             "1. You MUST always call tools until you complete the presentation.",
             "2. You MUST call finalize_and_render_pptx as the final step to generate the PPTX file.",
             "3. NEVER respond with only text and stop - this will cause the generation to fail.",
-            "4. Before calling plan_presentation_structure, check whether the user's request leaves "
-            "any of the following genuinely ambiguous: target audience, desired scope/slide count, "
-            "or tone. If so, ask ONE consolidated ask_user_question covering all of them before "
-            "planning - do not guess on things the user is better positioned to decide.",
-            "5. Do NOT ask about anything you can already infer confidently from the conversation, "
-            "uploaded documents, or minor stylistic choices - only ask when the answer would "
-            "materially change the presentation and you cannot infer it. Once answered (or if "
-            "nothing was ambiguous), proceed autonomously through the rest of the workflow without "
-            "further questions unless you hit a genuine blocker (e.g. a tool failure you cannot "
-            "resolve yourself).",
-            "6. Tool calls that are out of order (e.g. finalizing before every planned slide is "
+            "4. DEFAULT TO ASKING, NOT GUESSING. Whenever you are unsure about a choice that would "
+            "meaningfully affect the presentation - target audience, desired scope/slide count, tone, "
+            "which parts of the source material to emphasize, how to resolve ambiguous or conflicting "
+            "information in what was provided, a structural or design choice not implied by context, "
+            "or anything else where a wrong assumption would produce a presentation the user did not "
+            "want - call ask_user_question rather than guessing. This is the default; only skip asking "
+            "when you are genuinely confident in the answer, not merely when an answer is possible.",
+            "5. EXCEPTION: if the user has explicitly said not to ask questions (e.g. 'don't ask me "
+            "anything', 'just build it', 'use your best judgment', 'no more questions'), make the most "
+            "reasonable assumption yourself and proceed without asking - briefly note any significant "
+            "assumption in the relevant slide's notes instead.",
+            "6. Prefer asking before planning, batching multiple uncertainties into ONE consolidated "
+            "ask_user_question rather than asking one at a time. But do not suppress a genuine question "
+            "just because planning has already started - if a new ambiguity only becomes apparent "
+            "partway through (e.g. conflicting figures in an uploaded document), ask then too rather "
+            "than silently guessing.",
+            "7. Do NOT ask about things you can already infer confidently from the conversation or "
+            "uploaded documents, or about minor stylistic choices with no real stakes - that is noise, "
+            "not the kind of question this rule is asking for.",
+            "8. Tool calls that are out of order (e.g. finalizing before every planned slide is "
             "designed) will be rejected with an explanation - read it and follow the corrective "
             "instruction rather than retrying the same call.",
             "",
@@ -1095,7 +1104,7 @@ class AgentLoop:
             "Extract key data with extract_key_data",
             "If no design system is in your context, get the built-in default with extract_template_design_system (no template_path)",
             *research_step,
-            "If audience/scope/tone are genuinely ambiguous, ask ONE consolidated question with ask_user_question before planning (see CRITICAL RULES above)",
+            "If anything about the request is genuinely unsure/ambiguous, ask ONE consolidated question with ask_user_question before planning, unless the user already said not to ask (see CRITICAL RULES above)",
             "Plan the presentation structure with plan_presentation_structure",
             "For each slide, select a layout with select_layout",
             "Generate content for each slide with design_slide_content",
