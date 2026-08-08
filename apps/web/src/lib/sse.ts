@@ -38,6 +38,10 @@ export class SSEClient {
 
   connect(): void {
     this.disconnect();
+    // disconnect() raises intentionallyClosed so an in-flight teardown is not
+    // mistaken for a dropped connection. Clear it again here, or the very
+    // first connect would permanently disable reconnection for this client.
+    this.intentionallyClosed = false;
 
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
 
@@ -59,11 +63,14 @@ export class SSEClient {
 
     this.eventSource.onerror = () => {
       if (this.intentionallyClosed) return;
+      // A transient drop leaves readyState at CONNECTING and EventSource
+      // retries on its own, so stay out of its way. CLOSED means the browser
+      // has given up (bad status, wrong content type, orchestrator restarting)
+      // and will never retry - that is the case worth handling, because the
+      // alternative is a chat that silently stops updating until a reload.
       if (this.eventSource?.readyState === EventSource.CLOSED) {
-        // Auth failure or server explicitly closed — don't reconnect
-        return;
+        this.tryReconnect();
       }
-      this.tryReconnect();
     };
 
     // Listen for each typed event
@@ -83,6 +90,11 @@ export class SSEClient {
 
     for (const eventType of eventTypes) {
       this.eventSource.addEventListener(eventType, (e: MessageEvent) => {
+        // 'error' is both one of our event names and EventSource's own
+        // connection-failure event, which carries no data. Without this the
+        // onerror path would also be reported to handlers as an agent error.
+        if (e.data === undefined) return;
+
         console.log('SSE EVENT', eventType, e.data);
 
         const sseEvent: SSEEvent = {

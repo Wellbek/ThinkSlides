@@ -511,11 +511,19 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
 .ws-step-pre.bad { color: var(--ws-red-text); }
 
 /* ---- Inline cited sources (under the step that produced them) ---- */
-.ws-step-src-badge {
-  display: inline-flex; align-items: center; margin-left: 8px;
-  color: var(--ws-ai-text); opacity: 0.85;
-}
 .ws-src-inline { margin-top: 8px; }
+/* In the collapsed step summary the badge sits inline in a single row
+   alongside the timer/toggle, rather than stacked below block content.
+   The opened list is anchored as a popover instead of pushing the row's
+   flex layout (which previously wrapped the step label). */
+.ws-step-summary .ws-src-inline { margin-top: 0; position: relative; }
+.ws-step-summary .ws-src-inline-list {
+  position: absolute; top: 100%; right: 0; margin-top: 6px; z-index: 20;
+  min-width: 220px; max-width: 320px;
+  background: var(--ws-surface-1); border: 1px solid var(--ws-border);
+  border-radius: var(--ws-radius-sm); padding: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
 .ws-src-inline-btn {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 9px 4px 7px; border-radius: 999px;
