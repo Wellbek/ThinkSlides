@@ -718,8 +718,22 @@ class AgentLoop:
                         "paused": True,
                         "timestamp": _iso_now(),
                     })
-                    # Break the loop - workflow will resume on next user message
-                    break
+                    # Stop the whole run, not just this tool-calls batch. A
+                    # bare `break` here only exited the inner "for tool_call"
+                    # loop - the outer "for iteration" loop then continued to
+                    # its next pass and called the LLM again immediately,
+                    # with the just-appended assistant message's tool_calls
+                    # still unanswered (ask_user_question's own tool_call_id
+                    # never got a paired tool-role response, since that
+                    # append happens right after this block and was never
+                    # reached). Strict providers (OpenAI) reject that
+                    # outright: "An assistant message with 'tool_calls' must
+                    # be followed by tool messages responding to each
+                    # 'tool_call_id'" - visible as an error immediately after
+                    # the question. Lenient providers might not reject it,
+                    # but the run was never supposed to keep going here
+                    # regardless - it must wait for the resume request.
+                    return
 
                 # Feed result back to conversation (tool role message)
                 messages.append({

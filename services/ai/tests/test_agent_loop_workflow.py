@@ -383,6 +383,59 @@ async def test_design_slide_content_receives_the_select_layout_result_automatica
 
 
 @pytest.mark.asyncio
+async def test_ask_user_question_stops_the_run_instead_of_calling_the_llm_again(monkeypatch):
+    """Regression: a bare `break` inside the tool-calls loop only exited that
+    inner loop - the outer iteration loop then continued and called the LLM
+    again immediately, with the just-appended assistant message's tool_calls
+    still unanswered (ask_user_question's own tool_call_id never got a
+    paired tool-role response). Strict providers (OpenAI) reject that
+    outright: "An assistant message with 'tool_calls' must be followed by
+    tool messages...". The run must stop completely after pausing, not
+    continue to a second (malformed) LLM call."""
+    session_id = uuid.uuid4()
+    loop = _loop()
+    loop.redis_client = _FakeRedis()
+
+    monkeypatch.setattr(loop, "_load_context", lambda *a, **k: _async({}))
+    monkeypatch.setattr(loop, "_build_chat_messages", lambda *a, **k: _async([]))
+
+    calls = {"n": 0}
+
+    async def _chat(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise AssertionError(
+                "the LLM must not be called again after ask_user_question pauses - "
+                "the run should have stopped entirely"
+            )
+        return {
+            "message": {"content": ""},
+            "tool_calls": [{"id": "call_1", "function": {
+                "name": "ask_user_question",
+                "arguments": json.dumps({"question": "Focus on what?", "options": ["A", "B"]}),
+            }}],
+        }
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+
+    async def _execute_tool(name, args):
+        assert name == "ask_user_question"
+        return ToolResult(success=True, data={"question": args["question"], "options": ["A", "B"], "context": ""})
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    events = [ev async for ev in loop.run(session_id)]
+
+    assert calls["n"] == 1
+    event_types = [e["type"] for e in events]
+    assert "question" in event_types
+    assert event_types[-1] == "done"
+    assert events[-1]["paused"] is True
+    assert "error" not in event_types
+    assert loop.working_state.is_paused_for_user is True
+
+
+@pytest.mark.asyncio
 async def test_finalize_called_too_early_is_rejected_without_invoking_the_tool(monkeypatch):
     session_id = uuid.uuid4()
     loop = _loop()
