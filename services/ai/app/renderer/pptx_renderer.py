@@ -225,7 +225,7 @@ class PPTXRenderer:
             )
 
         # Render other content
-        top_offset = 0
+        top_offset = 0.0  # inches, matching PositionConfig's unit
         for content in other_content:
             if content.get("type") == "text":
                 content_pos = LayoutEngine.calculate_content_position(
@@ -242,7 +242,7 @@ class PPTXRenderer:
                     content_pos,
                     is_title=False,
                 )
-                top_offset += Inches(0.3)  # spacing between sections
+                top_offset += 0.3  # inches, spacing between sections
 
             elif content.get("type") == "image":
                 img_pos = LayoutEngine.calculate_image_position(
@@ -259,8 +259,16 @@ class PPTXRenderer:
         is_title: bool = False,
     ) -> None:
         """Add a text box with proper styling."""
+        # PositionConfig fields are inches (plain floats, see layout.py) -
+        # python-pptx's shape-creation calls take EMU Length values, and
+        # silently treat a raw int/float as EMU rather than raising. Passing
+        # pos.left/top/etc. directly - as this used to - produced textboxes a
+        # few EMU wide (1 inch = 914400 EMU), i.e. invisible: every slide on
+        # the no-template render path had its content positioned into a
+        # sub-pixel box. This is the "right slide count, no visible content"
+        # bug.
         txBox = slide.shapes.add_textbox(
-            pos.left, pos.top, pos.width, pos.height
+            Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
         )
         tf = txBox.text_frame
         tf.word_wrap = True
@@ -312,7 +320,7 @@ class PPTXRenderer:
             try:
                 slide.shapes.add_picture(
                     img_stream.name,
-                    pos.left, pos.top, pos.width, pos.height
+                    Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
                 )
             finally:
                 os.unlink(img_stream.name)
