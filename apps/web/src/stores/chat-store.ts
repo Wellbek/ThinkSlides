@@ -86,6 +86,50 @@ interface ChatState {
   setMode: (mode: EffortMode) => void;
 }
 
+/**
+ * Reconciles the optimistic user/assistant pair with the server's response,
+ * carrying forward anything SSE already attached to the optimistic assistant
+ * message (agentEventStream, generatedFiles, a genuine isComplete/content
+ * from a done event) rather than discarding it.
+ *
+ * Why this matters: the POST that creates the message rows and the SSE
+ * events for the resulting generation race independently. On a fast path -
+ * most visibly resuming after ask_user_question, where the first event can
+ * land within tens of milliseconds - SSE events reliably arrive and get
+ * appended to the optimistic assistant message *before* this POST response
+ * comes back. The old code then swapped in the server's freshly-created (and
+ * necessarily event-less) row wholesale, silently erasing everything that
+ * had just arrived - the chat looked permanently stuck on "Working..." even
+ * though the run had already finished successfully.
+ */
+function reconcileServerMessages(
+  currentMessages: ChatMessage[],
+  optimisticUserId: string,
+  optimisticAssistantId: string,
+  serverMessages: ChatMessage[]
+): ChatMessage[] {
+  const optimisticAssistant = currentMessages.find((m) => m.id === optimisticAssistantId);
+
+  const reconciled = serverMessages.map((m) => {
+    if (m.role !== 'assistant') return { ...m, isComplete: true };
+    return {
+      ...m,
+      agentEventStream: optimisticAssistant?.agentEventStream ?? m.agentEventStream,
+      generatedFiles: optimisticAssistant?.generatedFiles ?? m.generatedFiles,
+      // A done event may have already raced ahead and completed the
+      // optimistic message - don't regress a genuine completion back to
+      // "in progress".
+      isComplete: optimisticAssistant?.isComplete ?? false,
+      content: optimisticAssistant?.isComplete ? optimisticAssistant.content : m.content,
+    };
+  });
+
+  return [
+    ...currentMessages.filter((m) => m.id !== optimisticUserId && m.id !== optimisticAssistantId),
+    ...reconciled,
+  ];
+}
+
 function findActiveAssistantMessage(messages: ChatMessage[]): ChatMessage | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -302,6 +346,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         try {
           const data = JSON.parse(e.data) as DoneEvent;
           const totalElapsedMs = (data as any).totalElapsedMs;
+          // A done event fires on ask_user_question too - the run has
+          // paused, not finished, and will continue once the user answers
+          // (see sendMessage's resume path). Marking the message complete
+          // here would be wrong even though nothing currently depends on it
+          // staying false, since the run genuinely isn't done yet.
+          const isPaused = (data as any).paused === true;
 
           set((state) => {
             const activeMsg = findActiveAssistantMessage(state.activeMessages);
@@ -323,9 +373,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
               msg.id === activeMsg.id
                 ? {
                     ...msg,
-                    ...(data.content ? { content: data.content } : {}),
+                    ...(data.content && !isPaused ? { content: data.content } : {}),
                     generatedFiles: [...existingFiles, ...newFiles],
-                    isComplete: true,
+                    isComplete: !isPaused,
                   }
                 : msg
             );
@@ -440,10 +490,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const serverMessages: ChatMessage[] | undefined = data.messages;
         if (serverMessages && Array.isArray(serverMessages)) {
           set((state) => ({
-            activeMessages: [
-              ...state.activeMessages.filter(m => m.id !== optimisticUser.id && m.id !== optimisticAssistant.id),
-              ...serverMessages.map(m => ({ ...m, isComplete: m.role === 'assistant' ? false : true })),
-            ],
+            activeMessages: reconcileServerMessages(
+              state.activeMessages, optimisticUser.id, optimisticAssistant.id, serverMessages
+            ),
           }));
         }
       } else {
@@ -454,10 +503,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const serverMessages = data?.messages;
         if (serverMessages && Array.isArray(serverMessages)) {
           set((state) => ({
-            activeMessages: [
-              ...state.activeMessages.filter(m => m.id !== optimisticUser.id && m.id !== optimisticAssistant.id),
-              ...serverMessages.map(m => ({ ...m, isComplete: m.role === 'assistant' ? false : true })),
-            ],
+            activeMessages: reconcileServerMessages(
+              state.activeMessages, optimisticUser.id, optimisticAssistant.id, serverMessages
+            ),
           }));
         }
       }
