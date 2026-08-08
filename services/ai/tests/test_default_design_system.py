@@ -14,7 +14,7 @@ import pytest
 from pptx import Presentation
 from pptx.util import Emu
 
-from app.design_system import get_default_design_system
+from app.design_system import COLOR_THEMES, get_default_design_system, normalize_color_theme
 from app.renderer.default_template import DefaultTemplateGenerator, _hex_to_rgbcolor
 
 
@@ -101,3 +101,52 @@ def test_hex_to_rgbcolor_rejects_invalid():
         _hex_to_rgbcolor("nope")
     with pytest.raises(ValueError):
         _hex_to_rgbcolor("#123")
+
+
+# ── Color themes ────────────────────────────────────────────────────────
+
+
+def test_normalize_color_theme_accepts_known_names_case_insensitively():
+    for name in COLOR_THEMES:
+        assert normalize_color_theme(name) == name
+        assert normalize_color_theme(name.upper()) == name
+        assert normalize_color_theme(f"  {name}  ") == name
+
+
+def test_normalize_color_theme_falls_back_to_professional():
+    assert normalize_color_theme(None) == "professional"
+    assert normalize_color_theme("") == "professional"
+    assert normalize_color_theme("neon") == "professional"
+
+
+def test_every_theme_has_the_same_color_names_as_the_default():
+    """design_slide_content and the renderer both look up colors by name
+    (e.g. 'primary', 'white') - every theme must define the same set, or
+    switching themes could silently drop a color some code expects."""
+    default_names = {c["name"] for c in COLOR_THEMES["professional"]}
+    for theme, colors in COLOR_THEMES.items():
+        assert {c["name"] for c in colors} == default_names, theme
+
+
+def test_every_theme_color_is_valid_hex():
+    for theme, colors in COLOR_THEMES.items():
+        for entry in colors:
+            _hex_to_rgbcolor(entry["value"])  # raises ValueError if malformed
+
+
+def test_get_default_design_system_applies_the_requested_theme():
+    ds = get_default_design_system(color_theme="warm")
+    assert ds["colorTheme"] == "warm"
+    primary = next(c["value"] for c in ds["palette"]["colors"] if c["name"] == "primary")
+    assert primary == COLOR_THEMES["warm"][0]["value"]
+
+
+def test_get_default_design_system_unknown_theme_falls_back_to_professional():
+    ds = get_default_design_system(color_theme="not-a-real-theme")
+    assert ds["colorTheme"] == "professional"
+
+
+def test_get_default_design_system_no_theme_defaults_to_professional():
+    ds = get_default_design_system()
+    assert ds["colorTheme"] == "professional"
+    assert ds["palette"]["colors"] == COLOR_THEMES["professional"]
