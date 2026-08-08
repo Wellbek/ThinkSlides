@@ -592,7 +592,18 @@ class AgentLoop:
 
                 # Execute tool
                 tool_start = time.time()
-                if fn_name == "web_search":
+                precondition_error = self._check_precondition(fn_name)
+                if precondition_error:
+                    tool_result = ToolResult(success=False, error=precondition_error)
+                elif fn_name == "finalize_and_render_pptx" and self.working_state.accumulated_slides:
+                    # Trust the slides actually designed via design_slide_content
+                    # over whatever the LLM re-typed as the argument string - the
+                    # latter is a verbatim re-serialization of the whole deck and
+                    # is the single biggest truncation/drift risk on multi-slide
+                    # presentations.
+                    fn_args["slides_json"] = self.working_state.get_slides_json()
+                    tool_result = await self._execute_tool(fn_name, fn_args)
+                elif fn_name == "web_search":
                     # Cap repeated web searches so the agent cannot loop on
                     # low-quality results. After the cap, return a gentle
                     # "use existing research" result instead of executing.
@@ -776,6 +787,54 @@ class AgentLoop:
                 "code": "iteration_cap_reached",
                 "timestamp": _iso_now(),
             })
+
+    def _check_precondition(self, fn_name: str) -> str | None:
+        """Block a tool call that is out of order, returning a corrective
+        error message the LLM sees as the tool's result (same mechanism as the
+        web_search cap below). This is what actually stops the loop from
+        "jumping around" - illegal transitions never reach the tool at all,
+        instead of being merely discouraged in the system prompt.
+
+        Deliberately not a rigid phase counter: tools may still interleave
+        (e.g. select_layout/design_slide_content per slide, or ask_user_question
+        at any point) - only the transitions that would silently corrupt state
+        are blocked.
+        """
+        ws = self.working_state
+
+        if fn_name == "plan_presentation_structure" and ws.accumulated_slides:
+            return (
+                "Presentation structure cannot be replanned - slide content has "
+                "already been designed using the current structure. If the "
+                "structure genuinely needs to change, ask the user with "
+                "ask_user_question before restructuring; otherwise continue "
+                "designing the remaining slides in the existing plan."
+            )
+
+        if fn_name in ("select_layout", "design_slide_content", "generate_image_prompt"):
+            if not ws.presentation_structure:
+                return (
+                    f"{fn_name} requires a presentation structure. Call "
+                    "plan_presentation_structure first."
+                )
+
+        if fn_name == "finalize_and_render_pptx":
+            if not ws.presentation_structure:
+                return (
+                    "finalize_and_render_pptx requires a presentation structure. "
+                    "Call plan_presentation_structure first."
+                )
+            total = ws.presentation_structure.get("totalSlides", 0)
+            designed = {s.get("slideIndex") for s in ws.accumulated_slides}
+            missing = [i for i in range(total) if i not in designed]
+            if missing:
+                return (
+                    f"Cannot finalize yet: {len(missing)} of {total} planned slides "
+                    f"have not been designed (missing slideIndex: {missing}). Call "
+                    "design_slide_content for each missing slide first."
+                )
+
+        return None
 
     async def _execute_tool(self, name: str, args: dict) -> ToolResult:
         """Execute a registered tool by name."""
