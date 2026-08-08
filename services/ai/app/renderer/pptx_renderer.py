@@ -409,9 +409,27 @@ class PPTXRenderer:
                                 para.remove(excess_run)
 
                     if len(runs) > len(paragraphs):
+                        # Extra bullets beyond what the template placeholder
+                        # itself had paragraphs for. Clone the last template
+                        # paragraph's formatting - pPr (bullet marker/indent)
+                        # and its first run's rPr (font/size/color) - onto
+                        # each new one. Previously these were created bare,
+                        # so bullets past the placeholder's own paragraph
+                        # count silently lost the template's bullet styling
+                        # and typography, making multi-point slides look
+                        # thinner/plainer than the template's design.
+                        template_para = paragraphs[-1] if paragraphs else None
+                        template_pPr = template_para.find("a:pPr", NS) if template_para is not None else None
+                        template_run = template_para.find("a:r", NS) if template_para is not None else None
+                        template_rPr = template_run.find("a:rPr", NS) if template_run is not None else None
+
                         for run_data in runs[len(paragraphs):]:
                             new_para = ET.SubElement(txBody, f"{{{NS['a']}}}p")
+                            if template_pPr is not None:
+                                new_para.append(copy.deepcopy(template_pPr))
                             a_r = ET.SubElement(new_para, f"{{{NS['a']}}}r")
+                            if template_rPr is not None:
+                                a_r.append(copy.deepcopy(template_rPr))
                             a_t = ET.SubElement(a_r, f"{{{NS['a']}}}t")
                             a_t.text = run_data.get("text", "")
 
@@ -496,30 +514,44 @@ class PPTXRenderer:
         tree = ET.parse(pres_path)
         root = tree.getroot()
 
-        # Find the <p:sldIdLst> element
-        sldIdLst = root.find(".//p:sldIdLst", NS)
+        # Find the <p:sldIdLst> element. Some templates - including our own
+        # generated default, which starts with zero slides - omit it
+        # entirely rather than emitting an empty <p:sldIdLst/>. Silently
+        # bailing out here previously produced a slide-less package: the
+        # rest of the pipeline (slide XML, rels, content types) still ran
+        # and reported success, but the file opened with 0 slides - the
+        # "downloaded pptx is empty" failure mode. Create it in the correct
+        # schema position (after sldMasterIdLst, before sldSz) instead.
+        sldIdLst = root.find("p:sldIdLst", NS)
         if sldIdLst is None:
-            return
+            sldIdLst = ET.Element(f"{{{NS['p']}}}sldIdLst")
+            sldMasterIdLst = root.find("p:sldMasterIdLst", NS)
+            insert_pos = list(root).index(sldMasterIdLst) + 1 if sldMasterIdLst is not None else 0
+            root.insert(insert_pos, sldIdLst)
 
         # Remove existing slide ID entries
         for sldId in list(sldIdLst):
             sldIdLst.remove(sldId)
 
-        # Add new slide ID entries
-        # Slide IDs start from 256 by convention
-        for i in range(slide_count):
-            rid = f"rId{i + 2}"  # rId1 is typically the slideMaster
+        # Assign relationship IDs first (by scanning the actual rels file -
+        # see _update_presentation_rels), then reuse the same IDs here so the
+        # two files never disagree about which rId maps to which slide.
+        rids = self._update_presentation_rels(working_dir, slide_count)
+
+        # Add new slide ID entries. Slide IDs start from 256 by convention.
+        for i, rid in enumerate(rids):
             sldId = ET.SubElement(sldIdLst, f"{{{NS['p']}}}sldId")
             sldId.set("id", str(256 + i))
             sldId.set(f"{{{NS['r']}}}id", rid)
 
-        # Update presentation.xml.rels to include slide references
-        self._update_presentation_rels(working_dir, slide_count)
-
         tree.write(pres_path, xml_declaration=True, encoding="UTF-8")
 
-    def _update_presentation_rels(self, working_dir: str, slide_count: int) -> None:
-        """Update presentation.xml.rels to reference all slides."""
+    def _update_presentation_rels(self, working_dir: str, slide_count: int) -> list[str]:
+        """Update presentation.xml.rels to reference all slides.
+
+        Returns the relationship IDs assigned, in slide order, so the caller
+        can reuse them in <p:sldIdLst> instead of re-deriving them.
+        """
         rels_path = os.path.join(working_dir, "ppt", "_rels", "presentation.xml.rels")
         if not os.path.exists(rels_path):
             os.makedirs(os.path.dirname(rels_path), exist_ok=True)
@@ -532,15 +564,27 @@ class PPTXRenderer:
 
         rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
 
-        # Remove existing slide relationships
+        # Remove existing slide relationships - they get regenerated below.
         for rel in list(root):
             rel_type = rel.get("Type", "")
             if "slide" in rel_type and "layout" not in rel_type and "master" not in rel_type:
                 root.remove(rel)
 
-        # Add slide relationships
-        for i in range(slide_count):
-            rid = f"rId{i + 2}"
+        # Find the next free numeric rId instead of hardcoding rId{i+2}, which
+        # assumed rId1 is always the slideMaster and rId2..N+1 were free. Any
+        # template whose presentation.xml.rels already used those IDs for
+        # something else (a theme, printerSettings, tableStyles, ...) ended up
+        # with duplicate Id attributes - invalid OOXML that PowerPoint reports
+        # as a file needing repair.
+        used_ids = set()
+        for rel in root:
+            rid = rel.get("Id", "")
+            if rid.startswith("rId") and rid[3:].isdigit():
+                used_ids.add(int(rid[3:]))
+        next_id = max(used_ids, default=1) + 1
+
+        rids = [f"rId{next_id + i}" for i in range(slide_count)]
+        for i, rid in enumerate(rids):
             rel = ET.SubElement(root, f"{{{rel_ns}}}Relationship")
             rel.set("Id", rid)
             rel.set("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide")
@@ -548,6 +592,7 @@ class PPTXRenderer:
 
         tree = ET.ElementTree(root)
         tree.write(rels_path, xml_declaration=True, encoding="UTF-8")
+        return rids
 
     def _update_content_types(self, working_dir: str, slide_count: int) -> None:
         """Update [Content_Types].xml to include all slides."""
