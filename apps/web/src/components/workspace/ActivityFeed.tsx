@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
 import { QuestionCard } from "./QuestionCard";
+import { MarkdownText } from "./MarkdownText";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
 import { ChevronDown, Download, ExternalLink, Globe } from "lucide-react";
 import type { AgentEvent, SourceInfo } from "@thinkslides/schemas";
@@ -374,7 +375,7 @@ function ThoughtsBlock({ node }: { node: ThoughtsNode }) {
       {node.thoughts.map((t: any, i: number) => (
         <FeedItem key={`th-${i}`} dot="◆" dotClass="ws-dot-fact">
           <div className="ws-feed-header"><span className="lbl">{PHASE_LABEL[t.phase] ?? "Thinking"}</span><span className="ts">{fmtTime(t.timestamp)}</span></div>
-          {t.content && <div className="ws-feed-text">{t.content}</div>}
+          {t.content && <MarkdownText className="ws-feed-text">{t.content}</MarkdownText>}
         </FeedItem>
       ))}
       {node.progress.map((p: any, i: number) => (
@@ -435,9 +436,9 @@ function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: bool
 
         {/* Reasoning - full detail, no truncation. */}
         {step.thoughts.map((t: any, i: number) => (
-          <div className="ws-feed-text ws-step-thought" key={`th-${i}`}>
+          <MarkdownText className="ws-feed-text ws-step-thought" key={`th-${i}`}>
             {t.content}
-          </div>
+          </MarkdownText>
         ))}
 
         {Object.keys(step.args || {}).length > 0 && (
@@ -648,7 +649,7 @@ function EventItem({ ev, isAnswered, answerText }: { ev: any; isAnswered?: boole
       return (
         <FeedItem dot="↺" dotClass="ws-dot-status">
           <div className="ws-feed-header sys">Done<span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          {ev.content && <div className="ws-feed-text">{ev.content}</div>}
+          {ev.content && <MarkdownText className="ws-feed-text">{ev.content}</MarkdownText>}
         </FeedItem>
       );
     default:
