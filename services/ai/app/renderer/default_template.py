@@ -40,6 +40,13 @@ from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Bump whenever the generated template's geometry or styling changes, so
+# deployments holding a previously-generated copy pick the new one up. The
+# file is derived from code but cached as data on a persistent volume, so
+# without this a fix here never reaches an environment that already has one.
+#   v2 - rescale master/layout placeholders when moving the canvas to 16:9
+DEFAULT_TEMPLATE_VERSION = 2
+
 
 def _hex_to_rgbcolor(hex_value: str) -> RGBColor:
     """Convert a ``#RRGGBB`` hex string to a python-pptx ``RGBColor``."""
@@ -202,21 +209,53 @@ def get_default_template_path(output_dir: str | None = None) -> str:
     """
     Get or generate the default template.
 
+    The filename carries :data:`DEFAULT_TEMPLATE_VERSION`, so changing the
+    generator produces a new file rather than silently reusing the old one.
+    This is not cosmetic: the template lives on a persistent volume, and the
+    previous unversioned name meant a deployed fix to the layout geometry
+    never took effect on any environment that had generated a template before
+    - it kept serving a months-old file whose body placeholder hung 77pt below
+    the bottom of the slide.
+
     Args:
         output_dir: Directory to store the template. Defaults to
             ``settings.template_dir`` so the location is configurable like the
             other storage dirs (rather than a hardcoded ``/app/templates``).
 
     Returns:
-        Path to the default template file.
+        Path to the generated template file.
     """
     if output_dir is None:
         output_dir = settings.template_dir
     os.makedirs(output_dir, exist_ok=True)
-    template_path = os.path.join(output_dir, "default_template.pptx")
+    template_path = os.path.join(
+        output_dir, f"default_template_v{DEFAULT_TEMPLATE_VERSION}.pptx"
+    )
 
-    # Generate if not exists
     if not os.path.exists(template_path):
         template_path = DefaultTemplateGenerator.generate(template_path)
+        _remove_superseded_templates(output_dir, keep=os.path.basename(template_path))
 
     return template_path
+
+
+def _remove_superseded_templates(output_dir: str, keep: str) -> None:
+    """Delete default templates left behind by earlier versions."""
+    try:
+        stale = [
+            name for name in os.listdir(output_dir)
+            if name != keep
+            and name.startswith("default_template")
+            and name.endswith(".pptx")
+        ]
+    except OSError as e:
+        logger.warning("default_template_cleanup_skipped", error=str(e))
+        return
+
+    for name in stale:
+        try:
+            os.remove(os.path.join(output_dir, name))
+            logger.info("default_template_superseded_removed", name=name)
+        except OSError as e:
+            # A stale file left behind is harmless - it is simply never read.
+            logger.warning("default_template_cleanup_failed", name=name, error=str(e))

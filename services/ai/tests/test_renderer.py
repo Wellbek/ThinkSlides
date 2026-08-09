@@ -4,6 +4,7 @@ Tests for the PPTX renderer.
 
 import pytest
 import os
+import pathlib
 import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
@@ -1137,3 +1138,73 @@ class TestBrandCoherenceOnTheDefaultPath:
             assert table.cell(0, 0).fill.fore_color.rgb == RGBColor(0xAA, 0x00, 0x00)
         finally:
             os.unlink(output_path)
+
+
+class TestTheCachedDefaultTemplateIsVersioned:
+    """
+    The default template is derived from code but cached as data on a
+    persistent volume. Under its old unversioned name a deployed geometry fix
+    never reached any environment that had generated one before: it kept
+    serving a months-old file whose body placeholder hung 77pt below the
+    bottom of the slide, so every chart on it was flagged as overflowing no
+    matter how often the agent redesigned the slide.
+    """
+
+    def test_the_filename_carries_the_version(self, tmp_path):
+        from app.renderer.default_template import (
+            DEFAULT_TEMPLATE_VERSION, get_default_template_path,
+        )
+
+        path = get_default_template_path(str(tmp_path))
+        assert f"_v{DEFAULT_TEMPLATE_VERSION}" in os.path.basename(path)
+
+    def test_a_stale_unversioned_template_is_not_reused(self, tmp_path):
+        from pptx import Presentation
+        from app.renderer.default_template import get_default_template_path
+
+        # A file from before versioning, with the broken 4:3 geometry.
+        stale = tmp_path / "default_template.pptx"
+        prs = Presentation()
+        prs.save(str(stale))
+        stale_bytes = stale.read_bytes()
+
+        path = get_default_template_path(str(tmp_path))
+
+        assert os.path.basename(path) != "default_template.pptx"
+        assert pathlib.Path(path).read_bytes() != stale_bytes
+
+    def test_superseded_templates_are_cleaned_up(self, tmp_path):
+        from pptx import Presentation
+        from app.renderer.default_template import get_default_template_path
+
+        Presentation().save(str(tmp_path / "default_template.pptx"))
+        Presentation().save(str(tmp_path / "default_template_v1.pptx"))
+
+        path = get_default_template_path(str(tmp_path))
+
+        remaining = sorted(p.name for p in tmp_path.glob("default_template*.pptx"))
+        assert remaining == [os.path.basename(path)]
+
+    def test_the_generated_template_fits_the_slide(self, tmp_path):
+        """The actual defect the version bump exists to ship."""
+        from pptx import Presentation
+        from app.renderer.default_template import get_default_template_path
+
+        prs = Presentation(get_default_template_path(str(tmp_path)))
+        for layout in prs.slide_masters[0].slide_layouts:
+            for shape in layout.shapes:
+                if shape.top is None or shape.height is None:
+                    continue
+                assert shape.top + shape.height <= prs.slide_height, (
+                    f"{layout.name!r}/{shape.name!r} hangs below the slide"
+                )
+
+    def test_a_second_call_reuses_the_current_version(self, tmp_path):
+        from app.renderer.default_template import get_default_template_path
+
+        first = get_default_template_path(str(tmp_path))
+        mtime = os.path.getmtime(first)
+        second = get_default_template_path(str(tmp_path))
+
+        assert first == second
+        assert os.path.getmtime(second) == mtime, "template was needlessly regenerated"
