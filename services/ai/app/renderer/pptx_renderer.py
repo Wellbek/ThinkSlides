@@ -55,6 +55,13 @@ _SKIPPED_PLACEHOLDER_TYPES = frozenset({
     PP_PLACEHOLDER.SLIDE_NUMBER,
 })
 
+# Vertical breathing room between stacked content bands on one slide.
+CONTENT_GAP_IN = 0.18
+# Floors for a shared content region, so neither a short text block nor a
+# chart gets squeezed into an unreadable sliver.
+MIN_TEXT_BAND_IN = 0.4
+MIN_OBJECT_BAND_IN = 1.5
+
 # Standard PowerPoint body-bullet geometry: a 0.25" hanging indent per level.
 BULLET_INDENT_EMU = 228600
 # Glyph per outline level, matching PowerPoint's own default body scheme.
@@ -472,65 +479,150 @@ class PPTXRenderer:
 
         has_title = title_item is not None
 
-        # Vertical cursor (inches) for body items that have no placeholder left
-        # to go into. Without it, every overflow block would be drawn at the
-        # same calculated content position, stacked directly on top of the
-        # previous one.
-        top_offset = 0.0
-        for i, body_item in enumerate(body_items):
-            if i < len(body_phs):
-                self._fill_placeholder(body_phs[i], body_item.get("runs", []), is_title=False)
-                used_shapes.add(id(body_phs[i]))
+        # Body text and objects share the slide's content area, so they have to
+        # be allocated space TOGETHER.
+        #
+        # Filling every body placeholder with text first and only then falling
+        # objects back to LayoutEngine's content rectangle meant that a slide
+        # carrying both bullets and a chart - the common shape for a
+        # contentType:"chart" slide, which still lists its key points - drew
+        # the chart directly on top of the bullets. Validation flagged the
+        # collision correctly, but no amount of rewording by the content model
+        # could fix it: the renderer recreated it on every retry. That is what
+        # turned a single bad slide into an endless redesign loop.
+        body_entries = [("text", item) for item in body_items]
+        body_entries += [(item.get("type", "image"), item) for item in object_items]
+
+        if not body_entries:
+            self._strip_empty_placeholders(slide)
+            return
+
+        if len(body_entries) <= len(body_phs):
+            # Enough real placeholders to go round - use the layout's own
+            # geometry untouched, which is always the best-looking option.
+            regions = [None] * len(body_entries)
+        else:
+            base = (
+                self._placeholder_region(body_phs[0])
+                if body_phs
+                else LayoutEngine.calculate_content_position(layout_config, has_title=has_title)
+            )
+            regions = self._split_region_vertically(base, body_entries)
+
+        for i, ((kind, item), region) in enumerate(zip(body_entries, regions)):
+            ph = body_phs[i] if i < len(body_phs) else None
+
+            if kind == "text":
+                if ph is not None:
+                    # Keep the placeholder (it carries the layout's typography)
+                    # but move it onto its allocated band when the region had
+                    # to be shared.
+                    if region is not None:
+                        self._resize_shape(ph, region)
+                    self._fill_placeholder(ph, item.get("runs", []), is_title=False)
+                    used_shapes.add(id(ph))
+                else:
+                    self._add_text_box(slide, item.get("runs", []), region, is_title=False)
                 continue
 
-            content_pos = LayoutEngine.calculate_content_position(
-                layout_config, has_title=has_title
-            )
-            if top_offset > 0:
-                content_pos.top += top_offset
-                content_pos.height -= top_offset
-            if content_pos.height <= 0:
-                # No vertical room left at all - still render (an overflowing
-                # box that validate_rendered_output can flag beats silently
-                # dropped content) but stop driving the cursor negative.
-                content_pos.height = 0.4
-
-            used_height = self._add_text_box(
-                slide, body_item.get("runs", []), content_pos, is_title=False
-            )
-            # Advance by the text's own measured height rather than a flat
-            # guess, so a short block leaves no gap and a long one is not
-            # overwritten by the next.
-            top_offset += min(used_height, content_pos.height) + 0.15
-
-        # Objects (image/table/chart) take the geometry of the next free body
-        # placeholder when one exists, so they land in the layout's designed
-        # content region instead of a hardcoded rectangle. The placeholder
-        # itself is then removed - a graphic frame cannot live inside it.
-        free_phs = [ph for ph in body_phs if id(ph) not in used_shapes]
-        for obj in object_items:
-            ph = free_phs.pop(0) if free_phs else None
+            # Objects cannot live inside a placeholder - a graphic frame or
+            # picture replaces it, so the placeholder is removed.
             if ph is not None:
-                pos = PositionConfig(
-                    left=emu_to_inches(ph.left),
-                    top=emu_to_inches(ph.top),
-                    width=emu_to_inches(ph.width),
-                    height=emu_to_inches(ph.height),
-                )
+                pos = region if region is not None else self._placeholder_region(ph)
                 self._remove_shape(ph)
-            elif obj.get("type") == "image":
+            elif region is not None:
+                pos = region
+            elif kind == "image":
                 pos = LayoutEngine.calculate_image_position(layout_config, has_title=has_title)
             else:
                 pos = LayoutEngine.calculate_content_position(layout_config, has_title=has_title)
 
-            if obj["type"] == "image":
-                self._add_image(slide, obj.get("image", {}), pos)
-            elif obj["type"] == "table":
-                self._add_table(slide, obj.get("table", {}), pos)
+            if kind == "image":
+                self._add_image(slide, item.get("image", {}), pos)
+            elif kind == "table":
+                self._add_table(slide, item.get("table", {}), pos)
             else:
-                self._add_chart(slide, obj.get("chart", {}), pos)
+                self._add_chart(slide, item.get("chart", {}), pos)
 
         self._strip_empty_placeholders(slide)
+
+    @staticmethod
+    def _placeholder_region(shape) -> PositionConfig:
+        """The shape's geometry as an inches-based PositionConfig."""
+        return PositionConfig(
+            left=emu_to_inches(shape.left),
+            top=emu_to_inches(shape.top),
+            width=emu_to_inches(shape.width),
+            height=emu_to_inches(shape.height),
+        )
+
+    @staticmethod
+    def _resize_shape(shape, region: PositionConfig) -> None:
+        """Move/resize an existing shape onto ``region``."""
+        shape.left = Inches(region.left)
+        shape.top = Inches(region.top)
+        shape.width = Inches(region.width)
+        shape.height = Inches(region.height)
+
+    def _split_region_vertically(
+        self,
+        base: PositionConfig,
+        entries: list[tuple[str, dict]],
+    ) -> list[PositionConfig]:
+        """
+        Divide ``base`` into one stacked band per entry.
+
+        Text asks for the height it actually measures (so a two-line intro
+        above a chart does not claim half the slide), objects share whatever
+        is left but never drop below a legible minimum, and the whole stack is
+        scaled down proportionally if the requests exceed the region. Every
+        returned band is inside ``base``, which is what guarantees the chart
+        can no longer land on the bullets or run off the slide.
+        """
+        count = len(entries)
+        gap = CONTENT_GAP_IN
+        available = base.height - gap * (count - 1)
+        if available <= 0:
+            gap = 0.0
+            available = base.height
+
+        desired: list[Optional[float]] = []
+        for kind, item in entries:
+            if kind != "text":
+                desired.append(None)
+                continue
+            blocks = []
+            for run in item.get("runs", []):
+                style = TypographyEngine.get_body_style(run.get("level", 0))
+                blocks.append(text_fit.TextBlock(
+                    text=run.get("text", ""),
+                    font_size_pt=TypographyEngine.validate_font_size(
+                        style.font_size_pt, is_title=False
+                    ),
+                ))
+            measured = text_fit.estimate_blocks_height_pt(blocks, base.width * 72.0) / 72.0
+            desired.append(max(measured, MIN_TEXT_BAND_IN))
+
+        object_count = sum(1 for d in desired if d is None)
+        if object_count:
+            text_total = sum(d for d in desired if d is not None)
+            share = (available - text_total) / object_count
+            share = max(share, MIN_OBJECT_BAND_IN)
+            desired = [share if d is None else d for d in desired]
+
+        total = sum(desired)
+        if total > available and total > 0:
+            scale = available / total
+            desired = [d * scale for d in desired]
+
+        regions: list[PositionConfig] = []
+        top = base.top
+        for height in desired:
+            regions.append(PositionConfig(
+                left=base.left, top=top, width=base.width, height=height
+            ))
+            top += height + gap
+        return regions
 
     @staticmethod
     def _remove_shape(shape) -> None:
