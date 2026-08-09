@@ -1419,9 +1419,21 @@ class AgentLoop:
 
     def _build_system_prompt(self, context: dict, working_state: WorkingState | None = None) -> str:
         """Build the system prompt with embedded design system context."""
+        import datetime
+
+        # Without this the model dates the deck from its training cutoff -
+        # writing "this year" as 2023 and treating stale figures as current.
+        today = datetime.datetime.now().astimezone()
+
         prompt_parts = [
             "You are ThinkSlides, an AI assistant that generates professional PowerPoint presentations.",
             "You follow a ReAct (Reason-Act-Observe) pattern to create presentations step by step.",
+            "",
+            f"The current date is {today.strftime('%A, %d %B %Y')} ({today.strftime('%Y-%m-%d')}). "
+            "This is later than your training data. Treat it as authoritative for anything "
+            'time-relative - "current", "latest", "this year", "recent", "up to date" - and never '
+            "infer the present year from memory. When the deck needs recent figures, search for "
+            "them rather than relying on what you remember.",
             "",
             "## CRITICAL RULES - YOU MUST FOLLOW",
             "",
