@@ -68,6 +68,16 @@ class FinalizeAndRenderPptxTool:
                     ),
                     required=False,
                 ),
+                ToolParameter(
+                    name="design_system_json",
+                    type="string",
+                    description=(
+                        "JSON design system from extract_template_design_system, used to style "
+                        "generated tables/charts (header/band colors, fonts). Auto-supplied by "
+                        "the agent loop - do not set manually."
+                    ),
+                    required=False,
+                ),
             ],
         )
 
@@ -79,6 +89,7 @@ class FinalizeAndRenderPptxTool:
         template_path: str = "",
         presentation_metadata: str = "{}",
         color_theme: str = "",
+        design_system_json: str = "{}",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -89,6 +100,7 @@ class FinalizeAndRenderPptxTool:
             # "No slides provided" check below, which already fails loudly.
             slides = coerce_json_arg(slides_json, [])
             metadata = coerce_json_arg(presentation_metadata, {})
+            design_system = coerce_json_arg(design_system_json, {})
 
             if not slides:
                 return ToolResult(
@@ -120,6 +132,7 @@ class FinalizeAndRenderPptxTool:
                     renderer = PPTXRenderer(
                         template_path=template_path if template_path and os.path.exists(template_path) else None,
                         color_theme=color_theme or None,
+                        design_system=design_system,
                     )
                     result_path = renderer.render(
                         slides=slides,

@@ -116,6 +116,62 @@ async def test_validate_placeholder_warning():
     assert result.success is True
     assert len(result.data["warnings"]) > 0
 
+
+@pytest.mark.asyncio
+async def test_validate_valid_table():
+    slide = {
+        "slideIndex": 0,
+        "layoutId": "1",
+        "layoutName": "Default",
+        "contents": [{
+            "type": "table",
+            "table": {"rows": [["Region", "Revenue"], ["EMEA", "$4.2M"], ["APAC", "$3.1M"]], "headerRow": True},
+        }],
+    }
+    result = await ValidateSlideJsonTool.run(slide_json=json.dumps(slide))
+    assert result.success is True
+    assert result.data["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_validate_table_missing_rows():
+    slide = {
+        "slideIndex": 0,
+        "layoutId": "1",
+        "layoutName": "Default",
+        "contents": [{"type": "table", "table": {}}],
+    }
+    result = await ValidateSlideJsonTool.run(slide_json=json.dumps(slide))
+    assert result.success is False
+    assert any("rows" in e for e in result.data["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_table_rows_not_arrays():
+    slide = {
+        "slideIndex": 0,
+        "layoutId": "1",
+        "layoutName": "Default",
+        "contents": [{"type": "table", "table": {"rows": ["not", "a", "grid"]}}],
+    }
+    result = await ValidateSlideJsonTool.run(slide_json=json.dumps(slide))
+    assert result.success is False
+    assert any("array of cell values" in e for e in result.data["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_table_ragged_rows_warns_not_errors():
+    slide = {
+        "slideIndex": 0,
+        "layoutId": "1",
+        "layoutName": "Default",
+        "contents": [{"type": "table", "table": {"rows": [["A", "B"], ["only-one"]]}}],
+    }
+    result = await ValidateSlideJsonTool.run(slide_json=json.dumps(slide))
+    assert result.success is True
+    assert any("inconsistent column counts" in w for w in result.data["warnings"])
+
+
 # ── select_layout ──────────────────────────────────────────────
 
 from app.agent.tools.select_layout import SelectLayoutTool

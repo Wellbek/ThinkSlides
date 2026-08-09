@@ -149,10 +149,26 @@ class ValidateSlideJsonTool:
                 elif ctype == "table":
                     if "table" not in item:
                         errors.append(f"Content item {i}: table type requires 'table' object")
+                    elif not isinstance(item["table"], dict):
+                        errors.append(f"Content item {i}: 'table' must be an object")
                     else:
                         tbl = item["table"]
+                        rows = tbl.get("rows")
                         if "rows" not in tbl:
                             errors.append(f"Content item {i}: table requires 'rows' array")
+                        elif not isinstance(rows, list) or not rows:
+                            errors.append(f"Content item {i}: table 'rows' must be a non-empty array")
+                        elif not all(isinstance(r, list) for r in rows):
+                            errors.append(f"Content item {i}: every table row must be an array of cell values")
+                        else:
+                            col_counts = {len(r) for r in rows}
+                            if max(col_counts, default=0) == 0:
+                                errors.append(f"Content item {i}: table rows are all empty")
+                            elif len(col_counts) > 1:
+                                warnings.append(
+                                    f"Content item {i}: table rows have inconsistent column counts "
+                                    f"{sorted(col_counts)} - shorter rows render with blank trailing cells"
+                                )
 
                 elif ctype == "chart":
                     if "chart" not in item:

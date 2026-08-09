@@ -679,3 +679,125 @@ class TestCloneLayoutImages:
         assert len(prs.slides) == 1
         picture_shapes = [s for s in prs.slides[0].shapes if s.shape_type == 13]  # MSO_SHAPE_TYPE.PICTURE
         assert len(picture_shapes) == 1
+
+
+class TestTableRendering:
+    """Tables were previously schema-legal (validate_slide_json accepted
+    them, design_slide_content's prompt told the LLM to use them) but
+    functionally dead - no add_table call existed anywhere in the renderer
+    on either render path. Both paths must now produce a real table, styled
+    from the run's design system rather than python-pptx defaults."""
+
+    TABLE_CONTENT = {
+        "type": "table",
+        "table": {
+            "headerRow": True,
+            "rows": [["Region", "Revenue"], ["EMEA", "$4.2M"], ["APAC", "$3.1M"]],
+        },
+    }
+
+    BRAND_DESIGN_SYSTEM = {
+        "palette": {"colors": [{"name": "primary", "value": "#00704A", "type": "hex"}], "schemeName": "brand"},
+    }
+
+    def test_default_path_produces_a_real_table_shape(self, tmp_path):
+        from pptx import Presentation
+
+        renderer = PPTXRenderer(template_path=None, design_system=self.BRAND_DESIGN_SYSTEM)
+        slides = [{
+            "slideIndex": 0,
+            "layoutId": "1",
+            "layoutName": "Default",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Regional Revenue", "bold": True, "fontSizePt": 36}]},
+                self.TABLE_CONTENT,
+            ],
+        }]
+        output_path = str(tmp_path / "out.pptx")
+        renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
+
+        prs = Presentation(output_path)
+        tables = [s for s in prs.slides[0].shapes if s.has_table]
+        assert len(tables) == 1
+        table = tables[0].table
+        assert len(table.rows) == 3
+        assert len(table.columns) == 2
+        assert table.cell(0, 0).text == "Region"
+        assert table.cell(1, 1).text == "$4.2M"
+
+    def test_default_path_header_row_uses_the_design_system_primary_color(self, tmp_path):
+        from pptx import Presentation
+
+        renderer = PPTXRenderer(template_path=None, design_system=self.BRAND_DESIGN_SYSTEM)
+        slides = [{
+            "slideIndex": 0,
+            "layoutId": "1",
+            "layoutName": "Default",
+            "contents": [self.TABLE_CONTENT],
+        }]
+        output_path = str(tmp_path / "out.pptx")
+        renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
+
+        prs = Presentation(output_path)
+        table = next(s for s in prs.slides[0].shapes if s.has_table).table
+        header_cell = table.cell(0, 0)
+        assert header_cell.fill.fore_color.rgb == _hex_to_rgbcolor("#00704A")
+
+    def test_template_path_produces_a_graphic_frame_table(self, tmp_path):
+        from app.renderer.default_template import get_default_template_path
+
+        template_path = get_default_template_path(output_dir=str(tmp_path / "templates"))
+        renderer = PPTXRenderer(template_path=template_path, design_system=self.BRAND_DESIGN_SYSTEM)
+        slides = [{
+            "slideIndex": 0,
+            "layoutId": "2",
+            "layoutName": "Title and Content",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Title"}]},
+                self.TABLE_CONTENT,
+            ],
+        }]
+        output_path = str(tmp_path / "out.pptx")
+        result = renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
+
+        from pptx import Presentation
+        prs = Presentation(result)
+        assert len(prs.slides) == 1
+        tables = [s for s in prs.slides[0].shapes if s.has_table]
+        assert len(tables) == 1
+        table = tables[0].table
+        assert table.cell(0, 0).text == "Region"
+        assert table.cell(2, 1).text == "$3.1M"
+
+    def test_no_design_system_falls_back_to_default_colors(self, tmp_path):
+        """A run with no extracted design system (e.g. Stage D not landed
+        yet, or extraction genuinely produced nothing) must still render a
+        table, just with the built-in default colors - never crash."""
+        from pptx import Presentation
+
+        renderer = PPTXRenderer(template_path=None, design_system=None)
+        slides = [{
+            "slideIndex": 0,
+            "layoutId": "1",
+            "layoutName": "Default",
+            "contents": [self.TABLE_CONTENT],
+        }]
+        output_path = str(tmp_path / "out.pptx")
+        renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
+        prs = Presentation(output_path)
+        assert len([s for s in prs.slides[0].shapes if s.has_table]) == 1
+
+    def test_empty_rows_are_skipped_not_crashed(self, tmp_path):
+        from pptx import Presentation
+
+        renderer = PPTXRenderer(template_path=None)
+        slides = [{
+            "slideIndex": 0,
+            "layoutId": "1",
+            "layoutName": "Default",
+            "contents": [{"type": "table", "table": {"rows": []}}],
+        }]
+        output_path = str(tmp_path / "out.pptx")
+        renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
+        prs = Presentation(output_path)
+        assert len([s for s in prs.slides[0].shapes if s.has_table]) == 0

@@ -23,6 +23,7 @@ from app.renderer.layout import LayoutEngine, LayoutType, PositionConfig
 from app.renderer.typography import TypographyEngine
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
 from app.renderer import text_fit
+from app.renderer import table_style
 from app.renderer.xml_utils import get_shape_position, emu_to_inches, inches_to_emu
 from app.design_system import get_default_design_system
 
@@ -120,7 +121,12 @@ class PPTXRenderer:
     5. Repack as a valid PPTX ZIP.
     """
 
-    def __init__(self, template_path: Optional[str] = None, color_theme: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        template_path: Optional[str] = None,
+        color_theme: Optional[str] = None,
+        design_system: Optional[dict] = None,
+    ) -> None:
         self.template_path = template_path
         # Only meaningful on the no-template path (_render_from_default): an
         # uploaded template's own colors are preserved untouched to keep
@@ -128,6 +134,12 @@ class PPTXRenderer:
         # docstring) - color_theme only picks a palette for the built-in
         # default design system when there is no template to be faithful to.
         self.color_theme = color_theme
+        # The extracted (or default) design system for this run - used to
+        # style generated content that has no template placeholder of its
+        # own to inherit formatting from, namely tables and charts. See
+        # table_style.resolve_table_style / chart_renderer for how this is
+        # consumed.
+        self.design_system = design_system or {}
         # Set by _render_from_default before it adds any slides.
         self._title_rgb = None
 
@@ -349,6 +361,60 @@ class PPTXRenderer:
                 )
                 self._add_image(slide, content.get("image", {}), img_pos)
 
+            elif content.get("type") == "table":
+                table_pos = LayoutEngine.calculate_table_position(
+                    layout_config,
+                    has_title=has_title,
+                )
+                if top_offset > 0:
+                    table_pos.top += top_offset
+                    table_pos.height -= top_offset
+                self._add_table(slide, content.get("table", {}), table_pos)
+                top_offset += table_pos.height + 0.15
+
+    def _add_table(self, slide, table_data: dict, pos: PositionConfig) -> None:
+        """Add a native, design-system-styled table to the slide."""
+        rows_data = table_data.get("rows", [])
+        if not rows_data:
+            return
+        n_rows = len(rows_data)
+        n_cols = max((len(r) for r in rows_data), default=0)
+        if n_cols == 0:
+            return
+
+        graphic_frame = slide.shapes.add_table(
+            n_rows, n_cols, Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
+        )
+        table = graphic_frame.table
+        style = table_style.resolve_table_style(self.design_system)
+        header_row = bool(table_data.get("headerRow"))
+
+        header_rgb = _hex_to_rgbcolor(style.header_bg)
+        header_fg_rgb = _hex_to_rgbcolor(style.header_fg)
+        band_rgb = _hex_to_rgbcolor(style.band_bg)
+        row_rgb = _hex_to_rgbcolor(style.row_bg)
+
+        for r_idx, row in enumerate(rows_data):
+            is_header = header_row and r_idx == 0
+            for c_idx in range(n_cols):
+                cell = table.cell(r_idx, c_idx)
+                cell.text = str(row[c_idx]) if c_idx < len(row) else ""
+                cell.fill.solid()
+                if is_header:
+                    cell.fill.fore_color.rgb = header_rgb
+                elif r_idx % 2 == 1:
+                    cell.fill.fore_color.rgb = band_rgb
+                else:
+                    cell.fill.fore_color.rgb = row_rgb
+
+                for paragraph in cell.text_frame.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.size = Pt(14 if is_header else 12)
+                        run.font.bold = is_header
+                        run.font.name = style.font_name
+                        if is_header:
+                            run.font.color.rgb = header_fg_rgb
+
     def _add_text_box(
         self,
         slide,
@@ -478,11 +544,15 @@ class PPTXRenderer:
                     image_rels.append(rel)
                 continue
 
+            if content_type == "table":
+                self._add_table_to_cloned_slide(root, content)
+                continue
+
             if content_type != "text":
-                # table/chart content is not yet rendered on this path (see
-                # Stage C/D of the presentation-quality-overhaul initiative) -
-                # skipping is a no-op today, not a regression, since neither
-                # render path currently produces real tables/charts.
+                # chart content is not yet rendered on this path (see Stage D
+                # of the presentation-quality-overhaul initiative) - skipping
+                # is a no-op today, not a regression, since neither render
+                # path currently produces real charts.
                 continue
 
             placeholder_idx = content.get("placeholderIdx", -1)
@@ -628,7 +698,11 @@ class PPTXRenderer:
             f.write(img_bytes)
         self._ensure_content_type_extension(working_dir, ext)
 
-        placeholder_idx = img_data.get("placeholderIdx")
+        # The prompt tells the LLM to put placeholderIdx on the content item
+        # itself (the same convention as "text" content); also accept it
+        # nested inside the image object, matching the shared pydantic
+        # ImageContent schema, in case either convention is produced.
+        placeholder_idx = content.get("placeholderIdx", img_data.get("placeholderIdx"))
         pos = None
         if placeholder_idx is not None:
             for sp in root.findall(".//p:sp", NS):
@@ -697,6 +771,130 @@ class PPTXRenderer:
         default.set("Extension", ext)
         default.set("ContentType", mime)
         tree.write(ct_path, xml_declaration=True, encoding="UTF-8")
+
+    def _add_table_to_cloned_slide(self, root: ET.Element, content: dict) -> None:
+        """
+        Insert a native OOXML table (<p:graphicFrame><a:tbl>) into a cloned
+        layout's spTree for a `table` content item, styled from this run's
+        design system (see table_style.resolve_table_style) - e.g. a
+        Starbucks-templated deck gets a Starbucks-green header row and
+        banded rows without any per-table styling decision from the LLM.
+        """
+        table_data = content.get("table", {})
+        rows_data = table_data.get("rows", [])
+        if not rows_data:
+            return
+        n_cols = max((len(r) for r in rows_data), default=0)
+        if n_cols == 0:
+            return
+        n_rows = len(rows_data)
+
+        # See the equivalent comment in _add_image_to_cloned_slide: accept
+        # placeholderIdx on either the content item itself (the prompted
+        # convention) or nested inside the table object (the shared
+        # pydantic TableContent schema's convention).
+        placeholder_idx = content.get("placeholderIdx", table_data.get("placeholderIdx"))
+        pos = None
+        if placeholder_idx is not None:
+            for sp in root.findall(".//p:sp", NS):
+                ph = sp.find(".//p:ph", NS)
+                if ph is not None and int(ph.get("idx", "-1")) == placeholder_idx:
+                    box = get_shape_position(sp)
+                    if box["cx"] > 0 and box["cy"] > 0:
+                        pos = box
+                    break
+        if pos is None:
+            layout_type = LayoutEngine.infer_layout_type({"contents": [content]})
+            layout_config = LayoutEngine.get_layout(layout_type)
+            table_pos = LayoutEngine.calculate_table_position(layout_config, has_title=True)
+            pos = {
+                "x": inches_to_emu(table_pos.left),
+                "y": inches_to_emu(table_pos.top),
+                "cx": inches_to_emu(table_pos.width),
+                "cy": inches_to_emu(table_pos.height),
+            }
+
+        style = table_style.resolve_table_style(self.design_system)
+        header_row = bool(table_data.get("headerRow"))
+
+        existing_ids = [int(cNvPr.get("id")) for cNvPr in root.findall(".//p:cNvPr", NS) if (cNvPr.get("id") or "").isdigit()]
+        shape_id = max(existing_ids, default=1) + 1
+
+        col_width = max(1, pos["cx"] // n_cols)
+        row_height = max(1, pos["cy"] // n_rows)
+
+        spTree = root.find(".//p:spTree", NS)
+        graphicFrame = ET.SubElement(spTree, f"{{{NS['p']}}}graphicFrame")
+
+        nvGraphicFramePr = ET.SubElement(graphicFrame, f"{{{NS['p']}}}nvGraphicFramePr")
+        cNvPr = ET.SubElement(nvGraphicFramePr, f"{{{NS['p']}}}cNvPr")
+        cNvPr.set("id", str(shape_id))
+        cNvPr.set("name", f"Table {shape_id}")
+        cNvGraphicFramePr = ET.SubElement(nvGraphicFramePr, f"{{{NS['p']}}}cNvGraphicFramePr")
+        ET.SubElement(cNvGraphicFramePr, f"{{{NS['a']}}}graphicFrameLocks", {"noGrp": "1"})
+        ET.SubElement(nvGraphicFramePr, f"{{{NS['p']}}}nvPr")
+
+        xfrm = ET.SubElement(graphicFrame, f"{{{NS['p']}}}xfrm")
+        off = ET.SubElement(xfrm, f"{{{NS['a']}}}off")
+        off.set("x", str(pos["x"]))
+        off.set("y", str(pos["y"]))
+        ext_el = ET.SubElement(xfrm, f"{{{NS['a']}}}ext")
+        ext_el.set("cx", str(pos["cx"]))
+        ext_el.set("cy", str(pos["cy"]))
+
+        graphic = ET.SubElement(graphicFrame, f"{{{NS['a']}}}graphic")
+        graphicData = ET.SubElement(graphic, f"{{{NS['a']}}}graphicData")
+        graphicData.set("uri", "http://schemas.openxmlformats.org/drawingml/2006/table")
+
+        tbl = ET.SubElement(graphicData, f"{{{NS['a']}}}tbl")
+        tblPr = ET.SubElement(tbl, f"{{{NS['a']}}}tblPr")
+        tblPr.set("firstRow", "1" if header_row else "0")
+        tblPr.set("bandRow", "1")
+        tableStyleId = ET.SubElement(tblPr, f"{{{NS['a']}}}tableStyleId")
+        # A valid built-in table style GUID - the fill/font colors set
+        # per-cell below are what actually carries the design system's
+        # branding, this ID just needs to be well-formed.
+        tableStyleId.text = "{5940675A-B579-460E-94D1-54222C63F5DA}"
+
+        tblGrid = ET.SubElement(tbl, f"{{{NS['a']}}}tblGrid")
+        for _ in range(n_cols):
+            gridCol = ET.SubElement(tblGrid, f"{{{NS['a']}}}gridCol")
+            gridCol.set("w", str(col_width))
+
+        header_fill = style.header_bg.lstrip("#")
+        band_fill = style.band_bg.lstrip("#")
+        row_fill = style.row_bg.lstrip("#")
+        header_fg = style.header_fg.lstrip("#")
+
+        for r_idx, row in enumerate(rows_data):
+            is_header = header_row and r_idx == 0
+            tr = ET.SubElement(tbl, f"{{{NS['a']}}}tr")
+            tr.set("h", str(row_height))
+            fill_hex = header_fill if is_header else (band_fill if r_idx % 2 == 1 else row_fill)
+            font_hex = header_fg if is_header else "000000"
+
+            for c_idx in range(n_cols):
+                text = str(row[c_idx]) if c_idx < len(row) else ""
+                tc = ET.SubElement(tr, f"{{{NS['a']}}}tc")
+                txBody = ET.SubElement(tc, f"{{{NS['a']}}}txBody")
+                ET.SubElement(txBody, f"{{{NS['a']}}}bodyPr")
+                ET.SubElement(txBody, f"{{{NS['a']}}}lstStyle")
+                p = ET.SubElement(txBody, f"{{{NS['a']}}}p")
+                r = ET.SubElement(p, f"{{{NS['a']}}}r")
+                rPr = ET.SubElement(r, f"{{{NS['a']}}}rPr")
+                rPr.set("lang", "en-US")
+                rPr.set("sz", "1400" if is_header else "1200")
+                rPr.set("b", "1" if is_header else "0")
+                solidFill = ET.SubElement(rPr, f"{{{NS['a']}}}solidFill")
+                srgbClr = ET.SubElement(solidFill, f"{{{NS['a']}}}srgbClr")
+                srgbClr.set("val", font_hex)
+                t = ET.SubElement(r, f"{{{NS['a']}}}t")
+                t.text = text
+
+                tcPr = ET.SubElement(tc, f"{{{NS['a']}}}tcPr")
+                tcFill = ET.SubElement(tcPr, f"{{{NS['a']}}}solidFill")
+                tcSrgb = ET.SubElement(tcFill, f"{{{NS['a']}}}srgbClr")
+                tcSrgb.set("val", fill_hex)
 
     def _create_minimal_slide(self, slide_data: dict) -> bytes:
         shape_id = 2

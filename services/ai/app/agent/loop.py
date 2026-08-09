@@ -18,7 +18,6 @@ from app.agent import run_context
 from app.agent.registry import get_registry, ToolResult
 from app.llm.provider import build_chat_provider, get_llm_provider
 from app.observability.logging import get_logger
-from app.config import settings
 import asyncio
 import json
 import re
@@ -641,6 +640,11 @@ class AgentLoop:
                         fn_args["layout_info"] = json.dumps(
                             self.working_state.selected_layouts[slide_index]
                         )
+                elif fn_name == "finalize_and_render_pptx":
+                    # Needed so generated tables/charts can be styled from
+                    # the template's own brand colors instead of a generic
+                    # default - see table_style.resolve_table_style.
+                    fn_args["design_system_json"] = json.dumps(design_system)
 
                 # Yield tool_call event
                 yield _event("tool_call", current_phase, {
@@ -1149,7 +1153,6 @@ class AgentLoop:
             prompt_parts.append("")
 
         if context.get("research"):
-            import json as _json2
             prompt_parts.append("## Research Findings (from web_search)")
             prompt_parts.append(
                 "Base your factual content on these findings. Do NOT call web_search again for "
