@@ -1073,3 +1073,81 @@ async def test_redesign_after_a_validation_issue_then_clean_revalidation(monkeyp
 
     assert validate_calls["n"] == 2
     assert loop.working_state.validation_attempts == 2
+
+
+# ── slide previews are held back until the deck is settled ────────────────
+
+
+class TestDeferredSlidePreviews:
+    """
+    ``slide_finalized`` carries the preview image the UI displays. It used to
+    be emitted the moment finalize_and_render_pptx returned - i.e. *before*
+    validate_rendered_output had run. Any slide validation then sent back for
+    redesign had already been shown to the user as finished, and changed
+    underneath them afterwards.
+    """
+
+    @staticmethod
+    def _stage(loop, urls=("/previews/s/slide_0.png", "/previews/s/slide_1.png")):
+        loop.working_state.accumulated_slides = [
+            {"slideIndex": 0, "title": "one"},
+            {"slideIndex": 1, "title": "two"},
+        ]
+        loop.working_state.pending_slide_previews = [
+            {"slideIndex": i, "slideData": None, "previewUrl": u}
+            for i, u in enumerate(urls)
+        ]
+        loop.working_state.previews_published = False
+
+    def test_flush_emits_one_slide_finalized_per_staged_preview(self):
+        loop = _loop()
+        self._stage(loop)
+
+        events = loop._flush_slide_previews()
+
+        assert [e["type"] for e in events] == ["slide_finalized", "slide_finalized"]
+        assert [e["slideIndex"] for e in events] == [0, 1]
+        assert events[0]["previewUrl"] == "/previews/s/slide_0.png"
+
+    def test_flush_is_idempotent(self):
+        """The validation path and the loop-exit safety net can both call
+        this; the second must not double-publish."""
+        loop = _loop()
+        self._stage(loop)
+
+        assert len(loop._flush_slide_previews()) == 2
+        assert loop._flush_slide_previews() == []
+
+    def test_a_rerender_supersedes_an_already_published_set(self):
+        loop = _loop()
+        self._stage(loop)
+        loop._flush_slide_previews()
+
+        # A validation-driven redesign re-renders, staging fresh previews.
+        self._stage(loop, urls=("/previews/s/slide_0.png?v=2",))
+
+        events = loop._flush_slide_previews()
+        assert len(events) == 1
+        assert events[0]["previewUrl"].endswith("?v=2")
+
+    def test_nothing_is_published_when_no_render_has_happened(self):
+        assert _loop()._flush_slide_previews() == []
+
+    @pytest.mark.asyncio
+    async def test_staged_previews_survive_a_working_state_round_trip(self):
+        """An ask_user_question pause checkpoints to Redis mid-run; previews
+        staged but not yet validated must not be lost on resume."""
+        session_id = uuid.uuid4()
+        loop = _loop()
+        loop.redis_client = _FakeRedis()
+        self._stage(loop)
+
+        await loop._save_working_state(session_id)
+
+        resumed = _loop()
+        resumed.redis_client = loop.redis_client
+        await resumed._load_working_state(session_id)
+
+        assert resumed.working_state.previews_published is False
+        events = resumed._flush_slide_previews()
+        assert [e["slideIndex"] for e in events] == [0, 1]

@@ -151,6 +151,14 @@ class WorkingState:
         # the true rendered path with certainty, so validate_rendered_output
         # is auto-supplied this rather than trusting the LLM's own copy.
         self.last_rendered_path: str | None = None
+        # slide_finalized payloads produced by the most recent render, held
+        # back until validation has settled. A slide the validator is about to
+        # send back for redesign is not finalized, so publishing its preview
+        # the moment it renders shows the user a slide that then changes
+        # underneath them. Re-rendering overwrites this list, so whatever is
+        # eventually published always describes the last render.
+        self.pending_slide_previews: list[dict] = []
+        self.previews_published: bool = False
         self.completed_tools: dict[str, dict] = {}  # tool_name -> {args, result, timestamp}
         self.last_error: str | None = None
         self.answered_questions: list[dict] = []  # Track questions that have been answered
@@ -315,6 +323,8 @@ class WorkingState:
         self.has_called_validate = False
         self.validation_attempts = 0
         self.last_rendered_path = None
+        self.pending_slide_previews = []
+        self.previews_published = False
         self.completed_tools = {}
         self.last_error = None
         self.answered_questions = []
@@ -455,6 +465,8 @@ class AgentLoop:
             "has_called_validate": self.working_state.has_called_validate,
             "validation_attempts": self.working_state.validation_attempts,
             "last_rendered_path": self.working_state.last_rendered_path,
+            "pending_slide_previews": self.working_state.pending_slide_previews,
+            "previews_published": self.working_state.previews_published,
             "last_error": self.working_state.last_error,
             "pending_question": self.working_state.pending_question,
             "answered_questions": self.working_state.answered_questions,
@@ -503,6 +515,8 @@ class AgentLoop:
             self.working_state.has_called_validate = state_dict.get("has_called_validate", False)
             self.working_state.validation_attempts = state_dict.get("validation_attempts", 0)
             self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
+            self.working_state.pending_slide_previews = state_dict.get("pending_slide_previews", [])
+            self.working_state.previews_published = state_dict.get("previews_published", False)
             self.working_state.last_error = state_dict.get("last_error")
             self.working_state.pending_question = state_dict.get("pending_question")
             self.working_state.answered_questions = state_dict.get("answered_questions", [])
@@ -679,6 +693,13 @@ class AgentLoop:
                     })
                     continue  # Skip the break and continue the loop
 
+                # Safety net: the run is ending, so anything still staged is
+                # final by definition. Normally validate_rendered_output has
+                # already flushed these; this covers the paths where it hit
+                # its retry cap or errored without reaching the flush.
+                for preview_event in self._flush_slide_previews():
+                    yield preview_event
+
                 # Final thought (optional) - only if we actually called finalize
                 yield _event("thought", "complete", {
                     "content": "Agent completed reasoning. Presentation finalized.",
@@ -841,24 +862,31 @@ class AgentLoop:
                     "sources": sources if sources else None,
                 })
 
-                # If a slide was finalized, emit slide_finalized for each slide
+                # Stage the per-slide previews produced by this render. They are
+                # NOT published yet: validate_rendered_output runs next and may
+                # send slides back for redesign, and a slide that is about to
+                # change is not "finalized". _flush_slide_previews publishes
+                # them once validation settles.
                 if fn_name == "finalize_and_render_pptx" and tool_result.success:
                     self.working_state.has_called_finalize = True
                     self.working_state.last_rendered_path = tool_result.data.get("filePath")
                     preview_urls = tool_result.data.get("previewUrls", [])
 
-                    # Emit slide_finalized events for each slide with preview URL
-                    for slide_idx, preview_url in enumerate(preview_urls):
-                        slide_data = None
-                        if slide_idx < len(self.working_state.accumulated_slides):
-                            slide_data = self.working_state.accumulated_slides[slide_idx]
-
-                        yield _event("slide_finalized", "rendering", {
+                    self.working_state.pending_slide_previews = [
+                        {
                             "slideIndex": slide_idx,
-                            "slideData": slide_data,
+                            "slideData": (
+                                self.working_state.accumulated_slides[slide_idx]
+                                if slide_idx < len(self.working_state.accumulated_slides)
+                                else None
+                            ),
                             "previewUrl": preview_url,
-                            "timestamp": _iso_now(),
-                        })
+                        }
+                        for slide_idx, preview_url in enumerate(preview_urls)
+                    ]
+                    # A re-render supersedes anything published for the previous
+                    # attempt, so the fresh set must be publishable again.
+                    self.working_state.previews_published = False
 
                     # Working state is now cleared once validate_rendered_output
                     # has actually run (or hit its retry cap) below, not here -
@@ -886,6 +914,10 @@ class AgentLoop:
                         # the cap is reached, same as a found-issues result.
                         validation_done = at_cap
                     if validation_done:
+                        # The deck will not change again this run, so the
+                        # slides are genuinely final - publish their previews.
+                        for preview_event in self._flush_slide_previews():
+                            yield preview_event
                         await self._clear_working_state(session_id)
 
                 # If ask_user_question was called, emit question event and pause
@@ -1263,7 +1295,10 @@ class AgentLoop:
             "OPTIONS MUST BE TAILORED TO THE ACTUAL REQUEST, never generic placeholders: for content "
             "focus, name the 2-4 candidate angles/sections you actually saw in the material (not "
             "'Option A/B/C') and let the user pick or say 'cover them all'.",
-            "6. Color/style questions ONLY when no template was uploaded - never ask about colors if "
+            "6. When no template was uploaded you MUST settle the colour/style choice with the user "
+            "before designing content - fold it into your consolidated question rather than "
+            "defaulting silently, because an unanswered colour choice renders the deck in a generic "
+            "preset that looks nothing like the subject's brand. Never ask about colors if "
             "the user gave a template, since its own colors are always used as-is and the question "
             "would be meaningless. When you do ask: if the topic clearly implies a real brand/entity "
             "with a known color (e.g. a presentation about a specific company), offer that brand's "
@@ -1412,6 +1447,26 @@ class AgentLoop:
         ])
 
         return "\n".join(prompt_parts)
+
+    def _flush_slide_previews(self) -> list[dict]:
+        """
+        Publish the staged ``slide_finalized`` events for the current render.
+
+        Previews are staged at render time and released only once the deck is
+        settled, so the UI never shows a slide that validation is about to send
+        back for redesign. Idempotent: repeated calls after a flush emit
+        nothing until the next render stages a fresh set.
+        """
+        if self.working_state.previews_published:
+            return []
+
+        events = [
+            _event("slide_finalized", "rendering", {**preview, "timestamp": _iso_now()})
+            for preview in self.working_state.pending_slide_previews
+        ]
+        if events:
+            self.working_state.previews_published = True
+        return events
 
     def _extract_sources(self, data) -> list[dict]:
         """Extract source URLs from tool result data for display in chat.
