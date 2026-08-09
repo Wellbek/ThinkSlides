@@ -279,6 +279,10 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-big-stat { font-size: clamp(30px, 5vw, 58px); font-weight: 800; color: #14113A; line-height: 1; letter-spacing: -0.02em; }
 .ws-stat-cap { font-size: 12px; color: #555; max-width: 90%; line-height: 1.45; }
 
+/* Marks the approximate HTML reconstruction shown before the real rendered
+   slide image is available, so it is never mistaken for the final output. */
+.ws-draft-badge { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 5px 12px; border-radius: 999px; background: rgba(13,13,13,0.78); color: #EDEDED; font-size: 11px; font-weight: 500; letter-spacing: 0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; backdrop-filter: blur(4px); box-shadow: 0 2px 10px rgba(0,0,0,0.35); pointer-events: none; }
+
 .ws-anno { position: absolute; left: 30%; top: 36%; width: 40%; height: 30%; border: 1.5px solid var(--ws-ai-text); border-radius: var(--ws-radius-sm); background: rgba(129,140,248,0.10); cursor: pointer; }
 .ws-anno-pin { position: absolute; top: -11px; left: -11px; width: 20px; height: 20px; border-radius: 50%; background: var(--ws-ai-text); color: #0D0D0D; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px rgba(129,140,248,0.18); }
 

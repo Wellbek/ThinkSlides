@@ -64,7 +64,18 @@ export function SlideStage({ onCollapse }: { collapsed: boolean; onCollapse: () 
               // eslint-disable-next-line @next/next/no-img-element
               <img className="ws-slide-img" src={slide.previewUrl} alt={slide.title} />
             ) : (
-              <SlideCanvas slide={slide} />
+              // Approximate HTML reconstruction of the slide JSON, shown while
+              // the deck is still being designed. It is deliberately labelled:
+              // it lays content out in normal document flow, so it cannot show
+              // the overflow or overlap the real renderer might produce, and
+              // users were reading it as the finished result and reporting the
+              // rendered .pptx as "not aligned with the preview".
+              <>
+                <SlideCanvas slide={slide} />
+                <div className="ws-draft-badge">
+                  Draft layout - the rendered slide appears once the deck is finalized
+                </div>
+              </>
             )}
             {tool === "mark" && (
               <div className="ws-anno" title="Marked for edit">

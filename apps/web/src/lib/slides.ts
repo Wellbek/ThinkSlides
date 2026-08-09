@@ -84,9 +84,19 @@ export function collectPreviewSlides(messages: ChatMessage[]): PreviewSlide[] {
         layoutName: slide.layoutName || "Default",
         title: deriveTitle(slide),
         contents: Array.isArray(slide.contents) ? slide.contents : [],
-        previewUrl: previewUrls.get(idx),
       });
     }
+  }
+
+  // Merge preview URLs in a separate pass, after the whole stream has been
+  // walked. `slide_finalized` always arrives *after* the `design_slide_content`
+  // result for the same slide, so reading `previewUrls` inline above would
+  // always observe an empty map and leave `previewUrl` permanently undefined -
+  // which silently pinned the UI to the approximate CSS mock and hid the real
+  // LibreOffice render even once it was available.
+  for (const [idx, url] of previewUrls) {
+    const slide = byIndex.get(idx);
+    if (slide) slide.previewUrl = url;
   }
 
   return Array.from(byIndex.values()).sort(
