@@ -145,6 +145,13 @@ class WorkingState:
         # (e.g. content that cannot fit no matter how it's redesigned)
         # cannot loop forever chasing a clean validation result.
         self.has_called_validate: bool = False
+        # True only once a validation run came back with NO issues. The exit
+        # gate requires this (or the retry cap), so a deck with a known
+        # rendering defect can't be announced as finished.
+        self.validation_clean: bool = False
+        # Issues reported by the most recent validation run, replayed to the
+        # model when it tries to stop without fixing them.
+        self.validation_issues: list[dict] = []
         self.validation_attempts: int = 0
         self.MAX_VALIDATION_ATTEMPTS = 3
         # Set once finalize_and_render_pptx succeeds - the loop always knows
@@ -159,6 +166,11 @@ class WorkingState:
         # eventually published always describes the last render.
         self.pending_slide_previews: list[dict] = []
         self.previews_published: bool = False
+        # The finalize_and_render_pptx payload for the current render, held
+        # back with the previews. The download card and the file's entry in the
+        # sources list are driven off this, so neither appears until the deck
+        # has actually passed validation.
+        self.pending_render_result: dict | None = None
         self.completed_tools: dict[str, dict] = {}  # tool_name -> {args, result, timestamp}
         self.last_error: str | None = None
         self.answered_questions: list[dict] = []  # Track questions that have been answered
@@ -321,10 +333,13 @@ class WorkingState:
         self.is_paused_for_user = False
         self.has_called_finalize = False
         self.has_called_validate = False
+        self.validation_clean = False
+        self.validation_issues = []
         self.validation_attempts = 0
         self.last_rendered_path = None
         self.pending_slide_previews = []
         self.previews_published = False
+        self.pending_render_result = None
         self.completed_tools = {}
         self.last_error = None
         self.answered_questions = []
@@ -464,9 +479,12 @@ class AgentLoop:
             "has_called_finalize": self.working_state.has_called_finalize,
             "has_called_validate": self.working_state.has_called_validate,
             "validation_attempts": self.working_state.validation_attempts,
+            "validation_clean": self.working_state.validation_clean,
+            "validation_issues": self.working_state.validation_issues,
             "last_rendered_path": self.working_state.last_rendered_path,
             "pending_slide_previews": self.working_state.pending_slide_previews,
             "previews_published": self.working_state.previews_published,
+            "pending_render_result": self.working_state.pending_render_result,
             "last_error": self.working_state.last_error,
             "pending_question": self.working_state.pending_question,
             "answered_questions": self.working_state.answered_questions,
@@ -514,9 +532,12 @@ class AgentLoop:
             self.working_state.has_called_finalize = state_dict.get("has_called_finalize", False)
             self.working_state.has_called_validate = state_dict.get("has_called_validate", False)
             self.working_state.validation_attempts = state_dict.get("validation_attempts", 0)
+            self.working_state.validation_clean = state_dict.get("validation_clean", False)
+            self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
             self.working_state.pending_slide_previews = state_dict.get("pending_slide_previews", [])
             self.working_state.previews_published = state_dict.get("previews_published", False)
+            self.working_state.pending_render_result = state_dict.get("pending_render_result")
             self.working_state.last_error = state_dict.get("last_error")
             self.working_state.pending_question = state_dict.get("pending_question")
             self.working_state.answered_questions = state_dict.get("answered_questions", [])
@@ -661,10 +682,17 @@ class AgentLoop:
                 # in which case further validation attempts are blocked (see
                 # _check_precondition) and the loop must be allowed to exit
                 # with whatever output it has rather than stall forever.
-                validation_satisfied = (
-                    self.working_state.has_called_validate
-                    or self.working_state.validation_attempts >= self.working_state.MAX_VALIDATION_ATTEMPTS
+                # A validation run that FOUND problems does not satisfy the
+                # gate. Requiring only that validation had run meant a deck
+                # with a chart hanging off the page could still be announced
+                # as complete and offered for download - the issues were
+                # reported to the model and then simply not acted on. The
+                # retry cap is still the escape hatch for a defect that
+                # genuinely cannot be fixed.
+                at_validation_cap = (
+                    self.working_state.validation_attempts >= self.working_state.MAX_VALIDATION_ATTEMPTS
                 )
+                validation_satisfied = self.working_state.validation_clean or at_validation_cap
                 if not self.working_state.has_called_finalize or not validation_satisfied:
                     # Agent is trying to exit without completing the task
                     # Feed back an instruction to continue
@@ -676,10 +704,21 @@ class AgentLoop:
                     )
                     if not self.working_state.has_called_finalize:
                         next_step_instruction = "You MUST continue using tools until you call finalize_and_render_pptx."
-                    else:
+                    elif not self.working_state.has_called_validate:
                         next_step_instruction = (
                             "finalize_and_render_pptx has run, but you have not yet called "
                             "validate_rendered_output to check the actual rendered output. Call it now."
+                        )
+                    else:
+                        issue_summary = self._describe_validation_issues()
+                        next_step_instruction = (
+                            "validate_rendered_output found problems in the rendered file that you "
+                            f"have not fixed yet:\n{issue_summary}\n"
+                            "Do NOT tell the user the presentation is ready. Fix the slides named "
+                            "above with design_slide_content - shorten the content, move an "
+                            "oversized chart or table onto its own slide, or split the slide in two "
+                            "- then call finalize_and_render_pptx again and re-run "
+                            "validate_rendered_output."
                         )
                     # Add a system message forcing the agent to continue
                     messages.append({
@@ -887,6 +926,7 @@ class AgentLoop:
                     # A re-render supersedes anything published for the previous
                     # attempt, so the fresh set must be publishable again.
                     self.working_state.previews_published = False
+                    self.working_state.pending_render_result = dict(tool_result.data or {})
 
                     # Working state is now cleared once validate_rendered_output
                     # has actually run (or hit its retry cap) below, not here -
@@ -907,6 +947,8 @@ class AgentLoop:
                     at_cap = self.working_state.validation_attempts >= self.working_state.MAX_VALIDATION_ATTEMPTS
                     if tool_result.success:
                         issues = (tool_result.data or {}).get("issues", [])
+                        self.working_state.validation_issues = issues
+                        self.working_state.validation_clean = not issues
                         validation_done = not issues or at_cap
                     else:
                         # A failed attempt (e.g. LibreOffice conversion
@@ -1280,11 +1322,23 @@ class AgentLoop:
             "1. You MUST always call tools until you complete the presentation.",
             "2. You MUST call finalize_and_render_pptx as the final step to generate the PPTX file.",
             "3. NEVER respond with only text and stop - this will cause the generation to fail.",
+            "3b. NEVER write a download link or file path into your reply. The interface provides the "
+            "download itself once the deck has passed validation; a link you compose points at a path "
+            "inside the service container and is dead for the user. Say the deck is ready and describe "
+            "it - do not link to it. Equally, do not announce that the presentation is complete while "
+            "validate_rendered_output still reports unresolved issues; fix those first.",
             "4. DEFAULT TO ASKING, NOT GUESSING, at every real decision point. This includes at least: "
             "target audience; desired scope/slide count; tone; WHICH PARTS OF THE SOURCE MATERIAL TO "
             "FOCUS ON OR EMPHASIZE when it covers more than can reasonably fit; how to resolve ambiguous "
-            "or conflicting information in what was provided; and VISUAL STYLE / COLOR PREFERENCE "
-            "whenever no template was uploaded (so the built-in default design system will be used) and "
+            "or conflicting information in what was provided; HOW TO PRESENT THE DATA whenever the "
+            "material contains figures, time series, breakdowns or comparisons and it is not obvious "
+            "whether they belong in a chart, a table, or prose - and if a chart, which kind (a trend "
+            "over time reads differently as a line than as a bar, and a breakdown reads differently as "
+            "a pie than as a table). Offer the concrete alternatives for THAT data as options (e.g. "
+            "'Line chart of revenue 2011-2025', 'Table of year-by-year figures', 'Keep it as bullets') "
+            "rather than asking abstractly whether the user likes charts; and VISUAL STYLE / COLOR "
+            "PREFERENCE whenever no template was uploaded (so the built-in default design system will "
+            "be used) and "
             "the user hasn't already indicated one. Call ask_user_question rather than guessing whenever "
             "a wrong assumption would produce a presentation the user did not want. This is the default; "
             "only skip asking when you are genuinely confident in the answer, not merely when an answer "
@@ -1448,6 +1502,21 @@ class AgentLoop:
 
         return "\n".join(prompt_parts)
 
+    def _describe_validation_issues(self, limit: int = 8) -> str:
+        """Render the last validation run's issues as a slide-numbered list."""
+        issues = self.working_state.validation_issues
+        if not issues:
+            return "  (no specific issues recorded)"
+
+        lines = []
+        for issue in issues[:limit]:
+            slide_index = issue.get("slideIndex")
+            where = f"Slide {slide_index + 1}" if isinstance(slide_index, int) else "Deck"
+            lines.append(f"  - {where}: {issue.get('detail', issue.get('type', 'issue'))}")
+        if len(issues) > limit:
+            lines.append(f"  - ...and {len(issues) - limit} more")
+        return "\n".join(lines)
+
     def _flush_slide_previews(self) -> list[dict]:
         """
         Publish the staged ``slide_finalized`` events for the current render.
@@ -1464,6 +1533,20 @@ class AgentLoop:
             _event("slide_finalized", "rendering", {**preview, "timestamp": _iso_now()})
             for preview in self.working_state.pending_slide_previews
         ]
+
+        # The deck is settled, so the rendered file may now be offered for
+        # download. This event - not the finalize_and_render_pptx tool_result -
+        # is what persists the file and emits file_generated (see
+        # api/generate.py), so the download card and the file's sources entry
+        # cannot appear for a deck validation is still working on.
+        render_result = self.working_state.pending_render_result
+        if render_result:
+            events.append(_event("deck_finalized", "validation", {
+                "renderResult": render_result,
+                "validationClean": self.working_state.validation_clean,
+                "timestamp": _iso_now(),
+            }))
+
         if events:
             self.working_state.previews_published = True
         return events

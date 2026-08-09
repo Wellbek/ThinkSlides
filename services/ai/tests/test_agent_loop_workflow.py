@@ -1151,3 +1151,122 @@ class TestDeferredSlidePreviews:
         assert resumed.working_state.previews_published is False
         events = resumed._flush_slide_previews()
         assert [e["slideIndex"] for e in events] == [0, 1]
+
+
+# ── a deck with known defects cannot be declared finished ─────────────────
+
+
+class TestValidationMustBeCleanBeforeCompleting:
+    """
+    The exit gate used to accept "validate_rendered_output has run", not
+    "the rendered file is actually clean". A deck whose chart hung off the
+    page was reported to the model, ignored, and then announced as complete
+    and offered for download.
+    """
+
+    @staticmethod
+    def _validated(issues):
+        loop = _loop()
+        ws = loop.working_state
+        ws.has_called_finalize = True
+        ws.has_called_validate = True
+        ws.validation_attempts = 1
+        ws.validation_issues = issues
+        ws.validation_clean = not issues
+        return loop
+
+    def test_a_clean_validation_satisfies_the_gate(self):
+        ws = self._validated([]).working_state
+        satisfied = ws.validation_clean or ws.validation_attempts >= ws.MAX_VALIDATION_ATTEMPTS
+        assert satisfied is True
+
+    def test_a_validation_that_found_issues_does_not_satisfy_the_gate(self):
+        ws = self._validated([
+            {"slideIndex": 2, "type": "overflow", "detail": "A chart runs off the slide"},
+        ]).working_state
+        satisfied = ws.validation_clean or ws.validation_attempts >= ws.MAX_VALIDATION_ATTEMPTS
+        assert satisfied is False
+
+    def test_the_retry_cap_still_releases_the_gate(self):
+        """An unfixable defect must not trap the run forever."""
+        loop = self._validated([{"slideIndex": 0, "type": "overflow", "detail": "x"}])
+        ws = loop.working_state
+        ws.validation_attempts = ws.MAX_VALIDATION_ATTEMPTS
+        satisfied = ws.validation_clean or ws.validation_attempts >= ws.MAX_VALIDATION_ATTEMPTS
+        assert satisfied is True
+
+    def test_the_issue_summary_names_slides_by_their_display_number(self):
+        loop = self._validated([
+            {"slideIndex": 0, "type": "overflow", "detail": "A chart runs off the slide"},
+            {"slideIndex": 3, "type": "overlap", "detail": "A chart overlaps the text"},
+        ])
+        summary = loop._describe_validation_issues()
+        assert "Slide 1" in summary and "Slide 4" in summary
+        assert "runs off the slide" in summary
+
+    def test_the_issue_summary_is_capped(self):
+        loop = self._validated([
+            {"slideIndex": i, "type": "overflow", "detail": f"issue {i}"} for i in range(20)
+        ])
+        summary = loop._describe_validation_issues(limit=5)
+        assert summary.count("\n") == 5  # 5 issues + the "...and N more" line
+        assert "15 more" in summary
+
+
+class TestDownloadIsHeldUntilTheDeckIsSettled:
+    """The download card and the file's sources entry are driven by
+    file_generated, which api/generate.py now emits on the loop's
+    deck_finalized event rather than on the finalize tool_result."""
+
+    @staticmethod
+    def _rendered(loop):
+        loop.working_state.pending_slide_previews = [
+            {"slideIndex": 0, "slideData": None, "previewUrl": "/previews/s/slide_0.png"},
+        ]
+        loop.working_state.previews_published = False
+        loop.working_state.pending_render_result = {
+            "filePath": "/app/output/deck.pptx", "fileName": "deck.pptx",
+            "fileSizeBytes": 1234, "slideCount": 1,
+        }
+
+    def test_deck_finalized_carries_the_render_result(self):
+        loop = _loop()
+        self._rendered(loop)
+        loop.working_state.validation_clean = True
+
+        events = loop._flush_slide_previews()
+        deck = next(e for e in events if e["type"] == "deck_finalized")
+        assert deck["renderResult"]["fileName"] == "deck.pptx"
+        assert deck["validationClean"] is True
+
+    def test_no_deck_finalized_before_the_deck_settles(self):
+        """Staging a render must not, by itself, publish anything."""
+        loop = _loop()
+        self._rendered(loop)
+        assert loop.working_state.previews_published is False
+
+    def test_a_rerender_republishes_the_newer_file(self):
+        loop = _loop()
+        self._rendered(loop)
+        loop._flush_slide_previews()
+
+        self._rendered(loop)
+        loop.working_state.pending_render_result["fileName"] = "deck-v2.pptx"
+
+        deck = next(e for e in loop._flush_slide_previews() if e["type"] == "deck_finalized")
+        assert deck["renderResult"]["fileName"] == "deck-v2.pptx"
+
+    @pytest.mark.asyncio
+    async def test_the_staged_render_result_survives_a_pause(self):
+        session_id = uuid.uuid4()
+        loop = _loop()
+        loop.redis_client = _FakeRedis()
+        self._rendered(loop)
+        await loop._save_working_state(session_id)
+
+        resumed = _loop()
+        resumed.redis_client = loop.redis_client
+        await resumed._load_working_state(session_id)
+
+        deck = next(e for e in resumed._flush_slide_previews() if e["type"] == "deck_finalized")
+        assert deck["renderResult"]["filePath"] == "/app/output/deck.pptx"
