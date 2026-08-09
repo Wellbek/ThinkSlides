@@ -345,6 +345,10 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 
 /* Live entries end with a blinking caret that must sit on the same line as
    the last word, so the trailing block collapses to inline. */
+.ws-md-issues { margin: 6px 0 0; padding-left: 20px; list-style: disc outside; }
+.ws-md-issues li { margin: 2px 0; }
+.ws-md-issues li::marker { color: #FBBF24; }
+
 .ws-md-inline { display: inline; }
 .ws-md-inline > :last-child { display: inline; }
 
