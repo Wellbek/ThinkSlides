@@ -682,6 +682,8 @@ class AgentLoop:
                 design_system = context.get("design_system") or {}
                 if fn_name == "select_layout":
                     fn_args["available_layouts"] = json.dumps(design_system.get("layouts", []))
+                elif fn_name in ("analyze_document", "extract_key_data"):
+                    fn_args["detail_level"] = self.detail_level
                 elif fn_name == "plan_presentation_structure":
                     fn_args["design_system_summary"] = json.dumps(design_system)
                     fn_args["detail_level"] = self.detail_level
@@ -1196,9 +1198,12 @@ class AgentLoop:
             "## Presentation Detail Level",
             "",
             f"The user has selected the **{self.detail_level or DETAIL_LEVEL_DETAILED}** detail level. "
-            "plan_presentation_structure and design_slide_content are told this automatically - "
-            "you do not need to pass it yourself - but keep your own reasoning and notes "
-            "consistent with it rather than defaulting to the shortest possible phrasing.",
+            "analyze_document, extract_key_data, plan_presentation_structure, and "
+            "design_slide_content are all told this automatically - you do not need to pass it "
+            "yourself - but keep your own reasoning and notes consistent with it rather than "
+            "defaulting to the shortest possible phrasing. Higher levels also mean more of the "
+            "source material is actually considered (not just written more verbosely) and more "
+            "willingness to use real tables/charts where the data supports them.",
             "",
         ]
 

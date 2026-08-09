@@ -11,6 +11,8 @@ generating new ones.
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.run_context import get_chat_provider
+from app.llm.provider import get_tools_llm_provider as get_llm_provider
 from app.observability.logging import get_logger
 import os
 import json
@@ -25,6 +27,20 @@ MAX_CATALOG_IMAGES_PER_DOCUMENT = 6
 MAX_CATALOG_IMAGE_BYTES = 5 * 1024 * 1024
 MIN_CATALOG_IMAGE_DIMENSION_PX = 80
 CATALOG_IMAGE_CONTEXT_CHARS = 300
+
+# How much of the extracted content actually reaches downstream tools,
+# keyed by the composer's detail_level. "concise" keeps this tool's
+# original behavior (a plain hard truncation - cheap and appropriate for
+# "just give me the gist"); "detailed"/"comprehensive" summarize instead of
+# truncating once content exceeds the ceiling, so material beyond the old
+# fixed 15,000-char cutoff still informs planning rather than being
+# silently dropped.
+_DETAIL_MAX_CHARS = {
+    "concise": 15000,
+    "detailed": 30000,
+    "comprehensive": 50000,
+}
+_SUMMARIZE_CHUNK_CHARS = 12000
 
 
 class AnalyzeDocumentTool:
@@ -55,6 +71,12 @@ class AnalyzeDocumentTool:
                     required=False,
                     enum=["summary", "detailed", "structured"],
                 ),
+                ToolParameter(
+                    name="detail_level",
+                    type="string",
+                    description="How much of the document to surface: concise, detailed, or comprehensive",
+                    required=False,
+                ),
             ],
         )
 
@@ -63,6 +85,7 @@ class AnalyzeDocumentTool:
         cls,
         document_path: str,
         analysis_type: str = "summary",
+        detail_level: str = "detailed",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -89,10 +112,7 @@ class AnalyzeDocumentTool:
             else:
                 content = f"Unsupported file type: {ext}"
 
-            # Truncate for LLM context window
-            max_chars = 15000
-            truncated = len(content) > max_chars
-            summary_text = content[:max_chars] + ("... [truncated]" if truncated else "")
+            summary_text, truncated, condensed = await cls._condense_for_context_window(content, detail_level)
 
             duration_ms = int((time.time() - start) * 1000)
             logger.info("document_analyzed", path=document_path, ext=ext, duration_ms=duration_ms)
@@ -104,14 +124,61 @@ class AnalyzeDocumentTool:
                     "file_type": ext,
                     "content_length": len(content),
                     "truncated": truncated,
+                    "condensed": condensed,
                     "content": summary_text,
                     "analysis_type": analysis_type,
+                    "detail_level": detail_level,
                     "images": images,
                 },
                 duration_ms=duration_ms,
             )
         except Exception as e:
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
+
+    @classmethod
+    async def _condense_for_context_window(cls, content: str, detail_level: str) -> tuple[str, bool, bool]:
+        """
+        Fit `content` within this detail_level's ceiling. Returns
+        (final_content, was_truncated, was_condensed_via_summarization).
+
+        "concise" keeps a plain hard truncation. "detailed"/"comprehensive"
+        summarize in chunks instead once content exceeds the ceiling, so
+        material beyond the old fixed cutoff still reaches planning instead
+        of being silently dropped - a chunk that fails to summarize falls
+        back to its own raw (shorter) excerpt rather than losing that
+        section of the document entirely.
+        """
+        max_chars = _DETAIL_MAX_CHARS.get(detail_level, _DETAIL_MAX_CHARS["detailed"])
+        if len(content) <= max_chars:
+            return content, False, False
+
+        if detail_level == "concise":
+            return content[:max_chars] + "... [truncated]", True, False
+
+        chunks = [content[i:i + _SUMMARIZE_CHUNK_CHARS] for i in range(0, len(content), _SUMMARIZE_CHUNK_CHARS)]
+        llm = get_chat_provider() or get_llm_provider()
+        summaries: list[str] = []
+        for chunk in chunks:
+            try:
+                response = await llm.chat(
+                    messages=[{"role": "user", "content": (
+                        "Summarize the following document excerpt for use in writing a "
+                        "presentation. Preserve concrete facts, figures, names, and dates - "
+                        "do not lose specific details in favor of vague generalities.\n\n"
+                        f"{chunk}"
+                    )}],
+                    tools=None,
+                )
+                summary = (response.get("message", {}).get("content") or "").strip()
+                summaries.append(summary or chunk[:1500])
+            except Exception as e:
+                logger.warning("document_chunk_summarization_failed", error=str(e))
+                summaries.append(chunk[:1500])
+
+        condensed = "\n\n".join(s for s in summaries if s)
+        if len(condensed) > max_chars:
+            condensed = condensed[:max_chars] + "... [truncated]"
+        return condensed, True, True
 
     @staticmethod
     async def _extract_pdf(path: str) -> str:

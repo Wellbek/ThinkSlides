@@ -31,7 +31,11 @@ _DETAIL_GUIDANCE = {
         "contentType to fit them when the layout catalog offers it. Break "
         "large topics into multiple slides freely - a comprehensive deck is "
         "expected to run longer than a concise one, and totalSlides should "
-        "reflect that."
+        "reflect that. Where the key data genuinely contains tabular/"
+        "comparison data or a numeric trend/breakdown, propose contentType "
+        "'table' or 'chart' for that slide instead of prose bullets - a "
+        "comprehensive deck should use real tables and charts wherever the "
+        "underlying data supports one, not just text."
     ),
 }
 
