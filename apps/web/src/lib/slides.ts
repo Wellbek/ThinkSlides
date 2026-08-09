@@ -1,14 +1,17 @@
 /**
  * Collect structured slide data from the agent event stream.
  *
- * The backend does not render per-slide preview images - the
- * `slide_finalized` event only carries PPTX file metadata, and its
- * `previewUrl` is never populated. The faithful per-slide content lives in
- * the `design_slide_content` tool results, which return the full Slide JSON
- * (layoutName + contents with text runs / images / tables / charts).
+ * The backend renders a real per-slide preview image once the deck is
+ * finalized: `finalize_and_render_pptx` converts the rendered .pptx to PDF
+ * via LibreOffice and rasterizes each page to a PNG, and `slide_finalized`
+ * events carry that image's URL as `previewUrl`. Until that arrives, the
+ * `design_slide_content` tool results (full Slide JSON - layoutName +
+ * contents with text runs / images / tables / charts) are used to render an
+ * approximate live preview.
  *
  * This module reconstructs an ordered, deduplicated slide list from those
- * tool results so the preview and outline can render real slide content.
+ * tool results, merging in `previewUrl` once it becomes available so the
+ * approximate live view is replaced by the true rendered output.
  */
 import type { ChatMessage } from "@/stores/chat-store";
 import type {
@@ -53,9 +56,9 @@ function deriveTitle(slide: RawSlide): string {
 
 export function collectPreviewSlides(messages: ChatMessage[]): PreviewSlide[] {
   const byIndex = new Map<number, PreviewSlide>();
-  // Track the latest previewUrl per slideIndex from slide_finalized events
-  // (currently always absent, but wired for the day the renderer publishes
-  // per-slide images).
+  // Track the latest previewUrl per slideIndex from slide_finalized events,
+  // emitted once finalize_and_render_pptx has produced the real rendered
+  // output.
   const previewUrls = new Map<number, string>();
 
   for (const m of messages) {
