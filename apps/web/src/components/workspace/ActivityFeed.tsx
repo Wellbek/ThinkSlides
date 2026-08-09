@@ -359,10 +359,12 @@ function AssistantBlock({ message, isAnswered, answerText }: { message: any; isA
               {liveThought ? PHASE_LABEL[liveThought.phase] ?? "Working" : "Working..."}
             </span>
           </div>
-          <span className="ws-shimmer-body">
-            {liveThought ? liveThought.content : "The agent is reasoning through the next step."}
+          <div className="ws-shimmer-body">
+            <MarkdownText className="ws-md-inline">
+              {liveThought ? liveThought.content : "The agent is reasoning through the next step."}
+            </MarkdownText>
             <span className="ws-ai-cursor" />
-          </span>
+          </div>
         </FeedItem>
       )}
     </>
@@ -467,10 +469,12 @@ function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: bool
         {!!step.sources?.length && <SourcesInline sources={step.sources} />}
 
         {lastThought?.phase && step.running && (
-          <span className="ws-shimmer-body ws-step-live">
-            {lastThought.content || "Working..."}
+          <div className="ws-shimmer-body ws-step-live">
+            <MarkdownText className="ws-md-inline">
+              {lastThought.content || "Working..."}
+            </MarkdownText>
             <span className="ws-ai-cursor" />
-          </span>
+          </div>
         )}
       </div>
     </FeedItem>
