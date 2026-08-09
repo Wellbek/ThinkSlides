@@ -42,6 +42,12 @@ OVERLAP_AREA_RATIO_THRESHOLD = 0.35
 # Vision review is a per-slide LLM call; cap it so a large deck doesn't turn
 # "comprehensive" into a slow, expensive validation step.
 MAX_VISION_REVIEW_SLIDES = 8
+# Pictures (which is how charts are embedded - see chart_renderer) are held to
+# a looser overflow tolerance than text. A rendered chart PNG routinely carries
+# a hairline of transparent padding, and LibreOffice's PDF export rounds image
+# placement more coarsely than glyph placement, so a point or two of bleed is
+# not a layout defect. Anything beyond this is genuinely off the slide.
+IMAGE_OVERFLOW_TOLERANCE_PT = 4.0
 
 
 class ValidateRenderedOutputTool:
@@ -201,6 +207,69 @@ class ValidateRenderedOutputTool:
                                 "type": "overlap",
                                 "detail": f"Overlapping content: {text_i[:40]!r} overlaps {text_j[:40]!r}",
                             })
+
+                # Pictures - which is how charts reach the slide (see
+                # chart_renderer: matplotlib PNG embedded with add_picture) -
+                # are laid out independently of text and were not inspected at
+                # all, so a chart running off the page passed validation
+                # cleanly. get_text("dict") only yields text spans; image
+                # placement has to be read separately.
+                images = []
+                for info in page.get_image_info():
+                    bbox = info.get("bbox")
+                    if not bbox:
+                        continue
+                    rect = tuple(float(v) for v in bbox)
+                    if _rect_area(rect) <= 0:
+                        continue
+                    images.append(rect)
+
+                for idx, rect in enumerate(images):
+                    x0, y0, x1, y1 = rect
+                    over_left = -x0
+                    over_top = -y0
+                    over_right = x1 - page_width
+                    over_bottom = y1 - page_height
+                    worst = max(over_left, over_top, over_right, over_bottom)
+                    if worst > IMAGE_OVERFLOW_TOLERANCE_PT:
+                        sides = []
+                        if over_left > IMAGE_OVERFLOW_TOLERANCE_PT:
+                            sides.append(f"left by {over_left:.0f}pt")
+                        if over_top > IMAGE_OVERFLOW_TOLERANCE_PT:
+                            sides.append(f"top by {over_top:.0f}pt")
+                        if over_right > IMAGE_OVERFLOW_TOLERANCE_PT:
+                            sides.append(f"right by {over_right:.0f}pt")
+                        if over_bottom > IMAGE_OVERFLOW_TOLERANCE_PT:
+                            sides.append(f"bottom by {over_bottom:.0f}pt")
+                        issues.append({
+                            "slideIndex": page_index,
+                            "type": "overflow",
+                            "detail": (
+                                f"A chart or image runs off the slide - past the "
+                                f"{', '.join(sides)}. Give it a smaller region on the "
+                                f"slide, or move the content to its own slide."
+                            ),
+                        })
+
+                # A chart sitting on top of the body text is as broken as one
+                # hanging off the edge, and equally invisible to a text-only
+                # check.
+                for rect in images:
+                    for bbox, text in spans:
+                        inter = _rect_intersection_area(rect, bbox)
+                        if inter <= 0:
+                            continue
+                        text_area = _rect_area(bbox)
+                        if text_area > 0 and inter / text_area >= OVERLAP_AREA_RATIO_THRESHOLD:
+                            issues.append({
+                                "slideIndex": page_index,
+                                "type": "overlap",
+                                "detail": (
+                                    f"A chart or image overlaps the text {text[:40]!r}. "
+                                    f"Move one of them, or split them across two slides."
+                                ),
+                            })
+                            break
         finally:
             doc.close()
         return issues

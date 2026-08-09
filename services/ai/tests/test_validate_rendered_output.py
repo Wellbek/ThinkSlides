@@ -191,3 +191,84 @@ class TestRunToolResult:
 
         result = await ValidateRenderedOutputTool.run(pptx_path=output_path, session_id=session_id)
         assert result.success is True
+
+
+class TestImageAndChartGeometry:
+    """
+    Charts reach a slide as embedded pictures (chart_renderer renders a
+    matplotlib PNG, the renderer places it with add_picture). Geometry
+    checking only read text spans via get_text("dict"), so a chart running off
+    the page - or sitting on top of the body text - passed validation cleanly
+    and the deck was announced as ready for download.
+    """
+
+    @staticmethod
+    def _pdf_with_image(tmp_path, rect: fitz.Rect, text_ops=()) -> str:
+        doc = fitz.open()
+        page = doc.new_page(width=PAGE_WIDTH_PT, height=PAGE_HEIGHT_PT)
+        pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 240, 180))
+        pix.set_rect(pix.irect, (200, 60, 40))
+        page.insert_image(rect, pixmap=pix)
+        for text, x, y, size in text_ops:
+            page.insert_text((x, y), text, fontsize=size)
+        path = str(tmp_path / f"img_{time.time_ns()}.pdf")
+        doc.save(path)
+        doc.close()
+        return path
+
+    def test_an_image_inside_the_slide_is_not_flagged(self, tmp_path):
+        pdf = self._pdf_with_image(tmp_path, fitz.Rect(60, 60, 400, 300))
+        assert ValidateRenderedOutputTool._check_geometry(pdf) == []
+
+    def test_a_chart_running_off_the_right_edge_is_flagged(self, tmp_path):
+        pdf = self._pdf_with_image(
+            tmp_path, fitz.Rect(PAGE_WIDTH_PT - 100, 60, PAGE_WIDTH_PT + 220, 300)
+        )
+        issues = ValidateRenderedOutputTool._check_geometry(pdf)
+        assert any(i["type"] == "overflow" for i in issues)
+        assert any("chart or image" in i["detail"] for i in issues)
+        assert any("right" in i["detail"] for i in issues)
+
+    def test_a_chart_running_off_the_bottom_edge_is_flagged(self, tmp_path):
+        pdf = self._pdf_with_image(
+            tmp_path, fitz.Rect(60, PAGE_HEIGHT_PT - 80, 400, PAGE_HEIGHT_PT + 160)
+        )
+        issues = ValidateRenderedOutputTool._check_geometry(pdf)
+        assert any(i["type"] == "overflow" and "bottom" in i["detail"] for i in issues)
+
+    def test_the_message_names_the_slide_and_suggests_a_fix(self, tmp_path):
+        """The detail string is fed straight back to the model, so it has to
+        say what to actually do about it."""
+        pdf = self._pdf_with_image(
+            tmp_path, fitz.Rect(60, PAGE_HEIGHT_PT - 80, 400, PAGE_HEIGHT_PT + 160)
+        )
+        issue = next(i for i in ValidateRenderedOutputTool._check_geometry(pdf)
+                     if i["type"] == "overflow")
+        assert issue["slideIndex"] == 0
+        assert "own slide" in issue["detail"] or "smaller region" in issue["detail"]
+
+    def test_a_chart_covering_the_body_text_is_flagged_as_overlap(self, tmp_path):
+        pdf = self._pdf_with_image(
+            tmp_path,
+            fitz.Rect(40, 40, 400, 300),
+            text_ops=[("Body text underneath the chart", 60, 150, 14)],
+        )
+        issues = ValidateRenderedOutputTool._check_geometry(pdf)
+        assert any(i["type"] == "overlap" and "chart or image" in i["detail"] for i in issues)
+
+    def test_an_image_beside_the_text_is_not_flagged_as_overlap(self, tmp_path):
+        pdf = self._pdf_with_image(
+            tmp_path,
+            fitz.Rect(380, 60, 680, 300),
+            text_ops=[("Text well clear of the image", 40, 150, 14)],
+        )
+        issues = ValidateRenderedOutputTool._check_geometry(pdf)
+        assert not any(i["type"] == "overlap" for i in issues)
+
+    def test_a_hairline_of_bleed_is_tolerated(self, tmp_path):
+        """Rendered chart PNGs carry transparent padding and LibreOffice rounds
+        image placement coarsely; a point or two of bleed is not a defect."""
+        pdf = self._pdf_with_image(
+            tmp_path, fitz.Rect(60, 60, PAGE_WIDTH_PT + 1.5, 300)
+        )
+        assert ValidateRenderedOutputTool._check_geometry(pdf) == []
