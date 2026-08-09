@@ -780,3 +780,296 @@ async def test_no_confident_selection_means_no_image_on_the_slide(monkeypatch):
     assert 0 not in loop.working_state.selected_images
     rendered = loop.working_state.accumulated_slides[0]
     assert [c["type"] for c in rendered["contents"]] == ["text"]
+
+
+# ── validate_rendered_output: precondition, retry cap, mandatory-exit gate ─
+
+
+def test_validate_rendered_output_blocked_before_finalize():
+    loop = _loop()
+    loop.working_state.presentation_structure = {"totalSlides": 1}
+
+    error = loop._check_precondition("validate_rendered_output", {})
+
+    assert error is not None
+    assert "finalize_and_render_pptx" in error
+
+
+def test_validate_rendered_output_allowed_once_finalized():
+    loop = _loop()
+    loop.working_state.has_called_finalize = True
+
+    assert loop._check_precondition("validate_rendered_output", {}) is None
+
+
+def test_validate_rendered_output_blocked_once_the_retry_cap_is_reached():
+    loop = _loop()
+    loop.working_state.has_called_finalize = True
+    loop.working_state.validation_attempts = loop.working_state.MAX_VALIDATION_ATTEMPTS
+
+    error = loop._check_precondition("validate_rendered_output", {})
+
+    assert error is not None
+    assert "retry limit" in error.lower()
+
+
+@pytest.mark.asyncio
+async def test_exit_is_blocked_after_finalize_alone_without_validating(monkeypatch):
+    """The loop must not let the LLM stop right after finalize - it must
+    also call validate_rendered_output at least once."""
+    session_id = uuid.uuid4()
+    loop = _loop()
+    loop.redis_client = _FakeRedis()
+
+    async def _no_context(*a, **k):
+        return {}
+
+    async def _no_messages(*a, **k):
+        return []
+
+    monkeypatch.setattr(loop, "_load_context", _no_context)
+    monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
+
+    structure = {"title": "T", "totalSlides": 1, "slides": [{"slideIndex": 0}]}
+    layout0 = {"layoutId": "1", "layoutName": "Content"}
+    slide0 = {"slideIndex": 0, "layoutId": "1", "layoutName": "Content", "contents": []}
+
+    # Script: after finalize succeeds, the LLM tries to stop (empty tool_calls)
+    # - the loop must force it to continue instead of accepting that as done.
+    script = [
+        [{"id": "1", "function": {"name": "plan_presentation_structure", "arguments": "{}"}}],
+        [{"id": "2", "function": {"name": "select_layout", "arguments": json.dumps({"content_type": "content", "slide_index": 0})}}],
+        [{"id": "3", "function": {"name": "design_slide_content", "arguments": json.dumps({"slide_index": 0})}}],
+        [{"id": "4", "function": {"name": "finalize_and_render_pptx", "arguments": json.dumps({"session_id": str(session_id)})}}],
+        [],  # LLM tries to stop here without validating
+        [{"id": "5", "function": {"name": "validate_rendered_output", "arguments": json.dumps({"pptx_path": "/x.pptx", "session_id": str(session_id)})}}],
+        [],  # now allowed to stop
+    ]
+    calls = {"n": 0}
+
+    async def _chat(*a, **k):
+        idx = calls["n"]
+        calls["n"] += 1
+        tool_calls = script[idx] if idx < len(script) else []
+        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+    loop.MAX_ITERATIONS = 10
+
+    async def _execute_tool(name, args):
+        if name == "plan_presentation_structure":
+            return ToolResult(success=True, data=structure)
+        if name == "select_layout":
+            return ToolResult(success=True, data=layout0)
+        if name == "design_slide_content":
+            return ToolResult(success=True, data=slide0)
+        if name == "finalize_and_render_pptx":
+            return ToolResult(success=True, data={"filePath": "/x.pptx", "fileName": "x.pptx", "previewUrls": []})
+        if name == "validate_rendered_output":
+            return ToolResult(success=True, data={"sessionId": str(session_id), "valid": True, "issueCount": 0, "issues": []})
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    events = [ev async for ev in loop.run(session_id)]
+
+    assert loop.working_state.has_called_finalize is True
+    assert loop.working_state.has_called_validate is True
+    tool_names_called = [e["toolName"] for e in events if e["type"] == "tool_call"]
+    assert tool_names_called.count("validate_rendered_output") == 1
+
+
+@pytest.mark.asyncio
+async def test_validation_narration_is_server_authored(monkeypatch):
+    """The chat must show an explicit, server-written status for the
+    validation step - not left to the LLM to describe or omit."""
+    session_id = uuid.uuid4()
+    loop = _loop()
+    # Seeded via Redis (not assigned directly to loop.working_state) so
+    # _run's state_loaded check is True and skips working_state.reset(),
+    # which would otherwise wipe has_called_finalize before the script runs.
+    seeded_state = json.dumps({
+        "completed_tools": {}, "has_called_finalize": True, "last_rendered_path": "/x.pptx",
+    })
+    loop.redis_client = _FakeRedis({f"working_state:{session_id}": seeded_state})
+
+    async def _no_context(*a, **k):
+        return {}
+
+    async def _no_messages(*a, **k):
+        return []
+
+    monkeypatch.setattr(loop, "_load_context", _no_context)
+    monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
+
+    script = [
+        [{"id": "1", "function": {"name": "validate_rendered_output", "arguments": "{}"}}],
+        [],
+    ]
+    calls = {"n": 0}
+
+    async def _chat(*a, **k):
+        idx = calls["n"]
+        calls["n"] += 1
+        tool_calls = script[idx] if idx < len(script) else []
+        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+    loop.MAX_ITERATIONS = 3
+
+    async def _execute_tool(name, args):
+        return ToolResult(success=True, data={"sessionId": str(session_id), "valid": True, "issueCount": 0, "issues": []})
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    events = [ev async for ev in loop.run(session_id)]
+
+    thoughts = [e["content"] for e in events if e["type"] == "thought"]
+    assert any("Validating the rendered output with LibreOffice" in t for t in thoughts)
+
+
+@pytest.mark.asyncio
+async def test_working_state_survives_between_finalize_and_validate(monkeypatch):
+    """Regression guard: working state must not be cleared at finalize
+    anymore - only once validation has actually run (or hit its cap) -
+    otherwise a crash/resume between the two steps would lose has_called_finalize
+    and last_rendered_path."""
+    session_id = uuid.uuid4()
+    loop = _loop()
+    loop.redis_client = _FakeRedis()
+
+    async def _no_context(*a, **k):
+        return {}
+
+    async def _no_messages(*a, **k):
+        return []
+
+    monkeypatch.setattr(loop, "_load_context", _no_context)
+    monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
+
+    structure = {"title": "T", "totalSlides": 1, "slides": [{"slideIndex": 0}]}
+    layout0 = {"layoutId": "1", "layoutName": "Content"}
+    slide0 = {"slideIndex": 0, "layoutId": "1", "layoutName": "Content", "contents": []}
+
+    cleared = {"count": 0}
+
+    script = [
+        [{"id": "1", "function": {"name": "plan_presentation_structure", "arguments": "{}"}}],
+        [{"id": "2", "function": {"name": "select_layout", "arguments": json.dumps({"content_type": "content", "slide_index": 0})}}],
+        [{"id": "3", "function": {"name": "design_slide_content", "arguments": json.dumps({"slide_index": 0})}}],
+        [{"id": "4", "function": {"name": "finalize_and_render_pptx", "arguments": json.dumps({"session_id": str(session_id)})}}],
+        [{"id": "5", "function": {"name": "validate_rendered_output", "arguments": json.dumps({"pptx_path": "/x.pptx", "session_id": str(session_id)})}}],
+        [],
+    ]
+    calls = {"n": 0}
+
+    async def _chat(*a, **k):
+        idx = calls["n"]
+        calls["n"] += 1
+        tool_calls = script[idx] if idx < len(script) else []
+        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+    loop.MAX_ITERATIONS = 10
+
+    async def _execute_tool(name, args):
+        if name == "plan_presentation_structure":
+            return ToolResult(success=True, data=structure)
+        if name == "select_layout":
+            return ToolResult(success=True, data=layout0)
+        if name == "design_slide_content":
+            return ToolResult(success=True, data=slide0)
+        if name == "finalize_and_render_pptx":
+            return ToolResult(success=True, data={"filePath": "/x.pptx", "fileName": "x.pptx", "previewUrls": []})
+        if name == "validate_rendered_output":
+            return ToolResult(success=True, data={"sessionId": str(session_id), "valid": True, "issueCount": 0, "issues": []})
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    original_clear = loop._clear_working_state
+
+    async def _tracking_clear(*a, **k):
+        cleared["count"] += 1
+        await original_clear(*a, **k)
+
+    monkeypatch.setattr(loop, "_clear_working_state", _tracking_clear)
+
+    async for _ in loop.run(session_id):
+        pass
+
+    assert cleared["count"] == 1  # only once, after validation completed
+
+
+@pytest.mark.asyncio
+async def test_redesign_after_a_validation_issue_then_clean_revalidation(monkeypatch):
+    """The realistic auto-fix path: validate finds an overflow issue on
+    slide 0, the LLM redesigns it and re-renders, then validate reports
+    clean and the run is allowed to finish."""
+    session_id = uuid.uuid4()
+    loop = _loop()
+    loop.redis_client = _FakeRedis()
+
+    async def _no_context(*a, **k):
+        return {}
+
+    async def _no_messages(*a, **k):
+        return []
+
+    monkeypatch.setattr(loop, "_load_context", _no_context)
+    monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
+
+    structure = {"title": "T", "totalSlides": 1, "slides": [{"slideIndex": 0}]}
+    layout0 = {"layoutId": "1", "layoutName": "Content"}
+    slide0 = {"slideIndex": 0, "layoutId": "1", "layoutName": "Content", "contents": []}
+
+    script = [
+        [{"id": "1", "function": {"name": "plan_presentation_structure", "arguments": "{}"}}],
+        [{"id": "2", "function": {"name": "select_layout", "arguments": json.dumps({"content_type": "content", "slide_index": 0})}}],
+        [{"id": "3", "function": {"name": "design_slide_content", "arguments": json.dumps({"slide_index": 0})}}],
+        [{"id": "4", "function": {"name": "finalize_and_render_pptx", "arguments": json.dumps({"session_id": str(session_id)})}}],
+        [{"id": "5", "function": {"name": "validate_rendered_output", "arguments": json.dumps({"pptx_path": "/x.pptx", "session_id": str(session_id)})}}],
+        # Issue found -> LLM redesigns and re-renders.
+        [{"id": "6", "function": {"name": "design_slide_content", "arguments": json.dumps({"slide_index": 0})}}],
+        [{"id": "7", "function": {"name": "finalize_and_render_pptx", "arguments": json.dumps({"session_id": str(session_id)})}}],
+        [{"id": "8", "function": {"name": "validate_rendered_output", "arguments": json.dumps({"pptx_path": "/x.pptx", "session_id": str(session_id)})}}],
+        [],
+    ]
+    calls = {"n": 0}
+    validate_calls = {"n": 0}
+
+    async def _chat(*a, **k):
+        idx = calls["n"]
+        calls["n"] += 1
+        tool_calls = script[idx] if idx < len(script) else []
+        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+    loop.MAX_ITERATIONS = 15
+
+    async def _execute_tool(name, args):
+        if name == "plan_presentation_structure":
+            return ToolResult(success=True, data=structure)
+        if name == "select_layout":
+            return ToolResult(success=True, data=layout0)
+        if name == "design_slide_content":
+            return ToolResult(success=True, data=slide0)
+        if name == "finalize_and_render_pptx":
+            return ToolResult(success=True, data={"filePath": "/x.pptx", "fileName": "x.pptx", "previewUrls": []})
+        if name == "validate_rendered_output":
+            validate_calls["n"] += 1
+            if validate_calls["n"] == 1:
+                return ToolResult(success=True, data={
+                    "sessionId": str(session_id), "valid": False, "issueCount": 1,
+                    "issues": [{"slideIndex": 0, "type": "overflow", "detail": "Text extends past the slide boundary"}],
+                })
+            return ToolResult(success=True, data={"sessionId": str(session_id), "valid": True, "issueCount": 0, "issues": []})
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    async for _ in loop.run(session_id):
+        pass
+
+    assert validate_calls["n"] == 2
+    assert loop.working_state.validation_attempts == 2

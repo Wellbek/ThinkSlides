@@ -29,6 +29,7 @@ function toolLabel(toolName: string): string {
     validate_slide_json: "Validate slide JSON",
     select_source_image: "Check for a matching source image",
     finalize_and_render_pptx: "Finalize and render PPTX",
+    validate_rendered_output: "Validating rendered output with LibreOffice",
     ask_user_question: "Ask user",
   };
   return map[toolName] ?? toolName.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());

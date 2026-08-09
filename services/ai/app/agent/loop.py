@@ -109,6 +109,7 @@ TOOL_PHASES = {
     "validate_slide_json": "validation",
     "select_source_image": "content_generation",
     "finalize_and_render_pptx": "rendering",
+    "validate_rendered_output": "validation",
     "ask_user_question": "user_input",  # Future: pause for user input
 }
 
@@ -138,6 +139,18 @@ class WorkingState:
         self.pending_question: dict | None = None
         self.is_paused_for_user: bool = False
         self.has_called_finalize: bool = False
+        # Ground-truth output validation (see validate_rendered_output) must
+        # run at least once after finalize before the loop is allowed to
+        # exit - but bounded, so a deck with a genuinely unfixable overflow
+        # (e.g. content that cannot fit no matter how it's redesigned)
+        # cannot loop forever chasing a clean validation result.
+        self.has_called_validate: bool = False
+        self.validation_attempts: int = 0
+        self.MAX_VALIDATION_ATTEMPTS = 3
+        # Set once finalize_and_render_pptx succeeds - the loop always knows
+        # the true rendered path with certainty, so validate_rendered_output
+        # is auto-supplied this rather than trusting the LLM's own copy.
+        self.last_rendered_path: str | None = None
         self.completed_tools: dict[str, dict] = {}  # tool_name -> {args, result, timestamp}
         self.last_error: str | None = None
         self.answered_questions: list[dict] = []  # Track questions that have been answered
@@ -299,6 +312,9 @@ class WorkingState:
         self.pending_question = None
         self.is_paused_for_user = False
         self.has_called_finalize = False
+        self.has_called_validate = False
+        self.validation_attempts = 0
+        self.last_rendered_path = None
         self.completed_tools = {}
         self.last_error = None
         self.answered_questions = []
@@ -436,6 +452,9 @@ class AgentLoop:
             "current_step_index": self.working_state.current_step_index,
             "completed_tools": self.working_state.completed_tools,
             "has_called_finalize": self.working_state.has_called_finalize,
+            "has_called_validate": self.working_state.has_called_validate,
+            "validation_attempts": self.working_state.validation_attempts,
+            "last_rendered_path": self.working_state.last_rendered_path,
             "last_error": self.working_state.last_error,
             "pending_question": self.working_state.pending_question,
             "answered_questions": self.working_state.answered_questions,
@@ -481,6 +500,9 @@ class AgentLoop:
             self.working_state.current_step_index = state_dict.get("current_step_index", 0)
             self.working_state.completed_tools = state_dict.get("completed_tools", {})
             self.working_state.has_called_finalize = state_dict.get("has_called_finalize", False)
+            self.working_state.has_called_validate = state_dict.get("has_called_validate", False)
+            self.working_state.validation_attempts = state_dict.get("validation_attempts", 0)
+            self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
             self.working_state.last_error = state_dict.get("last_error")
             self.working_state.pending_question = state_dict.get("pending_question")
             self.working_state.answered_questions = state_dict.get("answered_questions", [])
@@ -619,22 +641,38 @@ class AgentLoop:
 
             # If no tool calls, check if we're actually done
             if not tool_calls:
-                # MANDATORY: Can only exit if finalize_and_render_pptx was called
-                if not self.working_state.has_called_finalize:
+                # MANDATORY: can only exit once finalize_and_render_pptx has
+                # rendered a file AND validate_rendered_output has actually
+                # checked it - unless the validation retry cap has been hit,
+                # in which case further validation attempts are blocked (see
+                # _check_precondition) and the loop must be allowed to exit
+                # with whatever output it has rather than stall forever.
+                validation_satisfied = (
+                    self.working_state.has_called_validate
+                    or self.working_state.validation_attempts >= self.working_state.MAX_VALIDATION_ATTEMPTS
+                )
+                if not self.working_state.has_called_finalize or not validation_satisfied:
                     # Agent is trying to exit without completing the task
                     # Feed back an instruction to continue
                     logger.warning(
                         "agent_exited_early",
                         session_id=str(session_id),
                         iteration=iteration,
-                        message="LLM responded without tool calls before finalize was called",
+                        message="LLM responded without tool calls before finalize/validate completed",
                     )
+                    if not self.working_state.has_called_finalize:
+                        next_step_instruction = "You MUST continue using tools until you call finalize_and_render_pptx."
+                    else:
+                        next_step_instruction = (
+                            "finalize_and_render_pptx has run, but you have not yet called "
+                            "validate_rendered_output to check the actual rendered output. Call it now."
+                        )
                     # Add a system message forcing the agent to continue
                     messages.append({
                         "role": "system",
                         "content": (
-                            "You have NOT completed the task. You MUST continue using tools "
-                            "until you call finalize_and_render_pptx. Do not stop with just text responses. "
+                            f"You have NOT completed the task. {next_step_instruction} "
+                            "Do not stop with just text responses. "
                             "If you need user input, use the ask_user_question tool (available in your tools). "
                             "Otherwise, continue with the next step in the presentation generation workflow."
                         ),
@@ -715,6 +753,30 @@ class AgentLoop:
                         {"id": entry.get("id"), "context": entry.get("context", "")}
                         for entry in catalog if entry.get("id")
                     ])
+                elif fn_name == "validate_rendered_output":
+                    # The loop knows the true rendered path and session_id
+                    # with certainty - overriding whatever the LLM sends
+                    # avoids validating a stale/wrong/hallucinated path.
+                    if self.working_state.last_rendered_path:
+                        fn_args["pptx_path"] = self.working_state.last_rendered_path
+                    fn_args["session_id"] = str(session_id)
+                    fn_args["detail_level"] = self.detail_level
+
+                # Narrate the validation step explicitly, server-authored so
+                # it's always present and consistent rather than depending
+                # on the LLM choosing to describe it.
+                if fn_name == "validate_rendered_output":
+                    narration = (
+                        "Validating the rendered output with LibreOffice - checking the actual "
+                        "rendered slides for text that overflows its placeholder or overlaps "
+                        "other content..."
+                    )
+                    if self.detail_level == DETAIL_LEVEL_COMPREHENSIVE:
+                        narration += " Also reviewing slide screenshots for visual polish."
+                    yield _event("thought", "validation", {
+                        "content": narration,
+                        "timestamp": _iso_now(),
+                    })
 
                 # Yield tool_call event
                 yield _event("tool_call", current_phase, {
@@ -782,6 +844,7 @@ class AgentLoop:
                 # If a slide was finalized, emit slide_finalized for each slide
                 if fn_name == "finalize_and_render_pptx" and tool_result.success:
                     self.working_state.has_called_finalize = True
+                    self.working_state.last_rendered_path = tool_result.data.get("filePath")
                     preview_urls = tool_result.data.get("previewUrls", [])
 
                     # Emit slide_finalized events for each slide with preview URL
@@ -797,8 +860,33 @@ class AgentLoop:
                             "timestamp": _iso_now(),
                         })
 
-                    # Clear saved working state - presentation is complete
-                    await self._clear_working_state(session_id)
+                    # Working state is now cleared once validate_rendered_output
+                    # has actually run (or hit its retry cap) below, not here -
+                    # "presentation is complete" means checked, not just rendered.
+
+                if fn_name == "validate_rendered_output" and precondition_error is None:
+                    # precondition_error is None only when the tool actually
+                    # executed - a call blocked for not having finalized yet,
+                    # or blocked by the retry cap below, must not count as an
+                    # attempt or be mistaken for "validation done".
+                    #
+                    # An attempt counts whether or not it succeeded (e.g. a
+                    # LibreOffice conversion failure still counts against the
+                    # cap - the loop must not retry that indefinitely either).
+                    self.working_state.validation_attempts += 1
+                    self.working_state.has_called_validate = True
+
+                    at_cap = self.working_state.validation_attempts >= self.working_state.MAX_VALIDATION_ATTEMPTS
+                    if tool_result.success:
+                        issues = (tool_result.data or {}).get("issues", [])
+                        validation_done = not issues or at_cap
+                    else:
+                        # A failed attempt (e.g. LibreOffice conversion
+                        # error) is not "clean" - only stop retrying once
+                        # the cap is reached, same as a found-issues result.
+                        validation_done = at_cap
+                    if validation_done:
+                        await self._clear_working_state(session_id)
 
                 # If ask_user_question was called, emit question event and pause
                 if fn_name == "ask_user_question" and tool_result.success:
@@ -1043,6 +1131,19 @@ class AgentLoop:
                     "design_slide_content for each missing slide first."
                 )
 
+        if fn_name == "validate_rendered_output":
+            if not ws.has_called_finalize:
+                return (
+                    "validate_rendered_output checks the actual rendered .pptx file, which "
+                    "does not exist yet. Call finalize_and_render_pptx first."
+                )
+            if ws.validation_attempts >= ws.MAX_VALIDATION_ATTEMPTS:
+                return (
+                    f"Validation retry limit reached ({ws.MAX_VALIDATION_ATTEMPTS} attempts). "
+                    "Accept the current rendered output and finish rather than continuing to "
+                    "redesign and re-validate."
+                )
+
         return None
 
     async def _execute_tool(self, name: str, args: dict) -> ToolResult:
@@ -1242,7 +1343,8 @@ class AgentLoop:
             "validate_slide_json — Validate slide JSON against the schema before rendering",
             "select_source_image — Reuse a confidently-matching image already extracted from the user's own source material (never generates new images)",
             "ask_user_question — Ask the user for clarification or input (pauses workflow)",
-            "finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
+            "finalize_and_render_pptx — Render the final PPTX file",
+            "validate_rendered_output — Check the ACTUAL rendered output for overflow/overlap (MUST be called after finalize_and_render_pptx, and is the true last step)",
         ]
         prompt_parts.append("## Available Tools")
         prompt_parts.append("Use the provided function tools to accomplish each step:")
@@ -1298,6 +1400,8 @@ class AgentLoop:
             "Generate content for each slide with design_slide_content",
             "Validate all slides with validate_slide_json",
             "Render with finalize_and_render_pptx - THIS IS MANDATORY",
+            "Then call validate_rendered_output to check the ACTUAL rendered file (not the slide JSON) for overflow/overlap - THIS IS ALSO MANDATORY, and comes after finalize, not before",
+            "If validate_rendered_output reports real issues (overflow/overlap) for a slide, call design_slide_content again for that slide with shorter/adjusted content reflecting the reported detail, then finalize_and_render_pptx and validate_rendered_output again - up to a few times; if issues remain after that, accept the output and finish rather than looping forever. Purely 'aesthetic' findings are optional polish, not something to chase indefinitely",
         ]
         prompt_parts.append("## Workflow")
         prompt_parts.extend(f"{i}. {step}" for i, step in enumerate(workflow_steps, 1))

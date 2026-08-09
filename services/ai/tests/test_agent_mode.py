@@ -111,7 +111,7 @@ def test_tool_and_workflow_lists_stay_contiguously_numbered_in_simple_mode():
         tool_numbers.append(int(line.split(".", 1)[0]))
 
     assert tool_numbers == list(range(1, len(tool_numbers) + 1))
-    assert len(tool_numbers) == 10  # 11 in deep mode, minus web_search
+    assert len(tool_numbers) == 11  # 12 in deep mode, minus web_search
 
 
 # ── Mode resolution and persistence ────────────────────────────────────
