@@ -265,7 +265,7 @@ class TestCloneLayoutPreservesFormatting:
             "contents": [{"type": "text", "placeholderIdx": 1, "runs": runs}],
         }
 
-        xml_bytes = renderer._clone_layout_as_slide(
+        xml_bytes, _image_rels = renderer._clone_layout_as_slide(
             default_template_layout2, slide_data, str(tmp_path), slide_num=1
         )
 
@@ -463,3 +463,219 @@ class TestPPTXRendererDefaultShapeSizing:
                 assert shape.height > Inches(0.1)
         finally:
             os.unlink(output_path)
+
+
+class TestTextFitAutofit:
+    """Unit coverage for app.renderer.text_fit, the shrink-to-fit estimator
+    used to stop long text from visually overlapping other content - the
+    root cause confirmed by rendering long text with LibreOffice and seeing
+    real overlap even though validate_font_size only ever enforced a
+    minimum size, never shrank anything."""
+
+    def test_short_text_needs_no_shrinking(self):
+        from app.renderer import text_fit
+        blocks = [text_fit.TextBlock(text="Short line", font_size_pt=18)]
+        scale, ln_reduction = text_fit.compute_autofit_scale(blocks, box_width_pt=400, box_height_pt=200)
+        assert scale == 1.0
+        assert ln_reduction == 0
+
+    def test_long_text_in_a_small_box_is_shrunk(self):
+        from app.renderer import text_fit
+        long_text = " ".join(["word"] * 400)
+        blocks = [text_fit.TextBlock(text=long_text, font_size_pt=20)]
+        scale, _ = text_fit.compute_autofit_scale(blocks, box_width_pt=300, box_height_pt=100)
+        assert scale < 1.0
+        assert scale >= text_fit.MIN_FONT_SCALE
+
+    def test_zero_size_box_is_left_alone(self):
+        """No usable geometry (e.g. a placeholder with no explicit xfrm) must
+        not be treated as "infinitely small" - that would force every
+        placeholder down to the minimum scale for no reason."""
+        from app.renderer import text_fit
+        blocks = [text_fit.TextBlock(text="Anything", font_size_pt=18)]
+        scale, ln_reduction = text_fit.compute_autofit_scale(blocks, box_width_pt=0, box_height_pt=0)
+        assert scale == 1.0
+        assert ln_reduction == 0
+
+
+class TestCloneLayoutAutofit:
+    """The template-clone path must never touch <a:rPr> (that's the whole
+    point of cloning - see the module docstring), so overflow protection has
+    to be the OOXML-native <a:normAutofit> render-time hint instead."""
+
+    @pytest.fixture
+    def renderer(self):
+        return PPTXRenderer(template_path=None)
+
+    @pytest.fixture
+    def small_boxed_layout(self, tmp_path):
+        """A synthetic single-placeholder layout with an explicit, small
+        <a:xfrm> so the fit estimate has real geometry to judge against."""
+        xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:a="{NS['a']}" xmlns:r="{NS['r']}" xmlns:p="{NS['p']}">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr/>
+      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="2" name="Body"/>
+          <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+          <p:nvPr><p:ph type="body" idx="1"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm><a:off x="457200" y="457200"/><a:ext cx="914400" cy="457200"/></a:xfrm>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr/>
+          <a:lstStyle/>
+          <a:p><a:pPr/><a:r><a:rPr sz="2000"/><a:t>placeholder</a:t></a:r></a:p>
+        </p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+</p:sldLayout>"""
+        layout_path = tmp_path / "slideLayout9.xml"
+        layout_path.write_text(xml)
+        return str(layout_path)
+
+    def test_overlong_text_gets_normautofit_without_touching_rpr(self, renderer, small_boxed_layout, tmp_path):
+        # The box is 1in x 0.5in at 20pt - far too small for several long
+        # bullet points at that size, so this must trigger autofit.
+        runs = [
+            {"text": "This is a fairly long bullet point that will not fit", "bullet": True},
+            {"text": "Here is another long bullet point stretching the box", "bullet": True},
+            {"text": "And a third one to make sure it clearly overflows", "bullet": True},
+        ]
+        slide_data = {
+            "slideIndex": 0,
+            "layoutId": "9",
+            "contents": [{"type": "text", "placeholderIdx": 1, "runs": runs}],
+        }
+
+        xml_bytes, _ = renderer._clone_layout_as_slide(small_boxed_layout, slide_data, str(tmp_path), slide_num=1)
+        root = ET.fromstring(xml_bytes)
+
+        sp = next(sp for sp in root.findall(".//p:sp", NS) if sp.find(".//p:ph", NS).get("idx") == "1")
+        txBody = sp.find(".//p:txBody", NS)
+        bodyPr = txBody.find("a:bodyPr", NS)
+        assert bodyPr is not None
+        normAutofit = bodyPr.find("a:normAutofit", NS)
+        assert normAutofit is not None, "overflowing placeholder must get a normAutofit hint"
+        assert int(normAutofit.get("fontScale")) < 100000
+
+    def test_short_text_gets_no_autofit_element(self, renderer, small_boxed_layout, tmp_path):
+        slide_data = {
+            "slideIndex": 0,
+            "layoutId": "9",
+            "contents": [{"type": "text", "placeholderIdx": 1, "runs": [{"text": "Hi", "bullet": True}]}],
+        }
+        xml_bytes, _ = renderer._clone_layout_as_slide(small_boxed_layout, slide_data, str(tmp_path), slide_num=1)
+        root = ET.fromstring(xml_bytes)
+        sp = next(sp for sp in root.findall(".//p:sp", NS) if sp.find(".//p:ph", NS).get("idx") == "1")
+        bodyPr = sp.find(".//p:txBody/a:bodyPr", NS)
+        assert bodyPr is None or bodyPr.find("a:normAutofit", NS) is None
+
+
+class TestCloneLayoutImages:
+    """Regression: the template-clone path used to silently drop every
+    non-text content item (`if content.get("type") != "text": continue`),
+    so an image the LLM placed on a slide never made it into the output
+    whenever a user-uploaded template was in use - the primary path. Images
+    must now render there too."""
+
+    # A minimal valid 1x1 transparent PNG.
+    ONE_PX_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+    @pytest.fixture
+    def renderer(self):
+        return PPTXRenderer(template_path=None)
+
+    @pytest.fixture
+    def default_template_layout2(self, tmp_path):
+        from app.renderer.default_template import get_default_template_path
+        template_path = get_default_template_path(output_dir=str(tmp_path / "templates"))
+        working_dir = tmp_path / "extracted"
+        with zipfile.ZipFile(template_path) as zf:
+            zf.extractall(working_dir)
+        return str(working_dir / "ppt" / "slideLayouts" / "slideLayout2.xml"), str(working_dir)
+
+    def test_base64_image_is_added_as_a_picture_shape(self, renderer, default_template_layout2, tmp_path):
+        layout_file, working_dir = default_template_layout2
+        slide_data = {
+            "slideIndex": 0,
+            "layoutId": "2",
+            "contents": [{
+                "type": "image",
+                "image": {"source": "base64", "data": self.ONE_PX_PNG_B64, "altText": "Test image"},
+            }],
+        }
+
+        xml_bytes, image_rels = renderer._clone_layout_as_slide(layout_file, slide_data, working_dir, slide_num=1)
+
+        assert len(image_rels) == 1
+        assert image_rels[0]["rId"] == "rId2"
+        assert image_rels[0]["target"].startswith("../media/image")
+
+        root = ET.fromstring(xml_bytes)
+        pics = root.findall(".//p:pic", NS)
+        assert len(pics) == 1
+        blip = pics[0].find(".//a:blip", NS)
+        assert blip.get(f"{{{NS['r']}}}embed") == "rId2"
+
+        # The image bytes actually landed on disk.
+        media_dir = os.path.join(working_dir, "ppt", "media")
+        assert os.path.exists(media_dir)
+        assert len(os.listdir(media_dir)) >= 1
+
+    def test_data_uri_prefixed_base64_is_decoded(self, renderer, default_template_layout2, tmp_path):
+        layout_file, working_dir = default_template_layout2
+        slide_data = {
+            "slideIndex": 0,
+            "layoutId": "2",
+            "contents": [{
+                "type": "image",
+                "image": {"source": "base64", "data": f"data:image/png;base64,{self.ONE_PX_PNG_B64}"},
+            }],
+        }
+        xml_bytes, image_rels = renderer._clone_layout_as_slide(layout_file, slide_data, working_dir, slide_num=1)
+        assert len(image_rels) == 1
+
+    def test_unresolvable_image_is_skipped_not_crashed(self, renderer, default_template_layout2, tmp_path):
+        layout_file, working_dir = default_template_layout2
+        slide_data = {
+            "slideIndex": 0,
+            "layoutId": "2",
+            "contents": [{"type": "image", "image": {"source": "base64", "data": "not-valid-base64!!"}}],
+        }
+        xml_bytes, image_rels = renderer._clone_layout_as_slide(layout_file, slide_data, working_dir, slide_num=1)
+        assert image_rels == []
+        root = ET.fromstring(xml_bytes)
+        assert root.findall(".//p:pic", NS) == []
+
+    def test_end_to_end_render_with_template_and_image_produces_valid_pptx(self, tmp_path):
+        """Full render() through the template path with an image content
+        item must produce a file python-pptx (and therefore PowerPoint/
+        LibreOffice) can open, with the picture actually present."""
+        from app.renderer.default_template import get_default_template_path
+        from pptx import Presentation
+
+        template_path = get_default_template_path(output_dir=str(tmp_path / "templates"))
+        renderer = PPTXRenderer(template_path=template_path)
+        slides = [{
+            "slideIndex": 0,
+            "layoutId": "2",
+            "layoutName": "Title and Content",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Title"}]},
+                {"type": "image", "image": {"source": "base64", "data": self.ONE_PX_PNG_B64}},
+            ],
+        }]
+        output_path = str(tmp_path / "out.pptx")
+        result = renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
+
+        assert os.path.exists(result)
+        prs = Presentation(result)
+        assert len(prs.slides) == 1
+        picture_shapes = [s for s in prs.slides[0].shapes if s.shape_type == 13]  # MSO_SHAPE_TYPE.PICTURE
+        assert len(picture_shapes) == 1

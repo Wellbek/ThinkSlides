@@ -11,7 +11,6 @@ import subprocess
 import tempfile
 import shutil
 from typing import Optional, List
-from pathlib import Path
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)

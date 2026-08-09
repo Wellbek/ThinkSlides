@@ -8,22 +8,88 @@ Never recreates design from scratch — always clones and fills.
 
 from __future__ import annotations
 import os
+import re
 import copy
-import json
 import zipfile
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
-from typing import Any, Optional
+from typing import Optional
 from pptx import Presentation
-from pptx.util import Inches, Pt, Emu
+from pptx.util import Inches, Pt
+from pptx.enum.text import MSO_AUTO_SIZE
 from app.observability.logging import get_logger
 from app.renderer.layout import LayoutEngine, LayoutType, PositionConfig
-from app.renderer.typography import TypographyEngine, TextStyle
+from app.renderer.typography import TypographyEngine
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
+from app.renderer import text_fit
+from app.renderer.xml_utils import get_shape_position, emu_to_inches, inches_to_emu
 from app.design_system import get_default_design_system
 
 logger = get_logger(__name__)
+
+# Cap on downloaded/decoded image size - guards against a runaway data: URI
+# or a slow/oversized remote response inflating render time or memory.
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+_DATA_URI_RE = re.compile(r"^data:([\w/+.-]+);base64,(.*)$", re.DOTALL)
+
+
+def _resolve_image_bytes(img_data: dict) -> Optional[bytes]:
+    """
+    Decode/fetch the raw bytes for an ImageContent regardless of its
+    `source` (base64 data, a bare/data-URI base64 string, or a remote URL).
+    Returns None (never raises) on anything that isn't a genuine, size-capped
+    image - callers treat that as "skip this image" rather than fail the
+    whole render.
+    """
+    source = img_data.get("source")
+    raw = img_data.get("data", "") or ""
+
+    if source == "base64":
+        m = _DATA_URI_RE.match(raw)
+        if m:
+            raw = m.group(2)
+        try:
+            import base64
+            decoded = base64.b64decode(raw, validate=False)
+        except Exception:
+            return None
+        if len(decoded) > MAX_IMAGE_BYTES:
+            return None
+        return decoded
+
+    if source == "url":
+        if not raw.startswith(("http://", "https://")):
+            return None
+        try:
+            import httpx
+            with httpx.Client(timeout=8.0, follow_redirects=True) as client:
+                resp = client.get(raw)
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "")
+                if not content_type.startswith("image/"):
+                    return None
+                if len(resp.content) > MAX_IMAGE_BYTES:
+                    return None
+                return resp.content
+        except Exception as e:
+            logger.warning("image_url_fetch_failed", url=raw, error=str(e))
+            return None
+
+    return None
+
+
+def _sniff_image_ext(img_bytes: bytes) -> str:
+    """Determine a file extension from image content, not from a claimed source string."""
+    try:
+        from PIL import Image
+        import io
+        with Image.open(io.BytesIO(img_bytes)) as im:
+            fmt = (im.format or "PNG").lower()
+            return "jpg" if fmt == "jpeg" else fmt
+    except Exception:
+        return "png"
 
 NS = {
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
@@ -109,8 +175,9 @@ class PPTXRenderer:
                 slide_file = f"slide{slide_num}.xml"
 
                 layout_file = layout_map.get(layout_id)
+                image_rels: list[dict] = []
                 if layout_file and os.path.exists(layout_file):
-                    slide_xml = self._clone_layout_as_slide(
+                    slide_xml, image_rels = self._clone_layout_as_slide(
                         layout_file, slide_data, working_dir, slide_num
                     )
                 else:
@@ -121,7 +188,7 @@ class PPTXRenderer:
                 with open(slide_path, "wb") as f:
                     f.write(slide_xml)
 
-                self._create_slide_rels(working_dir, slide_num, layout_id)
+                self._create_slide_rels(working_dir, slide_num, layout_id, image_rels)
 
             self._update_presentation_xml(working_dir, len(slides))
             self._update_content_types(working_dir, len(slides))
@@ -255,14 +322,25 @@ class PPTXRenderer:
                 if top_offset > 0:
                     content_pos.top += top_offset
                     content_pos.height -= top_offset
+                if content_pos.height <= 0:
+                    # No vertical room left in the content area at all -
+                    # still render (better an overflowing box Stage G's
+                    # validation can flag than silently dropped content),
+                    # but stop advancing top_offset further into negative
+                    # territory.
+                    content_pos.height = 0.4
 
-                self._add_text_box(
+                used_height = self._add_text_box(
                     slide,
                     content.get("runs", []),
                     content_pos,
                     is_title=False,
                 )
-                top_offset += 0.3  # inches, spacing between sections
+                # Advance by the text's own measured height (not a flat
+                # guess) plus a small gap, so a short block doesn't leave a
+                # gap and a long block doesn't get overwritten by the next
+                # one - the root cause of the visual overlap this replaces.
+                top_offset += min(used_height, content_pos.height) + 0.15
 
             elif content.get("type") == "image":
                 img_pos = LayoutEngine.calculate_image_position(
@@ -277,8 +355,8 @@ class PPTXRenderer:
         runs: list[dict],
         pos: PositionConfig,
         is_title: bool = False,
-    ) -> None:
-        """Add a text box with proper styling."""
+    ) -> float:
+        """Add a text box with proper styling. Returns the estimated height (inches) the text actually occupies."""
         # PositionConfig fields are inches (plain floats, see layout.py) -
         # python-pptx's shape-creation calls take EMU Length values, and
         # silently treat a raw int/float as EMU rather than raising. Passing
@@ -292,8 +370,31 @@ class PPTXRenderer:
         )
         tf = txBox.text_frame
         tf.word_wrap = True
+        # Second line of defense: let LibreOffice/PowerPoint's own autofit
+        # shrink further at render/open time if our own estimate below still
+        # undershoots for a given font's real metrics.
+        tf.auto_size = MSO_AUTO_SIZE.NONE
 
-        for i, run_data in enumerate(runs):
+        # Resolve each run's base (pre-fit) font size first, so the fit
+        # estimate and the actually-applied size always agree.
+        resolved_sizes: list[float] = []
+        for run_data in runs:
+            if is_title:
+                style = TypographyEngine.get_title_style(1)
+            else:
+                style = TypographyEngine.get_body_style(run_data.get("level", 0))
+            size_pt = TypographyEngine.validate_font_size(style.font_size_pt, is_title=is_title)
+            resolved_sizes.append(size_pt)
+
+        blocks = [
+            text_fit.TextBlock(text=r.get("text", ""), font_size_pt=size)
+            for r, size in zip(runs, resolved_sizes)
+        ]
+        box_width_pt = pos.width * 72.0
+        box_height_pt = pos.height * 72.0
+        font_scale, _ = text_fit.compute_autofit_scale(blocks, box_width_pt, box_height_pt)
+
+        for i, (run_data, base_size) in enumerate(zip(runs, resolved_sizes)):
             if i == 0:
                 p = tf.paragraphs[0]
             else:
@@ -302,50 +403,46 @@ class PPTXRenderer:
             run = p.add_run()
             run.text = run_data.get("text", "")
 
-            # Get proper style
-            if is_title:
-                style = TypographyEngine.get_title_style(1)
-            else:
-                level = run_data.get("level", 0)
-                style = TypographyEngine.get_body_style(level)
-
-            # Apply style
-            run.font.size = Pt(style.font_size_pt)
+            style = (
+                TypographyEngine.get_title_style(1)
+                if is_title
+                else TypographyEngine.get_body_style(run_data.get("level", 0))
+            )
+            fitted_size = max(text_fit.MIN_FONT_SCALE * base_size, base_size * font_scale)
+            run.font.size = Pt(fitted_size)
             run.font.bold = style.bold or run_data.get("bold", False)
             run.font.italic = style.italic or run_data.get("italic", False)
             run.font.underline = style.underline or run_data.get("underline", False)
             if is_title and self._title_rgb is not None:
                 run.font.color.rgb = self._title_rgb
 
-            # Validate font size
-            if run.font.size:
-                requested_size = run.font.size.pt
-                adjusted_size = TypographyEngine.validate_font_size(
-                    requested_size,
-                    is_title=is_title
-                )
-                if adjusted_size != requested_size:
-                    run.font.size = Pt(adjusted_size)
-
             # Bullet points
             if run_data.get("bullet", False):
                 p.level = run_data.get("level", 0)
 
+        fitted_blocks = [
+            text_fit.TextBlock(text=b.text, font_size_pt=b.font_size_pt * font_scale)
+            for b in blocks
+        ]
+        used_height_pt = text_fit.estimate_blocks_height_pt(fitted_blocks, box_width_pt)
+        return used_height_pt / 72.0
+
     def _add_image(self, slide, img_data: dict, pos: PositionConfig) -> None:
-        """Add an image to the slide."""
-        if img_data.get("source") == "base64":
-            import base64
-            img_binary = base64.b64decode(img_data.get("data", ""))
-            img_stream = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            img_stream.write(img_binary)
+        """Add an image to the slide. Supports base64 (raw or data-URI) and remote URL sources."""
+        img_bytes = _resolve_image_bytes(img_data)
+        if not img_bytes:
+            return
+        ext = _sniff_image_ext(img_bytes)
+        img_stream = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+        try:
+            img_stream.write(img_bytes)
             img_stream.close()
-            try:
-                slide.shapes.add_picture(
-                    img_stream.name,
-                    Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
-                )
-            finally:
-                os.unlink(img_stream.name)
+            slide.shapes.add_picture(
+                img_stream.name,
+                Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
+            )
+        finally:
+            os.unlink(img_stream.name)
 
     def _build_layout_map(self, working_dir: str) -> dict[str, str]:
         layout_map: dict[str, str] = {}
@@ -366,12 +463,26 @@ class PPTXRenderer:
         slide_data: dict,
         working_dir: str,
         slide_num: int,
-    ) -> bytes:
+    ) -> tuple[bytes, list[dict]]:
         tree = ET.parse(layout_file)
         root = tree.getroot()
+        image_rels: list[dict] = []
 
         for content in slide_data.get("contents", []):
-            if content.get("type") != "text":
+            content_type = content.get("type")
+
+            if content_type == "image":
+                next_rid = f"rId{2 + len(image_rels)}"  # rId1 is always the layout relationship
+                rel = self._add_image_to_cloned_slide(root, content, working_dir, next_rid)
+                if rel:
+                    image_rels.append(rel)
+                continue
+
+            if content_type != "text":
+                # table/chart content is not yet rendered on this path (see
+                # Stage C/D of the presentation-quality-overhaul initiative) -
+                # skipping is a no-op today, not a regression, since neither
+                # render path currently produces real tables/charts.
                 continue
 
             placeholder_idx = content.get("placeholderIdx", -1)
@@ -433,9 +544,159 @@ class PPTXRenderer:
                             a_t = ET.SubElement(a_r, f"{{{NS['a']}}}t")
                             a_t.text = run_data.get("text", "")
 
+                        paragraphs = txBody.findall("a:p", NS)
+
+                    self._apply_autofit_to_placeholder(sp, txBody, paragraphs)
                     break
 
-        return ET.tostring(root, encoding="unicode", xml_declaration=True).encode("utf-8")
+        return ET.tostring(root, encoding="unicode", xml_declaration=True).encode("utf-8"), image_rels
+
+    def _apply_autofit_to_placeholder(self, sp: ET.Element, txBody: ET.Element, paragraphs: list[ET.Element]) -> None:
+        """
+        Estimate whether the just-filled placeholder's text overflows its
+        box, and if so set <a:normAutofit fontScale/lnSpcReduction> on its
+        <a:bodyPr> - the same mechanism PowerPoint itself writes when text
+        overruns a placeholder. This never touches <a:rPr>, preserving
+        template fidelity: the run's own declared size is untouched, only a
+        render-time scale hint is added.
+        """
+        box = get_shape_position(sp)
+        if box["cx"] <= 0 or box["cy"] <= 0:
+            # No explicit xfrm on this placeholder (size inherited from the
+            # slide master) - not enough geometry to judge, leave as-is.
+            return
+
+        box_width_pt = emu_to_inches(box["cx"]) * 72.0
+        box_height_pt = emu_to_inches(box["cy"]) * 72.0
+
+        blocks: list[text_fit.TextBlock] = []
+        for para in paragraphs:
+            run = para.find("a:r", NS)
+            text = "".join(t.text or "" for t in para.findall(".//a:t", NS))
+            size_pt = 18.0
+            if run is not None:
+                rPr = run.find("a:rPr", NS)
+                if rPr is not None and rPr.get("sz"):
+                    try:
+                        size_pt = int(rPr.get("sz")) / 100.0
+                    except ValueError:
+                        pass
+            blocks.append(text_fit.TextBlock(text=text, font_size_pt=size_pt))
+
+        font_scale, ln_reduction = text_fit.compute_autofit_scale(blocks, box_width_pt, box_height_pt)
+        if font_scale >= 1.0:
+            return
+
+        bodyPr = txBody.find("a:bodyPr", NS)
+        if bodyPr is None:
+            # <a:bodyPr> must be the first child of <a:txBody> per the OOXML
+            # schema (before <a:lstStyle>/<a:p>).
+            bodyPr = ET.Element(f"{{{NS['a']}}}bodyPr")
+            txBody.insert(0, bodyPr)
+
+        for tag in ("a:noAutofit", "a:spAutoFit", "a:normAutofit"):
+            existing = bodyPr.find(tag, NS)
+            if existing is not None:
+                bodyPr.remove(existing)
+
+        normAutofit = ET.SubElement(bodyPr, f"{{{NS['a']}}}normAutofit")
+        normAutofit.set("fontScale", str(int(font_scale * 100000)))
+        if ln_reduction:
+            normAutofit.set("lnSpcReduction", str(ln_reduction))
+
+    def _add_image_to_cloned_slide(self, root: ET.Element, content: dict, working_dir: str, rel_id: str) -> Optional[dict]:
+        """
+        Insert an <p:pic> shape into a cloned layout's spTree for an `image`
+        content item, writing the image into ppt/media/. `rel_id` is the
+        already-decided rId for this image (the caller owns rId numbering
+        across a slide's relationships). Returns {"rId", "target"} to be
+        registered in the slide's .rels file, or None if the image couldn't
+        be resolved.
+        """
+        img_data = content.get("image", {})
+        img_bytes = _resolve_image_bytes(img_data)
+        if not img_bytes:
+            return None
+
+        ext = _sniff_image_ext(img_bytes)
+        media_dir = os.path.join(working_dir, "ppt", "media")
+        os.makedirs(media_dir, exist_ok=True)
+        existing = [f for f in os.listdir(media_dir) if re.match(r"^image(\d+)\.", f)]
+        next_n = max((int(re.match(r"^image(\d+)\.", f).group(1)) for f in existing), default=0) + 1
+        filename = f"image{next_n}.{ext}"
+        with open(os.path.join(media_dir, filename), "wb") as f:
+            f.write(img_bytes)
+        self._ensure_content_type_extension(working_dir, ext)
+
+        placeholder_idx = img_data.get("placeholderIdx")
+        pos = None
+        if placeholder_idx is not None:
+            for sp in root.findall(".//p:sp", NS):
+                ph = sp.find(".//p:ph", NS)
+                if ph is not None and int(ph.get("idx", "-1")) == placeholder_idx:
+                    box = get_shape_position(sp)
+                    if box["cx"] > 0 and box["cy"] > 0:
+                        pos = box
+                    break
+        if pos is None:
+            layout_type = LayoutEngine.infer_layout_type({"contents": [content]})
+            layout_config = LayoutEngine.get_layout(layout_type)
+            img_pos = LayoutEngine.calculate_image_position(layout_config, has_title=True)
+            pos = {
+                "x": inches_to_emu(img_pos.left),
+                "y": inches_to_emu(img_pos.top),
+                "cx": inches_to_emu(img_pos.width),
+                "cy": inches_to_emu(img_pos.height),
+            }
+
+        existing_ids = [int(cNvPr.get("id")) for cNvPr in root.findall(".//p:cNvPr", NS) if (cNvPr.get("id") or "").isdigit()]
+        shape_id = max(existing_ids, default=1) + 1
+
+        spTree = root.find(".//p:spTree", NS)
+        pic = ET.SubElement(spTree, f"{{{NS['p']}}}pic")
+
+        nvPicPr = ET.SubElement(pic, f"{{{NS['p']}}}nvPicPr")
+        cNvPr = ET.SubElement(nvPicPr, f"{{{NS['p']}}}cNvPr")
+        cNvPr.set("id", str(shape_id))
+        cNvPr.set("name", img_data.get("altText") or f"Picture {shape_id}")
+        ET.SubElement(nvPicPr, f"{{{NS['p']}}}cNvPicPr")
+        ET.SubElement(nvPicPr, f"{{{NS['p']}}}nvPr")
+
+        blipFill = ET.SubElement(pic, f"{{{NS['p']}}}blipFill")
+        blip = ET.SubElement(blipFill, f"{{{NS['a']}}}blip")
+        blip.set(f"{{{NS['r']}}}embed", rel_id)
+        stretch = ET.SubElement(blipFill, f"{{{NS['a']}}}stretch")
+        ET.SubElement(stretch, f"{{{NS['a']}}}fillRect")
+
+        spPr = ET.SubElement(pic, f"{{{NS['p']}}}spPr")
+        xfrm = ET.SubElement(spPr, f"{{{NS['a']}}}xfrm")
+        off = ET.SubElement(xfrm, f"{{{NS['a']}}}off")
+        off.set("x", str(pos["x"]))
+        off.set("y", str(pos["y"]))
+        ext_el = ET.SubElement(xfrm, f"{{{NS['a']}}}ext")
+        ext_el.set("cx", str(pos["cx"]))
+        ext_el.set("cy", str(pos["cy"]))
+        prstGeom = ET.SubElement(spPr, f"{{{NS['a']}}}prstGeom")
+        prstGeom.set("prst", "rect")
+        ET.SubElement(prstGeom, f"{{{NS['a']}}}avLst")
+
+        return {"rId": rel_id, "target": f"../media/{filename}"}
+
+    def _ensure_content_type_extension(self, working_dir: str, ext: str) -> None:
+        ct_path = os.path.join(working_dir, "[Content_Types].xml")
+        if not os.path.exists(ct_path):
+            return
+        mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "bmp": "image/bmp", "webp": "image/webp"}.get(ext, f"image/{ext}")
+        tree = ET.parse(ct_path)
+        root = tree.getroot()
+        ct_ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+        for default in root.findall(f"{{{ct_ns}}}Default"):
+            if default.get("Extension", "").lower() == ext.lower():
+                return
+        default = ET.SubElement(root, f"{{{ct_ns}}}Default")
+        default.set("Extension", ext)
+        default.set("ContentType", mime)
+        tree.write(ct_path, xml_declaration=True, encoding="UTF-8")
 
     def _create_minimal_slide(self, slide_data: dict) -> bytes:
         shape_id = 2
@@ -490,16 +751,24 @@ class PPTXRenderer:
 </p:sld>"""
         return slide_xml.encode("utf-8")
 
-    def _create_slide_rels(self, working_dir: str, slide_num: int, layout_id: str) -> None:
+    def _create_slide_rels(self, working_dir: str, slide_num: int, layout_id: str, image_rels: Optional[list[dict]] = None) -> None:
         rels_dir = os.path.join(working_dir, "ppt", "slides", "_rels")
         os.makedirs(rels_dir, exist_ok=True)
         rels_path = os.path.join(rels_dir, f"slide{slide_num}.xml.rels")
+
+        image_rel_xml = "\n".join(
+            f'  <Relationship Id="{rel["rId"]}" '
+            f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+            f'Target="{rel["target"]}"/>'
+            for rel in (image_rels or [])
+        )
 
         rels_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1"
     Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout"
     Target="../slideLayouts/slideLayout{layout_id}.xml"/>
+{image_rel_xml}
 </Relationships>"""
 
         with open(rels_path, "w", encoding="utf-8") as f:
@@ -632,7 +901,6 @@ class PPTXRenderer:
         root = tree.getroot()
 
         dc_ns = "http://purl.org/dc/elements/1.1/"
-        cp_ns = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 
         if metadata.get("title"):
             title_elem = root.find(f"{{{dc_ns}}}title")

@@ -6,8 +6,7 @@ Works with both template-based and default rendering modes.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Tuple, Optional
-from pptx.util import Inches, Pt, Emu
+from typing import Dict, Optional
 from dataclasses import dataclass
 from enum import Enum
 
@@ -215,10 +214,6 @@ class LayoutEngine:
 
         has_image = any(c.get("type") == "image" for c in contents)
         has_table = any(c.get("type") == "table" for c in contents)
-        has_content_text = any(
-            c.get("type") == "text" and len(c.get("runs", [])) > 2
-            for c in contents
-        )
 
         # Count text placeholders to detect two-column
         text_placeholders = sum(
