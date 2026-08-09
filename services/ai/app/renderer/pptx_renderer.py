@@ -17,7 +17,10 @@ import xml.etree.ElementTree as ET
 from typing import Optional
 from pptx import Presentation
 from pptx.util import Inches, Pt
-from pptx.enum.text import MSO_AUTO_SIZE
+from pptx.enum.text import MSO_AUTO_SIZE, PP_ALIGN
+from pptx.enum.shapes import PP_PLACEHOLDER
+from pptx.oxml.ns import qn
+from pptx.oxml.xmlchemy import OxmlElement
 from app.observability.logging import get_logger
 from app.renderer.layout import LayoutEngine, LayoutType, PositionConfig
 from app.renderer.typography import TypographyEngine
@@ -35,6 +38,100 @@ logger = get_logger(__name__)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 _DATA_URI_RE = re.compile(r"^data:([\w/+.-]+);base64,(.*)$", re.DOTALL)
+
+# Placeholders that hold the slide's title.
+_TITLE_PLACEHOLDER_TYPES = frozenset({
+    PP_PLACEHOLDER.TITLE,
+    PP_PLACEHOLDER.CENTER_TITLE,
+    PP_PLACEHOLDER.VERTICAL_TITLE,
+})
+# Chrome placeholders that must never receive slide content, and are left
+# alone by the unfilled-placeholder sweep (they are empty by design).
+# python-pptx does not normally clone these onto a slide, so this is a guard
+# for templates that carry them explicitly.
+_SKIPPED_PLACEHOLDER_TYPES = frozenset({
+    PP_PLACEHOLDER.DATE,
+    PP_PLACEHOLDER.FOOTER,
+    PP_PLACEHOLDER.SLIDE_NUMBER,
+})
+
+# Standard PowerPoint body-bullet geometry: a 0.25" hanging indent per level.
+BULLET_INDENT_EMU = 228600
+# Glyph per outline level, matching PowerPoint's own default body scheme.
+_BULLET_CHARS = {0: "•", 1: "–", 2: "▪"}
+# Children that must FOLLOW the bullet definition inside <a:pPr>, per the
+# DrawingML schema's fixed child order (lnSpc, spc*, buClr, buSz, buFont,
+# buChar/buNone, tabLst, defRPr, extLst). Appending blindly would put bullet
+# elements after defRPr and produce a file PowerPoint refuses to open.
+_PPR_TAIL_TAGS = ("a:tabLst", "a:defRPr", "a:extLst")
+# Bullet definitions to clear before re-declaring, so the helper is idempotent.
+_BULLET_TAGS = ("a:buClrTx", "a:buClr", "a:buSzTx", "a:buSzPct", "a:buSzPts",
+                "a:buFontTx", "a:buFont", "a:buNone", "a:buAutoNum", "a:buChar")
+
+
+def _insert_into_pPr(pPr, element) -> None:
+    """Insert ``element`` into ``pPr`` at a schema-valid position."""
+    for tag in _PPR_TAIL_TAGS:
+        existing = pPr.find(qn(tag))
+        if existing is not None:
+            existing.addprevious(element)
+            return
+    pPr.append(element)
+
+
+def _apply_bullet_formatting(
+    paragraph,
+    bulleted: bool,
+    level: int,
+    color_hex: Optional[str] = None,
+) -> None:
+    """
+    Write an explicit bullet definition onto a paragraph's ``<a:pPr>``.
+
+    python-pptx's ``paragraph.level`` only sets the *indent* level - it does
+    not add a bullet glyph. A free-standing text box (unlike a body
+    placeholder) also inherits no bullet definition from the slide master, so
+    content marked ``bullet: true`` previously rendered as unadorned lines of
+    text with no marker at all. Emitting ``<a:buFont>``/``<a:buChar>`` (or
+    ``<a:buNone>``) directly is the only way to make the bullet appear.
+
+    ``color_hex`` tints the marker with the deck's brand color, so bullets on
+    the no-template path still read as part of the design system rather than
+    defaulting to body black.
+    """
+    pPr = paragraph._p.get_or_add_pPr()
+    for tag in _BULLET_TAGS:
+        for el in pPr.findall(qn(tag)):
+            pPr.remove(el)
+
+    if not bulleted:
+        # Explicit, rather than merely absent: a placeholder-backed paragraph
+        # would otherwise inherit the master's bullet for a line (a title, a
+        # subtitle) that must not have one.
+        _insert_into_pPr(pPr, OxmlElement("a:buNone"))
+        return
+
+    pPr.set("marL", str(BULLET_INDENT_EMU * (level + 1)))
+    pPr.set("indent", str(-BULLET_INDENT_EMU))
+
+    normalized = (color_hex or "").lstrip("#")
+    if len(normalized) == 6:
+        buClr = OxmlElement("a:buClr")
+        srgbClr = OxmlElement("a:srgbClr")
+        srgbClr.set("val", normalized.upper())
+        buClr.append(srgbClr)
+        _insert_into_pPr(pPr, buClr)
+
+    buFont = OxmlElement("a:buFont")
+    buFont.set("typeface", "Arial")
+    buFont.set("panose", "020B0604020202020204")
+    buFont.set("pitchFamily", "34")
+    buFont.set("charset", "0")
+    _insert_into_pPr(pPr, buFont)
+
+    buChar = OxmlElement("a:buChar")
+    buChar.set("char", _BULLET_CHARS.get(level, _BULLET_CHARS[0]))
+    _insert_into_pPr(pPr, buChar)
 
 
 def _resolve_image_bytes(img_data: dict) -> Optional[bytes]:
@@ -143,6 +240,7 @@ class PPTXRenderer:
         self.design_system = design_system or {}
         # Set by _render_from_default before it adds any slides.
         self._title_rgb = None
+        self._bullet_color_hex: Optional[str] = None
 
     def render(
         self,
@@ -224,16 +322,34 @@ class PPTXRenderer:
         template_path = get_default_template_path()
         prs = Presentation(template_path)
 
-        # Resolve the chosen color theme's primary color for title text.
-        # The default template file itself doesn't need to change per theme
-        # (its master background is white in every theme) - only the title
-        # color applied here, at render time, actually varies.
-        palette = get_default_design_system(color_theme=self.color_theme)["palette"]["colors"]
-        primary_hex = next((c["value"] for c in palette if c.get("name") == "primary"), None)
+        # Resolve the chosen color theme's colors once. The default template
+        # file itself doesn't need to change per theme (its master background
+        # is white in every theme) - only the accents applied here, at render
+        # time, actually vary.
+        default_design_system = get_default_design_system(color_theme=self.color_theme)
+        palette = default_design_system["palette"]["colors"]
+
+        # Tables and charts are styled from self.design_system (they have no
+        # placeholder formatting to inherit). With no template there may be
+        # none, in which case they fell back to table_style's own built-in
+        # defaults - so a deck rendered in, say, Starbucks green got green
+        # titles and bullets but a navy table header. Adopt the resolved
+        # theme's design system so every element agrees on the palette.
+        if not self.design_system:
+            self.design_system = default_design_system
+
+        def _palette_hex(name: str) -> Optional[str]:
+            return next((c["value"] for c in palette if c.get("name") == name), None)
+
+        primary_hex = _palette_hex("primary")
         try:
             self._title_rgb = _hex_to_rgbcolor(primary_hex) if primary_hex else None
         except ValueError:
             self._title_rgb = None
+        # Brand-tinted bullet markers and title rules, so a deck rendered
+        # without a user template still reads as a designed artifact rather
+        # than default-black Office output.
+        self._bullet_color_hex = _palette_hex("accent") or primary_hex
 
         for slide_data in slides:
             # Infer layout type from slide content
@@ -261,25 +377,40 @@ class PPTXRenderer:
         return output_path
 
     def _find_layout_for_type(self, prs: Presentation, layout_type: LayoutType):
-        """Find the best layout from template for a given layout type."""
-        # Simple heuristic: match by layout name
-        type_names = {
-            LayoutType.TITLE: ["title", "blank"],
-            LayoutType.CONTENT: ["content", "blank"],
-            LayoutType.TWO_COLUMN: ["two", "column", "blank"],
-            LayoutType.IMAGE: ["image", "blank"],
-            LayoutType.TABLE: ["table", "blank"],
-            LayoutType.CONCLUSION: ["conclusion", "blank"],
+        """Find the best layout from the default template for a layout type."""
+        # Exact names in python-pptx's built-in layout catalog, which is what
+        # the default template is built from (see default_template.py).
+        #
+        # This used to be a substring match over a per-type keyword list, run
+        # against every layout in order. Because layout 0 is "Title Slide",
+        # the keyword "title" matched it first for LayoutType.TITLE - and
+        # "content" matched "Title and Content" only after "blank" failed, so
+        # several types collapsed onto the wrong layout. Naming the layouts
+        # exactly removes the ambiguity, with the old fuzzy match kept purely
+        # as a fallback for templates that don't use the stock catalog.
+        preferred_names = {
+            LayoutType.TITLE: ["title slide"],
+            LayoutType.CONTENT: ["title and content"],
+            LayoutType.TWO_COLUMN: ["two content", "comparison"],
+            # Object slides take a title-only layout: the picture/table is
+            # positioned by the renderer, so an unused body placeholder would
+            # only leave an empty "Click to add text" ghost behind it.
+            LayoutType.IMAGE: ["title only"],
+            LayoutType.TABLE: ["title only"],
+            LayoutType.CONCLUSION: ["title and content"],
         }
+        names = preferred_names.get(layout_type, ["title and content"])
+        by_name = {(lay.name or "").strip().lower(): lay for lay in prs.slide_layouts}
 
-        names = type_names.get(layout_type, ["blank"])
+        for name in names:
+            if name in by_name:
+                return by_name[name]
 
-        for layout in prs.slide_layouts:
-            layout_name = (layout.name or "").lower()
-            if any(name in layout_name for name in names):
-                return layout
+        for name in names:
+            for layout_name, layout in by_name.items():
+                if name in layout_name:
+                    return layout
 
-        # Fall back to first layout
         return prs.slide_layouts[0] if prs.slide_layouts else None
 
     def _render_content_on_slide(
@@ -288,101 +419,224 @@ class PPTXRenderer:
         slide_data: dict,
         layout_config: LayoutType,
     ) -> None:
-        """Render slide content with intelligent positioning."""
+        """
+        Render slide content into the layout's own placeholders.
+
+        ``prs.slides.add_slide(layout)`` copies the layout's placeholders onto
+        the new slide. This routine previously ignored them entirely and
+        stacked free-floating text boxes at LayoutEngine coordinates instead,
+        which produced decks where every slide carried an empty "Title"/
+        "Subtitle" placeholder *plus* unaligned text boxes drawn over the top
+        of them. Filling the real placeholders keeps the deck aligned to the
+        layout's own geometry, and any placeholder left unfilled is deleted so
+        no empty prompt box survives into the output.
+        """
         contents = slide_data.get("contents", [])
         if not contents:
+            self._strip_empty_placeholders(slide)
             return
 
-        # Check if slide has a title
-        has_title = any(
-            c.get("type") == "text" and
-            any(r.get("fontSizePt", 0) >= 28 or r.get("bold", False)
-                for r in c.get("runs", []))
-            for c in contents
-        )
+        text_items = [c for c in contents if c.get("type") == "text"]
+        object_items = [c for c in contents if c.get("type") in ("image", "table", "chart")]
 
-        # Separate title from other content
-        title_content = None
-        other_content = []
+        # The content designer emits the title first, then body items (see
+        # design_slide_content's prompt), so position in the list is the
+        # reliable signal - far more so than the old "bold or >=28pt" sniff,
+        # which misfired on any body run the model happened to bold.
+        title_item = text_items[0] if text_items else None
+        body_items = text_items[1:]
 
-        for content in contents:
-            if content.get("type") == "text":
-                runs = content.get("runs", [])
-                if any(r.get("fontSizePt", 0) >= 28 or r.get("bold", False)
-                      for r in runs):
-                    title_content = content
-                    continue
-            other_content.append(content)
+        title_ph, body_phs = self._classify_placeholders(slide)
+        used_shapes = set()
 
-        # Render title
-        if title_content:
-            title_pos = LayoutEngine.calculate_title_position(layout_config)
+        # A centred title belongs on a title/section slide. On a content slide
+        # it reads as stock-template filler next to left-aligned bullets, so
+        # override the stock layout's centring there.
+        center_title = layout_config.layout_type in (LayoutType.TITLE, LayoutType.CONCLUSION)
+
+        if title_item is not None and title_ph is not None:
+            self._fill_placeholder(
+                title_ph, title_item.get("runs", []), is_title=True, center=center_title
+            )
+            used_shapes.add(id(title_ph))
+        elif title_item is not None:
+            # Layout has no title placeholder (shouldn't happen with the stock
+            # catalog, but a user template may omit one) - fall back to an
+            # explicitly positioned box rather than dropping the title.
             self._add_text_box(
                 slide,
-                title_content.get("runs", []),
-                title_pos,
+                title_item.get("runs", []),
+                LayoutEngine.calculate_title_position(layout_config),
                 is_title=True,
             )
 
-        # Render other content
-        top_offset = 0.0  # inches, matching PositionConfig's unit
-        for content in other_content:
-            if content.get("type") == "text":
-                content_pos = LayoutEngine.calculate_content_position(
-                    layout_config,
-                    has_title=has_title,
-                )
-                if top_offset > 0:
-                    content_pos.top += top_offset
-                    content_pos.height -= top_offset
-                if content_pos.height <= 0:
-                    # No vertical room left in the content area at all -
-                    # still render (better an overflowing box Stage G's
-                    # validation can flag than silently dropped content),
-                    # but stop advancing top_offset further into negative
-                    # territory.
-                    content_pos.height = 0.4
+        has_title = title_item is not None
 
-                used_height = self._add_text_box(
-                    slide,
-                    content.get("runs", []),
-                    content_pos,
-                    is_title=False,
-                )
-                # Advance by the text's own measured height (not a flat
-                # guess) plus a small gap, so a short block doesn't leave a
-                # gap and a long block doesn't get overwritten by the next
-                # one - the root cause of the visual overlap this replaces.
-                top_offset += min(used_height, content_pos.height) + 0.15
+        # Vertical cursor (inches) for body items that have no placeholder left
+        # to go into. Without it, every overflow block would be drawn at the
+        # same calculated content position, stacked directly on top of the
+        # previous one.
+        top_offset = 0.0
+        for i, body_item in enumerate(body_items):
+            if i < len(body_phs):
+                self._fill_placeholder(body_phs[i], body_item.get("runs", []), is_title=False)
+                used_shapes.add(id(body_phs[i]))
+                continue
 
-            elif content.get("type") == "image":
-                img_pos = LayoutEngine.calculate_image_position(
-                    layout_config,
-                    has_title=has_title,
-                )
-                self._add_image(slide, content.get("image", {}), img_pos)
+            content_pos = LayoutEngine.calculate_content_position(
+                layout_config, has_title=has_title
+            )
+            if top_offset > 0:
+                content_pos.top += top_offset
+                content_pos.height -= top_offset
+            if content_pos.height <= 0:
+                # No vertical room left at all - still render (an overflowing
+                # box that validate_rendered_output can flag beats silently
+                # dropped content) but stop driving the cursor negative.
+                content_pos.height = 0.4
 
-            elif content.get("type") == "table":
-                table_pos = LayoutEngine.calculate_table_position(
-                    layout_config,
-                    has_title=has_title,
-                )
-                if top_offset > 0:
-                    table_pos.top += top_offset
-                    table_pos.height -= top_offset
-                self._add_table(slide, content.get("table", {}), table_pos)
-                top_offset += table_pos.height + 0.15
+            used_height = self._add_text_box(
+                slide, body_item.get("runs", []), content_pos, is_title=False
+            )
+            # Advance by the text's own measured height rather than a flat
+            # guess, so a short block leaves no gap and a long one is not
+            # overwritten by the next.
+            top_offset += min(used_height, content_pos.height) + 0.15
 
-            elif content.get("type") == "chart":
-                chart_pos = LayoutEngine.calculate_content_position(
-                    layout_config,
-                    has_title=has_title,
+        # Objects (image/table/chart) take the geometry of the next free body
+        # placeholder when one exists, so they land in the layout's designed
+        # content region instead of a hardcoded rectangle. The placeholder
+        # itself is then removed - a graphic frame cannot live inside it.
+        free_phs = [ph for ph in body_phs if id(ph) not in used_shapes]
+        for obj in object_items:
+            ph = free_phs.pop(0) if free_phs else None
+            if ph is not None:
+                pos = PositionConfig(
+                    left=emu_to_inches(ph.left),
+                    top=emu_to_inches(ph.top),
+                    width=emu_to_inches(ph.width),
+                    height=emu_to_inches(ph.height),
                 )
-                if top_offset > 0:
-                    chart_pos.top += top_offset
-                    chart_pos.height -= top_offset
-                self._add_chart(slide, content.get("chart", {}), chart_pos)
-                top_offset += chart_pos.height + 0.15
+                self._remove_shape(ph)
+            elif obj.get("type") == "image":
+                pos = LayoutEngine.calculate_image_position(layout_config, has_title=has_title)
+            else:
+                pos = LayoutEngine.calculate_content_position(layout_config, has_title=has_title)
+
+            if obj["type"] == "image":
+                self._add_image(slide, obj.get("image", {}), pos)
+            elif obj["type"] == "table":
+                self._add_table(slide, obj.get("table", {}), pos)
+            else:
+                self._add_chart(slide, obj.get("chart", {}), pos)
+
+        self._strip_empty_placeholders(slide)
+
+    @staticmethod
+    def _remove_shape(shape) -> None:
+        """Detach a shape from its slide."""
+        element = shape._element
+        parent = element.getparent()
+        if parent is not None:
+            parent.remove(element)
+
+    def _strip_empty_placeholders(self, slide) -> None:
+        """
+        Delete placeholders that were never filled.
+
+        An empty placeholder is not invisible: PowerPoint shows its "Click to
+        add title" prompt in the editor, and LibreOffice draws its outline in
+        some export paths. Leaving them behind is what made generated decks
+        look like half-finished templates.
+        """
+        for shape in list(slide.placeholders):
+            if shape.placeholder_format.type in _SKIPPED_PLACEHOLDER_TYPES:
+                continue
+            if shape.has_text_frame and not shape.text_frame.text.strip():
+                self._remove_shape(shape)
+
+    @staticmethod
+    def _classify_placeholders(slide) -> tuple[Optional[object], list[object]]:
+        """
+        Split a slide's placeholders into ``(title, [body...])``.
+
+        Body placeholders are returned in reading order (top, then left) so
+        that, on a two-content layout, the first body content item lands in
+        the left column rather than wherever python-pptx happened to enumerate
+        first.
+        """
+        title_ph = None
+        body_phs = []
+        for shape in slide.placeholders:
+            ph_type = shape.placeholder_format.type
+            if ph_type in _TITLE_PLACEHOLDER_TYPES and title_ph is None:
+                title_ph = shape
+            elif ph_type not in _SKIPPED_PLACEHOLDER_TYPES:
+                body_phs.append(shape)
+        body_phs.sort(key=lambda s: (s.top or 0, s.left or 0))
+        return title_ph, body_phs
+
+    def _fill_placeholder(
+        self,
+        placeholder,
+        runs: list[dict],
+        is_title: bool,
+        center: bool = False,
+    ) -> None:
+        """
+        Write text runs into an existing placeholder's text frame.
+
+        Sizing/bullet decisions mirror ``_add_text_box`` so both code paths
+        produce the same typography; the difference is purely that the box
+        already exists and carries the layout's own position and anchoring.
+        """
+        tf = placeholder.text_frame
+        tf.clear()
+        tf.word_wrap = True
+
+        resolved_sizes: list[float] = []
+        for run_data in runs:
+            style = (
+                TypographyEngine.get_title_style(1)
+                if is_title
+                else TypographyEngine.get_body_style(run_data.get("level", 0))
+            )
+            resolved_sizes.append(
+                TypographyEngine.validate_font_size(style.font_size_pt, is_title=is_title)
+            )
+
+        blocks = [
+            text_fit.TextBlock(text=r.get("text", ""), font_size_pt=size)
+            for r, size in zip(runs, resolved_sizes)
+        ]
+        box_width_pt = emu_to_inches(placeholder.width) * 72.0
+        box_height_pt = emu_to_inches(placeholder.height) * 72.0
+        font_scale, _ = text_fit.compute_autofit_scale(blocks, box_width_pt, box_height_pt)
+
+        for i, (run_data, base_size) in enumerate(zip(runs, resolved_sizes)):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            if is_title:
+                p.alignment = PP_ALIGN.CENTER if center else PP_ALIGN.LEFT
+            run = p.add_run()
+            run.text = run_data.get("text", "")
+
+            style = (
+                TypographyEngine.get_title_style(1)
+                if is_title
+                else TypographyEngine.get_body_style(run_data.get("level", 0))
+            )
+            run.font.size = Pt(max(text_fit.MIN_FONT_SCALE * base_size, base_size * font_scale))
+            run.font.bold = style.bold or run_data.get("bold", False)
+            run.font.italic = style.italic or run_data.get("italic", False)
+            run.font.underline = style.underline or run_data.get("underline", False)
+            if is_title and self._title_rgb is not None:
+                run.font.color.rgb = self._title_rgb
+
+            level = int(run_data.get("level", 0) or 0)
+            bulleted = bool(run_data.get("bullet", False)) and not is_title
+            if bulleted:
+                p.level = level
+            _apply_bullet_formatting(p, bulleted, level, self._bullet_color_hex)
 
     def _add_chart(self, slide, chart_data: dict, pos: PositionConfig) -> None:
         """Render chart_data to a design-system-styled PNG and place it on the slide."""
@@ -512,9 +766,13 @@ class PPTXRenderer:
             if is_title and self._title_rgb is not None:
                 run.font.color.rgb = self._title_rgb
 
-            # Bullet points
-            if run_data.get("bullet", False):
-                p.level = run_data.get("level", 0)
+            # Bullets. A title never takes a marker even if the model set the
+            # flag, since the title box is a single centered line.
+            level = int(run_data.get("level", 0) or 0)
+            bulleted = bool(run_data.get("bullet", False)) and not is_title
+            if bulleted:
+                p.level = level
+            _apply_bullet_formatting(p, bulleted, level, self._bullet_color_hex)
 
         fitted_blocks = [
             text_fit.TextBlock(text=b.text, font_size_pt=b.font_size_pt * font_scale)

@@ -32,6 +32,7 @@ import tempfile
 from pptx import Presentation
 from pptx.util import Emu
 from pptx.dml.color import RGBColor
+from pptx.oxml.ns import qn
 
 from app.design_system import get_default_design_system
 from app.config import settings
@@ -99,6 +100,20 @@ class DefaultTemplateGenerator:
         """
         prs = Presentation()
         width_emu, height_emu = cls._dimensions()
+
+        # python-pptx's built-in template is 4:3 (10in x 7.5in) and its
+        # master/layout placeholders are positioned for that canvas. Resizing
+        # the canvas alone leaves every placeholder at its original geometry,
+        # so on a 16:9 slide the body placeholders hang off the bottom edge -
+        # e.g. "Title and Content"'s body ran to 6.70in on a 5.625in slide,
+        # pushing bullets past the bottom of the rendered page. Rescale the
+        # placeholder geometry by the same factor as the canvas.
+        cls._rescale_placeholders(
+            prs,
+            x_scale=width_emu / prs.slide_width if prs.slide_width else 1.0,
+            y_scale=height_emu / prs.slide_height if prs.slide_height else 1.0,
+        )
+
         prs.slide_width = Emu(width_emu)
         prs.slide_height = Emu(height_emu)
 
@@ -116,6 +131,53 @@ class DefaultTemplateGenerator:
         prs.save(output_path)
         logger.info("default_template_generated", path=output_path)
         return output_path
+
+    @staticmethod
+    def _has_own_geometry(shape) -> bool:
+        """True when a shape carries its own ``<a:xfrm>`` rather than inheriting."""
+        spPr = shape._element.find(qn("p:spPr"))
+        return spPr is not None and spPr.find(qn("a:xfrm")) is not None
+
+    @classmethod
+    def _rescale_placeholders(cls, prs: Presentation, x_scale: float, y_scale: float) -> None:
+        """
+        Scale master/layout placeholder geometry by the given factors.
+
+        Called before the slide canvas is resized, while ``prs.slide_width``
+        and ``prs.slide_height`` still describe the geometry the placeholders
+        were authored against.
+
+        Two subtleties, both of which silently corrupt the geometry if missed:
+
+        * Most layout placeholders carry no ``<a:xfrm>`` and inherit position
+          from the master. Assigning to them would freeze the inherited value
+          as an explicit one, so they are skipped - scaling the master alone
+          already moves them.
+        * All four values must be read before any is written. Setting ``left``
+          creates an ``<a:xfrm>`` whose other components default to zero, so a
+          read-modify-write interleaved across the four attributes collapses
+          top/width/height to 0.
+        """
+        if x_scale == 1.0 and y_scale == 1.0:
+            return
+
+        for master in prs.slide_masters:
+            for container in (master, *master.slide_layouts):
+                for shape in container.shapes:
+                    if container is not master and not cls._has_own_geometry(shape):
+                        continue
+
+                    left, top = shape.left, shape.top
+                    width, height = shape.width, shape.height
+
+                    if left is not None:
+                        shape.left = Emu(int(left * x_scale))
+                    if top is not None:
+                        shape.top = Emu(int(top * y_scale))
+                    if width is not None:
+                        shape.width = Emu(int(width * x_scale))
+                    if height is not None:
+                        shape.height = Emu(int(height * y_scale))
 
     @classmethod
     def _apply_master_styling(cls, prs: Presentation) -> None:

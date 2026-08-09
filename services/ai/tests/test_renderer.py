@@ -399,56 +399,56 @@ class TestPPTXRendererDefaultShapeSizing:
     only an actual rendering engine (PowerPoint/LibreOffice) showed a blank
     slide. Confirmed by converting a rendered file with LibreOffice headless
     and finding zero extractable text before this fix, full text after.
+
+    Slide content now goes into the layout's own placeholders, so
+    ``_add_text_box`` is only reached as a fallback (a body item with no
+    placeholder left to fill). These tests therefore exercise it directly and
+    via that overflow path, which is where the unit bug could still recur.
     """
 
     def test_text_box_is_sized_in_inches_not_raw_emu(self):
         from pptx import Presentation
         from pptx.util import Inches
+        from app.renderer.layout import PositionConfig
 
         renderer = PPTXRenderer(template_path=None)
-        slides = [{
-            "slideIndex": 0,
-            "layoutId": "1",
-            "layoutName": "Default",
-            "contents": [{
-                "type": "text",
-                "placeholderIdx": 0,
-                "runs": [{"text": "Title", "bold": True, "fontSizePt": 36}],
-            }],
-        }]
-        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
-            output_path = f.name
-        try:
-            renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
-            prs = Presentation(output_path)
-            shape = next(s for s in prs.slides[0].shapes if s.has_text_frame and not s.is_placeholder)
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank
+        renderer._add_text_box(
+            slide,
+            [{"text": "Title", "bold": True, "fontSizePt": 36}],
+            PositionConfig(left=1.0, top=1.0, width=8.0, height=1.2),
+            is_title=True,
+        )
+        shape = next(s for s in slide.shapes if s.has_text_frame)
 
-            # The old bug produced shapes a handful of EMU wide/tall; a
-            # correctly-converted inch-based size is always comfortably
-            # above a tenth of an inch for any real slide element.
-            assert shape.width > Inches(0.1)
-            assert shape.height > Inches(0.1)
-            # And matches what LayoutEngine.calculate_title_position actually
-            # specified (1 inch margin either side on the default 10in slide).
-            assert shape.width == Inches(8.0)
-        finally:
-            os.unlink(output_path)
+        # The old bug produced shapes a handful of EMU wide/tall; a
+        # correctly-converted inch-based size is always comfortably
+        # above a tenth of an inch for any real slide element.
+        assert shape.width > Inches(0.1)
+        assert shape.height > Inches(0.1)
+        assert shape.width == Inches(8.0)
+        assert shape.left == Inches(1.0)
 
-    def test_multiple_stacked_content_blocks_use_inch_offsets(self):
-        """The top_offset accumulator mixed a Length (EMU) with
-        PositionConfig's inch-float on the second+ content block - fixed to
-        stay in inches throughout."""
+    def test_body_items_beyond_the_available_placeholders_do_not_stack(self):
+        """Overflow body blocks fall back to explicitly positioned text boxes.
+        Each must advance a vertical cursor - drawing them all at the same
+        calculated content position would silently overlap them."""
         from pptx import Presentation
         from pptx.util import Inches
 
         renderer = PPTXRenderer(template_path=None)
+        # Four body items: more than any stock layout has body placeholders,
+        # so the last ones take the fallback path.
         slides = [{
             "slideIndex": 0,
             "layoutId": "1",
             "layoutName": "Default",
             "contents": [
-                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "First block"}]},
-                {"type": "text", "placeholderIdx": 1, "runs": [{"text": "Second block"}]},
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Title"}]},
+                {"type": "text", "placeholderIdx": 1, "runs": [{"text": "Block one", "bullet": True}]},
+                {"type": "text", "placeholderIdx": 2, "runs": [{"text": "Block two", "bullet": True}]},
+                {"type": "text", "placeholderIdx": 3, "runs": [{"text": "Block three", "bullet": True}]},
             ],
         }]
         with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
@@ -456,11 +456,14 @@ class TestPPTXRendererDefaultShapeSizing:
         try:
             renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
             prs = Presentation(output_path)
-            text_shapes = [s for s in prs.slides[0].shapes if s.has_text_frame and not s.is_placeholder]
-            assert len(text_shapes) == 2
-            for shape in text_shapes:
+            overflow = [s for s in prs.slides[0].shapes
+                        if s.has_text_frame and not s.is_placeholder]
+            assert overflow, "expected at least one fallback text box"
+            for shape in overflow:
                 assert shape.top < Inches(1000), "top offset leaked raw EMU into the inches field"
                 assert shape.height > Inches(0.1)
+            tops = sorted(s.top for s in overflow)
+            assert len(set(tops)) == len(tops), "fallback blocks were drawn on top of each other"
         finally:
             os.unlink(output_path)
 
@@ -896,3 +899,241 @@ class TestChartRendering:
         assert len(image_rels) == 1
         root = ET.fromstring(xml_bytes)
         assert len(root.findall(".//p:pic", NS)) == 1
+
+
+class TestDefaultPathPlaceholderRendering:
+    """
+    Content on the no-template path must land in the layout's own
+    placeholders.
+
+    ``prs.slides.add_slide(layout)`` copies the layout's placeholders onto the
+    slide. The renderer used to ignore them and stack free-floating text boxes
+    at LayoutEngine coordinates instead, so every generated slide carried an
+    empty "Title"/"Subtitle" placeholder *plus* unaligned text boxes drawn over
+    the top of them - the "boring, misaligned, looks like an unfinished
+    template" output this guards against.
+    """
+
+    @staticmethod
+    def _render(slides):
+        from pptx import Presentation
+
+        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
+            output_path = f.name
+        PPTXRenderer(template_path=None).render(
+            slides=slides, metadata={"title": "T"}, output_path=output_path
+        )
+        try:
+            return Presentation(output_path)
+        finally:
+            os.unlink(output_path)
+
+    @staticmethod
+    def _content_slide(runs):
+        return {
+            "slideIndex": 0, "layoutId": "1", "layoutName": "Default",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "A Title", "bold": True}]},
+                {"type": "text", "placeholderIdx": 1, "runs": runs},
+            ],
+        }
+
+    def test_body_text_fills_a_placeholder_rather_than_a_floating_box(self):
+        prs = self._render([self._content_slide([
+            {"text": "First point", "bullet": True, "level": 0},
+            {"text": "Second point", "bullet": True, "level": 0},
+        ])])
+        slide = prs.slides[0]
+        filled = [s for s in slide.shapes if s.has_text_frame and s.text_frame.text.strip()]
+        assert filled, "slide has no text at all"
+        assert all(s.is_placeholder for s in filled), (
+            "text was rendered into free-floating boxes instead of the layout's placeholders"
+        )
+
+    def test_no_empty_placeholder_survives_into_the_output(self):
+        """An unfilled placeholder is not invisible - PowerPoint shows its
+        'Click to add title' prompt, which is what made decks look
+        half-finished."""
+        prs = self._render([self._content_slide([
+            {"text": "Only point", "bullet": True, "level": 0},
+        ])])
+        empty = [s for s in prs.slides[0].shapes
+                 if s.is_placeholder and s.has_text_frame and not s.text_frame.text.strip()]
+        assert empty == []
+
+    def test_a_bulleted_content_slide_does_not_use_the_title_layout(self):
+        """infer_layout_type used to classify any slide with <=2 content items
+        as a title slide - which is the shape of *every* ordinary content
+        slide - so whole decks rendered on the title layout."""
+        prs = self._render([self._content_slide([
+            {"text": "First point", "bullet": True, "level": 0},
+            {"text": "Second point", "bullet": True, "level": 0},
+            {"text": "Third point", "bullet": True, "level": 0},
+        ])])
+        assert "title slide" not in (prs.slides[0].slide_layout.name or "").lower()
+
+    def test_a_real_title_slide_still_uses_the_title_layout(self):
+        prs = self._render([{
+            "slideIndex": 0, "layoutId": "1", "layoutName": "Default",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Deck Title", "bold": True}]},
+                {"type": "text", "placeholderIdx": 1, "runs": [{"text": "A subtitle", "bullet": False}]},
+            ],
+        }])
+        assert "title slide" in (prs.slides[0].slide_layout.name or "").lower()
+
+    def test_bulleted_runs_get_a_real_bullet_glyph(self):
+        """p.level alone only sets indent - a text placeholder renders no
+        marker without an explicit <a:buChar>, which is why output came out as
+        plain lines of text."""
+        from pptx.oxml.ns import qn
+
+        prs = self._render([self._content_slide([
+            {"text": "First point", "bullet": True, "level": 0},
+            {"text": "Nested point", "bullet": True, "level": 1},
+        ])])
+        body = next(s for s in prs.slides[0].shapes
+                    if s.is_placeholder and "First point" in s.text_frame.text)
+        chars = [
+            p._p.find(qn("a:pPr")).find(qn("a:buChar")).get("char")
+            for p in body.text_frame.paragraphs
+        ]
+        assert all(c for c in chars), f"missing bullet glyphs: {chars}"
+        assert chars[0] != chars[1], "nested level should use a distinct marker"
+
+    def test_a_title_run_is_explicitly_unbulleted(self):
+        from pptx.oxml.ns import qn
+
+        prs = self._render([self._content_slide([
+            {"text": "Only point", "bullet": True, "level": 0},
+        ])])
+        title = next(s for s in prs.slides[0].shapes
+                     if s.is_placeholder and s.text_frame.text.strip() == "A Title")
+        pPr = title.text_frame.paragraphs[0]._p.find(qn("a:pPr"))
+        assert pPr.find(qn("a:buNone")) is not None
+
+
+class TestDefaultTemplateGeometry:
+    """
+    python-pptx's built-in template is 4:3 and its placeholders are positioned
+    for that canvas. Resizing the canvas to 16:9 without rescaling them left
+    the body placeholders hanging off the bottom of the slide.
+    """
+
+    def test_every_layout_placeholder_fits_inside_the_slide(self):
+        from pptx import Presentation
+        from app.renderer.default_template import DefaultTemplateGenerator
+
+        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
+            path = f.name
+        try:
+            DefaultTemplateGenerator.generate(path)
+            prs = Presentation(path)
+            for layout in prs.slide_masters[0].slide_layouts:
+                for shape in layout.shapes:
+                    if shape.top is None or shape.height is None:
+                        continue
+                    assert shape.top + shape.height <= prs.slide_height, (
+                        f"{layout.name!r}/{shape.name!r} extends "
+                        f"{shape.top + shape.height - prs.slide_height} EMU below the slide"
+                    )
+        finally:
+            os.unlink(path)
+
+    def test_rescaling_preserves_nonzero_geometry(self):
+        """Setting `left` creates an <a:xfrm> whose other components default
+        to zero, so a read-modify-write interleaved across the four attributes
+        collapses top/width/height to 0."""
+        from pptx import Presentation
+        from app.renderer.default_template import DefaultTemplateGenerator
+
+        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
+            path = f.name
+        try:
+            DefaultTemplateGenerator.generate(path)
+            prs = Presentation(path)
+            layout = next(lay for lay in prs.slide_masters[0].slide_layouts
+                          if (lay.name or "").lower() == "title and content")
+            for shape in layout.shapes:
+                assert shape.width and shape.width > 0, f"{shape.name!r} lost its width"
+                assert shape.height and shape.height > 0, f"{shape.name!r} lost its height"
+        finally:
+            os.unlink(path)
+
+
+class TestBrandCoherenceOnTheDefaultPath:
+    """
+    Tables and charts are styled from ``design_system`` because, unlike text,
+    they have no placeholder formatting to inherit. With no template there may
+    be no design system at all, in which case they used to fall back to
+    table_style's built-in defaults - so a deck rendered in a brand colour got
+    brand-coloured titles and bullets but a default-navy table header.
+    """
+
+    @staticmethod
+    def _render_table_deck(color_theme):
+        from pptx import Presentation
+
+        slides = [{
+            "slideIndex": 0, "layoutId": "1", "layoutName": "Default",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Comparison", "bold": True}]},
+                {"type": "table", "placeholderIdx": 1, "table": {
+                    "headerRow": True,
+                    "rows": [["Year", "Revenue"], ["2024", "$36B"], ["2025", "$37B"]],
+                }},
+            ],
+        }]
+        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
+            output_path = f.name
+        PPTXRenderer(template_path=None, color_theme=color_theme).render(
+            slides=slides, metadata={"title": "T"}, output_path=output_path
+        )
+        try:
+            prs = Presentation(output_path)
+            table = next(s.table for s in prs.slides[0].shapes if s.has_table)
+            return table.cell(0, 0).fill.fore_color.rgb
+        finally:
+            os.unlink(output_path)
+
+    def test_table_header_follows_a_brand_hex_color_theme(self):
+        from pptx.dml.color import RGBColor
+
+        header_rgb = self._render_table_deck("#00704A")
+
+        assert header_rgb == RGBColor(0x00, 0x70, 0x4A), (
+            f"table header {header_rgb} ignored the brand colour theme"
+        )
+
+    def test_different_color_themes_produce_different_table_headers(self):
+        assert self._render_table_deck("warm") != self._render_table_deck("monochrome")
+
+    def test_an_explicit_design_system_still_wins_over_the_theme_default(self):
+        """A template-derived design system must not be overwritten by the
+        no-template fallback."""
+        from pptx import Presentation
+        from pptx.dml.color import RGBColor
+
+        explicit = {
+            "palette": {"colors": [{"name": "primary", "value": "#AA0000", "type": "hex"}]},
+            "dataViz": {"tableHeaderBg": "#AA0000", "tableHeaderFg": "#FFFFFF"},
+        }
+        slides = [{
+            "slideIndex": 0, "layoutId": "1", "layoutName": "Default",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "T", "bold": True}]},
+                {"type": "table", "placeholderIdx": 1,
+                 "table": {"headerRow": True, "rows": [["A", "B"], ["1", "2"]]}},
+            ],
+        }]
+        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
+            output_path = f.name
+        try:
+            PPTXRenderer(
+                template_path=None, color_theme="#00704A", design_system=explicit
+            ).render(slides=slides, metadata={"title": "T"}, output_path=output_path)
+            prs = Presentation(output_path)
+            table = next(s.table for s in prs.slides[0].shapes if s.has_table)
+            assert table.cell(0, 0).fill.fore_color.rgb == RGBColor(0xAA, 0x00, 0x00)
+        finally:
+            os.unlink(output_path)
