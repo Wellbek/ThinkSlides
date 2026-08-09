@@ -650,22 +650,21 @@ function EventItem({ ev, isAnswered, answerText }: { ev: any; isAnswered?: boole
         </FeedItem>
       );
     case "validation_unresolved": {
-      // The deck ran out of revision attempts with defects still in it, so no
-      // download is offered. Say why, and which slides, rather than leaving
-      // the user with previews and a silently missing file.
+      // The deck ran out of revision attempts with defects still in it. It is
+      // still downloadable - withholding it would leave the user with nothing
+      // - but it must not read as clean, so the specific defects are listed.
       const issues: any[] = Array.isArray(ev.issues) ? ev.issues : [];
       return (
         <FeedItem dot="●" dotClass="ws-dot-error">
           <div className="ws-feed-header">
-            <span className="lbl" style={{ color: "#FBBF24" }}>Not ready to download</span>
+            <span className="lbl" style={{ color: "#FBBF24" }}>Known layout issues</span>
             <span className="ts">{fmtTime(ev.timestamp)}</span>
           </div>
           <div className="ws-feed-text">
-            The rendered deck still has {ev.issueCount ?? issues.length} layout
-            {(ev.issueCount ?? issues.length) === 1 ? " problem" : " problems"} after{" "}
-            {ev.attempts} revision{ev.attempts === 1 ? "" : "s"}, so it is not being offered
-            for download. Ask the agent to simplify the affected slides, or adjust the
-            content yourself.
+            The deck is available to download, but after {ev.attempts} revision
+            {ev.attempts === 1 ? "" : "s"} it still has {ev.issueCount ?? issues.length} layout
+            {(ev.issueCount ?? issues.length) === 1 ? " problem" : " problems"}. Ask the agent
+            to simplify the affected slides, or adjust them yourself.
             <ul className="ws-md-issues">
               {issues.slice(0, 6).map((issue: any, i: number) => (
                 <li key={i}>
