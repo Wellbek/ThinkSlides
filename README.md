@@ -58,15 +58,22 @@ Event types: `thought`, `tool_call`, `tool_result` (with cited sources), `slide_
 ![ReAct Agent Loop and Tool Pipeline](docs/diagrams/agent-loop-tools.png)
 
 The agent loop (`services/ai/app/agent/loop.py`) runs up to 25 Reason-Act-Observe iterations and
-cannot exit until `finalize_and_render_pptx` has run. It checkpoints a `WorkingState` to Redis
-(`working_state:<session_id>`, 1h TTL) so an `ask_user_question` pause can resume later. Tools map
-to logical phases: `content_analysis` -> `structure_planning` -> `layout_selection` ->
-`content_generation` -> `validation` -> `rendering` (plus `user_input`).
+cannot exit until both `finalize_and_render_pptx` and `validate_rendered_output` have run (the
+latter is bounded to 3 attempts so an unfixable overflow can't loop forever). It checkpoints a
+`WorkingState` to Redis (`working_state:<session_id>`, 1h TTL) so an `ask_user_question` pause can
+resume later. Tools map to logical phases: `content_analysis` -> `structure_planning` ->
+`layout_selection` -> `content_generation` -> `validation` -> `rendering` -> `validation` again
+(plus `user_input`).
 
-Eleven registered tools: `analyze_document`, `extract_key_data`,
-`extract_template_design_system`, `web_search` (capped at 3 calls/run),
+Twelve registered tools: `analyze_document` (also catalogs embedded document images for reuse),
+`extract_key_data`, `extract_template_design_system`, `web_search` (capped at 3 calls/run),
 `plan_presentation_structure`, `select_layout`, `design_slide_content`, `validate_slide_json`,
-`generate_image_prompt`, `finalize_and_render_pptx`, and `ask_user_question`.
+`select_source_image` (reuses an existing document/web image only when confidently relevant -
+never generates one), `finalize_and_render_pptx`, `validate_rendered_output` (ground-truth check
+against the actual LibreOffice-rendered output), and `ask_user_question`.
+
+See `docs/architecture-diagram-prompts.md`'s "Design Decisions" section for why images are reused
+rather than generated, and why output validation targets LibreOffice only.
 
 ### Data model
 
