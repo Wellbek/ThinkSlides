@@ -1384,3 +1384,67 @@ class TestOnlyTheBrokenSlidesGetRedesigned:
         await resumed._load_working_state(session_id)
 
         assert resumed.working_state.slides_needing_revision == [3]
+
+
+class TestInjectedDesignSystemIsNarrowedPerTool:
+    """
+    The whole design system used to be serialised into every tool call. For
+    design_slide_content that meant the full layout catalog - every
+    placeholder's EMU geometry for every layout - riding along on each slide,
+    in the arguments AND again in the echoed result, despite that tool only
+    reading the fonts and the palette. On a token-per-minute budget that is
+    what tips a normal deck into rate-limit territory partway through.
+    """
+
+    @staticmethod
+    def _design_system():
+        from app.design_system import get_default_design_system
+        return get_default_design_system()
+
+    def test_slide_content_gets_only_fonts_and_palette(self):
+        from app.agent.loop import _project_design_system
+
+        projected = _project_design_system("design_slide_content", self._design_system())
+
+        assert set(projected) == {"typography", "palette"}
+        assert set(projected["typography"]) == {"titleFont", "bodyFont"}
+        assert "layouts" not in projected
+
+    def test_slide_content_keeps_only_the_swatches_the_prompt_renders(self):
+        from app.agent.loop import _project_design_system
+
+        projected = _project_design_system("design_slide_content", self._design_system())
+
+        assert len(projected["palette"]["colors"]) <= 5
+
+    def test_the_planner_gets_layout_names_without_the_geometry(self):
+        from app.agent.loop import _project_design_system
+
+        projected = _project_design_system(
+            "plan_presentation_structure", self._design_system()
+        )
+
+        assert set(projected) == {"layouts"}
+        for layout in projected["layouts"]:
+            assert set(layout) == {"layoutId", "layoutName"}
+
+    def test_the_projection_is_substantially_smaller(self):
+        from app.agent.loop import _project_design_system
+
+        design_system = self._design_system()
+        full = len(json.dumps(design_system))
+        for tool in ("design_slide_content", "plan_presentation_structure"):
+            projected = len(json.dumps(_project_design_system(tool, design_system)))
+            assert projected < full / 4, f"{tool} payload barely shrank"
+
+    def test_other_tools_are_unaffected(self):
+        """select_layout genuinely needs the placeholder geometry."""
+        from app.agent.loop import _project_design_system
+
+        design_system = self._design_system()
+        assert _project_design_system("select_layout", design_system) == design_system
+
+    def test_an_empty_design_system_stays_empty(self):
+        from app.agent.loop import _project_design_system
+
+        assert _project_design_system("design_slide_content", {}) == {}

@@ -842,10 +842,14 @@ class AgentLoop:
                 elif fn_name in ("analyze_document", "extract_key_data"):
                     fn_args["detail_level"] = self.detail_level
                 elif fn_name == "plan_presentation_structure":
-                    fn_args["design_system_summary"] = json.dumps(design_system)
+                    fn_args["design_system_summary"] = json.dumps(
+                        _project_design_system(fn_name, design_system)
+                    )
                     fn_args["detail_level"] = self.detail_level
                 elif fn_name == "design_slide_content":
-                    fn_args["design_system_context"] = json.dumps(design_system)
+                    fn_args["design_system_context"] = json.dumps(
+                        _project_design_system(fn_name, design_system)
+                    )
                     fn_args["detail_level"] = self.detail_level
                     slide_index = fn_args.get("slide_index")
                     if slide_index in self.working_state.selected_layouts:
@@ -1308,15 +1312,16 @@ class AgentLoop:
             if ws.validation_attempts >= ws.MAX_VALIDATION_ATTEMPTS:
                 return (
                     f"Validation retry limit reached ({ws.MAX_VALIDATION_ATTEMPTS} attempts). "
-                    "Stop redesigning. Tell the user plainly which slides still render "
-                    "incorrectly and what is wrong with them - do NOT describe the deck as "
-                    "finished or ready, and do not offer it for download."
+                    "Stop redesigning and finish now. The file is made available to the user "
+                    "as it stands, so tell them plainly which slides still render incorrectly "
+                    "and what is wrong with them - do not describe the deck as clean or "
+                    "problem-free, and do not claim the issues were fixed."
                 )
             if ws.validation_failures >= ws.MAX_VALIDATION_FAILURES:
                 return (
                     f"Validation could not be completed after {ws.MAX_VALIDATION_FAILURES} "
-                    "failed attempts. Report that the rendered output could not be verified "
-                    "rather than claiming the presentation is ready."
+                    "failed attempts. Finish now and report that the rendered output could "
+                    "not be verified, rather than claiming the presentation is problem-free."
                 )
 
         return None
@@ -1654,15 +1659,22 @@ class AgentLoop:
                 }))
             else:
                 # Exhausted the revision budget with defects still present.
-                # The previews above still go out so the user can see exactly
-                # what is wrong, but no download is offered and nothing is
-                # described as finished - handing over a file whose chart runs
-                # off the slide, while acknowledging that it does, is the
-                # behaviour this replaces.
+                # The deck IS still handed over - once the agent has stopped
+                # trying, withholding the file only leaves the user with
+                # nothing, and its own closing message tells them to download
+                # it. What must not happen is passing it off as clean, so the
+                # unresolved issues are published alongside it and
+                # validationClean stays false for anything reading the event.
                 events.append(_event("validation_unresolved", "validation", {
                     "issues": self.working_state.validation_issues,
                     "issueCount": len(self.working_state.validation_issues),
                     "attempts": self.working_state.validation_attempts,
+                    "timestamp": _iso_now(),
+                }))
+                events.append(_event("deck_finalized", "validation", {
+                    "renderResult": render_result,
+                    "validationClean": False,
+                    "issues": self.working_state.validation_issues,
                     "timestamp": _iso_now(),
                 }))
 
@@ -1768,6 +1780,51 @@ class AgentLoop:
             for m in messages
             if m.content
         ]
+
+
+def _project_design_system(fn_name: str, design_system: dict) -> dict:
+    """
+    Narrow the design system to the keys a given tool actually reads.
+
+    The whole bundle used to be serialised into every call. For
+    design_slide_content that meant the full layout catalog - every
+    placeholder's EMU geometry for every layout, a few thousand characters -
+    rode along on each slide, in the tool-call arguments AND again in the
+    echoed tool result, despite that tool only ever reading the fonts and the
+    palette. On a token-per-minute budget that is what pushes a normal deck
+    into rate-limit territory partway through, and a 429 mid-revision is what
+    strands a deck with an unfixed slide.
+    """
+    if not design_system:
+        return {}
+
+    if fn_name == "design_slide_content":
+        typography = design_system.get("typography", {}) or {}
+        palette = design_system.get("palette", {}) or {}
+        return {
+            "typography": {
+                key: typography[key]
+                for key in ("titleFont", "bodyFont")
+                if key in typography
+            },
+            # The prompt only ever renders the first five swatches.
+            "palette": {"colors": (palette.get("colors") or [])[:5]},
+        }
+
+    if fn_name == "plan_presentation_structure":
+        # Only the layout NAMES are surfaced to the planner; the geometry is
+        # select_layout's business.
+        return {
+            "layouts": [
+                {
+                    "layoutId": layout.get("layoutId"),
+                    "layoutName": layout.get("layoutName"),
+                }
+                for layout in design_system.get("layouts", []) or []
+            ]
+        }
+
+    return design_system
 
 
 def _event(event_type: str, phase: str, data: dict) -> dict:
