@@ -978,6 +978,10 @@ class AgentLoop:
                     "slideDimensions": bundle.slide_dimensions,
                     "masterElements": bundle.master_elements,
                     "embeddedMedia": bundle.embedded_media,
+                    # Bundles written before this column existed default to
+                    # {} here - table_style.py's resolvers already fall back
+                    # to deriving from palette when dataViz is empty.
+                    "dataViz": bundle.data_viz,
                 }
 
         return context

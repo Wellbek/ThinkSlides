@@ -214,6 +214,7 @@ class LayoutEngine:
 
         has_image = any(c.get("type") == "image" for c in contents)
         has_table = any(c.get("type") == "table" for c in contents)
+        has_chart = any(c.get("type") == "chart" for c in contents)
 
         # Count text placeholders to detect two-column
         text_placeholders = sum(
@@ -222,14 +223,17 @@ class LayoutEngine:
         )
 
         # Title slide: minimal content, likely title placeholder
-        if len(contents) <= 2 and not has_image and not has_table:
+        if len(contents) <= 2 and not has_image and not has_table and not has_chart:
             return LayoutType.TITLE
 
         # Table slide
         if has_table:
             return LayoutType.TABLE
 
-        # Image slide
+        # Chart and image both use the same generous content-area layout -
+        # neither maps to a distinct LayoutType of its own (see LayoutType),
+        # so a chart falls through to CONTENT below, same as it did before
+        # charts were a real content type.
         if has_image:
             return LayoutType.IMAGE
 

@@ -801,3 +801,98 @@ class TestTableRendering:
         renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
         prs = Presentation(output_path)
         assert len([s for s in prs.slides[0].shapes if s.has_table]) == 0
+
+
+class TestChartRendering:
+    """Charts were previously schema-legal but functionally dead - no chart
+    rendering existed on either render path. Both must now produce a real
+    picture (matplotlib PNG), styled from the run's design system."""
+
+    CHART_CONTENT = {
+        "type": "chart",
+        "chart": {
+            "chartType": "bar",
+            "categories": ["Q1", "Q2", "Q3"],
+            "series": [{"name": "Revenue", "values": [10, 20, 15]}],
+        },
+    }
+
+    BRAND_DESIGN_SYSTEM = {
+        "palette": {"colors": [{"name": "primary", "value": "#00704A", "type": "hex"}]},
+    }
+
+    def test_default_path_produces_a_picture_for_the_chart(self, tmp_path):
+        from pptx import Presentation
+
+        renderer = PPTXRenderer(template_path=None, design_system=self.BRAND_DESIGN_SYSTEM)
+        slides = [{
+            "slideIndex": 0,
+            "layoutId": "1",
+            "layoutName": "Default",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Revenue", "bold": True, "fontSizePt": 36}]},
+                self.CHART_CONTENT,
+            ],
+        }]
+        output_path = str(tmp_path / "out.pptx")
+        renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
+
+        prs = Presentation(output_path)
+        pictures = [s for s in prs.slides[0].shapes if s.shape_type == 13]
+        assert len(pictures) == 1
+
+    def test_template_path_produces_a_picture_for_the_chart(self, tmp_path):
+        from app.renderer.default_template import get_default_template_path
+        from pptx import Presentation
+
+        template_path = get_default_template_path(output_dir=str(tmp_path / "templates"))
+        renderer = PPTXRenderer(template_path=template_path, design_system=self.BRAND_DESIGN_SYSTEM)
+        slides = [{
+            "slideIndex": 0,
+            "layoutId": "2",
+            "layoutName": "Title and Content",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Title"}]},
+                self.CHART_CONTENT,
+            ],
+        }]
+        output_path = str(tmp_path / "out.pptx")
+        result = renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
+
+        prs = Presentation(result)
+        assert len(prs.slides) == 1
+        pictures = [s for s in prs.slides[0].shapes if s.shape_type == 13]
+        assert len(pictures) == 1
+
+    def test_unrenderable_chart_is_skipped_not_crashed(self, tmp_path):
+        """Empty chart data must not raise or produce an empty picture shape."""
+        from pptx import Presentation
+
+        renderer = PPTXRenderer(template_path=None)
+        slides = [{
+            "slideIndex": 0,
+            "layoutId": "1",
+            "layoutName": "Default",
+            "contents": [{"type": "chart", "chart": {"chartType": "bar", "series": []}}],
+        }]
+        output_path = str(tmp_path / "out.pptx")
+        renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
+        prs = Presentation(output_path)
+        assert len([s for s in prs.slides[0].shapes if s.shape_type == 13]) == 0
+
+    def test_template_path_chart_registers_a_media_relationship(self, tmp_path):
+        from app.renderer.default_template import get_default_template_path
+
+        template_path = get_default_template_path(output_dir=str(tmp_path / "templates"))
+        renderer = PPTXRenderer(template_path=template_path, design_system=self.BRAND_DESIGN_SYSTEM)
+        working_dir = tmp_path / "extracted"
+        with zipfile.ZipFile(template_path) as zf:
+            zf.extractall(working_dir)
+        layout_file = str(working_dir / "ppt" / "slideLayouts" / "slideLayout2.xml")
+
+        slide_data = {"slideIndex": 0, "layoutId": "2", "contents": [self.CHART_CONTENT]}
+        xml_bytes, image_rels = renderer._clone_layout_as_slide(layout_file, slide_data, str(working_dir), slide_num=1)
+
+        assert len(image_rels) == 1
+        root = ET.fromstring(xml_bytes)
+        assert len(root.findall(".//p:pic", NS)) == 1

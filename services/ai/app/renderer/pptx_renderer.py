@@ -24,6 +24,7 @@ from app.renderer.typography import TypographyEngine
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
 from app.renderer import text_fit
 from app.renderer import table_style
+from app.renderer import chart_renderer
 from app.renderer.xml_utils import get_shape_position, emu_to_inches, inches_to_emu
 from app.design_system import get_default_design_system
 
@@ -372,6 +373,35 @@ class PPTXRenderer:
                 self._add_table(slide, content.get("table", {}), table_pos)
                 top_offset += table_pos.height + 0.15
 
+            elif content.get("type") == "chart":
+                chart_pos = LayoutEngine.calculate_content_position(
+                    layout_config,
+                    has_title=has_title,
+                )
+                if top_offset > 0:
+                    chart_pos.top += top_offset
+                    chart_pos.height -= top_offset
+                self._add_chart(slide, content.get("chart", {}), chart_pos)
+                top_offset += chart_pos.height + 0.15
+
+    def _add_chart(self, slide, chart_data: dict, pos: PositionConfig) -> None:
+        """Render chart_data to a design-system-styled PNG and place it on the slide."""
+        chart_bytes = chart_renderer.render_chart_to_png(
+            chart_data, self.design_system, pos.width, pos.height
+        )
+        if not chart_bytes:
+            return
+        img_stream = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        try:
+            img_stream.write(chart_bytes)
+            img_stream.close()
+            slide.shapes.add_picture(
+                img_stream.name,
+                Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
+            )
+        finally:
+            os.unlink(img_stream.name)
+
     def _add_table(self, slide, table_data: dict, pos: PositionConfig) -> None:
         """Add a native, design-system-styled table to the slide."""
         rows_data = table_data.get("rows", [])
@@ -544,15 +574,18 @@ class PPTXRenderer:
                     image_rels.append(rel)
                 continue
 
+            if content_type == "chart":
+                next_rid = f"rId{2 + len(image_rels)}"  # charts are rendered images too - share the same rId sequence
+                rel = self._add_chart_to_cloned_slide(root, content, working_dir, next_rid)
+                if rel:
+                    image_rels.append(rel)
+                continue
+
             if content_type == "table":
                 self._add_table_to_cloned_slide(root, content)
                 continue
 
             if content_type != "text":
-                # chart content is not yet rendered on this path (see Stage D
-                # of the presentation-quality-overhaul initiative) - skipping
-                # is a no-op today, not a regression, since neither render
-                # path currently produces real charts.
                 continue
 
             placeholder_idx = content.get("placeholderIdx", -1)
@@ -676,8 +709,8 @@ class PPTXRenderer:
 
     def _add_image_to_cloned_slide(self, root: ET.Element, content: dict, working_dir: str, rel_id: str) -> Optional[dict]:
         """
-        Insert an <p:pic> shape into a cloned layout's spTree for an `image`
-        content item, writing the image into ppt/media/. `rel_id` is the
+        Resolve an `image` content item's bytes and position within a cloned
+        layout, then delegate to _insert_picture_xml. `rel_id` is the
         already-decided rId for this image (the caller owns rId numbering
         across a slide's relationships). Returns {"rId", "target"} to be
         registered in the slide's .rels file, or None if the image couldn't
@@ -688,6 +721,78 @@ class PPTXRenderer:
         if not img_bytes:
             return None
 
+        pos = self._resolve_cloned_slide_position(
+            root, content, img_data.get("placeholderIdx"),
+            lambda layout_config: LayoutEngine.calculate_image_position(layout_config, has_title=True),
+        )
+        return self._insert_picture_xml(
+            root, working_dir, rel_id, img_bytes, pos,
+            alt_text=img_data.get("altText"), shape_label="Picture",
+        )
+
+    def _add_chart_to_cloned_slide(self, root: ET.Element, content: dict, working_dir: str, rel_id: str) -> Optional[dict]:
+        """
+        Render a `chart` content item to a PNG (see chart_renderer, styled
+        from this run's design system) and insert it the same way an image
+        would be - a chart is just a generated picture from the OOXML
+        package's point of view, which is exactly what makes it render
+        identically in LibreOffice and PowerPoint.
+        """
+        chart_data = content.get("chart", {})
+        pos = self._resolve_cloned_slide_position(
+            root, content, chart_data.get("placeholderIdx"),
+            lambda layout_config: LayoutEngine.calculate_content_position(layout_config, has_title=True),
+        )
+        width_in = emu_to_inches(pos["cx"])
+        height_in = emu_to_inches(pos["cy"])
+        chart_bytes = chart_renderer.render_chart_to_png(chart_data, self.design_system, width_in, height_in)
+        if not chart_bytes:
+            return None
+        return self._insert_picture_xml(
+            root, working_dir, rel_id, chart_bytes, pos,
+            alt_text=chart_data.get("title"), shape_label="Chart",
+        )
+
+    def _resolve_cloned_slide_position(self, root: ET.Element, content: dict, nested_placeholder_idx, fallback_position_fn) -> dict:
+        """
+        Shared position resolution for image/chart content on the
+        template-clone path: prefer a matching placeholder's own geometry
+        (the prompt convention puts placeholderIdx on the content item
+        itself, matching "text"; also accept it nested inside image/chart,
+        matching the shared pydantic schema), else fall back to the same
+        LayoutEngine heuristic the default render path uses.
+        """
+        placeholder_idx = content.get("placeholderIdx", nested_placeholder_idx)
+        if placeholder_idx is not None:
+            for sp in root.findall(".//p:sp", NS):
+                ph = sp.find(".//p:ph", NS)
+                if ph is not None and int(ph.get("idx", "-1")) == placeholder_idx:
+                    box = get_shape_position(sp)
+                    if box["cx"] > 0 and box["cy"] > 0:
+                        return box
+                    break
+
+        layout_type = LayoutEngine.infer_layout_type({"contents": [content]})
+        layout_config = LayoutEngine.get_layout(layout_type)
+        fallback_pos = fallback_position_fn(layout_config)
+        return {
+            "x": inches_to_emu(fallback_pos.left),
+            "y": inches_to_emu(fallback_pos.top),
+            "cx": inches_to_emu(fallback_pos.width),
+            "cy": inches_to_emu(fallback_pos.height),
+        }
+
+    def _insert_picture_xml(
+        self,
+        root: ET.Element,
+        working_dir: str,
+        rel_id: str,
+        img_bytes: bytes,
+        pos: dict,
+        alt_text: Optional[str],
+        shape_label: str,
+    ) -> Optional[dict]:
+        """Write image bytes into ppt/media/ and insert a <p:pic> shape referencing them at `pos`."""
         ext = _sniff_image_ext(img_bytes)
         media_dir = os.path.join(working_dir, "ppt", "media")
         os.makedirs(media_dir, exist_ok=True)
@@ -698,31 +803,6 @@ class PPTXRenderer:
             f.write(img_bytes)
         self._ensure_content_type_extension(working_dir, ext)
 
-        # The prompt tells the LLM to put placeholderIdx on the content item
-        # itself (the same convention as "text" content); also accept it
-        # nested inside the image object, matching the shared pydantic
-        # ImageContent schema, in case either convention is produced.
-        placeholder_idx = content.get("placeholderIdx", img_data.get("placeholderIdx"))
-        pos = None
-        if placeholder_idx is not None:
-            for sp in root.findall(".//p:sp", NS):
-                ph = sp.find(".//p:ph", NS)
-                if ph is not None and int(ph.get("idx", "-1")) == placeholder_idx:
-                    box = get_shape_position(sp)
-                    if box["cx"] > 0 and box["cy"] > 0:
-                        pos = box
-                    break
-        if pos is None:
-            layout_type = LayoutEngine.infer_layout_type({"contents": [content]})
-            layout_config = LayoutEngine.get_layout(layout_type)
-            img_pos = LayoutEngine.calculate_image_position(layout_config, has_title=True)
-            pos = {
-                "x": inches_to_emu(img_pos.left),
-                "y": inches_to_emu(img_pos.top),
-                "cx": inches_to_emu(img_pos.width),
-                "cy": inches_to_emu(img_pos.height),
-            }
-
         existing_ids = [int(cNvPr.get("id")) for cNvPr in root.findall(".//p:cNvPr", NS) if (cNvPr.get("id") or "").isdigit()]
         shape_id = max(existing_ids, default=1) + 1
 
@@ -732,7 +812,7 @@ class PPTXRenderer:
         nvPicPr = ET.SubElement(pic, f"{{{NS['p']}}}nvPicPr")
         cNvPr = ET.SubElement(nvPicPr, f"{{{NS['p']}}}cNvPr")
         cNvPr.set("id", str(shape_id))
-        cNvPr.set("name", img_data.get("altText") or f"Picture {shape_id}")
+        cNvPr.set("name", alt_text or f"{shape_label} {shape_id}")
         ET.SubElement(nvPicPr, f"{{{NS['p']}}}cNvPicPr")
         ET.SubElement(nvPicPr, f"{{{NS['p']}}}nvPr")
 

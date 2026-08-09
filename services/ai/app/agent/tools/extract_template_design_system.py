@@ -47,7 +47,7 @@ DEFAULT_SENTINELS = {"", "default", "none", "null", "builtin", "built-in"}
 # be shared with the renderer (which would otherwise create an import cycle if
 # it imported from this agent-tools module). Re-exported here for backward
 # compatibility with any caller importing it from its historical location.
-from app.design_system import get_default_design_system  # noqa: E402
+from app.design_system import get_default_design_system, derive_data_viz_config  # noqa: E402
 
 
 class ExtractTemplateDesignSystemTool:
@@ -195,6 +195,14 @@ class ExtractTemplateDesignSystemTool:
             design_system["masterElements"] = cls._extract_master_elements(zf)
             design_system["embeddedMedia"] = cls._extract_embedded_media(zf)
         design_system["sourceType"] = "pptx"
+        # No LLM call on this path by design (fast, deterministic XML
+        # parsing) - table/chart styling tokens are derived the same way
+        # from whatever palette was actually extracted, rather than adding
+        # an LLM round-trip just to pick chart colors.
+        design_system["dataViz"] = derive_data_viz_config(
+            design_system["palette"]["colors"],
+            body_font=design_system.get("typography", {}).get("bodyFont", {}).get("typeface", "Arial"),
+        )
         return design_system
 
     # ── PDF extraction (vision LLM-based) ───────────────────────────────
@@ -341,6 +349,12 @@ Return a JSON object with these EXACT keys (no extra keys, no missing keys):
 7. "embeddedMedia": [ {{"mediaType": "image"|"audio"|"video", "rId": "", "fileName": string, "mimeType": string, "fileSizeBytes": number}} ]
    - Any embedded images/logos visible in the template.
 
+8. "dataViz": {{ "chartColorSequence": [hex, hex, ...], "chartAxisColor": hex, "chartGridColor": hex, "tableHeaderBg": hex, "tableHeaderFg": hex, "tableBandBg": hex, "tableRowBg": hex, "tableBorder": hex, "fontFamily": string }}
+   - How this template's own brand colors should be used for generated tables and charts, so they look like they belong to this deck.
+   - chartColorSequence: 3-5 of the template's own colors, ordered for use as chart data-series colors (most prominent/brand color first).
+   - tableHeaderBg should be the template's primary/accent brand color; tableHeaderFg should be whichever of black/white has better contrast against it.
+   - Base every value on colors you actually identified in "palette" above - do not invent new colors here.
+
 Be precise with hex colors and positions. Return ONLY valid JSON — no markdown fences, no commentary."""
 
     @staticmethod
@@ -401,7 +415,11 @@ Be precise with hex colors and positions. Return ONLY valid JSON — no markdown
 
         if parsed is None:
             logger.warning("vision_response_fallback_to_defaults")
-            return dict(DEFAULTS)
+            result = dict(DEFAULTS)
+            result["dataViz"] = derive_data_viz_config(
+                result["palette"]["colors"], result["typography"]["bodyFont"]["typeface"]
+            )
+            return result
 
         # Merge: use parsed values where present, defaults for missing keys
         result: dict = {}
@@ -410,6 +428,20 @@ Be precise with hex colors and positions. Return ONLY valid JSON — no markdown
                 result[key] = parsed[key]
             else:
                 result[key] = default_val
+
+        # dataViz is handled separately from the DEFAULTS merge above: when
+        # the vision model provides its own judgment (it can see the actual
+        # template), trust it; otherwise derive one from whatever palette
+        # was actually extracted rather than falling back to an unrelated
+        # generic default.
+        vision_data_viz = parsed.get("dataViz") if isinstance(parsed, dict) else None
+        if isinstance(vision_data_viz, dict) and vision_data_viz.get("chartColorSequence"):
+            result["dataViz"] = vision_data_viz
+        else:
+            result["dataViz"] = derive_data_viz_config(
+                result.get("palette", {}).get("colors", []),
+                result.get("typography", {}).get("bodyFont", {}).get("typeface", "Arial"),
+            )
 
         return result
 

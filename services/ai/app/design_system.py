@@ -110,6 +110,44 @@ def resolve_palette(color_theme: str | None) -> tuple[str, list[dict]]:
     return theme, COLOR_THEMES[theme]
 
 
+def derive_data_viz_config(palette_colors: list[dict], body_font: str = "Arial") -> dict:
+    """
+    Deterministically derive table/chart styling tokens (header/band colors,
+    chart series color sequence, axis/grid colors, font) from an already
+    extracted palette - no LLM call needed, matching this module's existing
+    "single source of truth, computed once" design.
+
+    Used as the config for the deterministic PPTX/XML template-extraction
+    path (which intentionally makes no LLM call at all) and for the built-in
+    default design system below. The vision-LLM PDF extraction path
+    (extract_template_design_system) asks the model for its own dataViz
+    judgment instead, since it can see the actual template, and only falls
+    back to this when the model's response doesn't include one.
+    """
+    by_name = {c.get("name"): c.get("value") for c in palette_colors if c.get("value")}
+
+    # Ordered so the most prominent brand colors are used for the earliest
+    # (most visually dominant) data series first.
+    series_priority = ["primary", "secondary", "accent", "dark", "gray"]
+    color_sequence = [by_name[name] for name in series_priority if name in by_name]
+    if not color_sequence:
+        color_sequence = [c["value"] for c in palette_colors if c.get("value")][:5]
+    if not color_sequence:
+        color_sequence = ["#1F4E78", "#2980B9", "#FF7F50", "#808080", "#15334F"]
+
+    return {
+        "chartColorSequence": color_sequence,
+        "chartAxisColor": by_name.get("dark", "#404040"),
+        "chartGridColor": by_name.get("light", "#E0E0E0"),
+        "tableHeaderBg": by_name.get("primary", "#1F4E78"),
+        "tableHeaderFg": "#FFFFFF",
+        "tableBandBg": by_name.get("light", "#F2F2F2"),
+        "tableRowBg": "#FFFFFF",
+        "tableBorder": by_name.get("gray", "#CCCCCC"),
+        "fontFamily": body_font,
+    }
+
+
 def get_default_design_system(color_theme: str | None = None) -> dict:
     """Return the fully-parsed built-in default design system.
 
@@ -235,4 +273,5 @@ def get_default_design_system(color_theme: str | None = None) -> dict:
         "embeddedMedia": [],
         "sourceType": "default",
         "colorTheme": theme_label,
+        "dataViz": derive_data_viz_config(palette_colors, body_font="Arial"),
     }

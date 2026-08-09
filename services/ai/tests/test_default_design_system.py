@@ -82,6 +82,7 @@ def test_default_design_system_schema_is_complete():
         "masterElements",
         "embeddedMedia",
         "sourceType",
+        "dataViz",
     ):
         assert key in ds, f"design system missing key '{key}'"
     assert ds["sourceType"] == "default"
@@ -204,3 +205,50 @@ def test_invalid_hex_like_string_falls_back_to_professional():
     """Not a real hex (wrong length / bad chars) must not be treated as one."""
     ds = get_default_design_system(color_theme="#GGGGGG")
     assert ds["colorTheme"] == "professional"
+
+
+class TestDeriveDataVizConfig:
+    """derive_data_viz_config turns an already-extracted palette into
+    table/chart styling tokens without an LLM call - the deterministic
+    fallback used by the PPTX/XML extraction path (which makes no LLM call
+    at all) and by the built-in default design system."""
+
+    def test_uses_named_palette_roles_in_priority_order(self):
+        from app.design_system import derive_data_viz_config
+
+        palette = [
+            {"name": "gray", "value": "#808080"},
+            {"name": "accent", "value": "#FF7F50"},
+            {"name": "primary", "value": "#00704A"},
+            {"name": "secondary", "value": "#1E3932"},
+        ]
+        config = derive_data_viz_config(palette, body_font="Calibri")
+        # primary first, then secondary, then accent, then gray - dark absent.
+        assert config["chartColorSequence"][:4] == ["#00704A", "#1E3932", "#FF7F50", "#808080"]
+        assert config["tableHeaderBg"] == "#00704A"
+        assert config["fontFamily"] == "Calibri"
+
+    def test_empty_palette_falls_back_to_hardcoded_defaults(self):
+        from app.design_system import derive_data_viz_config
+
+        config = derive_data_viz_config([])
+        assert len(config["chartColorSequence"]) >= 1
+        assert config["tableHeaderBg"].startswith("#")
+        assert config["tableHeaderFg"] == "#FFFFFF"
+
+    def test_unnamed_palette_still_produces_a_sequence(self):
+        """A palette whose colors have no recognized role names (primary/
+        secondary/...) must still yield usable chart colors, not an empty
+        sequence."""
+        from app.design_system import derive_data_viz_config
+
+        palette = [{"name": "dk1", "value": "#111111"}, {"name": "lt1", "value": "#EEEEEE"}]
+        config = derive_data_viz_config(palette)
+        assert set(config["chartColorSequence"]) <= {"#111111", "#EEEEEE"}
+        assert len(config["chartColorSequence"]) == 2
+
+    def test_default_design_system_data_viz_is_internally_consistent(self):
+        ds = get_default_design_system(color_theme="professional")
+        primary = next(c["value"] for c in ds["palette"]["colors"] if c["name"] == "primary")
+        assert ds["dataViz"]["tableHeaderBg"] == primary
+        assert primary in ds["dataViz"]["chartColorSequence"]
