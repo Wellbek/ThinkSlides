@@ -1219,7 +1219,7 @@ class TestDownloadIsHeldUntilTheDeckIsSettled:
     deck_finalized event rather than on the finalize tool_result."""
 
     @staticmethod
-    def _rendered(loop):
+    def _rendered(loop, clean: bool = True):
         loop.working_state.pending_slide_previews = [
             {"slideIndex": 0, "slideData": None, "previewUrl": "/previews/s/slide_0.png"},
         ]
@@ -1228,11 +1228,15 @@ class TestDownloadIsHeldUntilTheDeckIsSettled:
             "filePath": "/app/output/deck.pptx", "fileName": "deck.pptx",
             "fileSizeBytes": 1234, "slideCount": 1,
         }
+        loop.working_state.validation_clean = clean
+        loop.working_state.validation_issues = [] if clean else [
+            {"slideIndex": 2, "type": "overflow",
+             "detail": "A chart or image runs off the slide - past the bottom by 61pt."},
+        ]
 
     def test_deck_finalized_carries_the_render_result(self):
         loop = _loop()
         self._rendered(loop)
-        loop.working_state.validation_clean = True
 
         events = loop._flush_slide_previews()
         deck = next(e for e in events if e["type"] == "deck_finalized")
@@ -1268,5 +1272,6 @@ class TestDownloadIsHeldUntilTheDeckIsSettled:
         resumed.redis_client = loop.redis_client
         await resumed._load_working_state(session_id)
 
-        deck = next(e for e in resumed._flush_slide_previews() if e["type"] == "deck_finalized")
+        events = resumed._flush_slide_previews()
+        deck = next(e for e in events if e["type"] == "deck_finalized")
         assert deck["renderResult"]["filePath"] == "/app/output/deck.pptx"

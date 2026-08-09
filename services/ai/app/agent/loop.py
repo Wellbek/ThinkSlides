@@ -154,6 +154,12 @@ class WorkingState:
         self.validation_issues: list[dict] = []
         self.validation_attempts: int = 0
         self.MAX_VALIDATION_ATTEMPTS = 3
+        # Checks that could not run at all (LibreOffice conversion error, a
+        # provider failure in the redesign feeding them). Tracked separately
+        # from real attempts so infrastructure trouble cannot exhaust the
+        # revision budget, but still bounded so it cannot spin forever.
+        self.validation_failures: int = 0
+        self.MAX_VALIDATION_FAILURES = 3
         # Set once finalize_and_render_pptx succeeds - the loop always knows
         # the true rendered path with certainty, so validate_rendered_output
         # is auto-supplied this rather than trusting the LLM's own copy.
@@ -336,6 +342,7 @@ class WorkingState:
         self.validation_clean = False
         self.validation_issues = []
         self.validation_attempts = 0
+        self.validation_failures = 0
         self.last_rendered_path = None
         self.pending_slide_previews = []
         self.previews_published = False
@@ -479,6 +486,7 @@ class AgentLoop:
             "has_called_finalize": self.working_state.has_called_finalize,
             "has_called_validate": self.working_state.has_called_validate,
             "validation_attempts": self.working_state.validation_attempts,
+            "validation_failures": self.working_state.validation_failures,
             "validation_clean": self.working_state.validation_clean,
             "validation_issues": self.working_state.validation_issues,
             "last_rendered_path": self.working_state.last_rendered_path,
@@ -532,6 +540,7 @@ class AgentLoop:
             self.working_state.has_called_finalize = state_dict.get("has_called_finalize", False)
             self.working_state.has_called_validate = state_dict.get("has_called_validate", False)
             self.working_state.validation_attempts = state_dict.get("validation_attempts", 0)
+            self.working_state.validation_failures = state_dict.get("validation_failures", 0)
             self.working_state.validation_clean = state_dict.get("validation_clean", False)
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
@@ -691,6 +700,7 @@ class AgentLoop:
                 # genuinely cannot be fixed.
                 at_validation_cap = (
                     self.working_state.validation_attempts >= self.working_state.MAX_VALIDATION_ATTEMPTS
+                    or self.working_state.validation_failures >= self.working_state.MAX_VALIDATION_FAILURES
                 )
                 validation_satisfied = self.working_state.validation_clean or at_validation_cap
                 if not self.working_state.has_called_finalize or not validation_satisfied:
@@ -937,24 +947,30 @@ class AgentLoop:
                     # executed - a call blocked for not having finalized yet,
                     # or blocked by the retry cap below, must not count as an
                     # attempt or be mistaken for "validation done".
-                    #
-                    # An attempt counts whether or not it succeeded (e.g. a
-                    # LibreOffice conversion failure still counts against the
-                    # cap - the loop must not retry that indefinitely either).
-                    self.working_state.validation_attempts += 1
                     self.working_state.has_called_validate = True
 
-                    at_cap = self.working_state.validation_attempts >= self.working_state.MAX_VALIDATION_ATTEMPTS
                     if tool_result.success:
+                        # Only a completed check spends the revision budget. A
+                        # run that never got to inspect anything (LibreOffice
+                        # failed to convert, the provider rate-limited the
+                        # redesign that preceded it) says nothing about the
+                        # deck, and burning an attempt on it used to push a
+                        # still-broken deck to the cap and out the door.
+                        self.working_state.validation_attempts += 1
                         issues = (tool_result.data or {}).get("issues", [])
                         self.working_state.validation_issues = issues
                         self.working_state.validation_clean = not issues
+                        at_cap = (
+                            self.working_state.validation_attempts
+                            >= self.working_state.MAX_VALIDATION_ATTEMPTS
+                        )
                         validation_done = not issues or at_cap
                     else:
-                        # A failed attempt (e.g. LibreOffice conversion
-                        # error) is not "clean" - only stop retrying once
-                        # the cap is reached, same as a found-issues result.
-                        validation_done = at_cap
+                        self.working_state.validation_failures += 1
+                        validation_done = (
+                            self.working_state.validation_failures
+                            >= self.working_state.MAX_VALIDATION_FAILURES
+                        )
                     if validation_done:
                         # The deck will not change again this run, so the
                         # slides are genuinely final - publish their previews.
@@ -1214,8 +1230,15 @@ class AgentLoop:
             if ws.validation_attempts >= ws.MAX_VALIDATION_ATTEMPTS:
                 return (
                     f"Validation retry limit reached ({ws.MAX_VALIDATION_ATTEMPTS} attempts). "
-                    "Accept the current rendered output and finish rather than continuing to "
-                    "redesign and re-validate."
+                    "Stop redesigning. Tell the user plainly which slides still render "
+                    "incorrectly and what is wrong with them - do NOT describe the deck as "
+                    "finished or ready, and do not offer it for download."
+                )
+            if ws.validation_failures >= ws.MAX_VALIDATION_FAILURES:
+                return (
+                    f"Validation could not be completed after {ws.MAX_VALIDATION_FAILURES} "
+                    "failed attempts. Report that the rendered output could not be verified "
+                    "rather than claiming the presentation is ready."
                 )
 
         return None
@@ -1534,18 +1557,31 @@ class AgentLoop:
             for preview in self.working_state.pending_slide_previews
         ]
 
-        # The deck is settled, so the rendered file may now be offered for
-        # download. This event - not the finalize_and_render_pptx tool_result -
-        # is what persists the file and emits file_generated (see
-        # api/generate.py), so the download card and the file's sources entry
-        # cannot appear for a deck validation is still working on.
         render_result = self.working_state.pending_render_result
         if render_result:
-            events.append(_event("deck_finalized", "validation", {
-                "renderResult": render_result,
-                "validationClean": self.working_state.validation_clean,
-                "timestamp": _iso_now(),
-            }))
+            if self.working_state.validation_clean:
+                # Only a deck that actually renders correctly is offered for
+                # download. This event - not the finalize_and_render_pptx
+                # tool_result - is what persists the file and emits
+                # file_generated (see api/generate.py).
+                events.append(_event("deck_finalized", "validation", {
+                    "renderResult": render_result,
+                    "validationClean": True,
+                    "timestamp": _iso_now(),
+                }))
+            else:
+                # Exhausted the revision budget with defects still present.
+                # The previews above still go out so the user can see exactly
+                # what is wrong, but no download is offered and nothing is
+                # described as finished - handing over a file whose chart runs
+                # off the slide, while acknowledging that it does, is the
+                # behaviour this replaces.
+                events.append(_event("validation_unresolved", "validation", {
+                    "issues": self.working_state.validation_issues,
+                    "issueCount": len(self.working_state.validation_issues),
+                    "attempts": self.working_state.validation_attempts,
+                    "timestamp": _iso_now(),
+                }))
 
         if events:
             self.working_state.previews_published = True
