@@ -320,7 +320,12 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-md > :first-child { margin-top: 0; }
 .ws-md > :last-child { margin-bottom: 0; }
 .ws-md p { margin: 0 0 6px; }
-.ws-md ul, .ws-md ol { margin: 4px 0 6px; padding-left: 20px; }
+/* list-style must be restated: Tailwind's preflight resets ol/ul to
+   list-style:none, which silently swallowed the numbering on the agent's
+   numbered slide rundown - the items indented but showed no markers. */
+.ws-md ul, .ws-md ol { margin: 4px 0 6px; padding-left: 22px; }
+.ws-md ul { list-style: disc outside; }
+.ws-md ol { list-style: decimal outside; }
 .ws-md li { margin: 2px 0; }
 .ws-md li::marker { color: var(--ws-ai-text); }
 .ws-md strong { color: #9a9a9a; font-weight: 600; }
