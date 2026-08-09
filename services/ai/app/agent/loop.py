@@ -152,6 +152,11 @@ class WorkingState:
         # Issues reported by the most recent validation run, replayed to the
         # model when it tries to stop without fixing them.
         self.validation_issues: list[dict] = []
+        # Slide indices the last validation run actually complained about.
+        # Only these get redesigned: a deck where one chart overflows does not
+        # need its other slides rewritten, and regenerating them costs an LLM
+        # call each and risks changing copy the user was happy with.
+        self.slides_needing_revision: list[int] = []
         self.validation_attempts: int = 0
         self.MAX_VALIDATION_ATTEMPTS = 3
         # Checks that could not run at all (LibreOffice conversion error, a
@@ -182,6 +187,34 @@ class WorkingState:
         self.answered_questions: list[dict] = []  # Track questions that have been answered
         self.web_search_calls: int = 0  # Cap repeated web_search calls per run
         self.MAX_WEB_SEARCH_CALLS = 3
+
+    # Above this share of the deck being flagged, redesigning everything is
+    # simpler (and no more expensive) than steering slide-by-slide edits.
+    FULL_REWRITE_ISSUE_RATIO = 0.6
+
+    def compute_slides_needing_revision(self, issues: list[dict]) -> list[int]:
+        """
+        Which slides the next revision pass should touch.
+
+        Returns just the flagged slides for a localised defect - one chart
+        running off one slide should cost one redesign, not a regeneration of
+        the whole deck. When most of the deck is flagged the distinction stops
+        being worth enforcing, so an empty list is returned, which callers read
+        as "no restriction".
+        """
+        flagged = sorted({
+            issue["slideIndex"] for issue in issues
+            if isinstance(issue.get("slideIndex"), int)
+        })
+        if not flagged:
+            return []
+
+        total = len(self.accumulated_slides) or (
+            (self.presentation_structure or {}).get("totalSlides", 0)
+        )
+        if total and len(flagged) / total >= self.FULL_REWRITE_ISSUE_RATIO:
+            return []
+        return flagged
 
     def add_slide(self, slide: dict) -> None:
         """Add a slide to the accumulated list, or replace it if this slideIndex
@@ -341,6 +374,7 @@ class WorkingState:
         self.has_called_validate = False
         self.validation_clean = False
         self.validation_issues = []
+        self.slides_needing_revision = []
         self.validation_attempts = 0
         self.validation_failures = 0
         self.last_rendered_path = None
@@ -489,6 +523,7 @@ class AgentLoop:
             "validation_failures": self.working_state.validation_failures,
             "validation_clean": self.working_state.validation_clean,
             "validation_issues": self.working_state.validation_issues,
+            "slides_needing_revision": self.working_state.slides_needing_revision,
             "last_rendered_path": self.working_state.last_rendered_path,
             "pending_slide_previews": self.working_state.pending_slide_previews,
             "previews_published": self.working_state.previews_published,
@@ -543,6 +578,7 @@ class AgentLoop:
             self.working_state.validation_failures = state_dict.get("validation_failures", 0)
             self.working_state.validation_clean = state_dict.get("validation_clean", False)
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
+            self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
             self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
             self.working_state.pending_slide_previews = state_dict.get("pending_slide_previews", [])
             self.working_state.previews_published = state_dict.get("previews_published", False)
@@ -721,14 +757,27 @@ class AgentLoop:
                         )
                     else:
                         issue_summary = self._describe_validation_issues()
+                        targets = self.working_state.slides_needing_revision
+                        if targets:
+                            scope = (
+                                "Edit ONLY slide(s) "
+                                + ", ".join(str(i + 1) for i in targets)
+                                + " with design_slide_content. Every other slide already "
+                                "renders correctly and is carried over unchanged - do not "
+                                "redesign them, and do not replan the deck."
+                            )
+                        else:
+                            scope = (
+                                "Most of the deck is affected, so redesign the slides with "
+                                "design_slide_content as needed."
+                            )
                         next_step_instruction = (
                             "validate_rendered_output found problems in the rendered file that you "
                             f"have not fixed yet:\n{issue_summary}\n"
-                            "Do NOT tell the user the presentation is ready. Fix the slides named "
-                            "above with design_slide_content - shorten the content, move an "
-                            "oversized chart or table onto its own slide, or split the slide in two "
-                            "- then call finalize_and_render_pptx again and re-run "
-                            "validate_rendered_output."
+                            f"Do NOT tell the user the presentation is ready. {scope} Shorten the "
+                            "content, give an oversized chart or table a smaller region, or move it "
+                            "onto its own slide - then call finalize_and_render_pptx again and "
+                            "re-run validate_rendered_output."
                         )
                     # Add a system message forcing the agent to continue
                     messages.append({
@@ -960,6 +1009,9 @@ class AgentLoop:
                         issues = (tool_result.data or {}).get("issues", [])
                         self.working_state.validation_issues = issues
                         self.working_state.validation_clean = not issues
+                        self.working_state.slides_needing_revision = (
+                            self.working_state.compute_slides_needing_revision(issues)
+                        )
                         at_cap = (
                             self.working_state.validation_attempts
                             >= self.working_state.MAX_VALIDATION_ATTEMPTS
@@ -1198,6 +1250,32 @@ class AgentLoop:
 
         if fn_name == "design_slide_content":
             slide_index = fn_args.get("slide_index")
+
+            # After a validation pass flagged specific slides, only those get
+            # redesigned. Regenerating a slide that already renders correctly
+            # costs an LLM call and risks rewriting copy the user was happy
+            # with, to fix a problem it does not have.
+            #
+            # An index that has not been designed yet is always allowed: one of
+            # the fixes we actively suggest is moving an oversized chart onto a
+            # slide of its own, which means authoring a new one.
+            already_designed = {
+                slide.get("slideIndex") for slide in ws.accumulated_slides
+            }
+            if (
+                ws.slides_needing_revision
+                and slide_index is not None
+                and slide_index not in ws.slides_needing_revision
+                and slide_index in already_designed
+            ):
+                targets = ", ".join(str(i + 1) for i in ws.slides_needing_revision)
+                return (
+                    f"Slide {slide_index + 1} renders correctly and does not need "
+                    f"redesigning. Validation only flagged slide(s) {targets} - edit "
+                    "just those, then call finalize_and_render_pptx again. Every other "
+                    "slide is carried over unchanged automatically."
+                )
+
             if slide_index is not None and slide_index not in ws.selected_layouts:
                 return (
                     f"No layout has been selected for slide {slide_index} yet. Call "

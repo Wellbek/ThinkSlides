@@ -1275,3 +1275,112 @@ class TestDownloadIsHeldUntilTheDeckIsSettled:
         events = resumed._flush_slide_previews()
         deck = next(e for e in events if e["type"] == "deck_finalized")
         assert deck["renderResult"]["filePath"] == "/app/output/deck.pptx"
+
+
+class TestOnlyTheBrokenSlidesGetRedesigned:
+    """
+    A deck where one chart overflows should cost one slide redesign, not a
+    regeneration of every slide. Redesigning slides that already render
+    correctly spends an LLM call each and risks rewriting copy the user was
+    happy with, to fix a problem those slides do not have.
+    """
+
+    @staticmethod
+    def _deck(loop, slide_count=5):
+        ws = loop.working_state
+        ws.presentation_structure = {"totalSlides": slide_count}
+        for i in range(slide_count):
+            ws.add_slide({"slideIndex": i, "contents": []})
+            ws.selected_layouts[i] = {"layoutId": "content"}
+        return ws
+
+    @staticmethod
+    def _overflow(slide_index):
+        return {"slideIndex": slide_index, "type": "overflow",
+                "detail": "A chart or image runs off the slide - past the bottom by 77pt."}
+
+    def test_a_single_bad_slide_targets_only_that_slide(self):
+        loop = _loop()
+        ws = self._deck(loop)
+        assert ws.compute_slides_needing_revision([self._overflow(3)]) == [3]
+
+    def test_redesigning_an_unaffected_slide_is_blocked(self):
+        loop = _loop()
+        ws = self._deck(loop)
+        ws.slides_needing_revision = [3]
+
+        error = loop._check_precondition("design_slide_content", {"slide_index": 1})
+
+        assert error is not None
+        assert "does not need" in error
+        assert "slide(s) 4" in error  # 1-based in user-facing text
+
+    def test_redesigning_the_flagged_slide_is_allowed(self):
+        loop = _loop()
+        ws = self._deck(loop)
+        ws.slides_needing_revision = [3]
+
+        assert loop._check_precondition("design_slide_content", {"slide_index": 3}) is None
+
+    def test_authoring_a_brand_new_slide_is_still_allowed(self):
+        """Moving an oversized chart onto its own slide is a fix we actively
+        suggest, so an index that has not been designed yet must not be
+        blocked."""
+        loop = _loop()
+        ws = self._deck(loop)
+        ws.slides_needing_revision = [3]
+        ws.selected_layouts[5] = {"layoutId": "content"}
+
+        assert loop._check_precondition("design_slide_content", {"slide_index": 5}) is None
+
+    def test_a_mostly_broken_deck_falls_back_to_a_full_rewrite(self):
+        """Past a certain share, steering slide-by-slide edits is not cheaper
+        than just redesigning - an empty list means no restriction."""
+        loop = _loop()
+        ws = self._deck(loop)
+        issues = [self._overflow(i) for i in range(4)]  # 4 of 5
+
+        assert ws.compute_slides_needing_revision(issues) == []
+
+    def test_no_restriction_applies_when_nothing_was_flagged(self):
+        loop = _loop()
+        ws = self._deck(loop)
+        ws.slides_needing_revision = []
+
+        assert loop._check_precondition("design_slide_content", {"slide_index": 2}) is None
+
+    def test_a_clean_validation_lifts_the_restriction(self):
+        loop = _loop()
+        ws = self._deck(loop)
+        ws.slides_needing_revision = [3]
+
+        assert ws.compute_slides_needing_revision([]) == []
+
+    def test_duplicate_issues_on_one_slide_collapse(self):
+        loop = _loop()
+        ws = self._deck(loop)
+        issues = [self._overflow(3), self._overflow(3)]
+
+        assert ws.compute_slides_needing_revision(issues) == [3]
+
+    def test_issues_without_a_slide_index_are_ignored(self):
+        loop = _loop()
+        ws = self._deck(loop)
+        issues = [{"type": "aesthetic", "detail": "deck-wide note"}, self._overflow(2)]
+
+        assert ws.compute_slides_needing_revision(issues) == [2]
+
+    @pytest.mark.asyncio
+    async def test_the_revision_target_survives_a_pause(self):
+        session_id = uuid.uuid4()
+        loop = _loop()
+        loop.redis_client = _FakeRedis()
+        self._deck(loop)
+        loop.working_state.slides_needing_revision = [3]
+        await loop._save_working_state(session_id)
+
+        resumed = _loop()
+        resumed.redis_client = loop.redis_client
+        await resumed._load_working_state(session_id)
+
+        assert resumed.working_state.slides_needing_revision == [3]
