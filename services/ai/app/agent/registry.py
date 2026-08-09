@@ -162,7 +162,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     from app.agent.tools.select_layout import SelectLayoutTool
     from app.agent.tools.design_slide_content import DesignSlideContentTool
     from app.agent.tools.validate_slide_json import ValidateSlideJsonTool
-    from app.agent.tools.generate_image_prompt import GenerateImagePromptTool
+    from app.agent.tools.select_source_image import SelectSourceImageTool
     from app.agent.tools.finalize_and_render_pptx import FinalizeAndRenderPptxTool
     from app.agent.tools.ask_user_question import AskUserQuestionTool
 
@@ -174,6 +174,6 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     SelectLayoutTool.register(registry)
     DesignSlideContentTool.register(registry)
     ValidateSlideJsonTool.register(registry)
-    GenerateImagePromptTool.register(registry)
+    SelectSourceImageTool.register(registry)
     FinalizeAndRenderPptxTool.register(registry)
     AskUserQuestionTool.register(registry)

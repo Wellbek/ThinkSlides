@@ -20,6 +20,7 @@ into a graceful ``ToolResult`` so the ReAct loop can continue without search.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from urllib.parse import urlparse
 
@@ -270,13 +271,40 @@ async def _firecrawl_search(config: SearchConfig, query: str, count: int) -> lis
 # Scraped pages can be enormous; cap what reaches the prompt.
 FIRECRAWL_SNIPPET_CHARS = 1500
 
+# How many candidate image URLs to keep per scraped page for the
+# select_source_image catalog - a page can embed dozens of icons/avatars/
+# tracking pixels, only the first few are worth surfacing as candidates.
+MAX_IMAGES_PER_RESULT = 4
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\((https?://[^\s)]+\.(?:png|jpe?g|gif|webp))\)", re.IGNORECASE)
+
+
+def _extract_image_urls_from_markdown(markdown: str) -> list[str]:
+    """Best-effort candidate image URLs scraped out of a page's markdown.
+
+    These are only ever candidates - select_source_image still has to judge
+    each one confidently relevant to a specific slide before it's used, and
+    defaults to using none.
+    """
+    if not markdown:
+        return []
+    seen: list[str] = []
+    for url in _MARKDOWN_IMAGE_RE.findall(markdown):
+        if url not in seen:
+            seen.append(url)
+        if len(seen) >= MAX_IMAGES_PER_RESULT:
+            break
+    return seen
+
 
 def parse_firecrawl_response(response) -> list[dict]:
     """Normalize Firecrawl's search response.
 
     v2 returns ``{"data": {"web": [...]}}``; older shapes return ``{"data": [...]}``.
     Each item carries ``url``, ``title``, ``description`` and - when scraping is
-    enabled - ``markdown``, which is preferred as the snippet.
+    enabled - ``markdown``, which is preferred as the snippet. ``images`` is
+    populated from image URLs found in that same markdown, when any exist -
+    the only backend where a candidate image is naturally tied to a specific
+    result, since scraping is already enabled.
     """
     if not isinstance(response, dict):
         return []
@@ -297,12 +325,14 @@ def parse_firecrawl_response(response) -> list[dict]:
         link = item.get("url") or ""
         if not link:
             continue
-        snippet = (item.get("markdown") or item.get("description") or "").strip()
+        markdown = item.get("markdown") or ""
+        snippet = (markdown or item.get("description") or "").strip()
         results.append({
             "title": item.get("title") or link,
             "url": link,
             "snippet": snippet[:FIRECRAWL_SNIPPET_CHARS],
             "source": host_from_url(link),
+            "images": _extract_image_urls_from_markdown(markdown),
         })
     return results
 

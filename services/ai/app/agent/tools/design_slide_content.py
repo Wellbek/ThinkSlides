@@ -94,6 +94,18 @@ class DesignSlideContentTool:
                     description="Content depth: concise, detailed, or comprehensive",
                     required=False,
                 ),
+                ToolParameter(
+                    name="selected_image_context",
+                    type="string",
+                    description=(
+                        "JSON of a pre-vetted image for this slide, if select_source_image "
+                        "found a confident match. Optional - auto-supplied by the system when "
+                        "present. If given, reference it with "
+                        '{"type": "image", "image": {"source": "selected"}} rather than '
+                        "inventing image data yourself; if absent, do not include an image."
+                    ),
+                    required=False,
+                ),
             ],
         )
 
@@ -105,6 +117,7 @@ class DesignSlideContentTool:
         layout_info: str = "{}",
         design_system_context: str = "{}",
         detail_level: str = "detailed",
+        selected_image_context: str = "{}",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -135,6 +148,7 @@ class DesignSlideContentTool:
                 )
             layout = coerce_json_arg(layout_info, {})
             ds = coerce_json_arg(design_system_context, {})
+            selected_image = coerce_json_arg(selected_image_context, {})
 
             placeholders = layout.get("placeholders", [])
             layout_name = layout.get("layoutName", "Default")
@@ -171,6 +185,14 @@ Design System Context:
 - Palette: {json.dumps(ds.get('palette', {}).get('colors', [])[:5])}
 """
 
+            image_info = (
+                "\nA pre-vetted source image IS available for this slide "
+                f"(what it shows: {selected_image.get('altText', '') or 'see catalog context'!r}). "
+                'If it fits the slide, include {"type": "image", "image": {"source": "selected"}} in contents.'
+                if selected_image.get("data")
+                else "\nNo pre-vetted source image is available for this slide - do not include image content."
+            )
+
             key_points = outline.get("keyPoints", []) if isinstance(outline, dict) else []
             kp_list = "\n".join(f"  - {kp}" for kp in key_points) if key_points else "  (none)"
 
@@ -189,6 +211,7 @@ Available Placeholders:
 {ph_text}
 Resolved placeholder indices: title={title_idx}, body={body_idx}
 {ds_info}
+{image_info}
 
 Return a JSON object with this exact structure:
 {{
@@ -220,7 +243,7 @@ Rules:
 - Put the slide title in the title placeholder (placeholderIdx={title_idx}).
 - Put EVERY key point listed above into the body placeholder (placeholderIdx={body_idx}) as its OWN bullet run - one run per key point, with bullet: true and level: 0. Never collapse multiple key points into a single bullet or drop points to save space.
 - {detail_guidance}
-- Use "image" type for pic placeholders with {{type: "image", image: {{source: "prompt", data: "description"}}}}.
+- Only use "image" type when a pre-vetted source image was supplied above (source: "selected") - never invent image data yourself; there is no image-generation step, only reuse of images that genuinely already exist.
 - Use "table" type for tbl placeholders (or any content placeholder, if no dedicated table placeholder exists) when the content is genuinely tabular (comparisons, structured data with 2+ rows and 2+ columns) - do not force prose bullet points into a table, and do not use a table for anything that reads better as bullets. Shape: {{type: "table", placeholderIdx: N, table: {{headerRow: true, rows: [["Column A", "Column B"], ["Row 1 value", "Row 1 value"], ["Row 2 value", "Row 2 value"]]}}}}. Every row must have the same number of cells as the header row. Keep cell text short (a few words) - tables are rendered at a fixed size, not auto-expanded.
 - Each content item must have a placeholderIdx matching one of the available placeholders."""
 

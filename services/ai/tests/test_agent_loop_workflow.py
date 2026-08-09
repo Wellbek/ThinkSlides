@@ -78,7 +78,7 @@ def test_design_slide_content_allowed_once_structure_exists():
 
     assert loop._check_precondition("design_slide_content", {}) is None
     assert loop._check_precondition("select_layout", {}) is None
-    assert loop._check_precondition("generate_image_prompt", {}) is None
+    assert loop._check_precondition("select_source_image", {}) is None
 
 
 def test_replanning_blocked_once_slides_have_been_designed():
@@ -545,3 +545,238 @@ async def test_run_merges_resumed_design_system_and_research_into_context(monkey
 
     assert loop.context["design_system"] == {"palette": {"colors": ["#000"]}}
     assert loop.context["research"] == [{"title": "B", "url": "https://example.org", "snippet": "s2"}]
+
+
+# ── WorkingState.resolve_and_add_slide: "selected" image sentinel ─────────
+# design_slide_content is told about a pre-vetted image via
+# selected_image_context and asked to reference it as a lightweight
+# {"source": "selected"} sentinel rather than inventing/copying raw image
+# data - this is the server-side step that turns that sentinel into real
+# data, or drops it when nothing was actually selected.
+
+
+def test_resolve_and_add_slide_fills_in_the_selected_image():
+    ws = WorkingState()
+    ws.selected_images[0] = {"source": "base64", "data": "data:image/png;base64,AAAA", "altText": "chart"}
+    slide = {
+        "slideIndex": 0,
+        "contents": [
+            {"type": "text", "runs": [{"text": "Title"}]},
+            {"type": "image", "image": {"source": "selected"}},
+        ],
+    }
+
+    ws.resolve_and_add_slide(slide)
+
+    stored = ws.accumulated_slides[0]
+    image_items = [c for c in stored["contents"] if c["type"] == "image"]
+    assert len(image_items) == 1
+    assert image_items[0]["image"]["source"] == "base64"
+    assert image_items[0]["image"]["data"] == "data:image/png;base64,AAAA"
+
+
+def test_resolve_and_add_slide_drops_the_sentinel_when_nothing_was_selected():
+    ws = WorkingState()  # no entry in selected_images for slide 0
+    slide = {
+        "slideIndex": 0,
+        "contents": [
+            {"type": "text", "runs": [{"text": "Title"}]},
+            {"type": "image", "image": {"source": "selected"}},
+        ],
+    }
+
+    ws.resolve_and_add_slide(slide)
+
+    stored = ws.accumulated_slides[0]
+    assert [c["type"] for c in stored["contents"]] == ["text"]
+
+
+def test_resolve_and_add_slide_preserves_placeholder_idx_from_the_sentinel():
+    ws = WorkingState()
+    ws.selected_images[0] = {"source": "url", "data": "https://example.com/photo.jpg"}
+    slide = {
+        "slideIndex": 0,
+        "contents": [{"type": "image", "placeholderIdx": 2, "image": {"source": "selected"}}],
+    }
+
+    ws.resolve_and_add_slide(slide)
+
+    resolved = ws.accumulated_slides[0]["contents"][0]
+    assert resolved["image"]["placeholderIdx"] == 2
+    assert resolved["image"]["data"] == "https://example.com/photo.jpg"
+
+
+def test_resolve_and_add_slide_leaves_non_selected_image_content_untouched():
+    """An image with an already-real source (e.g. from an older run/schema
+    path) must not be treated as a sentinel and must not be dropped."""
+    ws = WorkingState()
+    slide = {
+        "slideIndex": 0,
+        "contents": [{"type": "image", "image": {"source": "base64", "data": "data:image/png;base64,ZZZZ"}}],
+    }
+
+    ws.resolve_and_add_slide(slide)
+
+    assert ws.accumulated_slides[0]["contents"][0]["image"]["data"] == "data:image/png;base64,ZZZZ"
+
+
+def test_resolve_and_add_slide_handles_missing_contents_gracefully():
+    ws = WorkingState()
+    ws.resolve_and_add_slide({"slideIndex": 0})
+    assert ws.accumulated_slides == [{"slideIndex": 0}]
+
+
+# ── Full loop: select_source_image -> design_slide_content resolution ─────
+
+
+@pytest.mark.asyncio
+async def test_selected_source_image_flows_through_the_full_loop_into_the_slide(monkeypatch):
+    """Exercises the catalog auto-injection into select_source_image, the
+    loop resolving its chosen id back to real data, and design_slide_content's
+    "selected" sentinel being filled in - all together, through _run."""
+    session_id = uuid.uuid4()
+    loop = _loop()
+    loop.redis_client = _FakeRedis()
+
+    catalog_entry = {
+        "id": "doc-report.pdf-p1-0",
+        "sourceType": "document",
+        "data": "data:image/png;base64,AAAA",
+        "context": "Quarterly revenue chart",
+    }
+
+    async def _with_catalog(*args, **kwargs):
+        return {"imageCatalog": [dict(catalog_entry)]}
+
+    async def _no_messages(*args, **kwargs):
+        return [{"role": "user", "content": "Make a slide about revenue"}]
+
+    monkeypatch.setattr(loop, "_load_context", _with_catalog)
+    monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
+
+    structure = {"title": "T", "totalSlides": 1, "slides": [{"slideIndex": 0}]}
+    layout0 = {"layoutId": "1", "layoutName": "Content"}
+    slide_with_sentinel = {
+        "slideIndex": 0, "layoutId": "1", "layoutName": "Content",
+        "contents": [{"type": "image", "image": {"source": "selected"}}],
+    }
+
+    script = [
+        [{"id": "1", "function": {"name": "plan_presentation_structure", "arguments": "{}"}}],
+        [{"id": "2", "function": {"name": "select_layout", "arguments": json.dumps({"content_type": "content", "slide_index": 0})}}],
+        [{"id": "3", "function": {"name": "select_source_image", "arguments": json.dumps({"slide_index": 0, "slide_topic": "revenue"})}}],
+        [{"id": "4", "function": {"name": "design_slide_content", "arguments": json.dumps({"slide_index": 0})}}],
+        [{"id": "5", "function": {"name": "finalize_and_render_pptx", "arguments": json.dumps({"slides_json": "[]", "session_id": str(session_id)})}}],
+        [],
+    ]
+    calls = {"n": 0}
+
+    async def _chat(*args, **kwargs):
+        idx = calls["n"]
+        calls["n"] += 1
+        tool_calls = script[idx] if idx < len(script) else []
+        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+
+    async def _execute_tool(name, args):
+        if name == "plan_presentation_structure":
+            return ToolResult(success=True, data=structure)
+        if name == "select_layout":
+            return ToolResult(success=True, data=layout0)
+        if name == "select_source_image":
+            assert args["slide_index"] == 0
+            # The loop must have supplied the catalog itself (id + context only).
+            supplied = json.loads(args["catalog_json"])
+            assert supplied == [{"id": "doc-report.pdf-p1-0", "context": "Quarterly revenue chart"}]
+            return ToolResult(success=True, data={
+                "slideIndex": 0, "selected": True, "imageId": "doc-report.pdf-p1-0", "reason": "match",
+            })
+        if name == "design_slide_content":
+            # The resolved image must have been auto-supplied for this slide.
+            supplied_image = json.loads(args["selected_image_context"])
+            assert supplied_image["data"] == "data:image/png;base64,AAAA"
+            return ToolResult(success=True, data=slide_with_sentinel)
+        if name == "finalize_and_render_pptx":
+            return ToolResult(success=True, data={"filePath": "/x.pptx", "fileName": "x.pptx", "previewUrls": []})
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    async for _ in loop.run(session_id):
+        pass
+
+    assert loop.working_state.selected_images[0]["data"] == "data:image/png;base64,AAAA"
+    rendered = loop.working_state.accumulated_slides[0]
+    image_items = [c for c in rendered["contents"] if c.get("type") == "image"]
+    assert len(image_items) == 1
+    assert image_items[0]["image"]["source"] == "base64"
+    assert image_items[0]["image"]["data"] == "data:image/png;base64,AAAA"
+
+
+@pytest.mark.asyncio
+async def test_no_confident_selection_means_no_image_on_the_slide(monkeypatch):
+    """select_source_image declining to select anything must leave the
+    slide's "selected" sentinel dropped, not crash or ship a broken ref."""
+    session_id = uuid.uuid4()
+    loop = _loop()
+    loop.redis_client = _FakeRedis()
+
+    async def _with_catalog(*args, **kwargs):
+        return {"imageCatalog": [{"id": "x", "sourceType": "document", "data": "d", "context": "c"}]}
+
+    async def _no_messages(*args, **kwargs):
+        return [{"role": "user", "content": "Make a slide"}]
+
+    monkeypatch.setattr(loop, "_load_context", _with_catalog)
+    monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
+
+    structure = {"title": "T", "totalSlides": 1, "slides": [{"slideIndex": 0}]}
+    layout0 = {"layoutId": "1", "layoutName": "Content"}
+    slide_with_sentinel = {
+        "slideIndex": 0, "layoutId": "1", "layoutName": "Content",
+        "contents": [
+            {"type": "text", "runs": [{"text": "Title"}]},
+            {"type": "image", "image": {"source": "selected"}},
+        ],
+    }
+
+    script = [
+        [{"id": "1", "function": {"name": "plan_presentation_structure", "arguments": "{}"}}],
+        [{"id": "2", "function": {"name": "select_layout", "arguments": json.dumps({"content_type": "content", "slide_index": 0})}}],
+        [{"id": "3", "function": {"name": "select_source_image", "arguments": json.dumps({"slide_index": 0, "slide_topic": "x"})}}],
+        [{"id": "4", "function": {"name": "design_slide_content", "arguments": json.dumps({"slide_index": 0})}}],
+        [{"id": "5", "function": {"name": "finalize_and_render_pptx", "arguments": json.dumps({"slides_json": "[]", "session_id": str(session_id)})}}],
+        [],
+    ]
+    calls = {"n": 0}
+
+    async def _chat(*args, **kwargs):
+        idx = calls["n"]
+        calls["n"] += 1
+        tool_calls = script[idx] if idx < len(script) else []
+        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+
+    async def _execute_tool(name, args):
+        if name == "plan_presentation_structure":
+            return ToolResult(success=True, data=structure)
+        if name == "select_layout":
+            return ToolResult(success=True, data=layout0)
+        if name == "select_source_image":
+            return ToolResult(success=True, data={"slideIndex": 0, "selected": False, "imageId": None, "reason": "no match"})
+        if name == "design_slide_content":
+            return ToolResult(success=True, data=slide_with_sentinel)
+        if name == "finalize_and_render_pptx":
+            return ToolResult(success=True, data={"filePath": "/x.pptx", "fileName": "x.pptx", "previewUrls": []})
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    async for _ in loop.run(session_id):
+        pass
+
+    assert 0 not in loop.working_state.selected_images
+    rendered = loop.working_state.accumulated_slides[0]
+    assert [c["type"] for c in rendered["contents"]] == ["text"]

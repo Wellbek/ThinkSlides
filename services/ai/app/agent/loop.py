@@ -107,7 +107,7 @@ TOOL_PHASES = {
     "select_layout": "layout_selection",
     "design_slide_content": "content_generation",
     "validate_slide_json": "validation",
-    "generate_image_prompt": "content_generation",
+    "select_source_image": "content_generation",
     "finalize_and_render_pptx": "rendering",
     "ask_user_question": "user_input",  # Future: pause for user input
 }
@@ -129,6 +129,11 @@ class WorkingState:
         # back verbatim in the next call - the same class of JSON-escaping
         # mistake as available_layouts (see _run's tool-dispatch injection).
         self.selected_layouts: dict[int, dict] = {}
+        # slide_index -> the resolved image dict ({source, data, altText})
+        # chosen by select_source_image, keyed so design_slide_content can be
+        # auto-supplied a pre-vetted image instead of re-selecting or (worse)
+        # having to carry raw image bytes through its own LLM output.
+        self.selected_images: dict[int, dict] = {}
         self.current_step_index: int = 0
         self.pending_question: dict | None = None
         self.is_paused_for_user: bool = False
@@ -150,6 +155,44 @@ class WorkingState:
                     self.accumulated_slides[i] = slide
                     return
         self.accumulated_slides.append(slide)
+
+    def resolve_and_add_slide(self, slide_data: dict) -> None:
+        """
+        Add a designed slide, first resolving any image content item whose
+        source is the "selected" sentinel. design_slide_content is told
+        about a pre-vetted image (if any) via selected_image_context and
+        asked to reference it as {"type": "image", "image": {"source":
+        "selected"}} rather than inventing or copying raw image data into
+        its own output - this is the server-side step that turns that
+        sentinel into the real {source, data} the renderer can use, or
+        drops the item entirely if nothing was actually selected for this
+        slide (never ships a reference the renderer cannot resolve).
+        """
+        slide_index = slide_data.get("slideIndex")
+        resolved = self.selected_images.get(slide_index)
+        contents = slide_data.get("contents")
+
+        if isinstance(contents, list):
+            new_contents = []
+            for item in contents:
+                is_selected_sentinel = (
+                    isinstance(item, dict)
+                    and item.get("type") == "image"
+                    and isinstance(item.get("image"), dict)
+                    and item["image"].get("source") == "selected"
+                )
+                if is_selected_sentinel:
+                    if resolved:
+                        merged_image = dict(resolved)
+                        placeholder_idx = item.get("placeholderIdx", item["image"].get("placeholderIdx"))
+                        if placeholder_idx is not None:
+                            merged_image["placeholderIdx"] = placeholder_idx
+                        new_contents.append({**item, "image": merged_image})
+                    continue
+                new_contents.append(item)
+            slide_data = {**slide_data, "contents": new_contents}
+
+        self.add_slide(slide_data)
 
     def get_slides_json(self) -> str:
         """Get accumulated slides as JSON string."""
@@ -251,6 +294,7 @@ class WorkingState:
         self.accumulated_slides = []
         self.presentation_structure = None
         self.selected_layouts = {}
+        self.selected_images = {}
         self.current_step_index = 0
         self.pending_question = None
         self.is_paused_for_user = False
@@ -311,6 +355,7 @@ class AgentLoop:
         self.context: dict = {}
         self._resumed_design_system: dict | None = None
         self._resumed_research: list | None = None
+        self._resumed_image_catalog: list | None = None
         self.redis_client = None
         self.mode = normalize_mode(mode) if mode is not None else None
         self.detail_level = normalize_detail_level(detail_level) if detail_level is not None else None
@@ -387,6 +432,7 @@ class AgentLoop:
             "accumulated_slides": self.working_state.accumulated_slides,
             "presentation_structure": self.working_state.presentation_structure,
             "selected_layouts": self.working_state.selected_layouts,
+            "selected_images": self.working_state.selected_images,
             "current_step_index": self.working_state.current_step_index,
             "completed_tools": self.working_state.completed_tools,
             "has_called_finalize": self.working_state.has_called_finalize,
@@ -402,6 +448,7 @@ class AgentLoop:
             # research, since only WorkingState (not context) was persisted.
             "design_system": self.context.get("design_system"),
             "research": self.context.get("research"),
+            "image_catalog": self.context.get("imageCatalog"),
             "detail_level": self.detail_level,
         }
         redis_client = await self._get_redis_client()
@@ -428,6 +475,9 @@ class AgentLoop:
             self.working_state.selected_layouts = {
                 int(k): v for k, v in state_dict.get("selected_layouts", {}).items()
             }
+            self.working_state.selected_images = {
+                int(k): v for k, v in state_dict.get("selected_images", {}).items()
+            }
             self.working_state.current_step_index = state_dict.get("current_step_index", 0)
             self.working_state.completed_tools = state_dict.get("completed_tools", {})
             self.working_state.has_called_finalize = state_dict.get("has_called_finalize", False)
@@ -444,6 +494,7 @@ class AgentLoop:
             # _load_context after this call - _run merges these in afterwards.
             self._resumed_design_system = state_dict.get("design_system")
             self._resumed_research = state_dict.get("research")
+            self._resumed_image_catalog = state_dict.get("image_catalog")
             if self.detail_level is None:
                 self.detail_level = normalize_detail_level(state_dict.get("detail_level"))
             logger.info("loaded_working_state", session_id=str(session_id), tools_completed=len(state_dict.get("completed_tools", {})))
@@ -517,6 +568,8 @@ class AgentLoop:
                 context["design_system"] = self._resumed_design_system
             if self._resumed_research:
                 context["research"] = self._resumed_research
+            if self._resumed_image_catalog:
+                context["imageCatalog"] = self._resumed_image_catalog
 
         self.context = context
 
@@ -640,11 +693,26 @@ class AgentLoop:
                         fn_args["layout_info"] = json.dumps(
                             self.working_state.selected_layouts[slide_index]
                         )
+                    if slide_index in self.working_state.selected_images:
+                        fn_args["selected_image_context"] = json.dumps(
+                            self.working_state.selected_images[slide_index]
+                        )
                 elif fn_name == "finalize_and_render_pptx":
                     # Needed so generated tables/charts can be styled from
                     # the template's own brand colors instead of a generic
                     # default - see table_style.resolve_table_style.
                     fn_args["design_system_json"] = json.dumps(design_system)
+                elif fn_name == "select_source_image":
+                    # Metadata only (id + context) - never the raw image
+                    # bytes/URL, so the LLM's decision never has to carry an
+                    # image payload through its own output. See
+                    # _resolve_selected_image below for how the chosen id is
+                    # turned back into real data server-side.
+                    catalog = context.get("imageCatalog") or []
+                    fn_args["catalog_json"] = json.dumps([
+                        {"id": entry.get("id"), "context": entry.get("context", "")}
+                        for entry in catalog if entry.get("id")
+                    ])
 
                 # Yield tool_call event
                 yield _event("tool_call", current_phase, {
@@ -791,7 +859,7 @@ class AgentLoop:
 
                     if fn_name == "design_slide_content":
                         if tool_result.data and "slideIndex" in tool_result.data:
-                            self.working_state.add_slide(tool_result.data)
+                            self.working_state.resolve_and_add_slide(tool_result.data)
 
                     # Recorded by slide_index so design_slide_content's
                     # layout_info can be auto-supplied later (see the
@@ -814,6 +882,7 @@ class AgentLoop:
                     # without re-searching, and the sources stay available.
                     if fn_name == "web_search" and tool_result.data and tool_result.data.get("results"):
                         research = context.setdefault("research", [])
+                        image_catalog = context.setdefault("imageCatalog", [])
                         for item in tool_result.data["results"]:
                             research.append({
                                 "query": tool_result.data.get("query", ""),
@@ -821,9 +890,51 @@ class AgentLoop:
                                 "url": item.get("url", ""),
                                 "snippet": item.get("snippet", ""),
                             })
+                            # Candidate images a search backend found on this
+                            # page (currently only Firecrawl, whose scraped
+                            # markdown naturally ties an image to the page it
+                            # came from) - reused, never generated. See
+                            # select_source_image for the confidence gate.
+                            for img_url in (item.get("images") or [])[:2]:
+                                image_catalog.append({
+                                    "id": f"web-{len(image_catalog)}-{img_url}",
+                                    "sourceType": "web",
+                                    "data": img_url,
+                                    "context": f"{item.get('title', '')}: {item.get('snippet', '')}"[:300],
+                                })
                         # Bound the research context to avoid unbounded prompt growth.
                         if len(research) > 15:
                             context["research"] = research[-15:]
+                        if len(image_catalog) > 20:
+                            context["imageCatalog"] = image_catalog[-20:]
+
+                    # Catalog embedded images extracted from the user's own
+                    # documents (PDF/DOCX) - see analyze_document. Reused,
+                    # never generated.
+                    if fn_name == "analyze_document" and tool_result.data and tool_result.data.get("images"):
+                        image_catalog = context.setdefault("imageCatalog", [])
+                        image_catalog.extend(tool_result.data["images"])
+                        if len(image_catalog) > 20:
+                            context["imageCatalog"] = image_catalog[-20:]
+
+                    # Resolve select_source_image's chosen id back to the
+                    # real image data (the LLM only ever saw lightweight
+                    # metadata - see the tool-dispatch injection above) and
+                    # stash it for design_slide_content to reference on the
+                    # next call for this slide.
+                    if fn_name == "select_source_image" and tool_result.data and tool_result.data.get("selected"):
+                        slide_index = tool_result.data.get("slideIndex")
+                        image_id = tool_result.data.get("imageId")
+                        catalog_entry = next(
+                            (e for e in context.get("imageCatalog", []) if e.get("id") == image_id),
+                            None,
+                        )
+                        if slide_index is not None and catalog_entry:
+                            self.working_state.selected_images[slide_index] = {
+                                "source": "url" if catalog_entry.get("sourceType") == "web" else "base64",
+                                "data": catalog_entry.get("data", ""),
+                                "altText": (catalog_entry.get("context") or "")[:200],
+                            }
 
                     # Update the system prompt in place so the LLM sees the
                     # latest completed-work summary, WITHOUT discarding the
@@ -898,7 +1009,7 @@ class AgentLoop:
                 "designing the remaining slides in the existing plan."
             )
 
-        if fn_name in ("select_layout", "design_slide_content", "generate_image_prompt"):
+        if fn_name in ("select_layout", "design_slide_content", "select_source_image"):
             if not ws.presentation_structure:
                 return (
                     f"{fn_name} requires a presentation structure. Call "
@@ -1122,9 +1233,9 @@ class AgentLoop:
             *research_tool,
             "plan_presentation_structure — Plan the slide structure and outline",
             "select_layout — Choose the best layout for each slide based on content",
-            "design_slide_content — Generate slide content (text, image prompts, tables, charts)",
+            "design_slide_content — Generate slide content (text, tables, charts, and images via select_source_image)",
             "validate_slide_json — Validate slide JSON against the schema before rendering",
-            "generate_image_prompt — Create prompts for AI-generated images",
+            "select_source_image — Reuse a confidently-matching image already extracted from the user's own source material (never generates new images)",
             "ask_user_question — Ask the user for clarification or input (pauses workflow)",
             "finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
         ]
@@ -1178,6 +1289,7 @@ class AgentLoop:
             "If anything about the request is genuinely unsure/ambiguous, ask ONE consolidated question with ask_user_question before planning, unless the user already said not to ask (see CRITICAL RULES above)",
             "Plan the presentation structure with plan_presentation_structure",
             "For each slide, select a layout with select_layout",
+            "If candidate source images exist and a slide's topic plausibly has a relevant one, call select_source_image for that slide before designing its content - otherwise skip it",
             "Generate content for each slide with design_slide_content",
             "Validate all slides with validate_slide_json",
             "Render with finalize_and_render_pptx - THIS IS MANDATORY",

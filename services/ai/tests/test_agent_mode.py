@@ -247,7 +247,7 @@ class _StubProvider:
 async def test_tools_use_the_run_s_configured_provider_not_the_environment():
     """Regression: choosing a provider in Settings only changed the agent loop.
 
-    design_slide_content, generate_image_prompt, extract_key_data and
+    design_slide_content, select_source_image, extract_key_data and
     plan_presentation_structure each call get_llm_provider() directly, which
     returns the process-wide provider built from environment variables. An
     organisation that configured OpenAI still had its slides written by the
@@ -258,13 +258,13 @@ async def test_tools_use_the_run_s_configured_provider_not_the_environment():
     from app.agent.tools import (
         design_slide_content,
         extract_key_data,
-        generate_image_prompt,
+        select_source_image,
         plan_presentation_structure,
     )
 
     modules = [
         design_slide_content,
-        generate_image_prompt,
+        select_source_image,
         extract_key_data,
         plan_presentation_structure,
     ]

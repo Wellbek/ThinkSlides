@@ -27,7 +27,7 @@ function toolLabel(toolName: string): string {
     select_layout: "Select layout",
     design_slide_content: "Design slide content",
     validate_slide_json: "Validate slide JSON",
-    generate_image_prompt: "Generate image prompt",
+    select_source_image: "Check for a matching source image",
     finalize_and_render_pptx: "Finalize and render PPTX",
     ask_user_question: "Ask user",
   };
