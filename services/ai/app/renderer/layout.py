@@ -14,6 +14,16 @@ from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
+_EMU_PER_INCH = 914400
+
+
+def _default_slide_inches() -> tuple[float, float]:
+    """The built-in design system's canvas, in inches."""
+    from app.design_system import get_default_design_system
+
+    dims = get_default_design_system()["slideDimensions"]
+    return dims["widthEmu"] / _EMU_PER_INCH, dims["heightEmu"] / _EMU_PER_INCH
+
 
 class LayoutType(Enum):
     """Slide layout types."""
@@ -55,9 +65,11 @@ class LayoutEngine:
     - Readable font sizes (≥18pt for body, ≥32pt for titles)
     """
 
-    # Slide dimensions (standard 16:9)
-    SLIDE_WIDTH = 10.0  # inches
-    SLIDE_HEIGHT = 5.625  # inches
+    # Slide dimensions (PowerPoint's own 16:9 canvas). Derived from the shared
+    # design system rather than restated, so this can never disagree with the
+    # canvas the renderer actually creates.
+    SLIDE_WIDTH = _default_slide_inches()[0]
+    SLIDE_HEIGHT = _default_slide_inches()[1]
 
     # Layout configurations
     LAYOUTS: Dict[LayoutType, LayoutConfig] = {

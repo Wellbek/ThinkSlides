@@ -25,9 +25,11 @@ def test_generator_dimensions_match_design_system():
 
     assert width_emu == dims["widthEmu"]
     assert height_emu == dims["heightEmu"]
-    # 16:9 sanity check: 10in x 5.625in
-    assert width_emu == Emu(9144000)
-    assert height_emu == Emu(5143500)
+    # PowerPoint's own 16:9 page, 13.333in x 7.5in. Sizing against the
+    # standard canvas is what makes the design system's point sizes render
+    # at the size they claim (see slideDimensions' comment).
+    assert width_emu == Emu(12191695)
+    assert height_emu == Emu(6858000)
 
 
 def test_generator_palette_matches_design_system():
@@ -86,7 +88,13 @@ def test_default_design_system_schema_is_complete():
     ):
         assert key in ds, f"design system missing key '{key}'"
     assert ds["sourceType"] == "default"
-    assert len(ds["layouts"]) == 6
+    # Named rather than counted, so adding a layout is not a test failure
+    # but losing one the planner can emit still is.
+    layout_ids = {layout["layoutId"] for layout in ds["layouts"]}
+    assert {"title", "section", "content", "twoColumn",
+            "image", "table", "chart", "conclusion"} <= layout_ids
+    # Every layout declares the light/dark role the renderer paints it in.
+    assert all(layout.get("role") for layout in ds["layouts"])
     assert any(c["name"] == "white" for c in ds["palette"]["colors"])
 
 
@@ -175,15 +183,35 @@ def test_resolve_palette_hex_without_leading_hash():
     assert label == "#00704A"
 
 
-def test_resolve_palette_hex_is_uppercased_and_only_overrides_primary():
+def test_resolve_palette_hex_derives_a_whole_palette_around_the_brand_colour():
+    """A brand hex must not leave unrelated preset colours behind it.
+
+    Overriding only ``primary`` (the old behaviour) meant a deck asked to use
+    Starbucks green rendered green titles and *coral* bullet glyphs, because
+    ``accent`` was still the professional preset's #FF7F50. Two unrelated
+    hues on every slide is exactly what makes a deck look un-designed.
+    """
     from app.design_system import resolve_palette
+    from app import colors
 
     _, palette = resolve_palette("#00704a")
     by_name = {c["name"]: c["value"] for c in palette}
+
     assert by_name["primary"] == "#00704A"
-    # Everything else still comes from the professional base palette.
-    assert by_name["secondary"] == COLOR_THEMES["professional"][1]["value"]
     assert by_name["white"] == "#FFFFFF"
+
+    professional = {c["name"]: c["value"] for c in COLOR_THEMES["professional"]}
+    for slot in ("secondary", "accent", "dark", "light", "gray"):
+        assert by_name[slot] != professional[slot], (
+            f"{slot} was inherited from the professional preset "
+            "instead of being derived from the brand colour"
+        )
+
+    # The dark slot backs the cover/section/closing slides, so white titles
+    # on it have to clear WCAG AA.
+    assert colors.contrast_ratio("#FFFFFF", by_name["dark"]) >= 4.5
+    # And the light slot has to stay a light surface, not a mid-tone.
+    assert colors.relative_luminance(by_name["light"]) > 0.7
 
 
 def test_resolve_palette_named_theme_still_works():

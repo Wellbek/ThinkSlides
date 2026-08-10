@@ -45,7 +45,8 @@ logger = get_logger(__name__)
 # file is derived from code but cached as data on a persistent volume, so
 # without this a fix here never reaches an environment that already has one.
 #   v2 - rescale master/layout placeholders when moving the canvas to 16:9
-DEFAULT_TEMPLATE_VERSION = 2
+#   v3 - canvas moved to PowerPoint's own 13.333 x 7.5in 16:9 page
+DEFAULT_TEMPLATE_VERSION = 3
 
 
 def _hex_to_rgbcolor(hex_value: str) -> RGBColor:

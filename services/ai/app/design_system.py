@@ -17,6 +17,8 @@ output always agree - changing a color or dimension here updates both.
 from __future__ import annotations
 import re
 
+from app import colors
+
 _HEX_COLOR_RE = re.compile(r"^#?[0-9A-Fa-f]{6}$")
 
 
@@ -86,25 +88,58 @@ def normalize_color_theme(theme: str | None) -> str:
     return key if key in COLOR_THEMES else DEFAULT_COLOR_THEME
 
 
+def derive_brand_palette(brand_hex: str) -> list[dict]:
+    """
+    Build a full, internally coherent palette around a single brand colour.
+
+    Every slot is derived from the brand hue rather than inherited from an
+    unrelated preset. That inheritance was the bug: asking for Starbucks
+    green produced a deck with green titles and *coral* bullet glyphs,
+    because only ``primary`` was overridden and ``accent`` stayed at the
+    professional theme's ``#FF7F50``. Two unrelated hues on every slide is
+    exactly what makes a generated deck read as un-designed.
+
+    The slots and what the renderer does with them:
+
+    * ``primary``   - titles on light slides, table headers, first chart series
+    * ``secondary`` - second chart series; a lighter, calmer version of primary
+    * ``accent``    - the repeated motif (title rule, bullet glyphs on dark
+      slides). Analogous rather than complementary (+32 degrees of hue), which
+      stays harmonious for any input hue - a true complement is livelier but
+      clashes badly for roughly half the colour wheel, and this runs unattended.
+    * ``dark``      - the background of title/section/closing slides, so it has
+      to be deep enough for white text to clear WCAG AA.
+    * ``light``     - banded table rows and tinted surfaces; a wash of the
+      brand hue rather than a neutral grey, so even the quiet areas are on-brand.
+    * ``gray``      - footers and slide numbers, hue-tinted just enough to
+      belong to the deck without competing with the content.
+    """
+    return [
+        {"name": "primary", "value": brand_hex, "type": "hex"},
+        {"name": "secondary", "value": colors.with_lightness(brand_hex, 0.45, 0.50),
+         "type": "hex"},
+        {"name": "accent", "value": colors.shift_hue(brand_hex, 32, lightness=0.48,
+                                                     min_saturation=0.55), "type": "hex"},
+        {"name": "dark", "value": colors.with_lightness(brand_hex, 0.15, 0.9), "type": "hex"},
+        {"name": "light", "value": colors.with_lightness(brand_hex, 0.955, 0.55), "type": "hex"},
+        {"name": "white", "value": "#FFFFFF", "type": "hex"},
+        {"name": "gray", "value": colors.with_lightness(brand_hex, 0.52, 0.10), "type": "hex"},
+    ]
+
+
 def resolve_palette(color_theme: str | None) -> tuple[str, list[dict]]:
     """Resolve a caller-supplied color_theme to ``(label, palette_colors)``.
 
     Accepts either one of the named ``COLOR_THEMES`` or a specific brand hex
     (e.g. "#00704A") for when a named preset isn't a real match - "suggest
     Starbucks green" only means something if that exact color can actually
-    be applied, not approximated to the nearest preset. A hex color keeps
-    every other token (secondary/accent/dark/light/white/gray) from the
-    professional theme and only overrides primary, since primary is the
-    only slot the renderer currently applies (title text color).
+    be applied, not approximated to the nearest preset. A hex colour derives
+    the whole palette around itself (see :func:`derive_brand_palette`).
     """
     raw = (color_theme or "").strip()
     if _HEX_COLOR_RE.match(raw):
-        hex_value = raw if raw.startswith("#") else f"#{raw}"
-        palette = [dict(c) for c in COLOR_THEMES[DEFAULT_COLOR_THEME]]
-        for entry in palette:
-            if entry["name"] == "primary":
-                entry["value"] = hex_value.upper()
-        return hex_value.upper(), palette
+        hex_value = (raw if raw.startswith("#") else f"#{raw}").upper()
+        return hex_value, derive_brand_palette(hex_value)
 
     theme = normalize_color_theme(raw)
     return theme, COLOR_THEMES[theme]
@@ -163,94 +198,151 @@ def get_default_design_system(color_theme: str | None = None) -> dict:
     """
     theme_label, palette_colors = resolve_palette(color_theme)
 
-    # Slide dimensions: 10in x 5.625in (16:9), matching the renderer default
+    # 13.333in x 7.5in - PowerPoint's own 16:9 canvas, not the 10 x 5.625
+    # this used to use. Both are 16:9, but a point is an absolute unit: on a
+    # 10in-wide slide a 36pt title occupies the same fraction of the page as
+    # a 48pt title does on a real one, so every deck rendered a third larger
+    # than its own type scale claimed, and slides pasted into a normal deck
+    # jumped size. Sizing against the standard canvas is what makes the type
+    # scale below mean what it says.
     slide_dimensions = {
-        "widthEmu": _inch(10),
-        "heightEmu": _inch(5.625),
-        "widthPx": 960,
-        "heightPx": 540,
+        "widthEmu": _inch(13.333),
+        "heightEmu": _inch(7.5),
+        "widthPx": 1280,
+        "heightPx": 720,
     }
 
+    # Geometry, in inches on the 10 x 5.625 canvas. These are the numbers the
+    # renderer actually applies to each slide's placeholders (see
+    # renderer/deck_theme.py), not an idealised catalog that only the model
+    # ever sees - the two drifting apart is what made the model design for a
+    # six-layout catalog while everything rendered onto four stock Office
+    # layouts.
+    TITLE_X, TITLE_W = 0.85, 11.63
+    TITLE_Y, TITLE_H = 0.55, 1.05       # bottom-anchored, so the rule sits tight
+    RULE_Y, RULE_H, RULE_W = 1.78, 0.06, 1.50
+    BODY_Y, BODY_H = 2.10, 4.55         # ends at 6.65, above the footer band
+    COL_W, COL_GAP = 5.66, 0.31
+    FOOTER_Y, FOOTER_H = 6.85, 0.35
+    # Cover/closing slides centre their block instead of hanging it off a title bar.
+    HERO_X, HERO_W = 1.15, 11.00
+    HERO_TITLE_Y, HERO_TITLE_H = 2.05, 1.65
+    HERO_RULE_Y = 3.92
+    HERO_SUB_Y, HERO_SUB_H = 4.22, 1.40
+
+    def _ph(idx: int, ph_type: str, name: str,
+            x: float, y: float, cx: float, cy: float) -> dict:
+        return {"idx": idx, "type": ph_type, "name": name,
+                "xEmu": _inch(x), "yEmu": _inch(y),
+                "cxEmu": _inch(cx), "cyEmu": _inch(cy)}
+
+    # "role" drives the deck's light/dark rhythm: cover, section breaks and the
+    # closing slide are set on the brand's dark tone, content slides on white.
+    # A deck where every slide is the same white page is the single biggest
+    # reason generated output reads as un-designed.
     layouts = [
         {
             "layoutId": "title",
             "layoutName": "Title Slide",
             "masterId": "1",
+            "role": "cover",
             "placeholders": [
-                {"idx": 0, "type": "title", "name": "Title",
-                 "xEmu": _inch(1.0), "yEmu": _inch(1.5), "cxEmu": _inch(8.0), "cyEmu": _inch(1.5)},
-                {"idx": 1, "type": "subtitle", "name": "Subtitle",
-                 "xEmu": _inch(1.0), "yEmu": _inch(3.0), "cxEmu": _inch(8.0), "cyEmu": _inch(1.0)},
+                _ph(0, "title", "Title", HERO_X, HERO_TITLE_Y, HERO_W, HERO_TITLE_H),
+                _ph(1, "subtitle", "Subtitle", HERO_X, HERO_SUB_Y, HERO_W, HERO_SUB_H),
             ],
-            "hasBackground": False,
-            "hasDecorations": False,
+            "hasBackground": True,
+            "hasDecorations": True,
+        },
+        {
+            "layoutId": "section",
+            "layoutName": "Section Header",
+            "masterId": "1",
+            "role": "section",
+            "placeholders": [
+                _ph(0, "title", "Section Title", HERO_X, HERO_TITLE_Y, HERO_W, HERO_TITLE_H),
+                _ph(1, "body", "Section Note", HERO_X, HERO_SUB_Y, HERO_W, HERO_SUB_H),
+            ],
+            "hasBackground": True,
+            "hasDecorations": True,
         },
         {
             "layoutId": "content",
             "layoutName": "Title and Content",
             "masterId": "1",
+            "role": "content",
             "placeholders": [
-                {"idx": 0, "type": "title", "name": "Title",
-                 "xEmu": _inch(0.6), "yEmu": _inch(0.4), "cxEmu": _inch(9.0), "cyEmu": _inch(1.0)},
-                {"idx": 1, "type": "body", "name": "Content",
-                 "xEmu": _inch(0.6), "yEmu": _inch(1.5), "cxEmu": _inch(9.0), "cyEmu": _inch(3.5)},
+                _ph(0, "title", "Title", TITLE_X, TITLE_Y, TITLE_W, TITLE_H),
+                _ph(1, "body", "Content", TITLE_X, BODY_Y, TITLE_W, BODY_H),
             ],
-            "hasBackground": False,
-            "hasDecorations": False,
+            "hasBackground": True,
+            "hasDecorations": True,
         },
         {
             "layoutId": "twoColumn",
             "layoutName": "Two Column",
             "masterId": "1",
+            "role": "content",
             "placeholders": [
-                {"idx": 0, "type": "title", "name": "Title",
-                 "xEmu": _inch(0.6), "yEmu": _inch(0.4), "cxEmu": _inch(9.0), "cyEmu": _inch(1.0)},
-                {"idx": 1, "type": "body", "name": "Left Column",
-                 "xEmu": _inch(0.6), "yEmu": _inch(1.5), "cxEmu": _inch(4.0), "cyEmu": _inch(3.5)},
-                {"idx": 2, "type": "body", "name": "Right Column",
-                 "xEmu": _inch(5.0), "yEmu": _inch(1.5), "cxEmu": _inch(4.0), "cyEmu": _inch(3.5)},
+                _ph(0, "title", "Title", TITLE_X, TITLE_Y, TITLE_W, TITLE_H),
+                _ph(1, "body", "Left Column", TITLE_X, BODY_Y, COL_W, BODY_H),
+                _ph(2, "body", "Right Column",
+                    TITLE_X + COL_W + COL_GAP, BODY_Y, COL_W, BODY_H),
             ],
-            "hasBackground": False,
-            "hasDecorations": False,
+            "hasBackground": True,
+            "hasDecorations": True,
         },
         {
             "layoutId": "image",
             "layoutName": "Picture with Caption",
             "masterId": "1",
+            "role": "content",
             "placeholders": [
-                {"idx": 0, "type": "title", "name": "Title",
-                 "xEmu": _inch(0.6), "yEmu": _inch(0.4), "cxEmu": _inch(9.0), "cyEmu": _inch(1.0)},
-                {"idx": 1, "type": "image", "name": "Image",
-                 "xEmu": _inch(1.0), "yEmu": _inch(1.5), "cxEmu": _inch(4.0), "cyEmu": _inch(3.0)},
-                {"idx": 2, "type": "body", "name": "Caption",
-                 "xEmu": _inch(5.5), "yEmu": _inch(1.5), "cxEmu": _inch(4.0), "cyEmu": _inch(3.5)},
+                _ph(0, "title", "Title", TITLE_X, TITLE_Y, TITLE_W, TITLE_H),
+                _ph(1, "image", "Image", TITLE_X, BODY_Y, COL_W, BODY_H),
+                _ph(2, "body", "Caption",
+                    TITLE_X + COL_W + COL_GAP, BODY_Y, COL_W, BODY_H),
             ],
-            "hasBackground": False,
-            "hasDecorations": False,
+            "hasBackground": True,
+            "hasDecorations": True,
         },
         {
             "layoutId": "table",
             "layoutName": "Table",
             "masterId": "1",
+            "role": "content",
             "placeholders": [
-                {"idx": 0, "type": "title", "name": "Title",
-                 "xEmu": _inch(0.6), "yEmu": _inch(0.4), "cxEmu": _inch(9.0), "cyEmu": _inch(1.0)},
-                {"idx": 1, "type": "table", "name": "Table",
-                 "xEmu": _inch(0.6), "yEmu": _inch(1.5), "cxEmu": _inch(9.0), "cyEmu": _inch(3.5)},
+                _ph(0, "title", "Title", TITLE_X, TITLE_Y, TITLE_W, TITLE_H),
+                _ph(1, "table", "Table", TITLE_X, BODY_Y, TITLE_W, BODY_H),
             ],
-            "hasBackground": False,
-            "hasDecorations": False,
+            "hasBackground": True,
+            "hasDecorations": True,
+        },
+        {
+            # Without this entry, a slide the planner marked contentType
+            # "chart" had nothing in the catalog to match and fell back to
+            # whatever select_layout's keyword search hit first.
+            "layoutId": "chart",
+            "layoutName": "Chart",
+            "masterId": "1",
+            "role": "content",
+            "placeholders": [
+                _ph(0, "title", "Title", TITLE_X, TITLE_Y, TITLE_W, TITLE_H),
+                _ph(1, "chart", "Chart", TITLE_X, BODY_Y, TITLE_W, BODY_H),
+            ],
+            "hasBackground": True,
+            "hasDecorations": True,
         },
         {
             "layoutId": "conclusion",
             "layoutName": "Conclusion",
             "masterId": "1",
+            "role": "closing",
             "placeholders": [
-                {"idx": 0, "type": "title", "name": "Title",
-                 "xEmu": _inch(1.0), "yEmu": _inch(1.5), "cxEmu": _inch(8.0), "cyEmu": _inch(3.0)},
+                _ph(0, "title", "Title", HERO_X, HERO_TITLE_Y, HERO_W, HERO_TITLE_H),
+                _ph(1, "body", "Closing Note", HERO_X, HERO_SUB_Y, HERO_W, HERO_SUB_H),
             ],
-            "hasBackground": False,
-            "hasDecorations": False,
+            "hasBackground": True,
+            "hasDecorations": True,
         },
     ]
 
@@ -268,6 +360,22 @@ def get_default_design_system(color_theme: str | None = None) -> dict:
             "elementGapEmu": _inch(0.25),
             "titleTopMarginEmu": _inch(0.3),
             "bodyTopMarginEmu": _inch(0.2),
+            # The repeated motif and the footer band. The renderer reads these
+            # rather than carrying its own copy, so a change here moves the
+            # actual rendered decoration.
+            "accentRule": {
+                "xEmu": _inch(TITLE_X), "yEmu": _inch(RULE_Y),
+                "cxEmu": _inch(RULE_W), "cyEmu": _inch(RULE_H),
+            },
+            "heroAccentRule": {
+                "xEmu": _inch(HERO_X), "yEmu": _inch(HERO_RULE_Y),
+                "cxEmu": _inch(RULE_W), "cyEmu": _inch(RULE_H),
+            },
+            "footer": {
+                "xEmu": _inch(TITLE_X), "yEmu": _inch(FOOTER_Y),
+                "cxEmu": _inch(TITLE_W), "cyEmu": _inch(FOOTER_H),
+                "sizePt": 11,
+            },
         },
         "masterElements": [],
         "embeddedMedia": [],

@@ -8,7 +8,7 @@ import pathlib
 import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
-from app.renderer.pptx_renderer import PPTXRenderer, NS
+from app.renderer.pptx_renderer import PPTXRenderer, NS, is_chrome_shape
 from app.design_system import COLOR_THEMES
 from app.renderer.default_template import _hex_to_rgbcolor
 
@@ -337,56 +337,90 @@ class TestPPTXRendererFromTemplate:
             assert len(ids) == len(set(ids)), f"duplicate relationship IDs: {ids}"
 class TestPPTXRendererColorTheme:
     """A color_theme choice (see app.design_system.COLOR_THEMES) must
-    actually change the rendered title color on the no-template path -
-    otherwise asking the user for a preference and then ignoring it would
-    be worse than not asking at all."""
+    actually change the rendered deck on the no-template path - otherwise
+    asking the user for a preference and then ignoring it would be worse
+    than not asking at all.
 
-    def _title_slide(self):
-        return [{
-            "slideIndex": 0,
-            "layoutId": "1",
-            "layoutName": "Default",
-            "contents": [{
-                "type": "text",
-                "placeholderIdx": 0,
-                "runs": [{"text": "Title", "bold": True, "fontSizePt": 36}],
-            }],
-        }]
+    The theme now reaches a slide two ways: the cover's background is the
+    palette's ``dark``, and a content slide's title is its ``primary``. Both
+    are asserted, because the earlier version of this test only ever looked
+    at a title-only slide - which is a *cover*, and so renders a white title
+    on brand-dark in every theme.
+    """
 
-    def _render_and_get_title_run(self, color_theme):
+    def _deck(self):
+        return [
+            {
+                "slideIndex": 0, "layoutId": "title", "layoutName": "Title Slide",
+                "contents": [{
+                    "type": "text", "placeholderIdx": 0,
+                    "runs": [{"text": "Cover", "bold": True}],
+                }],
+            },
+            {
+                "slideIndex": 1, "layoutId": "content", "layoutName": "Title and Content",
+                "contents": [
+                    {"type": "text", "placeholderIdx": 0,
+                     "runs": [{"text": "Title", "bold": True}]},
+                    {"type": "text", "placeholderIdx": 1,
+                     "runs": [{"text": "A point", "bullet": True, "level": 0}]},
+                ],
+            },
+        ]
+
+    def _render(self, color_theme):
+        """Return ``(cover_background_rgb, content_title_run)``."""
         renderer = PPTXRenderer(template_path=None, color_theme=color_theme)
         with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
             output_path = f.name
         try:
             result = renderer.render(
-                slides=self._title_slide(), metadata={"title": "T"}, output_path=output_path,
+                slides=self._deck(), metadata={"title": "T"}, output_path=output_path,
             )
             from pptx import Presentation
             prs = Presentation(result)
-            slide = prs.slides[0]
-            for shape in slide.shapes:
+            background = prs.slides[0].background.fill.fore_color.rgb
+            for shape in prs.slides[1].shapes:
                 if shape.has_text_frame and shape.text_frame.text == "Title":
-                    return shape.text_frame.paragraphs[0].runs[0]
+                    return background, shape.text_frame.paragraphs[0].runs[0]
             raise AssertionError("title run not found")
         finally:
             os.unlink(output_path)
 
-    def test_warm_theme_applies_the_warm_primary_color_to_the_title(self):
-        run = self._render_and_get_title_run("warm")
-        assert run.font.color.rgb == _hex_to_rgbcolor(next(c["value"] for c in COLOR_THEMES["warm"] if c["name"] == "primary"))
+    @staticmethod
+    def _palette(theme, slot):
+        return _hex_to_rgbcolor(
+            next(c["value"] for c in COLOR_THEMES[theme] if c["name"] == slot)
+        )
 
-    def test_no_theme_defaults_to_the_professional_primary_color(self):
-        run = self._render_and_get_title_run(None)
-        assert run.font.color.rgb == _hex_to_rgbcolor(next(c["value"] for c in COLOR_THEMES["professional"] if c["name"] == "primary"))
+    def test_warm_theme_applies_the_warm_palette(self):
+        background, run = self._render("warm")
+        assert background == self._palette("warm", "dark")
+        assert run.font.color.rgb == self._palette("warm", "primary")
+
+    def test_no_theme_defaults_to_the_professional_palette(self):
+        background, run = self._render(None)
+        assert background == self._palette("professional", "dark")
+        assert run.font.color.rgb == self._palette("professional", "primary")
 
     def test_unknown_theme_falls_back_to_professional(self):
-        run = self._render_and_get_title_run("not-a-real-theme")
-        assert run.font.color.rgb == _hex_to_rgbcolor(next(c["value"] for c in COLOR_THEMES["professional"] if c["name"] == "primary"))
+        _, run = self._render("not-a-real-theme")
+        assert run.font.color.rgb == self._palette("professional", "primary")
 
-    def test_different_themes_produce_different_title_colors(self):
-        warm_run = self._render_and_get_title_run("warm")
-        mono_run = self._render_and_get_title_run("monochrome")
+    def test_different_themes_produce_different_decks(self):
+        warm_bg, warm_run = self._render("warm")
+        mono_bg, mono_run = self._render("monochrome")
         assert warm_run.font.color.rgb != mono_run.font.color.rgb
+        assert warm_bg != mono_bg
+
+    def test_the_cover_is_set_on_the_brand_dark_rather_than_white(self):
+        """The light/dark rhythm is the design language's load-bearing part.
+
+        Every slide on the same white page is what made a generated deck read
+        as seven unrelated documents rather than one artifact.
+        """
+        background, _ = self._render("professional")
+        assert background != _hex_to_rgbcolor("#FFFFFF")
 
 
 class TestPPTXRendererDefaultShapeSizing:
@@ -458,7 +492,8 @@ class TestPPTXRendererDefaultShapeSizing:
             renderer.render(slides=slides, metadata={"title": "T"}, output_path=output_path)
             prs = Presentation(output_path)
             overflow = [s for s in prs.slides[0].shapes
-                        if s.has_text_frame and not s.is_placeholder]
+                        if s.has_text_frame and not s.is_placeholder
+                        and not is_chrome_shape(s)]
             assert overflow, "expected at least one fallback text box"
             for shape in overflow:
                 assert shape.top < Inches(1000), "top offset leaked raw EMU into the inches field"
@@ -945,7 +980,9 @@ class TestDefaultPathPlaceholderRendering:
             {"text": "Second point", "bullet": True, "level": 0},
         ])])
         slide = prs.slides[0]
-        filled = [s for s in slide.shapes if s.has_text_frame and s.text_frame.text.strip()]
+        filled = [s for s in slide.shapes
+                  if s.has_text_frame and s.text_frame.text.strip()
+                  and not is_chrome_shape(s)]
         assert filled, "slide has no text at all"
         assert all(s.is_placeholder for s in filled), (
             "text was rendered into free-floating boxes instead of the layout's placeholders"
@@ -959,7 +996,8 @@ class TestDefaultPathPlaceholderRendering:
             {"text": "Only point", "bullet": True, "level": 0},
         ])])
         empty = [s for s in prs.slides[0].shapes
-                 if s.is_placeholder and s.has_text_frame and not s.text_frame.text.strip()]
+                 if s.is_placeholder and s.has_text_frame
+                 and not s.text_frame.text.strip()]
         assert empty == []
 
     def test_a_bulleted_content_slide_does_not_use_the_title_layout(self):
