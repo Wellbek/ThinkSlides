@@ -8,22 +8,285 @@ Never recreates design from scratch — always clones and fills.
 
 from __future__ import annotations
 import os
+import re
 import copy
-import json
 import zipfile
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
-from typing import Any, Optional
+from typing import Optional
+from dataclasses import dataclass, field
 from pptx import Presentation
-from pptx.util import Inches, Pt, Emu
+from pptx.util import Inches, Pt
+from pptx.enum.text import MSO_AUTO_SIZE, MSO_ANCHOR, PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE, PP_PLACEHOLDER
+from pptx.oxml.ns import qn
+from pptx.oxml.xmlchemy import OxmlElement
 from app.observability.logging import get_logger
-from app.renderer.layout import LayoutEngine, LayoutType, PositionConfig
-from app.renderer.typography import TypographyEngine, TextStyle
+from app.renderer.layout import LayoutEngine, PositionConfig
+from app.renderer.typography import TypeScale
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
+from app.renderer import text_fit
+from app.renderer import table_layout
+from app.renderer import table_style
+from app.renderer import chart_renderer
+from app.renderer import composition
+from app.renderer import deck_theme
+from app.renderer.deck_theme import DeckTheme, SlideStyle
+from app.renderer.xml_utils import get_shape_position, emu_to_inches, inches_to_emu
+from app import colors
 from app.design_system import get_default_design_system
 
 logger = get_logger(__name__)
+
+# Cap on downloaded/decoded image size - guards against a runaway data: URI
+# or a slow/oversized remote response inflating render time or memory.
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+_DATA_URI_RE = re.compile(r"^data:([\w/+.-]+);base64,(.*)$", re.DOTALL)
+
+# Placeholders that hold the slide's title.
+_TITLE_PLACEHOLDER_TYPES = frozenset({
+    PP_PLACEHOLDER.TITLE,
+    PP_PLACEHOLDER.CENTER_TITLE,
+    PP_PLACEHOLDER.VERTICAL_TITLE,
+})
+# Chrome placeholders that must never receive slide content, and are left
+# alone by the unfilled-placeholder sweep (they are empty by design).
+# python-pptx does not normally clone these onto a slide, so this is a guard
+# for templates that carry them explicitly.
+_SKIPPED_PLACEHOLDER_TYPES = frozenset({
+    PP_PLACEHOLDER.DATE,
+    PP_PLACEHOLDER.FOOTER,
+    PP_PLACEHOLDER.SLIDE_NUMBER,
+})
+
+# Vertical breathing room between stacked content bands on one slide.
+CONTENT_GAP_IN = 0.18
+# Floors for a shared content region, so neither a short text block nor a
+# chart gets squeezed into an unreadable sliver.
+MIN_TEXT_BAND_IN = 0.4
+MIN_OBJECT_BAND_IN = 1.5
+# The most of a shared band that text may claim when a chart or table is on
+# the slide too. Giving text everything it measured and the object whatever
+# was left produced a six-row table compressed into 1.7in and typeset at
+# 8pt, under five bullets - on a slide whose entire point was the table.
+# When a slide carries a visual, the copy is the supporting act.
+MAX_TEXT_SHARE_WITH_OBJECT = 0.42
+
+# Standard PowerPoint body-bullet geometry: a 0.25" hanging indent per level.
+BULLET_INDENT_EMU = 228600
+# Glyph per outline level, matching PowerPoint's own default body scheme.
+_BULLET_CHARS = {0: "•", 1: "–", 2: "▪"}
+# Children that must FOLLOW the bullet definition inside <a:pPr>, per the
+# DrawingML schema's fixed child order (lnSpc, spc*, buClr, buSz, buFont,
+# buChar/buNone, tabLst, defRPr, extLst). Appending blindly would put bullet
+# elements after defRPr and produce a file PowerPoint refuses to open.
+_PPR_TAIL_TAGS = ("a:tabLst", "a:defRPr", "a:extLst")
+# Bullet definitions to clear before re-declaring, so the helper is idempotent.
+_BULLET_TAGS = ("a:buClrTx", "a:buClr", "a:buSzTx", "a:buSzPct", "a:buSzPts",
+                "a:buFontTx", "a:buFont", "a:buNone", "a:buAutoNum", "a:buChar")
+
+# The stock python-pptx layout each of our catalog layouts is built on. The
+# catalog owns the geometry (see design_system.get_default_design_system);
+# the stock layout is only there to supply real placeholder shapes, which
+# carry the master's text defaults so we are not styling bare text boxes.
+_STOCK_LAYOUT_FOR_CATALOG_ID = {
+    "title": ["title slide"],
+    "section": ["section header"],
+    "content": ["title and content"],
+    "twoColumn": ["two content", "comparison"],
+    "conclusion": ["section header"],
+    # Object slides take a title-only layout: the picture/table/chart is
+    # positioned by the renderer, so an unused body placeholder would only
+    # leave an empty "Click to add text" ghost behind it.
+    "image": ["title only"],
+    "table": ["title only"],
+    "chart": ["title only"],
+}
+
+
+# Shapes the renderer adds as deck chrome rather than content: the accent
+# motif and the footer/slide number. Named so that everything downstream -
+# geometry validation, dead-space checks, tests - can tell "the deck's own
+# furniture" from "the slide's content" instead of measuring a 4pt rule as
+# if it were a body element.
+CHROME_NAME_PREFIX = "ThinkSlides Chrome:"
+CHROME_ACCENT_RULE = f"{CHROME_NAME_PREFIX} Accent Rule"
+CHROME_FOOTER = f"{CHROME_NAME_PREFIX} Footer"
+
+
+def is_chrome_shape(shape) -> bool:
+    """True for shapes the renderer added as deck chrome, not slide content."""
+    return str(getattr(shape, "name", "") or "").startswith(CHROME_NAME_PREFIX)
+
+
+@dataclass
+class SlidePlan:
+    """How one slide is laid out and coloured, resolved before anything is drawn."""
+    layout_id: str
+    style: SlideStyle
+    title_region: PositionConfig
+    body_regions: list[PositionConfig] = field(default_factory=list)
+    accent_rule: Optional[PositionConfig] = None
+    show_footer: bool = True
+
+    @property
+    def content_region(self) -> PositionConfig:
+        """The union of the body regions - the band shared content divides up."""
+        if not self.body_regions:
+            return PositionConfig(left=0.62, top=1.66, width=8.76, height=3.34)
+        left = min(r.left for r in self.body_regions)
+        top = min(r.top for r in self.body_regions)
+        right = max(r.left + r.width for r in self.body_regions)
+        bottom = max(r.top + r.height for r in self.body_regions)
+        return PositionConfig(left=left, top=top, width=right - left, height=bottom - top)
+
+
+def _region_from_placeholder_spec(spec: dict) -> PositionConfig:
+    """A catalog placeholder's EMU geometry as an inches-based region."""
+    return PositionConfig(
+        left=emu_to_inches(spec.get("xEmu", 0)),
+        top=emu_to_inches(spec.get("yEmu", 0)),
+        width=emu_to_inches(spec.get("cxEmu", 0)),
+        height=emu_to_inches(spec.get("cyEmu", 0)),
+    )
+
+
+def _insert_into_pPr(pPr, element) -> None:
+    """Insert ``element`` into ``pPr`` at a schema-valid position."""
+    for tag in _PPR_TAIL_TAGS:
+        existing = pPr.find(qn(tag))
+        if existing is not None:
+            existing.addprevious(element)
+            return
+    pPr.append(element)
+
+
+def _apply_bullet_formatting(
+    paragraph,
+    bulleted: bool,
+    level: int,
+    color_hex: Optional[str] = None,
+) -> None:
+    """
+    Write an explicit bullet definition onto a paragraph's ``<a:pPr>``.
+
+    python-pptx's ``paragraph.level`` only sets the *indent* level - it does
+    not add a bullet glyph. A free-standing text box (unlike a body
+    placeholder) also inherits no bullet definition from the slide master, so
+    content marked ``bullet: true`` previously rendered as unadorned lines of
+    text with no marker at all. Emitting ``<a:buFont>``/``<a:buChar>`` (or
+    ``<a:buNone>``) directly is the only way to make the bullet appear.
+
+    ``color_hex`` tints the marker with the deck's brand color, so bullets on
+    the no-template path still read as part of the design system rather than
+    defaulting to body black.
+    """
+    pPr = paragraph._p.get_or_add_pPr()
+    for tag in _BULLET_TAGS:
+        for el in pPr.findall(qn(tag)):
+            pPr.remove(el)
+
+    if not bulleted:
+        # Explicit, rather than merely absent: a placeholder-backed paragraph
+        # would otherwise inherit the master's bullet for a line (a title, a
+        # subtitle) that must not have one.
+        _insert_into_pPr(pPr, OxmlElement("a:buNone"))
+        return
+
+    pPr.set("marL", str(BULLET_INDENT_EMU * (level + 1)))
+    pPr.set("indent", str(-BULLET_INDENT_EMU))
+
+    normalized = (color_hex or "").lstrip("#")
+    if len(normalized) == 6:
+        buClr = OxmlElement("a:buClr")
+        srgbClr = OxmlElement("a:srgbClr")
+        srgbClr.set("val", normalized.upper())
+        buClr.append(srgbClr)
+        _insert_into_pPr(pPr, buClr)
+
+    buFont = OxmlElement("a:buFont")
+    buFont.set("typeface", "Arial")
+    buFont.set("panose", "020B0604020202020204")
+    buFont.set("pitchFamily", "34")
+    buFont.set("charset", "0")
+    _insert_into_pPr(pPr, buFont)
+
+    buChar = OxmlElement("a:buChar")
+    buChar.set("char", _BULLET_CHARS.get(level, _BULLET_CHARS[0]))
+    _insert_into_pPr(pPr, buChar)
+
+
+def _clear_text_transform(run) -> None:
+    """
+    Cancel any inherited capitalisation on a run.
+
+    Several stock Office layouts - "Section Header" most visibly - declare
+    ``cap="all"`` on their title placeholder. Text written into one came back
+    SHOUTED: a closing slide reading "What we recommend" rendered as
+    "WHAT WE RECOMMEND", which is the layout's styling leaking through
+    content the deck's own design system never asked to be uppercase.
+    python-pptx has no API for the attribute, so it is written directly.
+    """
+    run._r.get_or_add_rPr().set("cap", "none")
+
+
+def _resolve_image_bytes(img_data: dict) -> Optional[bytes]:
+    """
+    Decode/fetch the raw bytes for an ImageContent regardless of its
+    `source` (base64 data, a bare/data-URI base64 string, or a remote URL).
+    Returns None (never raises) on anything that isn't a genuine, size-capped
+    image - callers treat that as "skip this image" rather than fail the
+    whole render.
+    """
+    source = img_data.get("source")
+    raw = img_data.get("data", "") or ""
+
+    if source == "base64":
+        m = _DATA_URI_RE.match(raw)
+        if m:
+            raw = m.group(2)
+        try:
+            import base64
+            decoded = base64.b64decode(raw, validate=False)
+        except Exception:
+            return None
+        if len(decoded) > MAX_IMAGE_BYTES:
+            return None
+        return decoded
+
+    if source == "url":
+        if not raw.startswith(("http://", "https://")):
+            return None
+        try:
+            import httpx
+            with httpx.Client(timeout=8.0, follow_redirects=True) as client:
+                resp = client.get(raw)
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "")
+                if not content_type.startswith("image/"):
+                    return None
+                if len(resp.content) > MAX_IMAGE_BYTES:
+                    return None
+                return resp.content
+        except Exception as e:
+            logger.warning("image_url_fetch_failed", url=raw, error=str(e))
+            return None
+
+    return None
+
+
+def _sniff_image_ext(img_bytes: bytes) -> str:
+    """Determine a file extension from image content, not from a claimed source string."""
+    try:
+        from PIL import Image
+        import io
+        with Image.open(io.BytesIO(img_bytes)) as im:
+            fmt = (im.format or "PNG").lower()
+            return "jpg" if fmt == "jpeg" else fmt
+    except Exception:
+        return "png"
 
 NS = {
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
@@ -54,7 +317,12 @@ class PPTXRenderer:
     5. Repack as a valid PPTX ZIP.
     """
 
-    def __init__(self, template_path: Optional[str] = None, color_theme: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        template_path: Optional[str] = None,
+        color_theme: Optional[str] = None,
+        design_system: Optional[dict] = None,
+    ) -> None:
         self.template_path = template_path
         # Only meaningful on the no-template path (_render_from_default): an
         # uploaded template's own colors are preserved untouched to keep
@@ -62,8 +330,20 @@ class PPTXRenderer:
         # docstring) - color_theme only picks a palette for the built-in
         # default design system when there is no template to be faithful to.
         self.color_theme = color_theme
-        # Set by _render_from_default before it adds any slides.
-        self._title_rgb = None
+        # The extracted (or default) design system for this run - used to
+        # style generated content that has no template placeholder of its
+        # own to inherit formatting from, namely tables and charts. See
+        # table_style.resolve_table_style / chart_renderer for how this is
+        # consumed.
+        self.design_system = design_system or {}
+        # All set by _render_from_default before it adds any slides.
+        self._theme: Optional[DeckTheme] = None
+        # The deck's resolved type scale - the design system's typefaces and
+        # point sizes, with legibility floors applied.
+        self._type_scale = TypeScale()
+        # The style of the slide currently being written, so the text helpers
+        # colour their runs for the background they are actually landing on.
+        self._style: Optional[SlideStyle] = None
 
     def render(
         self,
@@ -109,8 +389,9 @@ class PPTXRenderer:
                 slide_file = f"slide{slide_num}.xml"
 
                 layout_file = layout_map.get(layout_id)
+                image_rels: list[dict] = []
                 if layout_file and os.path.exists(layout_file):
-                    slide_xml = self._clone_layout_as_slide(
+                    slide_xml, image_rels = self._clone_layout_as_slide(
                         layout_file, slide_data, working_dir, slide_num
                     )
                 else:
@@ -121,7 +402,7 @@ class PPTXRenderer:
                 with open(slide_path, "wb") as f:
                     f.write(slide_xml)
 
-                self._create_slide_rels(working_dir, slide_num, layout_id)
+                self._create_slide_rels(working_dir, slide_num, layout_id, image_rels)
 
             self._update_presentation_xml(working_dir, len(slides))
             self._update_content_types(working_dir, len(slides))
@@ -144,29 +425,38 @@ class PPTXRenderer:
         template_path = get_default_template_path()
         prs = Presentation(template_path)
 
-        # Resolve the chosen color theme's primary color for title text.
-        # The default template file itself doesn't need to change per theme
-        # (its master background is white in every theme) - only the title
-        # color applied here, at render time, actually varies.
-        palette = get_default_design_system(color_theme=self.color_theme)["palette"]["colors"]
-        primary_hex = next((c["value"] for c in palette if c.get("name") == "primary"), None)
-        try:
-            self._title_rgb = _hex_to_rgbcolor(primary_hex) if primary_hex else None
-        except ValueError:
-            self._title_rgb = None
+        # Resolve the chosen color theme's colors once. The default template
+        # file itself doesn't need to change per theme (its master background
+        # is white in every theme) - only the accents applied here, at render
+        # time, actually vary.
+        default_design_system = get_default_design_system(color_theme=self.color_theme)
 
-        for slide_data in slides:
-            # Infer layout type from slide content
-            layout_type = LayoutEngine.infer_layout_type(slide_data)
-            layout_config = LayoutEngine.get_layout(layout_type)
+        # Tables and charts are styled from self.design_system (they have no
+        # placeholder formatting to inherit). With no template there may be
+        # none, in which case they fell back to table_style's own built-in
+        # defaults - so a deck rendered in, say, Starbucks green got green
+        # titles and bullets but a navy table header. Adopt the resolved
+        # theme's design system so every element agrees on the palette.
+        if not self.design_system:
+            self.design_system = default_design_system
 
-            # Find appropriate layout from template
-            layout = self._find_layout_for_type(prs, layout_type)
+        self._theme = DeckTheme.from_design_system(self.design_system)
+        self._type_scale = TypeScale.from_design_system(self.design_system)
+        # The layout catalog is what the model planned against; it is also
+        # what actually positions every shape below, so the two cannot drift.
+        catalog = self.design_system if self.design_system.get("layouts") else default_design_system
 
+        total = len(slides)
+        for index, slide_data in enumerate(slides):
+            plan = self._plan_slide(catalog, slide_data, index, total)
+            layout = self._find_layout_for_catalog_id(prs, plan.layout_id)
             slide = prs.slides.add_slide(layout)
 
-            # Render content using intelligent positioning
-            self._render_content_on_slide(slide, slide_data, layout_config)
+            self._style = plan.style
+            self._apply_background(slide, plan.style)
+            self._render_content_on_slide(slide, slide_data, plan)
+            self._decorate_slide(slide, plan, catalog, index, total, metadata)
+        self._style = None
 
         core_props = prs.core_properties
         if metadata.get("title"):
@@ -180,96 +470,796 @@ class PPTXRenderer:
         logger.info("pptx_rendered_default", slide_count=len(slides), output=output_path)
         return output_path
 
-    def _find_layout_for_type(self, prs: Presentation, layout_type: LayoutType):
-        """Find the best layout from template for a given layout type."""
-        # Simple heuristic: match by layout name
-        type_names = {
-            LayoutType.TITLE: ["title", "blank"],
-            LayoutType.CONTENT: ["content", "blank"],
-            LayoutType.TWO_COLUMN: ["two", "column", "blank"],
-            LayoutType.IMAGE: ["image", "blank"],
-            LayoutType.TABLE: ["table", "blank"],
-            LayoutType.CONCLUSION: ["conclusion", "blank"],
-        }
+    def _find_layout_for_catalog_id(self, prs: Presentation, layout_id: str):
+        """The stock layout that supplies placeholder shapes for a catalog layout.
 
-        names = type_names.get(layout_type, ["blank"])
+        Only the shapes matter - every position is overwritten from the
+        catalog afterwards. Exact name matching (rather than the old
+        substring keyword sweep) because layout 0 is "Title Slide", so the
+        keyword "title" matched it first for every type that mentioned title.
+        """
+        names = _STOCK_LAYOUT_FOR_CATALOG_ID.get(layout_id, ["title and content"])
+        by_name = {(lay.name or "").strip().lower(): lay for lay in prs.slide_layouts}
 
-        for layout in prs.slide_layouts:
-            layout_name = (layout.name or "").lower()
-            if any(name in layout_name for name in names):
-                return layout
+        for name in names:
+            if name in by_name:
+                return by_name[name]
 
-        # Fall back to first layout
+        for name in names:
+            for layout_name, layout in by_name.items():
+                if name in layout_name:
+                    return layout
+
         return prs.slide_layouts[0] if prs.slide_layouts else None
+
+    def _plan_slide(
+        self,
+        catalog: dict,
+        slide_data: dict,
+        index: int,
+        total: int,
+    ) -> SlidePlan:
+        """
+        Resolve which catalog layout a slide uses, and therefore its geometry,
+        role and colours - before any shape exists.
+
+        The layout is taken from the slide's own ``layoutId`` when that names
+        a real catalog entry (which is what select_layout produced), and only
+        inferred from the content otherwise. Inferring unconditionally, as the
+        renderer used to, silently discarded the layout the agent had chosen.
+        """
+        layout_id = str(slide_data.get("layoutId") or "").strip()
+        entry = deck_theme.layout_entry(catalog, layout_id)
+        if entry is None:
+            inferred = LayoutEngine.infer_layout_type(slide_data)
+            layout_id = deck_theme.LAYOUT_ID_FOR_TYPE.get(inferred.value, "content")
+            entry = deck_theme.layout_entry(catalog, layout_id)
+
+        role = (entry or {}).get("role", deck_theme.ROLE_CONTENT)
+        # A deck that opens on a content slide has no cover; force the first
+        # slide to read as one so the light/dark rhythm always starts right.
+        if index == 0 and role == deck_theme.ROLE_CONTENT and total > 1:
+            role = deck_theme.ROLE_COVER
+        style = self._theme.style_for(role)
+
+        specs = (entry or {}).get("placeholders") or []
+        title_spec = next((s for s in specs if s.get("type") in ("title", "ctrTitle")), None)
+        body_specs = [s for s in specs if s.get("type") not in ("title", "ctrTitle")]
+
+        title_region = (
+            _region_from_placeholder_spec(title_spec)
+            if title_spec
+            else PositionConfig(left=0.62, top=0.40, width=8.76, height=0.90)
+        )
+        body_regions = [_region_from_placeholder_spec(s) for s in body_specs]
+
+        spacing = (catalog.get("spacing") or {})
+        rule_spec = spacing.get(
+            "heroAccentRule" if role in deck_theme.DARK_ROLES else "accentRule"
+        )
+        accent_rule = _region_from_placeholder_spec(rule_spec) if rule_spec else None
+
+        return SlidePlan(
+            layout_id=layout_id or "content",
+            style=style,
+            title_region=title_region,
+            body_regions=body_regions,
+            accent_rule=accent_rule,
+            # The cover carries the deck's title already; a footer under it
+            # is noise, and no real deck numbers its cover.
+            show_footer=role != deck_theme.ROLE_COVER,
+        )
+
+    @staticmethod
+    def _apply_background(slide, style: SlideStyle) -> None:
+        """Paint the slide's background for its role."""
+        try:
+            fill = slide.background.fill
+            fill.solid()
+            fill.fore_color.rgb = _hex_to_rgbcolor(style.background)
+        except (ValueError, AttributeError) as e:
+            logger.warning("slide_background_skipped", error=str(e))
+
+    def _decorate_slide(
+        self,
+        slide,
+        plan: SlidePlan,
+        catalog: dict,
+        index: int,
+        total: int,
+        metadata: dict,
+    ) -> None:
+        """Draw the deck's repeated chrome: the accent rule and the footer.
+
+        One mark in the same place on every slide is what carries a design
+        language across a deck; without it, seven slides of the same white
+        page read as seven unrelated documents.
+        """
+        if plan.accent_rule is not None:
+            self._add_accent_rule(slide, plan.accent_rule, plan.style.accent_color)
+
+        if not plan.show_footer:
+            return
+
+        footer = (catalog.get("spacing") or {}).get("footer") or {}
+        region = _region_from_placeholder_spec(footer) if footer else None
+        if region is None or region.width <= 0:
+            return
+        size_pt = int(footer.get("sizePt", 10) or 10)
+
+        font_name = self._type_scale.body_font
+        label = str(metadata.get("title") or "").strip()
+        if label:
+            self._add_chrome_text(
+                slide, label, region, size_pt, plan.style.footer_color,
+                PP_ALIGN.LEFT, font_name,
+            )
+        self._add_chrome_text(
+            slide, str(index + 1), region, size_pt, plan.style.footer_color,
+            PP_ALIGN.RIGHT, font_name,
+        )
+
+    @staticmethod
+    def _add_accent_rule(slide, region: PositionConfig, color_hex: str) -> None:
+        """A short filled bar - the deck's one repeated motif."""
+        try:
+            rgb = _hex_to_rgbcolor(color_hex)
+        except ValueError:
+            return
+        shape = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            Inches(region.left), Inches(region.top),
+            Inches(region.width), Inches(region.height),
+        )
+        shape.name = CHROME_ACCENT_RULE
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = rgb
+        shape.line.fill.background()
+        # Autoshapes carry a <p:style> whose effectRef points at the theme's
+        # shadow. An empty <a:effectLst/> (what shadow.inherit = False writes)
+        # is the documented override, but LibreOffice still honoured the
+        # effectRef and drew a soft grey shadow under the bar, which reads as
+        # a rendering artifact rather than a design element. Dropping the
+        # whole style reference leaves nothing to inherit from - the shape's
+        # own explicit fill and line are all that is left.
+        style = shape._element.find(qn("p:style"))
+        if style is not None:
+            shape._element.remove(style)
+
+    @staticmethod
+    def _add_chrome_text(
+        slide,
+        text: str,
+        region: PositionConfig,
+        size_pt: int,
+        color_hex: str,
+        alignment,
+        font_name: str,
+    ) -> None:
+        """A single small line of deck chrome (footer label or slide number)."""
+        box = slide.shapes.add_textbox(
+            Inches(region.left), Inches(region.top),
+            Inches(region.width), Inches(region.height),
+        )
+        box.name = CHROME_FOOTER
+        frame = box.text_frame
+        frame.word_wrap = False
+        frame.margin_left = frame.margin_right = 0
+        frame.margin_top = frame.margin_bottom = 0
+        paragraph = frame.paragraphs[0]
+        paragraph.alignment = alignment
+        run = paragraph.add_run()
+        run.text = text
+        run.font.size = Pt(size_pt)
+        run.font.name = font_name
+        try:
+            run.font.color.rgb = _hex_to_rgbcolor(color_hex)
+        except ValueError:
+            pass
 
     def _render_content_on_slide(
         self,
         slide,
         slide_data: dict,
-        layout_config: LayoutType,
+        plan: SlidePlan,
     ) -> None:
-        """Render slide content with intelligent positioning."""
+        """
+        Render slide content into the plan's regions, reusing the stock
+        layout's placeholder shapes where they exist.
+
+        ``prs.slides.add_slide(layout)`` copies the layout's placeholders onto
+        the new slide. This routine previously ignored them entirely and
+        stacked free-floating text boxes at LayoutEngine coordinates instead,
+        which produced decks where every slide carried an empty "Title"/
+        "Subtitle" placeholder *plus* unaligned text boxes drawn over the top
+        of them. It then swung the other way and deferred to the stock
+        placeholders' own geometry - which is python-pptx's 4:3 Office
+        template rescaled, not the catalog the agent designed against.
+
+        Both positions are now resolved the same way: the placeholder shapes
+        are reused (they carry the master's text defaults) but every one of
+        them is moved onto the catalog region for its slot, so what the model
+        planned and what renders are the same rectangle.
+        """
         contents = slide_data.get("contents", [])
         if not contents:
+            self._strip_empty_placeholders(slide)
             return
 
-        # Check if slide has a title
-        has_title = any(
-            c.get("type") == "text" and
-            any(r.get("fontSizePt", 0) >= 28 or r.get("bold", False)
-                for r in c.get("runs", []))
-            for c in contents
+        text_items = [c for c in contents if c.get("type") == "text"]
+        object_items = [
+            c for c in contents
+            if c.get("type") in ("image", "table", "chart", "metrics")
+        ]
+
+        # The content designer emits the title first, then body items (see
+        # design_slide_content's prompt), so position in the list is the
+        # reliable signal - far more so than the old "bold or >=28pt" sniff,
+        # which misfired on any body run the model happened to bold.
+        title_item = text_items[0] if text_items else None
+        body_items = text_items[1:]
+        slide_title = " ".join(
+            str(run.get("text", "")) for run in (title_item or {}).get("runs", [])
+        ).strip()
+
+        title_ph, body_phs = self._classify_placeholders(slide)
+
+        if title_item is not None:
+            if title_ph is not None:
+                self._resize_shape(title_ph, plan.title_region)
+                self._fill_placeholder(
+                    title_ph, title_item.get("runs", []), is_title=True,
+                )
+            else:
+                # Layout has no title placeholder (shouldn't happen with the
+                # stock catalog, but a user template may omit one) - fall back
+                # to an explicitly positioned box rather than dropping it.
+                self._add_text_box(
+                    slide, title_item.get("runs", []), plan.title_region, is_title=True,
+                )
+
+        # Body text and objects share the slide's content area, so they have to
+        # be allocated space TOGETHER.
+        #
+        # Filling every body placeholder with text first and only then falling
+        # objects back to LayoutEngine's content rectangle meant that a slide
+        # carrying both bullets and a chart - the common shape for a
+        # contentType:"chart" slide, which still lists its key points - drew
+        # the chart directly on top of the bullets. Validation flagged the
+        # collision correctly, but no amount of rewording by the content model
+        # could fix it: the renderer recreated it on every retry. That is what
+        # turned a single bad slide into an endless redesign loop.
+        body_entries = [("text", item) for item in body_items]
+        body_entries += [(item.get("type", "image"), item) for item in object_items]
+
+        if not body_entries:
+            self._strip_empty_placeholders(slide)
+            return
+
+        if len(body_entries) == len(plan.body_regions):
+            # The catalog declared a slot per item - a two-column layout's two
+            # columns, a picture layout's image and caption. Use them as
+            # authored rather than re-deriving a stack.
+            regions = plan.body_regions
+        else:
+            # Fewer items than slots is as wrong as more. Filling only the
+            # first slot left a two-column layout with one narrow column of
+            # text wrapping at half width and the other half of the slide
+            # blank - which is what the model gets when it picks twoColumn
+            # and then writes a single body block.
+            regions = self._split_region_vertically(plan.content_region, body_entries)
+
+        for i, ((kind, item), region) in enumerate(zip(body_entries, regions)):
+            ph = body_phs[i] if i < len(body_phs) else None
+
+            if kind == "text":
+                if ph is not None:
+                    # Keep the placeholder (it carries the layout's typography)
+                    # but move it onto its allocated band.
+                    self._resize_shape(ph, region)
+                    self._fill_placeholder(ph, item.get("runs", []), is_title=False)
+                else:
+                    self._add_text_box(slide, item.get("runs", []), region, is_title=False)
+                continue
+
+            # Objects cannot live inside a placeholder - a graphic frame or
+            # picture replaces it, so the placeholder is removed.
+            if ph is not None:
+                self._remove_shape(ph)
+
+            if kind == "image":
+                self._add_image(slide, item.get("image", {}), region)
+            elif kind == "table":
+                self._add_table(slide, item.get("table", {}), region)
+            elif kind == "metrics":
+                self._add_key_metrics(slide, item.get("metrics", {}), region)
+            else:
+                self._add_chart(slide, item.get("chart", {}), region, slide_title)
+
+        self._strip_empty_placeholders(slide)
+
+    @staticmethod
+    def _placeholder_region(shape) -> PositionConfig:
+        """The shape's geometry as an inches-based PositionConfig."""
+        return PositionConfig(
+            left=emu_to_inches(shape.left),
+            top=emu_to_inches(shape.top),
+            width=emu_to_inches(shape.width),
+            height=emu_to_inches(shape.height),
         )
 
-        # Separate title from other content
-        title_content = None
-        other_content = []
+    @staticmethod
+    def _resize_shape(shape, region: PositionConfig) -> None:
+        """Move/resize an existing shape onto ``region``."""
+        shape.left = Inches(region.left)
+        shape.top = Inches(region.top)
+        shape.width = Inches(region.width)
+        shape.height = Inches(region.height)
 
-        for content in contents:
-            if content.get("type") == "text":
-                runs = content.get("runs", [])
-                if any(r.get("fontSizePt", 0) >= 28 or r.get("bold", False)
-                      for r in runs):
-                    title_content = content
-                    continue
-            other_content.append(content)
+    def _split_region_vertically(
+        self,
+        base: PositionConfig,
+        entries: list[tuple[str, dict]],
+    ) -> list[PositionConfig]:
+        """
+        Divide ``base`` into one stacked band per entry.
 
-        # Render title
-        if title_content:
-            title_pos = LayoutEngine.calculate_title_position(layout_config)
-            self._add_text_box(
-                slide,
-                title_content.get("runs", []),
-                title_pos,
-                is_title=True,
+        Text asks for the height it actually measures (so a two-line intro
+        above a chart does not claim half the slide), objects share whatever
+        is left but never drop below a legible minimum, and the whole stack is
+        scaled down proportionally if the requests exceed the region. Every
+        returned band is inside ``base``, which is what guarantees the chart
+        can no longer land on the bullets or run off the slide.
+        """
+        count = len(entries)
+        gap = CONTENT_GAP_IN
+        available = base.height - gap * (count - 1)
+        if available <= 0:
+            gap = 0.0
+            available = base.height
+
+        desired: list[Optional[float]] = []
+        for kind, item in entries:
+            if kind != "text":
+                desired.append(None)
+                continue
+            blocks = []
+            for run in item.get("runs", []):
+                style = self._type_scale.body_style(run.get("level", 0))
+                blocks.append(text_fit.TextBlock(
+                    text=run.get("text", ""),
+                    font_size_pt=style.font_size_pt,
+                ))
+            measured = text_fit.estimate_blocks_height_pt(blocks, base.width * 72.0) / 72.0
+            desired.append(max(measured, MIN_TEXT_BAND_IN))
+
+        object_count = sum(1 for d in desired if d is None)
+        if object_count:
+            text_total = sum(d for d in desired if d is not None)
+            text_cap = available * MAX_TEXT_SHARE_WITH_OBJECT
+            if text_total > text_cap and text_total > 0:
+                # Shrink the text bands proportionally rather than the object.
+                # The text still fits: _write_runs autofits into whatever band
+                # it is finally given, down to its own legibility floor.
+                squeeze = text_cap / text_total
+                desired = [None if d is None else max(MIN_TEXT_BAND_IN, d * squeeze)
+                           for d in desired]
+                text_total = sum(d for d in desired if d is not None)
+
+            share = (available - text_total) / object_count
+            share = max(share, MIN_OBJECT_BAND_IN)
+            desired = [share if d is None else d for d in desired]
+
+        total = sum(desired)
+        if total > available and total > 0:
+            scale = available / total
+            desired = [d * scale for d in desired]
+
+        regions: list[PositionConfig] = []
+        top = base.top
+        for height in desired:
+            regions.append(PositionConfig(
+                left=base.left, top=top, width=base.width, height=height
+            ))
+            top += height + gap
+        return regions
+
+    @staticmethod
+    def _remove_shape(shape) -> None:
+        """Detach a shape from its slide."""
+        element = shape._element
+        parent = element.getparent()
+        if parent is not None:
+            parent.remove(element)
+
+    def _strip_empty_placeholders(self, slide) -> None:
+        """
+        Delete placeholders that were never filled.
+
+        An empty placeholder is not invisible: PowerPoint shows its "Click to
+        add title" prompt in the editor, and LibreOffice draws its outline in
+        some export paths. Leaving them behind is what made generated decks
+        look like half-finished templates.
+        """
+        for shape in list(slide.placeholders):
+            if shape.placeholder_format.type in _SKIPPED_PLACEHOLDER_TYPES:
+                continue
+            if shape.has_text_frame and not shape.text_frame.text.strip():
+                self._remove_shape(shape)
+
+    @staticmethod
+    def _classify_placeholders(slide) -> tuple[Optional[object], list[object]]:
+        """
+        Split a slide's placeholders into ``(title, [body...])``.
+
+        Body placeholders are returned in reading order (top, then left) so
+        that, on a two-content layout, the first body content item lands in
+        the left column rather than wherever python-pptx happened to enumerate
+        first.
+        """
+        title_ph = None
+        body_phs = []
+        for shape in slide.placeholders:
+            ph_type = shape.placeholder_format.type
+            if ph_type in _TITLE_PLACEHOLDER_TYPES and title_ph is None:
+                title_ph = shape
+            elif ph_type not in _SKIPPED_PLACEHOLDER_TYPES:
+                body_phs.append(shape)
+        body_phs.sort(key=lambda s: (s.top or 0, s.left or 0))
+        return title_ph, body_phs
+
+    def _fill_placeholder(
+        self,
+        placeholder,
+        runs: list[dict],
+        is_title: bool,
+    ) -> None:
+        """
+        Write text runs into an existing placeholder's text frame.
+
+        Typography and bullets are shared with ``_add_text_box`` via
+        ``_write_runs``; the difference is only that the box already exists.
+        A balanced body block is moved down inside its own band rather than
+        being flushed to the top of it - see ``_write_runs``.
+        """
+        box_width_in = emu_to_inches(placeholder.width)
+        box_height_in = emu_to_inches(placeholder.height)
+
+        balance = self._write_runs(
+            placeholder.text_frame, runs, is_title, box_width_in, box_height_in
+        )
+
+        if balance.top_offset_in > 0:
+            # Move the top edge down and pull the height in by the same
+            # amount, so the block sits lower without its bottom edge
+            # reaching any further into the footer band.
+            placeholder.top = Inches(emu_to_inches(placeholder.top) + balance.top_offset_in)
+            placeholder.height = Inches(max(0.1, box_height_in - balance.top_offset_in))
+
+    def _write_runs(
+        self,
+        tf,
+        runs: list[dict],
+        is_title: bool,
+        box_width_in: float,
+        box_height_in: float,
+    ) -> composition.BodyBalance:
+        """
+        Write ``runs`` into a text frame in the deck's own typography.
+
+        Returns the vertical balance that was applied, so the caller can
+        place the block: a body block short enough to leave the bottom half
+        of the slide empty is set a little larger, led a little further
+        apart, and started lower down its band. That combination is what
+        stops a three-bullet slide reading as a half-finished page.
+        """
+        tf.clear()
+        tf.word_wrap = True
+        # A title sits at the bottom of its band, directly above the accent
+        # rule, so a one-line and a two-line title both start from the same
+        # baseline and the motif never floats away from the text. Stock Office
+        # layouts centre their titles vertically, which made the gap between
+        # title and rule depend on how long the title happened to be.
+        tf.vertical_anchor = MSO_ANCHOR.BOTTOM if is_title else MSO_ANCHOR.TOP
+
+        styles = [self._style_for_run(run_data, is_title) for run_data in runs]
+        texts = [str(r.get("text", "")) for r in runs]
+
+        balance = composition.NO_CHANGE
+        if not is_title and runs:
+            balance = composition.balance_body(
+                texts,
+                [style.font_size_pt for style in styles],
+                box_width_in,
+                box_height_in,
             )
 
-        # Render other content
-        top_offset = 0.0  # inches, matching PositionConfig's unit
-        for content in other_content:
-            if content.get("type") == "text":
-                content_pos = LayoutEngine.calculate_content_position(
-                    layout_config,
-                    has_title=has_title,
-                )
-                if top_offset > 0:
-                    content_pos.top += top_offset
-                    content_pos.height -= top_offset
+        resolved_sizes = [style.font_size_pt * balance.size_scale for style in styles]
 
-                self._add_text_box(
-                    slide,
-                    content.get("runs", []),
-                    content_pos,
-                    is_title=False,
-                )
-                top_offset += 0.3  # inches, spacing between sections
+        blocks = [
+            text_fit.TextBlock(text=text, font_size_pt=size)
+            for text, size in zip(texts, resolved_sizes)
+        ]
+        box_width_pt = box_width_in * 72.0
+        box_height_pt = box_height_in * 72.0
+        # The gaps between paragraphs are part of the block's height, so the
+        # autofit has to fit the text into what is left after them.
+        gap_total_pt = balance.paragraph_gap_pt * max(0, len(runs) - 1)
+        font_scale, _ = text_fit.compute_autofit_scale(
+            blocks, box_width_pt, max(1.0, box_height_pt - gap_total_pt)
+        )
 
-            elif content.get("type") == "image":
-                img_pos = LayoutEngine.calculate_image_position(
-                    layout_config,
-                    has_title=has_title,
+        for i, (run_data, style, base_size) in enumerate(zip(runs, styles, resolved_sizes)):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            # Explicit on every paragraph, not just titles: stock Office
+            # layouts centre their subtitle placeholder, so a cover slide's
+            # subtitle floated centre-of-slide while its title sat hard left.
+            p.alignment = PP_ALIGN.LEFT
+            if i > 0 and balance.paragraph_gap_pt > 0:
+                p.space_before = Pt(balance.paragraph_gap_pt)
+
+            run = p.add_run()
+            run.text = run_data.get("text", "")
+
+            run.font.name = style.font_name
+            run.font.size = Pt(max(text_fit.MIN_FONT_SCALE * base_size, base_size * font_scale))
+            run.font.bold = style.bold or run_data.get("bold", False)
+            run.font.italic = style.italic or run_data.get("italic", False)
+            run.font.underline = style.underline or run_data.get("underline", False)
+            self._apply_text_color(run, is_title)
+            _clear_text_transform(run)
+
+            level = int(run_data.get("level", 0) or 0)
+            bulleted = (
+                bool(run_data.get("bullet", False))
+                and not is_title
+                and not self._is_cover
+            )
+            if bulleted:
+                p.level = level
+            _apply_bullet_formatting(p, bulleted, level, self._bullet_hex())
+
+        return balance
+
+    @property
+    def _is_cover(self) -> bool:
+        """A cover slide's body is a standfirst, not a list.
+
+        The planner is told the title slide takes 0-1 key points and the
+        model routinely gives it three anyway. Bulleting them turns the
+        opening slide into an agenda nobody asked for; setting them as
+        running lines keeps it a cover whatever it was handed.
+        """
+        return self._style is not None and self._style.role == deck_theme.ROLE_COVER
+
+    def _style_for_run(self, run_data: dict, is_title: bool):
+        """The deck's own typography for one run.
+
+        Hero titles (cover, section, closing) step up a size: they are the
+        only thing on the slide, so the content-slide title size reads small
+        there. The scale itself comes from the run's design system, which is
+        the point - an uploaded template's fonts were previously extracted,
+        shown to the model, and then rendered in the base template's theme
+        font anyway because ``run.font.name`` was never assigned.
+        """
+        if is_title:
+            hero = self._style is not None and self._style.role in deck_theme.DARK_ROLES
+            return self._type_scale.title_style(hero=hero)
+        return self._type_scale.body_style(run_data.get("level", 0))
+
+    @staticmethod
+    def _set_run_color(run, color_hex: str) -> None:
+        try:
+            run.font.color.rgb = _hex_to_rgbcolor(color_hex)
+        except ValueError:
+            pass
+
+    def _apply_text_color(self, run, is_title: bool) -> None:
+        """Colour a run for the background the current slide is actually on.
+
+        Body text was previously left at the master's default (black) whatever
+        was behind it, so the moment a slide gained a dark background its
+        subtitle became black-on-brand-dark.
+        """
+        if self._style is None:
+            return
+        color_hex = self._style.title_color if is_title else self._style.body_color
+        try:
+            run.font.color.rgb = _hex_to_rgbcolor(color_hex)
+        except ValueError:
+            pass
+
+    def _bullet_hex(self) -> Optional[str]:
+        """The current slide's bullet-glyph colour, if a style is in effect."""
+        return self._style.bullet_color if self._style is not None else None
+
+    def _add_chart(
+        self,
+        slide,
+        chart_data: dict,
+        pos: PositionConfig,
+        slide_title: str = "",
+    ) -> None:
+        """Render chart_data to a design-system-styled PNG and place it on the slide."""
+        chart_bytes = chart_renderer.render_chart_to_png(
+            chart_data, self.design_system, pos.width, pos.height,
+            slide_title=slide_title,
+        )
+        if not chart_bytes:
+            return
+        img_stream = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        try:
+            img_stream.write(chart_bytes)
+            img_stream.close()
+            slide.shapes.add_picture(
+                img_stream.name,
+                Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
+            )
+        finally:
+            os.unlink(img_stream.name)
+
+    def _add_key_metrics(self, slide, metrics_data: dict, pos: PositionConfig) -> None:
+        """Draw a row of headline figures: a large number over a short label.
+
+        The one visual a qualitative slide can carry honestly - it invents
+        nothing, it just sets figures the deck already states at the size
+        their importance deserves. Without it, a slide whose point is "we
+        grew 3% and opened 400 stores" renders as two plain bullets.
+        """
+        items = [
+            item for item in (metrics_data.get("items") or [])
+            if isinstance(item, dict) and str(item.get("value", "")).strip()
+        ]
+        if not items:
+            return
+
+        style = self._style or self._theme.style_for(deck_theme.ROLE_CONTENT)
+        gap = 0.3
+        column_width = (pos.width - gap * (len(items) - 1)) / len(items)
+        if column_width <= 0:
+            return
+
+        # Sized off the column so four figures do not overflow where two fit.
+        value_pt = max(24.0, min(56.0, column_width * 12.0))
+        label_pt = max(11.0, min(16.0, value_pt * 0.32))
+        block_height = (value_pt * 1.25 + label_pt * 2.6) / 72.0
+        top = pos.top + max(0.0, pos.height - block_height) / 3.0
+
+        for index, item in enumerate(items):
+            left = pos.left + index * (column_width + gap)
+            box = slide.shapes.add_textbox(
+                Inches(left), Inches(top), Inches(column_width), Inches(block_height)
+            )
+            frame = box.text_frame
+            frame.word_wrap = True
+            frame.margin_left = frame.margin_right = 0
+            frame.vertical_anchor = MSO_ANCHOR.TOP
+
+            value = frame.paragraphs[0]
+            value.alignment = PP_ALIGN.LEFT
+            value_run = value.add_run()
+            value_run.text = str(item.get("value", "")).strip()
+            value_run.font.size = Pt(value_pt)
+            value_run.font.bold = True
+            value_run.font.name = self._type_scale.title_font
+            self._set_run_color(value_run, style.title_color)
+            _clear_text_transform(value_run)
+            _apply_bullet_formatting(value, False, 0, None)
+
+            label = frame.add_paragraph()
+            label.alignment = PP_ALIGN.LEFT
+            label_run = label.add_run()
+            label_run.text = str(item.get("label", "")).strip()
+            label_run.font.size = Pt(label_pt)
+            label_run.font.name = self._type_scale.body_font
+            self._set_run_color(label_run, style.body_color)
+            _clear_text_transform(label_run)
+            _apply_bullet_formatting(label, False, 0, None)
+
+            # A short accent rule under each figure, tying the row back to
+            # the deck's one repeated motif.
+            self._add_accent_rule(
+                slide,
+                PositionConfig(left=left, top=top + block_height + 0.06,
+                               width=min(0.9, column_width * 0.4), height=0.05),
+                style.accent_color,
+            )
+
+    def _add_table(self, slide, table_data: dict, pos: PositionConfig) -> None:
+        """Add a native, design-system-styled table, laid out from its content.
+
+        Columns are sized to what they hold, figures are right-aligned,
+        rows take the height their text needs, and the whole table is
+        centred in its band. Splitting the band equally per row - the
+        previous behaviour - stretched a four-row table across four inches
+        and produced visibly uneven rows, because LibreOffice enforces its
+        own minimum row height and then distributes the surplus unevenly.
+        """
+        rows_data = table_data.get("rows", [])
+        if not rows_data:
+            return
+        n_rows = len(rows_data)
+        n_cols = max((len(r) for r in rows_data), default=0)
+        if n_cols == 0:
+            return
+
+        header_row = bool(table_data.get("headerRow"))
+        layout = table_layout.plan_table(
+            [[str(c) for c in row] for row in rows_data],
+            has_header=header_row,
+            region_width_in=pos.width,
+            region_height_in=pos.height,
+        )
+        if layout is None:
+            return
+
+        # Sit the table in its band rather than filling it: a short table
+        # stretched to a tall region is what left a dead strip above and
+        # below with rows an inch apart. Optically centred (a third of the
+        # surplus above, two thirds below) rather than mathematically, so it
+        # reads as hanging from the title instead of floating mid-slide.
+        top = pos.top + max(0.0, (pos.height - layout.height_in)) / 3.0
+
+        graphic_frame = slide.shapes.add_table(
+            n_rows, n_cols,
+            Inches(pos.left), Inches(top),
+            Inches(pos.width), Inches(layout.height_in),
+        )
+        table = graphic_frame.table
+        style = table_style.resolve_table_style(self.design_system)
+
+        for index, fraction in enumerate(layout.col_fractions):
+            table.columns[index].width = Inches(pos.width * fraction)
+        for index, height in enumerate(layout.row_heights_in):
+            table.rows[index].height = Inches(height)
+
+        # python-pptx applies a banded PowerPoint table style by default,
+        # which paints its own accent1 header over the fills set below.
+        table.first_row = header_row
+        table.horz_banding = False
+
+        header_rgb = _hex_to_rgbcolor(style.header_bg)
+        header_fg_rgb = _hex_to_rgbcolor(style.header_fg)
+        band_rgb = _hex_to_rgbcolor(style.band_bg)
+        row_rgb = _hex_to_rgbcolor(style.row_bg)
+        body_fg_rgb = _hex_to_rgbcolor(deck_theme.BODY_ON_LIGHT)
+
+        for r_idx, row in enumerate(rows_data):
+            is_header = header_row and r_idx == 0
+            is_total = r_idx == layout.total_row_index
+            for c_idx in range(n_cols):
+                cell = table.cell(r_idx, c_idx)
+                cell.text = str(row[c_idx]) if c_idx < len(row) else ""
+                cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+                cell.fill.solid()
+                if is_header:
+                    cell.fill.fore_color.rgb = header_rgb
+                elif is_total:
+                    # A summary row reads as part of the data unless it is
+                    # set apart; a tint of the header does that without
+                    # introducing another colour.
+                    cell.fill.fore_color.rgb = _hex_to_rgbcolor(
+                        colors.mix(style.band_bg, style.header_bg, 0.22)
+                    )
+                elif r_idx % 2 == 1:
+                    cell.fill.fore_color.rgb = band_rgb
+                else:
+                    cell.fill.fore_color.rgb = row_rgb
+
+                # Figures right-align so their digits line up and can be
+                # compared down the column; prose stays left.
+                alignment = (
+                    PP_ALIGN.RIGHT if c_idx in layout.numeric_columns else PP_ALIGN.LEFT
                 )
-                self._add_image(slide, content.get("image", {}), img_pos)
+                for paragraph in cell.text_frame.paragraphs:
+                    paragraph.alignment = alignment
+                    for run in paragraph.runs:
+                        run.font.size = Pt(
+                            layout.header_pt if is_header else layout.body_pt
+                        )
+                        run.font.bold = is_header or is_total
+                        run.font.name = style.font_name
+                        run.font.color.rgb = header_fg_rgb if is_header else body_fg_rgb
 
     def _add_text_box(
         self,
@@ -277,8 +1267,13 @@ class PPTXRenderer:
         runs: list[dict],
         pos: PositionConfig,
         is_title: bool = False,
-    ) -> None:
-        """Add a text box with proper styling."""
+    ) -> float:
+        """Add a text box in the deck's typography. Returns its height in inches.
+
+        Used when the layout supplied no placeholder for a block - a user
+        template that omits one, or more content items than the catalog
+        declared slots for.
+        """
         # PositionConfig fields are inches (plain floats, see layout.py) -
         # python-pptx's shape-creation calls take EMU Length values, and
         # silently treat a raw int/float as EMU rather than raising. Passing
@@ -287,65 +1282,46 @@ class PPTXRenderer:
         # the no-template render path had its content positioned into a
         # sub-pixel box. This is the "right slide count, no visible content"
         # bug.
+        balance = composition.NO_CHANGE
+        if not is_title and runs:
+            balance = composition.balance_body(
+                [str(r.get("text", "")) for r in runs],
+                [self._style_for_run(r, is_title).font_size_pt for r in runs],
+                pos.width,
+                pos.height,
+            )
+
+        top = pos.top + balance.top_offset_in
+        height = max(0.1, pos.height - balance.top_offset_in)
+
         txBox = slide.shapes.add_textbox(
-            Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
+            Inches(pos.left), Inches(top), Inches(pos.width), Inches(height)
         )
         tf = txBox.text_frame
-        tf.word_wrap = True
+        # Second line of defense: let LibreOffice/PowerPoint's own autofit
+        # shrink further at render/open time if our own estimate still
+        # undershoots for a given font's real metrics.
+        tf.auto_size = MSO_AUTO_SIZE.NONE
 
-        for i, run_data in enumerate(runs):
-            if i == 0:
-                p = tf.paragraphs[0]
-            else:
-                p = tf.add_paragraph()
-
-            run = p.add_run()
-            run.text = run_data.get("text", "")
-
-            # Get proper style
-            if is_title:
-                style = TypographyEngine.get_title_style(1)
-            else:
-                level = run_data.get("level", 0)
-                style = TypographyEngine.get_body_style(level)
-
-            # Apply style
-            run.font.size = Pt(style.font_size_pt)
-            run.font.bold = style.bold or run_data.get("bold", False)
-            run.font.italic = style.italic or run_data.get("italic", False)
-            run.font.underline = style.underline or run_data.get("underline", False)
-            if is_title and self._title_rgb is not None:
-                run.font.color.rgb = self._title_rgb
-
-            # Validate font size
-            if run.font.size:
-                requested_size = run.font.size.pt
-                adjusted_size = TypographyEngine.validate_font_size(
-                    requested_size,
-                    is_title=is_title
-                )
-                if adjusted_size != requested_size:
-                    run.font.size = Pt(adjusted_size)
-
-            # Bullet points
-            if run_data.get("bullet", False):
-                p.level = run_data.get("level", 0)
+        self._write_runs(tf, runs, is_title, pos.width, height)
+        return height
 
     def _add_image(self, slide, img_data: dict, pos: PositionConfig) -> None:
-        """Add an image to the slide."""
-        if img_data.get("source") == "base64":
-            import base64
-            img_binary = base64.b64decode(img_data.get("data", ""))
-            img_stream = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            img_stream.write(img_binary)
+        """Add an image to the slide. Supports base64 (raw or data-URI) and remote URL sources."""
+        img_bytes = _resolve_image_bytes(img_data)
+        if not img_bytes:
+            return
+        ext = _sniff_image_ext(img_bytes)
+        img_stream = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+        try:
+            img_stream.write(img_bytes)
             img_stream.close()
-            try:
-                slide.shapes.add_picture(
-                    img_stream.name,
-                    Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
-                )
-            finally:
-                os.unlink(img_stream.name)
+            slide.shapes.add_picture(
+                img_stream.name,
+                Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
+            )
+        finally:
+            os.unlink(img_stream.name)
 
     def _build_layout_map(self, working_dir: str) -> dict[str, str]:
         layout_map: dict[str, str] = {}
@@ -366,12 +1342,33 @@ class PPTXRenderer:
         slide_data: dict,
         working_dir: str,
         slide_num: int,
-    ) -> bytes:
+    ) -> tuple[bytes, list[dict]]:
         tree = ET.parse(layout_file)
         root = tree.getroot()
+        image_rels: list[dict] = []
 
         for content in slide_data.get("contents", []):
-            if content.get("type") != "text":
+            content_type = content.get("type")
+
+            if content_type == "image":
+                next_rid = f"rId{2 + len(image_rels)}"  # rId1 is always the layout relationship
+                rel = self._add_image_to_cloned_slide(root, content, working_dir, next_rid)
+                if rel:
+                    image_rels.append(rel)
+                continue
+
+            if content_type == "chart":
+                next_rid = f"rId{2 + len(image_rels)}"  # charts are rendered images too - share the same rId sequence
+                rel = self._add_chart_to_cloned_slide(root, content, working_dir, next_rid)
+                if rel:
+                    image_rels.append(rel)
+                continue
+
+            if content_type == "table":
+                self._add_table_to_cloned_slide(root, content)
+                continue
+
+            if content_type != "text":
                 continue
 
             placeholder_idx = content.get("placeholderIdx", -1)
@@ -433,9 +1430,334 @@ class PPTXRenderer:
                             a_t = ET.SubElement(a_r, f"{{{NS['a']}}}t")
                             a_t.text = run_data.get("text", "")
 
+                        paragraphs = txBody.findall("a:p", NS)
+
+                    self._apply_autofit_to_placeholder(sp, txBody, paragraphs)
                     break
 
-        return ET.tostring(root, encoding="unicode", xml_declaration=True).encode("utf-8")
+        return ET.tostring(root, encoding="unicode", xml_declaration=True).encode("utf-8"), image_rels
+
+    def _apply_autofit_to_placeholder(self, sp: ET.Element, txBody: ET.Element, paragraphs: list[ET.Element]) -> None:
+        """
+        Estimate whether the just-filled placeholder's text overflows its
+        box, and if so set <a:normAutofit fontScale/lnSpcReduction> on its
+        <a:bodyPr> - the same mechanism PowerPoint itself writes when text
+        overruns a placeholder. This never touches <a:rPr>, preserving
+        template fidelity: the run's own declared size is untouched, only a
+        render-time scale hint is added.
+        """
+        box = get_shape_position(sp)
+        if box["cx"] <= 0 or box["cy"] <= 0:
+            # No explicit xfrm on this placeholder (size inherited from the
+            # slide master) - not enough geometry to judge, leave as-is.
+            return
+
+        box_width_pt = emu_to_inches(box["cx"]) * 72.0
+        box_height_pt = emu_to_inches(box["cy"]) * 72.0
+
+        blocks: list[text_fit.TextBlock] = []
+        for para in paragraphs:
+            run = para.find("a:r", NS)
+            text = "".join(t.text or "" for t in para.findall(".//a:t", NS))
+            size_pt = 18.0
+            if run is not None:
+                rPr = run.find("a:rPr", NS)
+                if rPr is not None and rPr.get("sz"):
+                    try:
+                        size_pt = int(rPr.get("sz")) / 100.0
+                    except ValueError:
+                        pass
+            blocks.append(text_fit.TextBlock(text=text, font_size_pt=size_pt))
+
+        font_scale, ln_reduction = text_fit.compute_autofit_scale(blocks, box_width_pt, box_height_pt)
+        if font_scale >= 1.0:
+            return
+
+        bodyPr = txBody.find("a:bodyPr", NS)
+        if bodyPr is None:
+            # <a:bodyPr> must be the first child of <a:txBody> per the OOXML
+            # schema (before <a:lstStyle>/<a:p>).
+            bodyPr = ET.Element(f"{{{NS['a']}}}bodyPr")
+            txBody.insert(0, bodyPr)
+
+        for tag in ("a:noAutofit", "a:spAutoFit", "a:normAutofit"):
+            existing = bodyPr.find(tag, NS)
+            if existing is not None:
+                bodyPr.remove(existing)
+
+        normAutofit = ET.SubElement(bodyPr, f"{{{NS['a']}}}normAutofit")
+        normAutofit.set("fontScale", str(int(font_scale * 100000)))
+        if ln_reduction:
+            normAutofit.set("lnSpcReduction", str(ln_reduction))
+
+    def _add_image_to_cloned_slide(self, root: ET.Element, content: dict, working_dir: str, rel_id: str) -> Optional[dict]:
+        """
+        Resolve an `image` content item's bytes and position within a cloned
+        layout, then delegate to _insert_picture_xml. `rel_id` is the
+        already-decided rId for this image (the caller owns rId numbering
+        across a slide's relationships). Returns {"rId", "target"} to be
+        registered in the slide's .rels file, or None if the image couldn't
+        be resolved.
+        """
+        img_data = content.get("image", {})
+        img_bytes = _resolve_image_bytes(img_data)
+        if not img_bytes:
+            return None
+
+        pos = self._resolve_cloned_slide_position(
+            root, content, img_data.get("placeholderIdx"),
+            lambda layout_config: LayoutEngine.calculate_image_position(layout_config, has_title=True),
+        )
+        return self._insert_picture_xml(
+            root, working_dir, rel_id, img_bytes, pos,
+            alt_text=img_data.get("altText"), shape_label="Picture",
+        )
+
+    def _add_chart_to_cloned_slide(self, root: ET.Element, content: dict, working_dir: str, rel_id: str) -> Optional[dict]:
+        """
+        Render a `chart` content item to a PNG (see chart_renderer, styled
+        from this run's design system) and insert it the same way an image
+        would be - a chart is just a generated picture from the OOXML
+        package's point of view, which is exactly what makes it render
+        identically in LibreOffice and PowerPoint.
+        """
+        chart_data = content.get("chart", {})
+        pos = self._resolve_cloned_slide_position(
+            root, content, chart_data.get("placeholderIdx"),
+            lambda layout_config: LayoutEngine.calculate_content_position(layout_config, has_title=True),
+        )
+        width_in = emu_to_inches(pos["cx"])
+        height_in = emu_to_inches(pos["cy"])
+        chart_bytes = chart_renderer.render_chart_to_png(chart_data, self.design_system, width_in, height_in)
+        if not chart_bytes:
+            return None
+        return self._insert_picture_xml(
+            root, working_dir, rel_id, chart_bytes, pos,
+            alt_text=chart_data.get("title"), shape_label="Chart",
+        )
+
+    def _resolve_cloned_slide_position(self, root: ET.Element, content: dict, nested_placeholder_idx, fallback_position_fn) -> dict:
+        """
+        Shared position resolution for image/chart content on the
+        template-clone path: prefer a matching placeholder's own geometry
+        (the prompt convention puts placeholderIdx on the content item
+        itself, matching "text"; also accept it nested inside image/chart,
+        matching the shared pydantic schema), else fall back to the same
+        LayoutEngine heuristic the default render path uses.
+        """
+        placeholder_idx = content.get("placeholderIdx", nested_placeholder_idx)
+        if placeholder_idx is not None:
+            for sp in root.findall(".//p:sp", NS):
+                ph = sp.find(".//p:ph", NS)
+                if ph is not None and int(ph.get("idx", "-1")) == placeholder_idx:
+                    box = get_shape_position(sp)
+                    if box["cx"] > 0 and box["cy"] > 0:
+                        return box
+                    break
+
+        layout_type = LayoutEngine.infer_layout_type({"contents": [content]})
+        layout_config = LayoutEngine.get_layout(layout_type)
+        fallback_pos = fallback_position_fn(layout_config)
+        return {
+            "x": inches_to_emu(fallback_pos.left),
+            "y": inches_to_emu(fallback_pos.top),
+            "cx": inches_to_emu(fallback_pos.width),
+            "cy": inches_to_emu(fallback_pos.height),
+        }
+
+    def _insert_picture_xml(
+        self,
+        root: ET.Element,
+        working_dir: str,
+        rel_id: str,
+        img_bytes: bytes,
+        pos: dict,
+        alt_text: Optional[str],
+        shape_label: str,
+    ) -> Optional[dict]:
+        """Write image bytes into ppt/media/ and insert a <p:pic> shape referencing them at `pos`."""
+        ext = _sniff_image_ext(img_bytes)
+        media_dir = os.path.join(working_dir, "ppt", "media")
+        os.makedirs(media_dir, exist_ok=True)
+        existing = [f for f in os.listdir(media_dir) if re.match(r"^image(\d+)\.", f)]
+        next_n = max((int(re.match(r"^image(\d+)\.", f).group(1)) for f in existing), default=0) + 1
+        filename = f"image{next_n}.{ext}"
+        with open(os.path.join(media_dir, filename), "wb") as f:
+            f.write(img_bytes)
+        self._ensure_content_type_extension(working_dir, ext)
+
+        existing_ids = [int(cNvPr.get("id")) for cNvPr in root.findall(".//p:cNvPr", NS) if (cNvPr.get("id") or "").isdigit()]
+        shape_id = max(existing_ids, default=1) + 1
+
+        spTree = root.find(".//p:spTree", NS)
+        pic = ET.SubElement(spTree, f"{{{NS['p']}}}pic")
+
+        nvPicPr = ET.SubElement(pic, f"{{{NS['p']}}}nvPicPr")
+        cNvPr = ET.SubElement(nvPicPr, f"{{{NS['p']}}}cNvPr")
+        cNvPr.set("id", str(shape_id))
+        cNvPr.set("name", alt_text or f"{shape_label} {shape_id}")
+        ET.SubElement(nvPicPr, f"{{{NS['p']}}}cNvPicPr")
+        ET.SubElement(nvPicPr, f"{{{NS['p']}}}nvPr")
+
+        blipFill = ET.SubElement(pic, f"{{{NS['p']}}}blipFill")
+        blip = ET.SubElement(blipFill, f"{{{NS['a']}}}blip")
+        blip.set(f"{{{NS['r']}}}embed", rel_id)
+        stretch = ET.SubElement(blipFill, f"{{{NS['a']}}}stretch")
+        ET.SubElement(stretch, f"{{{NS['a']}}}fillRect")
+
+        spPr = ET.SubElement(pic, f"{{{NS['p']}}}spPr")
+        xfrm = ET.SubElement(spPr, f"{{{NS['a']}}}xfrm")
+        off = ET.SubElement(xfrm, f"{{{NS['a']}}}off")
+        off.set("x", str(pos["x"]))
+        off.set("y", str(pos["y"]))
+        ext_el = ET.SubElement(xfrm, f"{{{NS['a']}}}ext")
+        ext_el.set("cx", str(pos["cx"]))
+        ext_el.set("cy", str(pos["cy"]))
+        prstGeom = ET.SubElement(spPr, f"{{{NS['a']}}}prstGeom")
+        prstGeom.set("prst", "rect")
+        ET.SubElement(prstGeom, f"{{{NS['a']}}}avLst")
+
+        return {"rId": rel_id, "target": f"../media/{filename}"}
+
+    def _ensure_content_type_extension(self, working_dir: str, ext: str) -> None:
+        ct_path = os.path.join(working_dir, "[Content_Types].xml")
+        if not os.path.exists(ct_path):
+            return
+        mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "bmp": "image/bmp", "webp": "image/webp"}.get(ext, f"image/{ext}")
+        tree = ET.parse(ct_path)
+        root = tree.getroot()
+        ct_ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+        for default in root.findall(f"{{{ct_ns}}}Default"):
+            if default.get("Extension", "").lower() == ext.lower():
+                return
+        default = ET.SubElement(root, f"{{{ct_ns}}}Default")
+        default.set("Extension", ext)
+        default.set("ContentType", mime)
+        tree.write(ct_path, xml_declaration=True, encoding="UTF-8")
+
+    def _add_table_to_cloned_slide(self, root: ET.Element, content: dict) -> None:
+        """
+        Insert a native OOXML table (<p:graphicFrame><a:tbl>) into a cloned
+        layout's spTree for a `table` content item, styled from this run's
+        design system (see table_style.resolve_table_style) - e.g. a
+        Starbucks-templated deck gets a Starbucks-green header row and
+        banded rows without any per-table styling decision from the LLM.
+        """
+        table_data = content.get("table", {})
+        rows_data = table_data.get("rows", [])
+        if not rows_data:
+            return
+        n_cols = max((len(r) for r in rows_data), default=0)
+        if n_cols == 0:
+            return
+        n_rows = len(rows_data)
+
+        # See the equivalent comment in _add_image_to_cloned_slide: accept
+        # placeholderIdx on either the content item itself (the prompted
+        # convention) or nested inside the table object (the shared
+        # pydantic TableContent schema's convention).
+        placeholder_idx = content.get("placeholderIdx", table_data.get("placeholderIdx"))
+        pos = None
+        if placeholder_idx is not None:
+            for sp in root.findall(".//p:sp", NS):
+                ph = sp.find(".//p:ph", NS)
+                if ph is not None and int(ph.get("idx", "-1")) == placeholder_idx:
+                    box = get_shape_position(sp)
+                    if box["cx"] > 0 and box["cy"] > 0:
+                        pos = box
+                    break
+        if pos is None:
+            layout_type = LayoutEngine.infer_layout_type({"contents": [content]})
+            layout_config = LayoutEngine.get_layout(layout_type)
+            table_pos = LayoutEngine.calculate_table_position(layout_config, has_title=True)
+            pos = {
+                "x": inches_to_emu(table_pos.left),
+                "y": inches_to_emu(table_pos.top),
+                "cx": inches_to_emu(table_pos.width),
+                "cy": inches_to_emu(table_pos.height),
+            }
+
+        style = table_style.resolve_table_style(self.design_system)
+        header_row = bool(table_data.get("headerRow"))
+
+        existing_ids = [int(cNvPr.get("id")) for cNvPr in root.findall(".//p:cNvPr", NS) if (cNvPr.get("id") or "").isdigit()]
+        shape_id = max(existing_ids, default=1) + 1
+
+        col_width = max(1, pos["cx"] // n_cols)
+        row_height = max(1, pos["cy"] // n_rows)
+
+        spTree = root.find(".//p:spTree", NS)
+        graphicFrame = ET.SubElement(spTree, f"{{{NS['p']}}}graphicFrame")
+
+        nvGraphicFramePr = ET.SubElement(graphicFrame, f"{{{NS['p']}}}nvGraphicFramePr")
+        cNvPr = ET.SubElement(nvGraphicFramePr, f"{{{NS['p']}}}cNvPr")
+        cNvPr.set("id", str(shape_id))
+        cNvPr.set("name", f"Table {shape_id}")
+        cNvGraphicFramePr = ET.SubElement(nvGraphicFramePr, f"{{{NS['p']}}}cNvGraphicFramePr")
+        ET.SubElement(cNvGraphicFramePr, f"{{{NS['a']}}}graphicFrameLocks", {"noGrp": "1"})
+        ET.SubElement(nvGraphicFramePr, f"{{{NS['p']}}}nvPr")
+
+        xfrm = ET.SubElement(graphicFrame, f"{{{NS['p']}}}xfrm")
+        off = ET.SubElement(xfrm, f"{{{NS['a']}}}off")
+        off.set("x", str(pos["x"]))
+        off.set("y", str(pos["y"]))
+        ext_el = ET.SubElement(xfrm, f"{{{NS['a']}}}ext")
+        ext_el.set("cx", str(pos["cx"]))
+        ext_el.set("cy", str(pos["cy"]))
+
+        graphic = ET.SubElement(graphicFrame, f"{{{NS['a']}}}graphic")
+        graphicData = ET.SubElement(graphic, f"{{{NS['a']}}}graphicData")
+        graphicData.set("uri", "http://schemas.openxmlformats.org/drawingml/2006/table")
+
+        tbl = ET.SubElement(graphicData, f"{{{NS['a']}}}tbl")
+        tblPr = ET.SubElement(tbl, f"{{{NS['a']}}}tblPr")
+        tblPr.set("firstRow", "1" if header_row else "0")
+        tblPr.set("bandRow", "1")
+        tableStyleId = ET.SubElement(tblPr, f"{{{NS['a']}}}tableStyleId")
+        # A valid built-in table style GUID - the fill/font colors set
+        # per-cell below are what actually carries the design system's
+        # branding, this ID just needs to be well-formed.
+        tableStyleId.text = "{5940675A-B579-460E-94D1-54222C63F5DA}"
+
+        tblGrid = ET.SubElement(tbl, f"{{{NS['a']}}}tblGrid")
+        for _ in range(n_cols):
+            gridCol = ET.SubElement(tblGrid, f"{{{NS['a']}}}gridCol")
+            gridCol.set("w", str(col_width))
+
+        header_fill = style.header_bg.lstrip("#")
+        band_fill = style.band_bg.lstrip("#")
+        row_fill = style.row_bg.lstrip("#")
+        header_fg = style.header_fg.lstrip("#")
+
+        for r_idx, row in enumerate(rows_data):
+            is_header = header_row and r_idx == 0
+            tr = ET.SubElement(tbl, f"{{{NS['a']}}}tr")
+            tr.set("h", str(row_height))
+            fill_hex = header_fill if is_header else (band_fill if r_idx % 2 == 1 else row_fill)
+            font_hex = header_fg if is_header else "000000"
+
+            for c_idx in range(n_cols):
+                text = str(row[c_idx]) if c_idx < len(row) else ""
+                tc = ET.SubElement(tr, f"{{{NS['a']}}}tc")
+                txBody = ET.SubElement(tc, f"{{{NS['a']}}}txBody")
+                ET.SubElement(txBody, f"{{{NS['a']}}}bodyPr")
+                ET.SubElement(txBody, f"{{{NS['a']}}}lstStyle")
+                p = ET.SubElement(txBody, f"{{{NS['a']}}}p")
+                r = ET.SubElement(p, f"{{{NS['a']}}}r")
+                rPr = ET.SubElement(r, f"{{{NS['a']}}}rPr")
+                rPr.set("lang", "en-US")
+                rPr.set("sz", "1400" if is_header else "1200")
+                rPr.set("b", "1" if is_header else "0")
+                solidFill = ET.SubElement(rPr, f"{{{NS['a']}}}solidFill")
+                srgbClr = ET.SubElement(solidFill, f"{{{NS['a']}}}srgbClr")
+                srgbClr.set("val", font_hex)
+                t = ET.SubElement(r, f"{{{NS['a']}}}t")
+                t.text = text
+
+                tcPr = ET.SubElement(tc, f"{{{NS['a']}}}tcPr")
+                tcFill = ET.SubElement(tcPr, f"{{{NS['a']}}}solidFill")
+                tcSrgb = ET.SubElement(tcFill, f"{{{NS['a']}}}srgbClr")
+                tcSrgb.set("val", fill_hex)
 
     def _create_minimal_slide(self, slide_data: dict) -> bytes:
         shape_id = 2
@@ -490,16 +1812,24 @@ class PPTXRenderer:
 </p:sld>"""
         return slide_xml.encode("utf-8")
 
-    def _create_slide_rels(self, working_dir: str, slide_num: int, layout_id: str) -> None:
+    def _create_slide_rels(self, working_dir: str, slide_num: int, layout_id: str, image_rels: Optional[list[dict]] = None) -> None:
         rels_dir = os.path.join(working_dir, "ppt", "slides", "_rels")
         os.makedirs(rels_dir, exist_ok=True)
         rels_path = os.path.join(rels_dir, f"slide{slide_num}.xml.rels")
+
+        image_rel_xml = "\n".join(
+            f'  <Relationship Id="{rel["rId"]}" '
+            f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+            f'Target="{rel["target"]}"/>'
+            for rel in (image_rels or [])
+        )
 
         rels_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1"
     Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout"
     Target="../slideLayouts/slideLayout{layout_id}.xml"/>
+{image_rel_xml}
 </Relationships>"""
 
         with open(rels_path, "w", encoding="utf-8") as f:
@@ -632,7 +1962,6 @@ class PPTXRenderer:
         root = tree.getroot()
 
         dc_ns = "http://purl.org/dc/elements/1.1/"
-        cp_ns = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 
         if metadata.get("title"):
             title_elem = root.find(f"{{{dc_ns}}}title")

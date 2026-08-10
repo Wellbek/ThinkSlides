@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 from app.api.title_generator import generate_chat_title
 

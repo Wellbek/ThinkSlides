@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, Text, BigInteger, ForeignKey, DateTime, JSON, ARRAY
+from sqlalchemy import Column, String, Integer, Boolean, Text, BigInteger, ForeignKey, DateTime, ARRAY
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
@@ -121,6 +121,7 @@ class DesignSystemBundle(Base):
     slide_dimensions = Column(JSONB, nullable=False, default=dict)
     master_elements = Column(JSONB, nullable=False, default=list)
     embedded_media = Column(JSONB, nullable=False, default=list)
+    data_viz = Column(JSONB, nullable=False, default=dict)
     raw_xml_snapshot = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 

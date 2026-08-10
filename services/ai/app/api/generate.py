@@ -7,7 +7,6 @@ from app.agent.loop import AgentLoop, MODE_SIMPLE, DETAIL_LEVEL_DETAILED, normal
 from app.api.tenancy import resolve_org_id
 from app.observability.logging import get_logger
 from pydantic import BaseModel
-from typing import Optional
 import uuid
 import json
 import asyncio
@@ -267,11 +266,18 @@ async def _run_agent(
                         question_text = event.get("question", "")
                         options = event.get("options", [])
                         context = event.get("context", "")
-                        question_content = f"Question: {question_text}\n"
-                        if options:
-                            question_content += "\nOptions:\n"
-                            for i, opt in enumerate(options, 1):
-                                question_content += f"{i}. {opt}\n"
+                        # A single call can carry several questions; older
+                        # events only have the one, so fall back to it.
+                        questions = event.get("questions") or [
+                            {"question": question_text, "options": options}
+                        ]
+                        lines = []
+                        for q in questions:
+                            lines.append(f"Question: {q.get('question', '')}")
+                            for i, opt in enumerate(q.get("options") or [], 1):
+                                lines.append(f"{i}. {opt}")
+                            lines.append("")
+                        question_content = "\n".join(lines)
                         if context:
                             question_content += f"\nContext: {context}\n"
                         final_content = question_content
@@ -286,6 +292,7 @@ async def _run_agent(
                                 "type": "question",
                                 "question": question_text,
                                 "options": options,
+                                "questions": questions,
                                 "context": context,
                             }),
                         )
@@ -297,15 +304,21 @@ async def _run_agent(
                             session_id
                         )
 
-                    # Track generated files from tool_result events
-                    if event.get("type") == "tool_result" and event.get("toolName") == "finalize_and_render_pptx":
-                        tool_result_data = event.get("toolResult") or event.get("result")
+                    # Persist the rendered deck on the loop's "deck_finalized"
+                    # event rather than on the finalize_and_render_pptx
+                    # tool_result. finalize runs BEFORE validate_rendered_output,
+                    # so keying off it offered the user a download (and a
+                    # sources entry) for a deck validation had not checked yet -
+                    # and might still send back for redesign. The loop emits
+                    # deck_finalized only once validation has settled.
+                    if event.get("type") == "deck_finalized":
+                        render_result = event.get("renderResult")
                         generated_file_info = {}
-                        if tool_result_data and isinstance(tool_result_data, dict):
-                            generated_file_info = tool_result_data
-                        elif isinstance(tool_result_data, str):
+                        if isinstance(render_result, dict):
+                            generated_file_info = render_result
+                        elif isinstance(render_result, str):
                             try:
-                                generated_file_info = json.loads(tool_result_data)
+                                generated_file_info = json.loads(render_result)
                             except (json.JSONDecodeError, TypeError):
                                 generated_file_info = {}
 
@@ -470,7 +483,6 @@ async def simple_fallback(
 
     from app.renderer.pptx_renderer import PPTXRenderer
     import os
-    import time
 
     logger.info("simple_fallback: generating 2-slide presentation for session %s", session_id)
 

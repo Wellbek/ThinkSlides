@@ -19,15 +19,130 @@ through vision models like GLM-4.6V.
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 from app.config import settings
 from app.llm.catalog import PROVIDERS_BY_ID
+from app.llm.retry_notices import REASON_RATE_LIMIT, RetryNotice, publish_retry_notice
 from app.observability.logging import get_logger
 import asyncio
+import inspect
 import json
+import re
 import time
 
 logger = get_logger(__name__)
+
+# Rate limits are a routine, self-correcting condition - a token-per-minute
+# ceiling clears within seconds - but an unretried 429 surfaces as a failed
+# tool call. Mid-run that abandons a slide the agent was in the middle of
+# fixing, which is how a deck ends up shipped with an unresolved defect.
+#
+# This is the ONLY place a 429 is retried. The agent loop's own retry wrapper
+# deliberately declines rate limits (see AgentLoop._chat_with_retry) so that
+# the wait the user is told about - "Retrying in 12s (2 of 6)" - is the whole
+# truth rather than one of two nested budgets silently multiplying each other.
+MAX_RATE_LIMIT_RETRIES = 6
+MAX_RATE_LIMIT_SLEEP_S = 60.0
+_RETRY_AFTER_RE = re.compile(r"try again in\s+([0-9.]+)\s*(ms|s)\b", re.IGNORECASE)
+
+
+# Providers report an exhausted account with the same 429 they use for "you
+# are going too fast" - Zhipu's 1113 (余额不足, "insufficient balance") and
+# OpenAI's insufficient_quota both arrive that way. Waiting cannot fix either,
+# so retrying just makes the run hang for two minutes before failing anyway.
+_QUOTA_EXHAUSTED_MARKERS = (
+    "insufficient_quota",
+    "insufficient balance",
+    "exceeded your current quota",
+    "余额不足",
+    "billing",
+)
+
+
+def _is_quota_exhausted(exc: Exception) -> bool:
+    """True when the account is out of credit rather than out of pace."""
+    text = str(exc).lower()
+    return any(marker in text for marker in _QUOTA_EXHAUSTED_MARKERS)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """True for a provider's 'slow down' response, in any SDK's shape."""
+    if _is_quota_exhausted(exc):
+        return False
+    for candidate in (exc, getattr(exc, "response", None)):
+        if getattr(candidate, "status_code", None) == 429:
+            return True
+    if getattr(exc, "code", None) == "rate_limit_exceeded":
+        return True
+    text = str(exc).lower()
+    return "rate limit" in text or "rate_limit_exceeded" in text
+
+
+def _rate_limit_delay(exc: Exception, attempt: int) -> float:
+    """How long to wait, preferring the delay the provider itself asked for."""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers:
+        for key, scale in (("retry-after-ms", 0.001), ("retry-after", 1.0)):
+            try:
+                raw = headers.get(key)
+            except AttributeError:
+                raw = None
+            if raw:
+                try:
+                    return min(float(raw) * scale, MAX_RATE_LIMIT_SLEEP_S)
+                except (TypeError, ValueError):
+                    pass
+
+    match = _RETRY_AFTER_RE.search(str(exc))
+    if match:
+        seconds = float(match.group(1))
+        if match.group(2).lower() == "ms":
+            seconds /= 1000.0
+        # A small cushion: the window has to have actually rolled over by the
+        # time the retry lands, or it just 429s again.
+        return min(seconds + 0.5, MAX_RATE_LIMIT_SLEEP_S)
+
+    return min(2.0 ** attempt, MAX_RATE_LIMIT_SLEEP_S)
+
+
+async def _with_rate_limit_retry(call, *, provider: str, model: str):
+    """
+    Run ``call``, retrying while the provider reports a rate limit.
+
+    Accepts either an async or a sync callable - the Zhipu SDK is synchronous
+    while the OpenAI/Anthropic ones are not, and both need the same treatment.
+    """
+    for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+        try:
+            result = call()
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+        except Exception as exc:
+            if attempt >= MAX_RATE_LIMIT_RETRIES or not _is_rate_limit_error(exc):
+                raise
+            delay = _rate_limit_delay(exc, attempt)
+            logger.warning(
+                "llm_rate_limited_retrying",
+                provider=provider,
+                model=model,
+                attempt=attempt + 1,
+                max_attempts=MAX_RATE_LIMIT_RETRIES,
+                sleeping_s=round(delay, 2),
+            )
+            # Narrate the wait while it is happening - an unannounced 30s
+            # pause mid-generation is indistinguishable from a hang.
+            publish_retry_notice(
+                RetryNotice(
+                    reason=REASON_RATE_LIMIT,
+                    attempt=attempt + 1,
+                    max_attempts=MAX_RATE_LIMIT_RETRIES,
+                    delay_seconds=delay,
+                    provider=provider,
+                    model=model,
+                )
+            )
+            await asyncio.sleep(delay)
 
 
 @dataclass(frozen=True)
@@ -109,7 +224,11 @@ class ZhipuProvider(LLMProvider):
             kwargs["tools"] = tools
 
         try:
-            response = self.client.chat.completions.create(**kwargs)
+            response = await _with_rate_limit_retry(
+                lambda: self.client.chat.completions.create(**kwargs),
+                provider="zhipu",
+                model=self.model,
+            )
         except Exception as e:
             logger.error("zhipu_api_error", error=str(e), model=self.model)
             raise
@@ -185,7 +304,11 @@ class AzureOpenAIProvider(LLMProvider):
             kwargs["tools"] = tools
 
         try:
-            response = await self.client.chat.completions.create(**kwargs)
+            response = await _with_rate_limit_retry(
+                lambda: self.client.chat.completions.create(**kwargs),
+                provider="azure_openai",
+                model=self.deployment,
+            )
         except Exception as e:
             logger.error("azure_openai_api_error", error=str(e), deployment=self.deployment)
             raise
@@ -264,7 +387,11 @@ class OpenAIProvider(LLMProvider):
             kwargs["tools"] = tools
 
         try:
-            response = await self.client.chat.completions.create(**kwargs)
+            response = await _with_rate_limit_retry(
+                lambda: self.client.chat.completions.create(**kwargs),
+                provider="openai",
+                model=self.model,
+            )
         except Exception as e:
             logger.error("openai_api_error", error=str(e), model=self.model)
             raise
@@ -330,7 +457,11 @@ class AnthropicProvider(LLMProvider):
             kwargs["tools"] = anthropic_tools_from_openai(tools)
 
         try:
-            response = await self.client.messages.create(**kwargs)
+            response = await _with_rate_limit_retry(
+                lambda: self.client.messages.create(**kwargs),
+                provider="anthropic",
+                model=self.model,
+            )
         except Exception as e:
             logger.error("anthropic_api_error", error=str(e), model=self.model)
             raise
@@ -594,16 +725,22 @@ class ZhipuVisionProvider(VisionLLMProvider):
 
         try:
             # Run the synchronous ZhipuAI SDK call in a thread pool
-            # to avoid blocking the event loop during long vision LLM calls
+            # to avoid blocking the event loop during long vision LLM calls.
+            # Retried on a rate limit like every other call: a 429 here fails
+            # template extraction, which loses the user's brand for the run.
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
+            response = await _with_rate_limit_retry(
+                lambda: loop.run_in_executor(
+                    None,
+                    lambda: self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    ),
                 ),
+                provider="zhipu",
+                model=self.model,
             )
         except Exception as e:
             logger.error("zhipu_vision_api_error", error=str(e), model=self.model)
@@ -656,11 +793,15 @@ class AzureOpenAIVisionProvider(VisionLLMProvider):
         messages = [{"role": "user", "content": content}]
 
         try:
-            response = await self.client.chat.completions.create(
+            response = await _with_rate_limit_retry(
+                lambda: self.client.chat.completions.create(
+                    model=self.deployment,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ),
+                provider="azure_openai",
                 model=self.deployment,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
             )
         except Exception as e:
             logger.error("azure_vision_api_error", error=str(e), deployment=self.deployment)

@@ -160,10 +160,16 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     from app.agent.tools.web_search import WebSearchTool
     from app.agent.tools.plan_presentation_structure import PlanPresentationStructureTool
     from app.agent.tools.select_layout import SelectLayoutTool
+    from app.agent.tools.build_visuals import (
+        BuildChartTool,
+        BuildKeyMetricsTool,
+        BuildTableTool,
+    )
     from app.agent.tools.design_slide_content import DesignSlideContentTool
     from app.agent.tools.validate_slide_json import ValidateSlideJsonTool
-    from app.agent.tools.generate_image_prompt import GenerateImagePromptTool
+    from app.agent.tools.select_source_image import SelectSourceImageTool
     from app.agent.tools.finalize_and_render_pptx import FinalizeAndRenderPptxTool
+    from app.agent.tools.validate_rendered_output import ValidateRenderedOutputTool
     from app.agent.tools.ask_user_question import AskUserQuestionTool
 
     AnalyzeDocumentTool.register(registry)
@@ -172,8 +178,12 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     WebSearchTool.register(registry)
     PlanPresentationStructureTool.register(registry)
     SelectLayoutTool.register(registry)
+    BuildChartTool.register(registry)
+    BuildTableTool.register(registry)
+    BuildKeyMetricsTool.register(registry)
     DesignSlideContentTool.register(registry)
     ValidateSlideJsonTool.register(registry)
-    GenerateImagePromptTool.register(registry)
+    SelectSourceImageTool.register(registry)
     FinalizeAndRenderPptxTool.register(registry)
+    ValidateRenderedOutputTool.register(registry)
     AskUserQuestionTool.register(registry)

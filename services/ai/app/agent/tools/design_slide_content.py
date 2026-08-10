@@ -94,6 +94,28 @@ class DesignSlideContentTool:
                     description="Content depth: concise, detailed, or comprehensive",
                     required=False,
                 ),
+                ToolParameter(
+                    name="prepared_visuals",
+                    type="string",
+                    description=(
+                        "JSON list of visual kinds already built and attached to this "
+                        "slide by build_chart/build_table/build_key_metrics. "
+                        "Auto-supplied by the system - do not pass it yourself."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
+                    name="selected_image_context",
+                    type="string",
+                    description=(
+                        "JSON of a pre-vetted image for this slide, if select_source_image "
+                        "found a confident match. Optional - auto-supplied by the system when "
+                        "present. If given, reference it with "
+                        '{"type": "image", "image": {"source": "selected"}} rather than '
+                        "inventing image data yourself; if absent, do not include an image."
+                    ),
+                    required=False,
+                ),
             ],
         )
 
@@ -105,6 +127,8 @@ class DesignSlideContentTool:
         layout_info: str = "{}",
         design_system_context: str = "{}",
         detail_level: str = "detailed",
+        selected_image_context: str = "{}",
+        prepared_visuals: str = "[]",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -135,6 +159,11 @@ class DesignSlideContentTool:
                 )
             layout = coerce_json_arg(layout_info, {})
             ds = coerce_json_arg(design_system_context, {})
+            selected_image = coerce_json_arg(selected_image_context, {})
+            attached = [
+                block for block in (coerce_json_arg(prepared_visuals, []) or [])
+                if isinstance(block, dict)
+            ]
 
             placeholders = layout.get("placeholders", [])
             layout_name = layout.get("layoutName", "Default")
@@ -171,10 +200,24 @@ Design System Context:
 - Palette: {json.dumps(ds.get('palette', {}).get('colors', [])[:5])}
 """
 
+            image_info = (
+                "\nA pre-vetted source image IS available for this slide "
+                f"(what it shows: {selected_image.get('altText', '') or 'see catalog context'!r}). "
+                'If it fits the slide, include {"type": "image", "image": {"source": "selected"}} in contents.'
+                if selected_image.get("data")
+                else "\nNo pre-vetted source image is available for this slide - do not include image content."
+            )
+
             key_points = outline.get("keyPoints", []) if isinstance(outline, dict) else []
             kp_list = "\n".join(f"  - {kp}" for kp in key_points) if key_points else "  (none)"
 
             detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
+
+            # A visual built through build_chart/build_table/build_key_metrics
+            # is attached to the slide server-side. Telling the model it exists
+            # (but not what is in it) is what keeps the copy from restating the
+            # same figures next to the chart that already shows them.
+            visual_info = _prepared_visual_guidance(attached)
 
             prompt = f"""Generate content for a single presentation slide.
 
@@ -189,6 +232,8 @@ Available Placeholders:
 {ph_text}
 Resolved placeholder indices: title={title_idx}, body={body_idx}
 {ds_info}
+{image_info}
+{visual_info}
 
 Return a JSON object with this exact structure:
 {{
@@ -220,8 +265,10 @@ Rules:
 - Put the slide title in the title placeholder (placeholderIdx={title_idx}).
 - Put EVERY key point listed above into the body placeholder (placeholderIdx={body_idx}) as its OWN bullet run - one run per key point, with bullet: true and level: 0. Never collapse multiple key points into a single bullet or drop points to save space.
 - {detail_guidance}
-- Use "image" type for pic placeholders with {{type: "image", image: {{source: "prompt", data: "description"}}}}.
-- Use "table" type for tbl placeholders.
+- Only use "image" type when a pre-vetted source image was supplied above (source: "selected") - never invent image data yourself; there is no image-generation step, only reuse of images that genuinely already exist.
+- Use "table" type for tbl placeholders (or any content placeholder, if no dedicated table placeholder exists) when the content is genuinely tabular (comparisons, structured data with 2+ rows and 2+ columns) - do not force prose bullet points into a table, and do not use a table for anything that reads better as bullets. Shape: {{type: "table", placeholderIdx: N, table: {{headerRow: true, rows: [["Column A", "Column B"], ["Row 1 value", "Row 1 value"], ["Row 2 value", "Row 2 value"]]}}}}. Every row must have the same number of cells as the header row. Keep cell text short (a few words) - tables are rendered at a fixed size, not auto-expanded.
+- Use "chart" type whenever the key points for this slide carry numbers that tell a story a reader would rather SEE than read: a trend over time, a comparison across categories, a breakdown of a whole, or a correlation. A slide whose points are mostly figures ("revenue rose from $11.7B to $37.2B across 2011-2025") should render that data as a chart, not as a list of sentences. Shape: {{type: "chart", placeholderIdx: N, chart: {{chartType: "bar"|"line"|"pie"|"scatter", categories: ["2011", "2020", "2025"], series: [{{name: "Revenue ($B)", values: [11.7, 23.5, 37.2]}}]}}}}. Pick chartType by intent: "line" for change over time, "bar" for comparison across categories, "pie" for parts of a single whole (one series, values summing to a meaningful total), "scatter" for relationships between two measures. Every series must have exactly as many values as there are categories, and values must be plain numbers - no units, no "%" or "$" inside the number (put those in the series name). Only chart figures that are actually present in the key points or key data; never invent or estimate values to fill a chart.
+- A chart or a table REPLACES the prose it visualizes - do not emit a chart and then also restate the same figures as bullets in the same body placeholder. A short bullet or two of interpretation ("growth flattened after 2023") alongside a chart is good; a duplicate of the chart's own numbers is not.
 - Each content item must have a placeholderIdx matching one of the available placeholders."""
 
             response = await llm.chat(
@@ -280,3 +327,49 @@ Rules:
             )
         except Exception as e:
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
+
+def _describe_visual(block: dict) -> str:
+    """One line naming what a prepared visual actually shows."""
+    kind = block.get("type")
+    if kind == "chart":
+        chart = block.get("chart") or {}
+        series = "; ".join(
+            f"{s.get('name')}: {', '.join(str(v) for v in (s.get('values') or [])[:12])}"
+            for s in (chart.get("series") or [])
+        )
+        categories = ", ".join(str(c) for c in (chart.get("categories") or [])[:12])
+        return (
+            f"a {chart.get('chartType', 'bar')} chart over [{categories}] showing {series}"
+        )
+    if kind == "table":
+        rows = (block.get("table") or {}).get("rows") or []
+        header = ", ".join(str(c) for c in (rows[0] if rows else [])[:8])
+        return f"a table with columns [{header}] and {max(0, len(rows) - 1)} data rows"
+    if kind == "metrics":
+        items = (block.get("metrics") or {}).get("items") or []
+        figures = "; ".join(f"{i.get('value')} {i.get('label')}" for i in items)
+        return f"a row of headline figures: {figures}"
+    return str(kind)
+
+
+def _prepared_visual_guidance(attached: list[dict]) -> str:
+    """What to tell the model about visuals already attached to this slide."""
+    if not attached:
+        return (
+            "\nNo chart, table or metric row has been built for this slide. If its "
+            "key points are carried by figures, stop and call build_chart, "
+            "build_table or build_key_metrics for this slide_index first - do not "
+            "write chart or table JSON here yourself."
+        )
+
+    described = "\n".join(f"  - {_describe_visual(block)}" for block in attached)
+    return (
+        "\nThe following has ALREADY been built for this slide and will be placed "
+        f"on it automatically:\n{described}\n"
+        "Do NOT emit chart, table or metrics content yourself. Write the title and "
+        "at most one or two short bullets that INTERPRET this data - what it means, "
+        "what changed, what follows from it. Your copy must be about THIS data and "
+        "these categories: naming any other subject, segment or figure would "
+        "contradict the visual sitting next to it. Do not list its numbers back; "
+        "the reader can already see them."
+    )

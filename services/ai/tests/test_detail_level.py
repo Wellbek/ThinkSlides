@@ -22,7 +22,12 @@ from app.agent.loop import (
 
 
 def _loop(mode: str | None = MODE_SIMPLE, detail_level: str | None = None) -> AgentLoop:
-    return AgentLoop(db=None, mode=mode, detail_level=detail_level)
+    loop = AgentLoop(db=None, mode=mode, detail_level=detail_level)
+    # These tests drive planning and drafting directly, so they stand in for a
+    # run whose user opted out of the consultation checkpoints - which are
+    # covered in test_agent_loop_workflow.py.
+    loop.questions_declined = True
+    return loop
 
 
 class _FakeRedis:
@@ -199,6 +204,55 @@ async def test_loop_injects_detail_level_into_plan_and_design_calls(monkeypatch)
     assert captured["detail_level"] == DETAIL_LEVEL_COMPREHENSIVE
 
 
+@pytest.mark.asyncio
+async def test_loop_injects_detail_level_into_analyze_document_and_extract_key_data(monkeypatch):
+    session_id = uuid.uuid4()
+    loop = _loop(detail_level=DETAIL_LEVEL_COMPREHENSIVE)
+    loop.redis_client = _FakeRedis()
+
+    async def _no_context(*a, **k):
+        return {}
+
+    async def _no_messages(*a, **k):
+        return []
+
+    monkeypatch.setattr(loop, "_load_context", _no_context)
+    monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
+
+    script = [
+        [
+            {"id": "1", "function": {"name": "analyze_document", "arguments": json.dumps({"document_path": "x.pdf"})}},
+            {"id": "2", "function": {"name": "extract_key_data", "arguments": json.dumps({"content": "x"})}},
+        ],
+        [],
+    ]
+    calls = {"n": 0}
+
+    async def _chat(*a, **k):
+        idx = calls["n"]
+        calls["n"] += 1
+        tool_calls = script[idx] if idx < len(script) else []
+        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+    loop.MAX_ITERATIONS = 2
+
+    captured: dict = {}
+
+    async def _execute_tool(name, args):
+        from app.agent.registry import ToolResult
+        captured[name] = args
+        return ToolResult(success=True, data={})
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    async for _ in loop.run(session_id):
+        pass
+
+    assert captured["analyze_document"]["detail_level"] == DETAIL_LEVEL_COMPREHENSIVE
+    assert captured["extract_key_data"]["detail_level"] == DETAIL_LEVEL_COMPREHENSIVE
+
+
 # ── Tool prompts vary by detail_level ───────────────────────────────────
 
 
@@ -252,3 +306,61 @@ async def test_design_slide_content_prompt_varies_by_detail_level():
     assert "thorough paragraph" in captured_prompts[0]
     assert "thorough paragraph" not in captured_prompts[1]
     assert captured_prompts[0] != captured_prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_extract_key_data_prompt_varies_by_detail_level():
+    from app.agent import run_context
+    from app.agent.tools.extract_key_data import ExtractKeyDataTool
+
+    captured_prompts = []
+
+    class _Capture:
+        async def chat(self, messages, tools=None):
+            captured_prompts.append(messages[0]["content"])
+            return {"message": {"content": "{}"}}
+
+    token = run_context.set_chat_provider(_Capture())
+    try:
+        await ExtractKeyDataTool.run(content="x", detail_level="comprehensive")
+        await ExtractKeyDataTool.run(content="x", detail_level="concise")
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert "up to 20 each" in captured_prompts[0]
+    assert "up to 20 each" not in captured_prompts[1]
+    assert captured_prompts[0] != captured_prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_extract_key_data_widens_the_content_window_at_higher_detail():
+    from app.agent import run_context
+    from app.agent.tools.extract_key_data import ExtractKeyDataTool
+
+    captured_prompts = []
+
+    class _Capture:
+        async def chat(self, messages, tools=None):
+            captured_prompts.append(messages[0]["content"])
+            return {"message": {"content": "{}"}}
+
+    long_content = "word " * 6000  # well beyond the "concise" 8000-char ceiling
+    token = run_context.set_chat_provider(_Capture())
+    try:
+        await ExtractKeyDataTool.run(content=long_content, detail_level="comprehensive")
+        await ExtractKeyDataTool.run(content=long_content, detail_level="concise")
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert len(captured_prompts[0]) > len(captured_prompts[1])
+
+
+def test_plan_presentation_structure_comprehensive_guidance_mentions_table_and_chart():
+    """Comprehensive-detail planning should actually propose real tables/
+    charts where the data supports them, now that Stages C/D make those
+    content types render for real instead of being schema-legal no-ops."""
+    from app.agent.tools.plan_presentation_structure import _DETAIL_GUIDANCE
+
+    comprehensive = _DETAIL_GUIDANCE["comprehensive"]
+    assert "table" in comprehensive.lower()
+    assert "chart" in comprehensive.lower()

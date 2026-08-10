@@ -6,14 +6,23 @@ Works with both template-based and default rendering modes.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Tuple, Optional
-from pptx.util import Inches, Pt, Emu
+from typing import Dict, Optional
 from dataclasses import dataclass
 from enum import Enum
 
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
+
+_EMU_PER_INCH = 914400
+
+
+def _default_slide_inches() -> tuple[float, float]:
+    """The built-in design system's canvas, in inches."""
+    from app.design_system import get_default_design_system
+
+    dims = get_default_design_system()["slideDimensions"]
+    return dims["widthEmu"] / _EMU_PER_INCH, dims["heightEmu"] / _EMU_PER_INCH
 
 
 class LayoutType(Enum):
@@ -56,9 +65,11 @@ class LayoutEngine:
     - Readable font sizes (≥18pt for body, ≥32pt for titles)
     """
 
-    # Slide dimensions (standard 16:9)
-    SLIDE_WIDTH = 10.0  # inches
-    SLIDE_HEIGHT = 5.625  # inches
+    # Slide dimensions (PowerPoint's own 16:9 canvas). Derived from the shared
+    # design system rather than restated, so this can never disagree with the
+    # canvas the renderer actually creates.
+    SLIDE_WIDTH = _default_slide_inches()[0]
+    SLIDE_HEIGHT = _default_slide_inches()[1]
 
     # Layout configurations
     LAYOUTS: Dict[LayoutType, LayoutConfig] = {
@@ -215,31 +226,46 @@ class LayoutEngine:
 
         has_image = any(c.get("type") == "image" for c in contents)
         has_table = any(c.get("type") == "table" for c in contents)
-        has_content_text = any(
-            c.get("type") == "text" and len(c.get("runs", [])) > 2
-            for c in contents
-        )
+        has_chart = any(c.get("type") == "chart" for c in contents)
 
-        # Count text placeholders to detect two-column
-        text_placeholders = sum(
-            1 for c in contents
-            if c.get("type") == "text" and c.get("placeholderIdx") is not None
-        )
+        text_items = [c for c in contents if c.get("type") == "text"]
 
-        # Title slide: minimal content, likely title placeholder
-        if len(contents) <= 2 and not has_image and not has_table:
-            return LayoutType.TITLE
-
-        # Table slide
+        # Object slides are classified by what they carry, before any
+        # text-shape reasoning - a slide whose point is a table or a chart
+        # needs that layout even though it also has a title and some prose.
         if has_table:
             return LayoutType.TABLE
 
-        # Image slide
+        # Chart and image both use the same generous content-area layout -
+        # neither maps to a distinct LayoutType of its own (see LayoutType),
+        # so a chart falls through to CONTENT below, same as it did before
+        # charts were a real content type.
         if has_image:
             return LayoutType.IMAGE
 
-        # Two-column: multiple text placeholders
-        if text_placeholders >= 2:
+        if has_chart:
+            return LayoutType.CONTENT
+
+        # A genuine title slide carries a title and, at most, a one-line
+        # subtitle - no bulleted body.
+        #
+        # This used to be `len(contents) <= 2`, which matched the *ordinary*
+        # shape the content designer emits for every content slide (one title
+        # text item + one body text item). The result was that essentially
+        # every slide in a deck was classified TITLE, rendered on the title
+        # layout, and had its bullets stranded outside the layout's
+        # placeholders. Judge by whether the body actually reads like a body.
+        if not text_items:
+            return LayoutType.TITLE
+
+        body_items = text_items[1:]
+        body_runs = [r for c in body_items for r in c.get("runs", [])]
+        body_is_bulleted = any(r.get("bullet") for r in body_runs)
+        if len(body_runs) <= 1 and not body_is_bulleted:
+            return LayoutType.TITLE
+
+        # Two-column: a title plus two or more distinct body text items.
+        if len(body_items) >= 2:
             return LayoutType.TWO_COLUMN
 
         # Default content

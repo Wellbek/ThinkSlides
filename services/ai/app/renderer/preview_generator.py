@@ -11,7 +11,6 @@ import subprocess
 import tempfile
 import shutil
 from typing import Optional, List
-from pathlib import Path
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -49,43 +48,22 @@ class PreviewGenerator:
         temp_dir = tempfile.mkdtemp(prefix="pptx_preview_")
 
         try:
-            # Step 1: PPTX -> PDF via LibreOffice headless.
-            # Use an isolated user profile to avoid lock collisions with any
-            # concurrent LibreOffice instance, and set HOME so the profile is
-            # writable. Note: LibreOffice returns exit code 0 even when it
-            # fails to load the source file, so we verify the PDF was created.
-            profile_dir = os.path.join(temp_dir, "lo_profile")
-            result = subprocess.run(
-                [
-                    "libreoffice",
-                    "--headless",
-                    f"-env:UserInstallation=file://{profile_dir}",
-                    "--convert-to", "pdf",
-                    "--outdir", temp_dir,
-                    pptx_path,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                env={**os.environ, "HOME": temp_dir},
-            )
-
-            base_name = os.path.splitext(os.path.basename(pptx_path))[0]
-            pdf_path = os.path.join(temp_dir, f"{base_name}.pdf")
-
-            if not os.path.exists(pdf_path):
-                logger.error(
-                    "preview_failed",
-                    reason="libreoffice_no_pdf",
-                    stderr=result.stderr,
-                    stdout=result.stdout,
-                    pptx_path=pptx_path,
-                )
+            pdf_path = self.convert_to_pdf(pptx_path, temp_dir)
+            if not pdf_path:
                 return []
 
-            # Step 2: PDF -> one PNG per page via PyMuPDF (fitz).
-            # LibreOffice's --convert-to png only exports the first slide, so
-            # rendering via PDF is required to preview every slide.
+            # Persist the intermediate PDF alongside the preview PNGs so
+            # validate_rendered_output can inspect the exact same
+            # LibreOffice-rendered geometry later without paying for a
+            # second (slow) conversion - see get_pdf_path.
+            try:
+                shutil.copy(pdf_path, os.path.join(session_preview_dir, "deck.pdf"))
+            except OSError as e:
+                logger.warning("preview_pdf_persist_failed", session_id=session_id, error=str(e))
+
+            # PDF -> one PNG per page via PyMuPDF (fitz). LibreOffice's
+            # --convert-to png only exports the first slide, so rendering
+            # via PDF is required to preview every slide.
             preview_urls = self._render_pdf_to_pngs(
                 pdf_path, session_preview_dir, session_id
             )
@@ -99,14 +77,66 @@ class PreviewGenerator:
 
             return preview_urls
 
-        except subprocess.TimeoutExpired:
-            logger.error("preview_failed", reason="timeout", pptx_path=pptx_path)
-            return []
         except Exception as e:
             logger.error("preview_failed", reason=str(e), pptx_path=pptx_path)
             return []
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @staticmethod
+    def convert_to_pdf(pptx_path: str, work_dir: str) -> Optional[str]:
+        """
+        Convert pptx_path to PDF via LibreOffice headless, writing into
+        work_dir (caller owns work_dir's lifecycle/cleanup). Returns the PDF
+        path, or None on failure.
+
+        Uses an isolated user profile to avoid lock collisions with any
+        concurrent LibreOffice instance, and sets HOME so the profile is
+        writable. LibreOffice returns exit code 0 even when it fails to load
+        the source file, so the PDF's existence is verified rather than the
+        exit code.
+        """
+        profile_dir = os.path.join(work_dir, "lo_profile")
+        try:
+            result = subprocess.run(
+                [
+                    "libreoffice",
+                    "--headless",
+                    f"-env:UserInstallation=file://{profile_dir}",
+                    "--convert-to", "pdf",
+                    "--outdir", work_dir,
+                    pptx_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env={**os.environ, "HOME": work_dir},
+            )
+        except subprocess.TimeoutExpired:
+            logger.error("pdf_conversion_failed", reason="timeout", pptx_path=pptx_path)
+            return None
+
+        base_name = os.path.splitext(os.path.basename(pptx_path))[0]
+        pdf_path = os.path.join(work_dir, f"{base_name}.pdf")
+
+        if not os.path.exists(pdf_path):
+            logger.error(
+                "pdf_conversion_failed",
+                reason="libreoffice_no_pdf",
+                stderr=result.stderr,
+                stdout=result.stdout,
+                pptx_path=pptx_path,
+            )
+            return None
+
+        return pdf_path
+
+    def get_pdf_path(self, session_id: str) -> Optional[str]:
+        """The intermediate PDF generate_previews already produced for this
+        session, if any - lets validate_rendered_output reuse the exact same
+        LibreOffice-rendered geometry instead of converting a second time."""
+        pdf_path = os.path.join(self.output_dir, session_id, "deck.pdf")
+        return pdf_path if os.path.exists(pdf_path) else None
 
     @staticmethod
     def _render_pdf_to_pngs(

@@ -213,6 +213,44 @@ def test_firecrawl_snippets_are_capped():
     assert len(parsed[0]["snippet"]) == search_backends.FIRECRAWL_SNIPPET_CHARS
 
 
+def test_firecrawl_extracts_candidate_images_from_scraped_markdown():
+    """Reused for select_source_image's catalog - never generated, only
+    surfaced as a candidate the LLM still has to confidently confirm."""
+    markdown = (
+        "# Report\n\n"
+        "![Revenue chart](https://example.com/chart.png)\n\n"
+        "Some text here.\n\n"
+        "![Team photo](https://example.com/team.jpg \"caption\")"
+    )
+    parsed = search_backends.parse_firecrawl_response(
+        {"data": {"web": [{"url": "https://example.com/report", "title": "Report", "markdown": markdown}]}}
+    )
+    assert parsed[0]["images"] == ["https://example.com/chart.png"]
+
+
+def test_firecrawl_images_absent_when_markdown_has_none():
+    parsed = search_backends.parse_firecrawl_response(
+        {"data": {"web": [{"url": "https://x.test/a", "title": "A", "markdown": "just text, no images"}]}}
+    )
+    assert parsed[0]["images"] == []
+
+
+def test_firecrawl_images_are_capped_per_result():
+    markdown = "\n".join(f"![img{i}](https://x.test/{i}.png)" for i in range(10))
+    parsed = search_backends.parse_firecrawl_response(
+        {"data": {"web": [{"url": "https://x.test/a", "title": "A", "markdown": markdown}]}}
+    )
+    assert len(parsed[0]["images"]) == search_backends.MAX_IMAGES_PER_RESULT
+
+
+def test_other_backends_report_no_images():
+    """Tavily/Zhipu/Anthropic/OpenAI never claim image candidates they don't have."""
+    parsed = search_backends.parse_tavily_response(
+        {"results": [{"url": "https://x.test/a", "title": "A", "content": "c"}]}
+    )
+    assert "images" not in parsed[0] or parsed[0].get("images") == []
+
+
 # ── Anthropic (native) ─────────────────────────────────────────────────
 
 

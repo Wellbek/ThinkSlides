@@ -116,6 +116,62 @@ async def test_validate_placeholder_warning():
     assert result.success is True
     assert len(result.data["warnings"]) > 0
 
+
+@pytest.mark.asyncio
+async def test_validate_valid_table():
+    slide = {
+        "slideIndex": 0,
+        "layoutId": "1",
+        "layoutName": "Default",
+        "contents": [{
+            "type": "table",
+            "table": {"rows": [["Region", "Revenue"], ["EMEA", "$4.2M"], ["APAC", "$3.1M"]], "headerRow": True},
+        }],
+    }
+    result = await ValidateSlideJsonTool.run(slide_json=json.dumps(slide))
+    assert result.success is True
+    assert result.data["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_validate_table_missing_rows():
+    slide = {
+        "slideIndex": 0,
+        "layoutId": "1",
+        "layoutName": "Default",
+        "contents": [{"type": "table", "table": {}}],
+    }
+    result = await ValidateSlideJsonTool.run(slide_json=json.dumps(slide))
+    assert result.success is False
+    assert any("rows" in e for e in result.data["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_table_rows_not_arrays():
+    slide = {
+        "slideIndex": 0,
+        "layoutId": "1",
+        "layoutName": "Default",
+        "contents": [{"type": "table", "table": {"rows": ["not", "a", "grid"]}}],
+    }
+    result = await ValidateSlideJsonTool.run(slide_json=json.dumps(slide))
+    assert result.success is False
+    assert any("array of cell values" in e for e in result.data["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_table_ragged_rows_warns_not_errors():
+    slide = {
+        "slideIndex": 0,
+        "layoutId": "1",
+        "layoutName": "Default",
+        "contents": [{"type": "table", "table": {"rows": [["A", "B"], ["only-one"]]}}],
+    }
+    result = await ValidateSlideJsonTool.run(slide_json=json.dumps(slide))
+    assert result.success is True
+    assert any("inconsistent column counts" in w for w in result.data["warnings"])
+
+
 # ── select_layout ──────────────────────────────────────────────
 
 from app.agent.tools.select_layout import SelectLayoutTool
@@ -293,11 +349,57 @@ async def test_ask_user_question_still_accepts_a_json_encoded_string():
 
 
 @pytest.mark.asyncio
-async def test_ask_user_question_treats_a_plain_string_as_one_option():
+async def test_ask_user_question_rejects_a_question_with_nothing_to_pick_from():
+    """A question with one suggestion (or none) leaves the user with nothing to
+    react to, which is the failure mode the options exist to prevent - so it is
+    sent back for the model to ask properly rather than shown as-is."""
     result = await AskUserQuestionTool.run(question="Pick one", options="Only choice")
 
+    assert result.success is False
+    assert "Pick one" in result.error
+    assert "2" in result.error
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_asks_several_things_in_one_pause():
+    result = await AskUserQuestionTool.run(
+        questions=[
+            {"question": "Who is it for?", "options": ["Investors", "Staff"]},
+            {"question": "How long?", "options": ["5 slides", "10 slides", "15 slides"]},
+        ],
+        context="Planning a deck about coffee",
+    )
+
     assert result.success is True
-    assert result.data["options"] == ["Only choice"]
+    assert [q["question"] for q in result.data["questions"]] == [
+        "Who is it for?",
+        "How long?",
+    ]
+    # The first question also fills the single-question fields, which older
+    # persisted sessions and the chat-message rendering still read.
+    assert result.data["question"] == "Who is it for?"
+    assert result.data["options"] == ["Investors", "Staff"]
+    assert result.data["context"] == "Planning a deck about coffee"
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_accepts_the_questions_array_as_a_json_string():
+    result = await AskUserQuestionTool.run(
+        questions='[{"question": "Which angle?", "options": ["History", "Growth"]}]'
+    )
+
+    assert result.success is True
+    assert result.data["questions"][0]["options"] == ["History", "Growth"]
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_collapses_duplicate_options():
+    result = await AskUserQuestionTool.run(
+        question="Which colour?", options=["Green", "green", "Blue"]
+    )
+
+    assert result.success is True
+    assert result.data["options"] == ["Green", "Blue"]
 
 
 # ── registry: array-typed parameters get an items schema ────────────────
@@ -312,3 +414,34 @@ def test_ask_user_question_schema_declares_options_as_a_string_array():
 
     assert options_prop["type"] == "array"
     assert options_prop["items"] == {"type": "string"}
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_hoists_context_attached_to_a_question():
+    """Observed on the outline review: the model put the outline on the
+    question object instead of the call, so the user was asked to approve a
+    plan they could not see."""
+    result = await AskUserQuestionTool.run(
+        questions=[{
+            "question": "Shall we go ahead with this outline?",
+            "options": ["Go ahead as planned", "Add a slide on risks"],
+            "context": "1. Cover\n2. Market size\n3. Outlook",
+        }],
+    )
+
+    assert result.success is True
+    assert result.data["context"] == "1. Cover\n2. Market size\n3. Outlook"
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_call_context_wins_over_a_hoisted_one():
+    result = await AskUserQuestionTool.run(
+        questions=[{
+            "question": "Shall we go ahead?",
+            "options": ["Yes", "Add a slide on risks"],
+            "context": "inner",
+        }],
+        context="outer",
+    )
+
+    assert result.data["context"] == "outer"

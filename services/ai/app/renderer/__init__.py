@@ -1,1 +1,1 @@
-from app.renderer.pptx_renderer import PPTXRenderer
+from app.renderer.pptx_renderer import PPTXRenderer as PPTXRenderer

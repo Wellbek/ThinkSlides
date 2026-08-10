@@ -13,6 +13,37 @@ import time
 
 logger = get_logger(__name__)
 
+# How thoroughly to mine the source content, keyed by the composer's
+# detail_level - mirrors the pattern in plan_presentation_structure.py /
+# design_slide_content.py. Concise keeps this tool's original "headline
+# facts only" behavior; the others progressively ask for more items per
+# category and widen how much source content is actually considered.
+_DETAIL_GUIDANCE = {
+    "concise": (
+        "Extract only the handful of most important items per category "
+        "(up to 5 each) - the headline facts, not exhaustive detail."
+    ),
+    "detailed": (
+        "Extract a solid, representative set of items per category (up to "
+        "10 each), including secondary facts that are still genuinely "
+        "useful for a presentation."
+    ),
+    "comprehensive": (
+        "Extract as many genuinely relevant items per category as the "
+        "content actually supports (up to 20 each) - be thorough. This "
+        "feeds a comprehensive-depth presentation that should not have to "
+        "go back to the source document to find something you skipped."
+    ),
+}
+
+# How much of the source content to actually consider, in lockstep with
+# analyze_document's own detail-level truncation ceiling.
+_DETAIL_MAX_CHARS = {
+    "concise": 8000,
+    "detailed": 16000,
+    "comprehensive": 28000,
+}
+
 
 class ExtractKeyDataTool:
     """Extract specific data points from document content using LLM."""
@@ -39,6 +70,12 @@ class ExtractKeyDataTool:
                     description="Comma-separated list of data types to extract: metrics,dates,names,figures,all",
                     required=False,
                 ),
+                ToolParameter(
+                    name="detail_level",
+                    type="string",
+                    description="How thoroughly to mine the content: concise, detailed, or comprehensive",
+                    required=False,
+                ),
             ],
         )
 
@@ -47,6 +84,7 @@ class ExtractKeyDataTool:
         cls,
         content: str,
         data_types: str = "all",
+        detail_level: str = "detailed",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -55,8 +93,13 @@ class ExtractKeyDataTool:
             # tools-tier model, which only exists for the default provider.
             llm = get_chat_provider() or get_llm_provider()
 
+            detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
+            max_chars = _DETAIL_MAX_CHARS.get(detail_level, _DETAIL_MAX_CHARS["detailed"])
+
             prompt = f"""Extract key data points from the following content.
 Focus on: {data_types}
+
+{detail_guidance}
 
 Return a JSON object with these keys:
 - "metrics": list of {{name, value, unit}} objects
@@ -67,7 +110,7 @@ Return a JSON object with these keys:
 - "topics": list of main topics
 
 Content:
-{content[:8000]}"""
+{content[:max_chars]}"""
 
             response = await llm.chat(
                 messages=[{"role": "user", "content": prompt}],

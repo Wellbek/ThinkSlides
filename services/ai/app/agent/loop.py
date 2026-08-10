@@ -16,9 +16,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import ai_settings
 from app.agent import run_context
 from app.agent.registry import get_registry, ToolResult
-from app.llm.provider import build_chat_provider, get_llm_provider
+from app.agent.summaries import summarize_tool_result
+from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
+from app.llm.provider import _is_rate_limit_error, build_chat_provider, get_llm_provider
+from app.llm.retry_notices import (
+    REASON_TRANSIENT,
+    RetryNotice,
+    publish_retry_notice,
+    reset_retry_observer,
+    set_retry_observer,
+)
 from app.observability.logging import get_logger
-from app.config import settings
 import asyncio
 import json
 import re
@@ -52,6 +60,55 @@ DETAIL_LEVEL_CONCISE = "concise"
 DETAIL_LEVEL_DETAILED = "detailed"
 DETAIL_LEVEL_COMPREHENSIVE = "comprehensive"
 DETAIL_LEVELS = {DETAIL_LEVEL_CONCISE, DETAIL_LEVEL_DETAILED, DETAIL_LEVEL_COMPREHENSIVE}
+
+# How much research a Deep Thinking run does, by content depth: (floor, cap)
+# on the number of searches. The floor exists because one lookup returning a
+# handful of links was being treated as the whole truth about a topic - a deck
+# is only as trustworthy as the breadth behind it, and a single query answers
+# one facet of a subject that has several. The cap stops the agent grinding
+# through near-identical queries when the results stop improving.
+RESEARCH_BUDGET = {
+    DETAIL_LEVEL_CONCISE: (3, 6),
+    DETAIL_LEVEL_DETAILED: (4, 9),
+    DETAIL_LEVEL_COMPREHENSIVE: (5, 12),
+}
+
+# How many distinct sources a run aims to have gathered before it writes
+# anything. Below this the agent is told to keep looking rather than plan.
+RESEARCH_MIN_SOURCES = 6
+
+# How many findings stay in the prompt. Large enough to hold every search a run
+# is asked to make, since evicting the early ones would throw away the breadth
+# the floor above exists to produce; snippets are trimmed instead so the
+# context cost stays flat.
+MAX_RESEARCH_IN_CONTEXT = 48
+RESEARCH_SNIPPET_CHARS = 320
+
+# Ways a user tells us to stop asking and just build the thing. Matched against
+# what they actually typed, because the alternative - trusting the model to
+# remember an instruction from six tool calls ago - is how a "don't ask me
+# anything" run ends up interrogating someone anyway. Kept deliberately narrow:
+# a false positive silently disables the consultation the user asked for.
+_NO_QUESTIONS_PATTERNS = (
+    r"\bdon'?t ask\b",
+    r"\bdo not ask\b",
+    r"\bno (?:more )?questions?\b",
+    r"\bstop asking\b",
+    r"\bwithout asking\b",
+    r"\bjust (?:build|make|create|do|generate) it\b",
+    r"\b(?:use )?your best judgement?\b",
+    r"\bno need to ask\b",
+    r"\bskip the questions?\b",
+)
+_NO_QUESTIONS_RE = re.compile("|".join(_NO_QUESTIONS_PATTERNS), re.IGNORECASE)
+
+
+def user_declined_questions(chat_messages: list[dict]) -> bool:
+    """True when the user has explicitly asked not to be interrupted."""
+    return any(
+        m.get("role") == "user" and _NO_QUESTIONS_RE.search(m.get("content") or "")
+        for m in chat_messages
+    )
 
 
 def normalize_detail_level(level: str | None) -> str:
@@ -108,8 +165,12 @@ TOOL_PHASES = {
     "select_layout": "layout_selection",
     "design_slide_content": "content_generation",
     "validate_slide_json": "validation",
-    "generate_image_prompt": "content_generation",
+    "select_source_image": "content_generation",
+    "build_chart": "content_generation",
+    "build_table": "content_generation",
+    "build_key_metrics": "content_generation",
     "finalize_and_render_pptx": "rendering",
+    "validate_rendered_output": "validation",
     "ask_user_question": "user_input",  # Future: pause for user input
 }
 
@@ -130,15 +191,107 @@ class WorkingState:
         # back verbatim in the next call - the same class of JSON-escaping
         # mistake as available_layouts (see _run's tool-dispatch injection).
         self.selected_layouts: dict[int, dict] = {}
+        # slide_index -> the resolved image dict ({source, data, altText})
+        # chosen by select_source_image, keyed so design_slide_content can be
+        # auto-supplied a pre-vetted image instead of re-selecting or (worse)
+        # having to carry raw image bytes through its own LLM output.
+        self.selected_images: dict[int, dict] = {}
+        # slide_index -> content blocks built by build_chart/build_table/
+        # build_key_metrics. Held here rather than asked back from the model
+        # because these carry the deck's actual figures: routing validated
+        # numbers through a second LLM response is how a chart ends up
+        # disagreeing with the bullets beside it.
+        self.prepared_visuals: dict[int, list[dict]] = {}
         self.current_step_index: int = 0
         self.pending_question: dict | None = None
         self.is_paused_for_user: bool = False
         self.has_called_finalize: bool = False
+        # Ground-truth output validation (see validate_rendered_output) must
+        # run at least once after finalize before the loop is allowed to
+        # exit - but bounded, so a deck with a genuinely unfixable overflow
+        # (e.g. content that cannot fit no matter how it's redesigned)
+        # cannot loop forever chasing a clean validation result.
+        self.has_called_validate: bool = False
+        # True only once a validation run came back with NO issues. The exit
+        # gate requires this (or the retry cap), so a deck with a known
+        # rendering defect can't be announced as finished.
+        self.validation_clean: bool = False
+        # Issues reported by the most recent validation run, replayed to the
+        # model when it tries to stop without fixing them.
+        self.validation_issues: list[dict] = []
+        # Slide indices the last validation run actually complained about.
+        # Only these get redesigned: a deck where one chart overflows does not
+        # need its other slides rewritten, and regenerating them costs an LLM
+        # call each and risks changing copy the user was happy with.
+        self.slides_needing_revision: list[int] = []
+        self.validation_attempts: int = 0
+        self.MAX_VALIDATION_ATTEMPTS = 3
+        # Checks that could not run at all (LibreOffice conversion error, a
+        # provider failure in the redesign feeding them). Tracked separately
+        # from real attempts so infrastructure trouble cannot exhaust the
+        # revision budget, but still bounded so it cannot spin forever.
+        self.validation_failures: int = 0
+        self.MAX_VALIDATION_FAILURES = 3
+        # Set once finalize_and_render_pptx succeeds - the loop always knows
+        # the true rendered path with certainty, so validate_rendered_output
+        # is auto-supplied this rather than trusting the LLM's own copy.
+        self.last_rendered_path: str | None = None
+        # slide_finalized payloads produced by the most recent render, held
+        # back until validation has settled. A slide the validator is about to
+        # send back for redesign is not finalized, so publishing its preview
+        # the moment it renders shows the user a slide that then changes
+        # underneath them. Re-rendering overwrites this list, so whatever is
+        # eventually published always describes the last render.
+        self.pending_slide_previews: list[dict] = []
+        self.previews_published: bool = False
+        # The finalize_and_render_pptx payload for the current render, held
+        # back with the previews. The download card and the file's entry in the
+        # sources list are driven off this, so neither appears until the deck
+        # has actually passed validation.
+        self.pending_render_result: dict | None = None
         self.completed_tools: dict[str, dict] = {}  # tool_name -> {args, result, timestamp}
         self.last_error: str | None = None
         self.answered_questions: list[dict] = []  # Track questions that have been answered
-        self.web_search_calls: int = 0  # Cap repeated web_search calls per run
-        self.MAX_WEB_SEARCH_CALLS = 3
+        # How many web searches this run has attempted, and how many distinct
+        # sources they produced between them. Both are gates: the run may not
+        # start planning off a single lookup (see RESEARCH_MIN_SEARCHES), and
+        # may not keep searching forever either (see RESEARCH_MAX_SEARCHES).
+        self.web_search_calls: int = 0
+        self.researched_urls: set[str] = set()
+        # Questions the agent has put to the user, by checkpoint. The planning
+        # consultation is enforced rather than merely encouraged - see
+        # AgentLoop._check_precondition - so it has to be remembered across the
+        # pause/resume cycle that answering a question involves.
+        self.consulted_before_planning: bool = False
+        self.reviewed_outline_with_user: bool = False
+
+    # Above this share of the deck being flagged, redesigning everything is
+    # simpler (and no more expensive) than steering slide-by-slide edits.
+    FULL_REWRITE_ISSUE_RATIO = 0.6
+
+    def compute_slides_needing_revision(self, issues: list[dict]) -> list[int]:
+        """
+        Which slides the next revision pass should touch.
+
+        Returns just the flagged slides for a localised defect - one chart
+        running off one slide should cost one redesign, not a regeneration of
+        the whole deck. When most of the deck is flagged the distinction stops
+        being worth enforcing, so an empty list is returned, which callers read
+        as "no restriction".
+        """
+        flagged = sorted({
+            issue["slideIndex"] for issue in issues
+            if isinstance(issue.get("slideIndex"), int)
+        })
+        if not flagged:
+            return []
+
+        total = len(self.accumulated_slides) or (
+            (self.presentation_structure or {}).get("totalSlides", 0)
+        )
+        if total and len(flagged) / total >= self.FULL_REWRITE_ISSUE_RATIO:
+            return []
+        return flagged
 
     def add_slide(self, slide: dict) -> None:
         """Add a slide to the accumulated list, or replace it if this slideIndex
@@ -152,9 +305,82 @@ class WorkingState:
                     return
         self.accumulated_slides.append(slide)
 
+    def resolve_and_add_slide(self, slide_data: dict) -> None:
+        """
+        Add a designed slide, first resolving any image content item whose
+        source is the "selected" sentinel. design_slide_content is told
+        about a pre-vetted image (if any) via selected_image_context and
+        asked to reference it as {"type": "image", "image": {"source":
+        "selected"}} rather than inventing or copying raw image data into
+        its own output - this is the server-side step that turns that
+        sentinel into the real {source, data} the renderer can use, or
+        drops the item entirely if nothing was actually selected for this
+        slide (never ships a reference the renderer cannot resolve).
+        """
+        slide_index = slide_data.get("slideIndex")
+        resolved = self.selected_images.get(slide_index)
+        contents = slide_data.get("contents")
+
+        if isinstance(contents, list):
+            new_contents = []
+            for item in contents:
+                is_selected_sentinel = (
+                    isinstance(item, dict)
+                    and item.get("type") == "image"
+                    and isinstance(item.get("image"), dict)
+                    and item["image"].get("source") == "selected"
+                )
+                if is_selected_sentinel:
+                    if resolved:
+                        merged_image = dict(resolved)
+                        placeholder_idx = item.get("placeholderIdx", item["image"].get("placeholderIdx"))
+                        if placeholder_idx is not None:
+                            merged_image["placeholderIdx"] = placeholder_idx
+                        new_contents.append({**item, "image": merged_image})
+                    continue
+                new_contents.append(item)
+            slide_data = {**slide_data, "contents": new_contents}
+
+        # Attach anything build_chart/build_table/build_key_metrics prepared
+        # for this slide. Any chart or table the model wrote inline is
+        # dropped in favour of the validated one, so a slide cannot end up
+        # carrying the same figures twice.
+        prepared = self.prepared_visuals.get(slide_index)
+        if prepared:
+            prepared_types = {block.get("type") for block in prepared}
+            kept = [
+                item for item in slide_data.get("contents", [])
+                if not (isinstance(item, dict) and item.get("type") in prepared_types)
+            ]
+            slide_data = {**slide_data, "contents": [*kept, *prepared]}
+
+        self.add_slide(slide_data)
+
     def get_slides_json(self) -> str:
-        """Get accumulated slides as JSON string."""
-        return json.dumps(self.accumulated_slides)
+        """The deck as JSON, in the order the slides are meant to be read.
+
+        Slides accumulate in the order ``design_slide_content`` happened to be
+        called, which is not the order they were planned in - a model that
+        designs slide 5 before slide 2 (routinely, and always after a
+        validation pass sends specific slides back) produced a deck whose
+        narrative ran out of sequence: the closing "Implications" slide
+        rendered second. Ordering here rather than at each consumer means the
+        renderer, the markdown fallback and the validator all see the same
+        deck.
+        """
+        return json.dumps(self.ordered_slides())
+
+    def ordered_slides(self) -> list[dict]:
+        """Accumulated slides sorted by their planned index.
+
+        A slide with no index keeps its position relative to the slides
+        around it, since a stable sort leaves equal keys in insertion order.
+        """
+        def key(slide: dict) -> int:
+            index = slide.get("slideIndex")
+            return index if isinstance(index, int) else 10**6
+
+        return sorted(self.accumulated_slides, key=key)
 
     def record_completed_tool(self, name: str, args: dict, result: dict) -> None:
         """Record a successfully completed tool call."""
@@ -218,7 +444,7 @@ class WorkingState:
 
         if self.accumulated_slides:
             lines.append(f"### Slides Already Designed ({len(self.accumulated_slides)} slides)")
-            for i, slide in enumerate(self.accumulated_slides):
+            for i, slide in enumerate(self.ordered_slides()):
                 contents = slide.get("contents") or [{}]
                 runs = contents[0].get("runs") or [{}]
                 title = runs[0].get("text", f"Slide {i+1}")
@@ -252,14 +478,28 @@ class WorkingState:
         self.accumulated_slides = []
         self.presentation_structure = None
         self.selected_layouts = {}
+        self.selected_images = {}
         self.current_step_index = 0
         self.pending_question = None
         self.is_paused_for_user = False
         self.has_called_finalize = False
+        self.has_called_validate = False
+        self.validation_clean = False
+        self.validation_issues = []
+        self.slides_needing_revision = []
+        self.validation_attempts = 0
+        self.validation_failures = 0
+        self.last_rendered_path = None
+        self.pending_slide_previews = []
+        self.previews_published = False
+        self.pending_render_result = None
         self.completed_tools = {}
         self.last_error = None
         self.answered_questions = []
         self.web_search_calls = 0
+        self.researched_urls = set()
+        self.consulted_before_planning = False
+        self.reviewed_outline_with_user = False
 
 
 class AgentLoop:
@@ -276,10 +516,16 @@ class AgentLoop:
 
     MAX_ITERATIONS = 25
 
-    # A rate limit is a wait, not a failure. Three retries covers the usual
-    # per-minute window without letting a genuinely broken key hang the run.
+    # Transient provider failures (5xx, timeouts) are a wait, not a failure.
+    # Rate limits are retried in the provider layer instead - see
+    # _chat_with_retry for why they must not be retried in both places.
     MAX_LLM_RETRIES = 3
     RETRY_BASE_SECONDS = 5.0
+
+    # How often the loop looks for retry notices while a call is in flight.
+    # Fast enough that a countdown appears promptly, cheap enough to be
+    # invisible next to calls measured in seconds.
+    NOTICE_POLL_SECONDS = 0.2
 
     def __init__(
         self,
@@ -312,6 +558,7 @@ class AgentLoop:
         self.context: dict = {}
         self._resumed_design_system: dict | None = None
         self._resumed_research: list | None = None
+        self._resumed_image_catalog: list | None = None
         self.redis_client = None
         self.mode = normalize_mode(mode) if mode is not None else None
         self.detail_level = normalize_detail_level(detail_level) if detail_level is not None else None
@@ -319,6 +566,9 @@ class AgentLoop:
         self.search_config: ai_settings.SearchConfig | None = None
         self._search_token = None
         self._provider_token = None
+        # Set from the conversation in _run: the consultation checkpoints are
+        # enforced, so the user's "just build it" has to be able to lift them.
+        self.questions_declined: bool = False
 
     async def _configure(self) -> None:
         """Resolve the organisation's settings into this run's provider and mode.
@@ -388,13 +638,29 @@ class AgentLoop:
             "accumulated_slides": self.working_state.accumulated_slides,
             "presentation_structure": self.working_state.presentation_structure,
             "selected_layouts": self.working_state.selected_layouts,
+            "selected_images": self.working_state.selected_images,
             "current_step_index": self.working_state.current_step_index,
             "completed_tools": self.working_state.completed_tools,
             "has_called_finalize": self.working_state.has_called_finalize,
+            "has_called_validate": self.working_state.has_called_validate,
+            "validation_attempts": self.working_state.validation_attempts,
+            "validation_failures": self.working_state.validation_failures,
+            "validation_clean": self.working_state.validation_clean,
+            "validation_issues": self.working_state.validation_issues,
+            "slides_needing_revision": self.working_state.slides_needing_revision,
+            "last_rendered_path": self.working_state.last_rendered_path,
+            "pending_slide_previews": self.working_state.pending_slide_previews,
+            "previews_published": self.working_state.previews_published,
+            "pending_render_result": self.working_state.pending_render_result,
             "last_error": self.working_state.last_error,
             "pending_question": self.working_state.pending_question,
             "answered_questions": self.working_state.answered_questions,
             "web_search_calls": self.working_state.web_search_calls,
+            "researched_urls": sorted(self.working_state.researched_urls),
+            # Without these, the run that resumes after answering the planning
+            # question would find the checkpoint unmet and ask all over again.
+            "consulted_before_planning": self.working_state.consulted_before_planning,
+            "reviewed_outline_with_user": self.working_state.reviewed_outline_with_user,
             # Carried so a run paused on a question resumes at the same effort
             # level - the resume request has no mode of its own.
             "mode": self.mode,
@@ -403,6 +669,7 @@ class AgentLoop:
             # research, since only WorkingState (not context) was persisted.
             "design_system": self.context.get("design_system"),
             "research": self.context.get("research"),
+            "image_catalog": self.context.get("imageCatalog"),
             "detail_level": self.detail_level,
         }
         redis_client = await self._get_redis_client()
@@ -429,13 +696,33 @@ class AgentLoop:
             self.working_state.selected_layouts = {
                 int(k): v for k, v in state_dict.get("selected_layouts", {}).items()
             }
+            self.working_state.selected_images = {
+                int(k): v for k, v in state_dict.get("selected_images", {}).items()
+            }
             self.working_state.current_step_index = state_dict.get("current_step_index", 0)
             self.working_state.completed_tools = state_dict.get("completed_tools", {})
             self.working_state.has_called_finalize = state_dict.get("has_called_finalize", False)
+            self.working_state.has_called_validate = state_dict.get("has_called_validate", False)
+            self.working_state.validation_attempts = state_dict.get("validation_attempts", 0)
+            self.working_state.validation_failures = state_dict.get("validation_failures", 0)
+            self.working_state.validation_clean = state_dict.get("validation_clean", False)
+            self.working_state.validation_issues = state_dict.get("validation_issues", [])
+            self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
+            self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
+            self.working_state.pending_slide_previews = state_dict.get("pending_slide_previews", [])
+            self.working_state.previews_published = state_dict.get("previews_published", False)
+            self.working_state.pending_render_result = state_dict.get("pending_render_result")
             self.working_state.last_error = state_dict.get("last_error")
             self.working_state.pending_question = state_dict.get("pending_question")
             self.working_state.answered_questions = state_dict.get("answered_questions", [])
             self.working_state.web_search_calls = state_dict.get("web_search_calls", 0)
+            self.working_state.researched_urls = set(state_dict.get("researched_urls", []))
+            self.working_state.consulted_before_planning = state_dict.get(
+                "consulted_before_planning", False
+            )
+            self.working_state.reviewed_outline_with_user = state_dict.get(
+                "reviewed_outline_with_user", False
+            )
             # Only inherit the saved mode when the caller did not pick one, so
             # a resumed run keeps its effort level while a fresh message is
             # free to change it.
@@ -445,6 +732,7 @@ class AgentLoop:
             # _load_context after this call - _run merges these in afterwards.
             self._resumed_design_system = state_dict.get("design_system")
             self._resumed_research = state_dict.get("research")
+            self._resumed_image_catalog = state_dict.get("image_catalog")
             if self.detail_level is None:
                 self.detail_level = normalize_detail_level(state_dict.get("detail_level"))
             logger.info("loaded_working_state", session_id=str(session_id), tools_completed=len(state_dict.get("completed_tools", {})))
@@ -518,11 +806,18 @@ class AgentLoop:
                 context["design_system"] = self._resumed_design_system
             if self._resumed_research:
                 context["research"] = self._resumed_research
+            if self._resumed_image_catalog:
+                context["imageCatalog"] = self._resumed_image_catalog
 
         self.context = context
 
         # ── Phase 2: Build messages ──────────────────
         chat_messages = await self._build_chat_messages(session_id)
+        # Never un-declined: "just build it" said once holds for the run (and
+        # lets a caller driving the loop directly switch the checkpoints off).
+        self.questions_declined = self.questions_declined or user_declined_questions(
+            chat_messages
+        )
 
         # ── Phase 3: ReAct loop ──────────────────────
         tool_schemas = self._tool_schemas_for_mode()
@@ -538,11 +833,19 @@ class AgentLoop:
         for iteration in range(self.MAX_ITERATIONS):
             # Call LLM
             start_time = time.time()
+            response = None
             try:
-                response = await self._chat_with_retry(
-                    messages=messages,
-                    tools=tool_schemas if tool_schemas else None,
-                )
+                async for kind, payload in self._with_retry_notices(
+                    self._chat_with_retry(
+                        messages=messages,
+                        tools=tool_schemas if tool_schemas else None,
+                    ),
+                    current_phase,
+                ):
+                    if kind == "event":
+                        yield payload
+                    else:
+                        response = payload
             except Exception as e:
                 logger.error("llm_call_failed", error=str(e), iteration=iteration)
                 yield _event("error", "content_analysis", {
@@ -567,27 +870,82 @@ class AgentLoop:
 
             # If no tool calls, check if we're actually done
             if not tool_calls:
-                # MANDATORY: Can only exit if finalize_and_render_pptx was called
-                if not self.working_state.has_called_finalize:
+                # MANDATORY: can only exit once finalize_and_render_pptx has
+                # rendered a file AND validate_rendered_output has actually
+                # checked it - unless the validation retry cap has been hit,
+                # in which case further validation attempts are blocked (see
+                # _check_precondition) and the loop must be allowed to exit
+                # with whatever output it has rather than stall forever.
+                # A validation run that FOUND problems does not satisfy the
+                # gate. Requiring only that validation had run meant a deck
+                # with a chart hanging off the page could still be announced
+                # as complete and offered for download - the issues were
+                # reported to the model and then simply not acted on. The
+                # retry cap is still the escape hatch for a defect that
+                # genuinely cannot be fixed.
+                at_validation_cap = (
+                    self.working_state.validation_attempts >= self.working_state.MAX_VALIDATION_ATTEMPTS
+                    or self.working_state.validation_failures >= self.working_state.MAX_VALIDATION_FAILURES
+                )
+                validation_satisfied = self.working_state.validation_clean or at_validation_cap
+                if not self.working_state.has_called_finalize or not validation_satisfied:
                     # Agent is trying to exit without completing the task
                     # Feed back an instruction to continue
                     logger.warning(
                         "agent_exited_early",
                         session_id=str(session_id),
                         iteration=iteration,
-                        message="LLM responded without tool calls before finalize was called",
+                        message="LLM responded without tool calls before finalize/validate completed",
                     )
+                    if not self.working_state.has_called_finalize:
+                        next_step_instruction = "You MUST continue using tools until you call finalize_and_render_pptx."
+                    elif not self.working_state.has_called_validate:
+                        next_step_instruction = (
+                            "finalize_and_render_pptx has run, but you have not yet called "
+                            "validate_rendered_output to check the actual rendered output. Call it now."
+                        )
+                    else:
+                        issue_summary = self._describe_validation_issues()
+                        targets = self.working_state.slides_needing_revision
+                        if targets:
+                            scope = (
+                                "Edit ONLY slide(s) "
+                                + ", ".join(str(i + 1) for i in targets)
+                                + " with design_slide_content. Every other slide already "
+                                "renders correctly and is carried over unchanged - do not "
+                                "redesign them, and do not replan the deck."
+                            )
+                        else:
+                            scope = (
+                                "Most of the deck is affected, so redesign the slides with "
+                                "design_slide_content as needed."
+                            )
+                        next_step_instruction = (
+                            "validate_rendered_output found problems in the rendered file that you "
+                            f"have not fixed yet:\n{issue_summary}\n"
+                            f"Do NOT tell the user the presentation is ready. {scope} Shorten the "
+                            "content, give an oversized chart or table a smaller region, or move it "
+                            "onto its own slide - then call finalize_and_render_pptx again and "
+                            "re-run validate_rendered_output."
+                        )
                     # Add a system message forcing the agent to continue
                     messages.append({
                         "role": "system",
                         "content": (
-                            "You have NOT completed the task. You MUST continue using tools "
-                            "until you call finalize_and_render_pptx. Do not stop with just text responses. "
+                            f"You have NOT completed the task. {next_step_instruction} "
+                            "Do not stop with just text responses. "
                             "If you need user input, use the ask_user_question tool (available in your tools). "
                             "Otherwise, continue with the next step in the presentation generation workflow."
                         ),
                     })
                     continue  # Skip the break and continue the loop
+
+                # Safety net: the run is ending, so anything still staged is
+                # final by definition. Normally validate_rendered_output has
+                # already flushed these; this covers the paths where it hit
+                # its retry cap or errored without reaching the flush.
+                for preview_event in self._flush_slide_previews():
+                    yield preview_event
 
                 # Final thought (optional) - only if we actually called finalize
                 yield _event("thought", "complete", {
@@ -630,17 +988,81 @@ class AgentLoop:
                 design_system = context.get("design_system") or {}
                 if fn_name == "select_layout":
                     fn_args["available_layouts"] = json.dumps(design_system.get("layouts", []))
+                elif fn_name in ("analyze_document", "extract_key_data"):
+                    fn_args["detail_level"] = self.detail_level
                 elif fn_name == "plan_presentation_structure":
-                    fn_args["design_system_summary"] = json.dumps(design_system)
+                    fn_args["design_system_summary"] = json.dumps(
+                        _project_design_system(fn_name, design_system)
+                    )
                     fn_args["detail_level"] = self.detail_level
                 elif fn_name == "design_slide_content":
-                    fn_args["design_system_context"] = json.dumps(design_system)
+                    fn_args["design_system_context"] = json.dumps(
+                        _project_design_system(fn_name, design_system)
+                    )
                     fn_args["detail_level"] = self.detail_level
                     slide_index = fn_args.get("slide_index")
                     if slide_index in self.working_state.selected_layouts:
                         fn_args["layout_info"] = json.dumps(
                             self.working_state.selected_layouts[slide_index]
                         )
+                    if slide_index in self.working_state.selected_images:
+                        fn_args["selected_image_context"] = json.dumps(
+                            self.working_state.selected_images[slide_index]
+                        )
+                    prepared = self.working_state.prepared_visuals.get(slide_index)
+                    if prepared:
+                        # What the visual actually shows, not just that one
+                        # exists. Passing only the type produced copy about a
+                        # different subject entirely - a Starbucks deck whose
+                        # donut read Beverages/Food/Merchandise carried bullets
+                        # about the "technology" and "healthcare" segments,
+                        # because the model had a vague outline, no figures,
+                        # and filled the gap by inventing some.
+                        fn_args["prepared_visuals"] = json.dumps(prepared)
+                elif fn_name == "finalize_and_render_pptx":
+                    # Needed so generated tables/charts can be styled from
+                    # the template's own brand colors instead of a generic
+                    # default - see table_style.resolve_table_style.
+                    fn_args["design_system_json"] = json.dumps(design_system)
+                elif fn_name == "select_source_image":
+                    # Metadata only (id + context) - never the raw image
+                    # bytes/URL, so the LLM's decision never has to carry an
+                    # image payload through its own output. See
+                    # _resolve_selected_image below for how the chosen id is
+                    # turned back into real data server-side.
+                    catalog = context.get("imageCatalog") or []
+                    fn_args["catalog_json"] = json.dumps([
+                        {"id": entry.get("id"), "context": entry.get("context", "")}
+                        for entry in catalog if entry.get("id")
+                    ])
+                elif fn_name == "validate_rendered_output":
+                    # The loop knows the true rendered path and session_id
+                    # with certainty - overriding whatever the LLM sends
+                    # avoids validating a stale/wrong/hallucinated path.
+                    if self.working_state.last_rendered_path:
+                        fn_args["pptx_path"] = self.working_state.last_rendered_path
+                    fn_args["session_id"] = str(session_id)
+                    fn_args["detail_level"] = self.detail_level
+                    # The content checks read the deck's own JSON, which the
+                    # loop already holds - asking the model to hand it back
+                    # would risk it being paraphrased on the way.
+                    fn_args["slides_json"] = self.working_state.get_slides_json()
+
+                # Narrate the validation step explicitly, server-authored so
+                # it's always present and consistent rather than depending
+                # on the LLM choosing to describe it.
+                if fn_name == "validate_rendered_output":
+                    narration = (
+                        "Validating the rendered output with LibreOffice - checking the actual "
+                        "rendered slides for text that overflows its placeholder or overlaps "
+                        "other content..."
+                    )
+                    if self.detail_level == DETAIL_LEVEL_COMPREHENSIVE:
+                        narration += " Also reviewing slide screenshots for visual polish."
+                    yield _event("thought", "validation", {
+                        "content": narration,
+                        "timestamp": _iso_now(),
+                    })
 
                 # Yield tool_call event
                 yield _event("tool_call", current_phase, {
@@ -652,40 +1074,49 @@ class AgentLoop:
 
                 # Execute tool
                 tool_start = time.time()
+                tool_result = None
                 precondition_error = self._check_precondition(fn_name, fn_args)
                 if precondition_error:
                     tool_result = ToolResult(success=False, error=precondition_error)
-                elif fn_name == "finalize_and_render_pptx" and self.working_state.accumulated_slides:
-                    # Trust the slides actually designed via design_slide_content
-                    # over whatever the LLM re-typed as the argument string - the
-                    # latter is a verbatim re-serialization of the whole deck and
-                    # is the single biggest truncation/drift risk on multi-slide
-                    # presentations.
-                    fn_args["slides_json"] = self.working_state.get_slides_json()
-                    tool_result = await self._execute_tool(fn_name, fn_args)
-                elif fn_name == "web_search":
+                elif (
+                    fn_name == "web_search"
+                    and self.working_state.web_search_calls >= self._max_web_searches()
+                ):
                     # Cap repeated web searches so the agent cannot loop on
                     # low-quality results. After the cap, return a gentle
                     # "use existing research" result instead of executing.
-                    if self.working_state.web_search_calls >= self.working_state.MAX_WEB_SEARCH_CALLS:
-                        tool_result = ToolResult(
-                            success=True,
-                            data={
-                                "query": fn_args.get("query", ""),
-                                "results": [],
-                                "result_count": 0,
-                                "note": (
-                                    "Maximum number of web searches reached. Use the Research "
-                                    "Findings already in your context to write the content, and "
-                                    "do not call web_search again. Proceed to the next step."
-                                ),
-                            },
-                        )
-                    else:
-                        self.working_state.web_search_calls += 1
-                        tool_result = await self._execute_tool(fn_name, fn_args)
+                    tool_result = ToolResult(
+                        success=True,
+                        data={
+                            "query": fn_args.get("query", ""),
+                            "results": [],
+                            "result_count": 0,
+                            "note": (
+                                "Maximum number of web searches reached. Use the Research "
+                                "Findings already in your context to write the content, and "
+                                "do not call web_search again. Proceed to the next step."
+                            ),
+                        },
+                    )
                 else:
-                    tool_result = await self._execute_tool(fn_name, fn_args)
+                    if fn_name == "finalize_and_render_pptx" and self.working_state.accumulated_slides:
+                        # Trust the slides actually designed via design_slide_content
+                        # over whatever the LLM re-typed as the argument string - the
+                        # latter is a verbatim re-serialization of the whole deck and
+                        # is the single biggest truncation/drift risk on multi-slide
+                        # presentations.
+                        fn_args["slides_json"] = self.working_state.get_slides_json()
+                    if fn_name == "web_search":
+                        self.working_state.web_search_calls += 1
+                    # Tools make their own LLM calls, so a rate limit can strike
+                    # inside one - narrate those waits the same way.
+                    async for kind, payload in self._with_retry_notices(
+                        self._execute_tool(fn_name, fn_args), current_phase
+                    ):
+                        if kind == "event":
+                            yield payload
+                        else:
+                            tool_result = payload
                 tool_duration = int((time.time() - tool_start) * 1000)
 
                 # Extract sources from tool result data (URLs that can be displayed to user)
@@ -693,11 +1124,15 @@ class AgentLoop:
                 if tool_result.success and tool_result.data:
                     sources = self._extract_sources(tool_result.data)
 
-                # Yield tool_result event
+                # Yield tool_result event. The summary is what the feed leads
+                # with; the raw result stays on the event behind a disclosure.
                 yield _event("tool_result", current_phase, {
                     "toolName": fn_name,
                     "callId": call_id,
                     "result": tool_result.data if tool_result.success else tool_result.error,
+                    "summary": summarize_tool_result(
+                        fn_name, fn_args, tool_result.data, tool_result.success
+                    ),
                     "durationMs": tool_duration,
                     "success": tool_result.success,
                     "tokenCount": tool_result.token_count,
@@ -705,34 +1140,97 @@ class AgentLoop:
                     "sources": sources if sources else None,
                 })
 
-                # If a slide was finalized, emit slide_finalized for each slide
+                # Stage the per-slide previews produced by this render. They are
+                # NOT published yet: validate_rendered_output runs next and may
+                # send slides back for redesign, and a slide that is about to
+                # change is not "finalized". _flush_slide_previews publishes
+                # them once validation settles.
                 if fn_name == "finalize_and_render_pptx" and tool_result.success:
                     self.working_state.has_called_finalize = True
+                    self.working_state.last_rendered_path = tool_result.data.get("filePath")
                     preview_urls = tool_result.data.get("previewUrls", [])
 
-                    # Emit slide_finalized events for each slide with preview URL
-                    for slide_idx, preview_url in enumerate(preview_urls):
-                        slide_data = None
-                        if slide_idx < len(self.working_state.accumulated_slides):
-                            slide_data = self.working_state.accumulated_slides[slide_idx]
-
-                        yield _event("slide_finalized", "rendering", {
+                    # Preview page N is the Nth slide of the RENDERED deck, so
+                    # it has to be matched against the same ordering the
+                    # renderer was given - not the order the slides happened to
+                    # be designed in.
+                    rendered_order = self.working_state.ordered_slides()
+                    self.working_state.pending_slide_previews = [
+                        {
                             "slideIndex": slide_idx,
-                            "slideData": slide_data,
+                            "slideData": (
+                                rendered_order[slide_idx]
+                                if slide_idx < len(rendered_order)
+                                else None
+                            ),
                             "previewUrl": preview_url,
-                            "timestamp": _iso_now(),
-                        })
+                        }
+                        for slide_idx, preview_url in enumerate(preview_urls)
+                    ]
+                    # A re-render supersedes anything published for the previous
+                    # attempt, so the fresh set must be publishable again.
+                    self.working_state.previews_published = False
+                    self.working_state.pending_render_result = dict(tool_result.data or {})
 
-                    # Clear saved working state - presentation is complete
-                    await self._clear_working_state(session_id)
+                    # Working state is now cleared once validate_rendered_output
+                    # has actually run (or hit its retry cap) below, not here -
+                    # "presentation is complete" means checked, not just rendered.
+
+                if fn_name == "validate_rendered_output" and precondition_error is None:
+                    # precondition_error is None only when the tool actually
+                    # executed - a call blocked for not having finalized yet,
+                    # or blocked by the retry cap below, must not count as an
+                    # attempt or be mistaken for "validation done".
+                    self.working_state.has_called_validate = True
+
+                    if tool_result.success:
+                        # Only a completed check spends the revision budget. A
+                        # run that never got to inspect anything (LibreOffice
+                        # failed to convert, the provider rate-limited the
+                        # redesign that preceded it) says nothing about the
+                        # deck, and burning an attempt on it used to push a
+                        # still-broken deck to the cap and out the door.
+                        self.working_state.validation_attempts += 1
+                        issues = (tool_result.data or {}).get("issues", [])
+                        self.working_state.validation_issues = issues
+                        self.working_state.validation_clean = not issues
+                        self.working_state.slides_needing_revision = (
+                            self.working_state.compute_slides_needing_revision(issues)
+                        )
+                        at_cap = (
+                            self.working_state.validation_attempts
+                            >= self.working_state.MAX_VALIDATION_ATTEMPTS
+                        )
+                        validation_done = not issues or at_cap
+                    else:
+                        self.working_state.validation_failures += 1
+                        validation_done = (
+                            self.working_state.validation_failures
+                            >= self.working_state.MAX_VALIDATION_FAILURES
+                        )
+                    if validation_done:
+                        # The deck will not change again this run, so the
+                        # slides are genuinely final - publish their previews.
+                        for preview_event in self._flush_slide_previews():
+                            yield preview_event
+                        await self._clear_working_state(session_id)
 
                 # If ask_user_question was called, emit question event and pause
                 if fn_name == "ask_user_question" and tool_result.success:
                     self.working_state.is_paused_for_user = True
                     self.working_state.pending_question = tool_result.data
+                    # Which checkpoint this satisfied is decided by where the
+                    # run is, not by what the model says it is doing: before a
+                    # plan exists the question is the planning consultation,
+                    # after it the outline review.
+                    if self.working_state.presentation_structure:
+                        self.working_state.reviewed_outline_with_user = True
+                    else:
+                        self.working_state.consulted_before_planning = True
                     yield _event("question", "user_input", {
                         "question": tool_result.data.get("question"),
                         "options": tool_result.data.get("options", []),
+                        "questions": tool_result.data.get("questions", []),
                         "context": tool_result.data.get("context", ""),
                         "timestamp": _iso_now(),
                     })
@@ -787,7 +1285,7 @@ class AgentLoop:
 
                     if fn_name == "design_slide_content":
                         if tool_result.data and "slideIndex" in tool_result.data:
-                            self.working_state.add_slide(tool_result.data)
+                            self.working_state.resolve_and_add_slide(tool_result.data)
 
                     # Recorded by slide_index so design_slide_content's
                     # layout_info can be auto-supplied later (see the
@@ -810,16 +1308,78 @@ class AgentLoop:
                     # without re-searching, and the sources stay available.
                     if fn_name == "web_search" and tool_result.data and tool_result.data.get("results"):
                         research = context.setdefault("research", [])
+                        image_catalog = context.setdefault("imageCatalog", [])
                         for item in tool_result.data["results"]:
+                            if item.get("url"):
+                                self.working_state.researched_urls.add(item["url"])
                             research.append({
                                 "query": tool_result.data.get("query", ""),
                                 "title": item.get("title", ""),
                                 "url": item.get("url", ""),
                                 "snippet": item.get("snippet", ""),
                             })
-                        # Bound the research context to avoid unbounded prompt growth.
-                        if len(research) > 15:
-                            context["research"] = research[-15:]
+                            # Candidate images a search backend found on this
+                            # page (currently only Firecrawl, whose scraped
+                            # markdown naturally ties an image to the page it
+                            # came from) - reused, never generated. See
+                            # select_source_image for the confidence gate.
+                            for img_url in (item.get("images") or [])[:2]:
+                                image_catalog.append({
+                                    "id": f"web-{len(image_catalog)}-{img_url}",
+                                    "sourceType": "web",
+                                    "data": img_url,
+                                    "context": f"{item.get('title', '')}: {item.get('snippet', '')}"[:300],
+                                })
+                        # Bound the research context to avoid unbounded prompt
+                        # growth. The bound has to clear several searches' worth
+                        # of results, or the breadth the run was just made to go
+                        # and find is thrown away before it can be written from:
+                        # at 15, a fourth search silently evicted the first one.
+                        if len(research) > MAX_RESEARCH_IN_CONTEXT:
+                            context["research"] = research[-MAX_RESEARCH_IN_CONTEXT:]
+                        if len(image_catalog) > 20:
+                            context["imageCatalog"] = image_catalog[-20:]
+
+                    # Catalog embedded images extracted from the user's own
+                    # documents (PDF/DOCX) - see analyze_document. Reused,
+                    # never generated.
+                    if fn_name == "analyze_document" and tool_result.data and tool_result.data.get("images"):
+                        image_catalog = context.setdefault("imageCatalog", [])
+                        image_catalog.extend(tool_result.data["images"])
+                        if len(image_catalog) > 20:
+                            context["imageCatalog"] = image_catalog[-20:]
+
+                    # Charts/tables/metric rows are attached to their slide
+                    # here rather than handed back for the model to re-state.
+                    if fn_name in BUILD_VISUAL_TOOLS and tool_result.data:
+                        target = tool_result.data.get("slideIndex")
+                        block = tool_result.data.get("content")
+                        if target is not None and block:
+                            slots = self.working_state.prepared_visuals.setdefault(target, [])
+                            slots[:] = [
+                                existing for existing in slots
+                                if existing.get("type") != block.get("type")
+                            ]
+                            slots.append(block)
+
+                    # Resolve select_source_image's chosen id back to the
+                    # real image data (the LLM only ever saw lightweight
+                    # metadata - see the tool-dispatch injection above) and
+                    # stash it for design_slide_content to reference on the
+                    # next call for this slide.
+                    if fn_name == "select_source_image" and tool_result.data and tool_result.data.get("selected"):
+                        slide_index = tool_result.data.get("slideIndex")
+                        image_id = tool_result.data.get("imageId")
+                        catalog_entry = next(
+                            (e for e in context.get("imageCatalog", []) if e.get("id") == image_id),
+                            None,
+                        )
+                        if slide_index is not None and catalog_entry:
+                            self.working_state.selected_images[slide_index] = {
+                                "source": "url" if catalog_entry.get("sourceType") == "web" else "base64",
+                                "data": catalog_entry.get("data", ""),
+                                "altText": (catalog_entry.get("context") or "")[:200],
+                            }
 
                     # Update the system prompt in place so the LLM sees the
                     # latest completed-work summary, WITHOUT discarding the
@@ -871,6 +1431,36 @@ class AgentLoop:
                 "timestamp": _iso_now(),
             })
 
+    def _research_budget(self) -> tuple[int, int]:
+        """(floor, cap) on this run's number of web searches."""
+        return RESEARCH_BUDGET.get(
+            self.detail_level or DETAIL_LEVEL_DETAILED,
+            RESEARCH_BUDGET[DETAIL_LEVEL_DETAILED],
+        )
+
+    def _min_web_searches(self) -> int:
+        return self._research_budget()[0]
+
+    def _max_web_searches(self) -> int:
+        return self._research_budget()[1]
+
+    def _research_is_thin(self) -> bool:
+        """True while a Deep Thinking run has not looked around enough yet.
+
+        Counted in attempts rather than successes, so a search backend that is
+        down or returning nothing cannot stall the run - each attempt spends
+        the budget either way, and the cap is above the floor.
+        """
+        if self.mode != MODE_DEEP:
+            return False
+        ws = self.working_state
+        if ws.web_search_calls >= self._max_web_searches():
+            return False
+        return (
+            ws.web_search_calls < self._min_web_searches()
+            or len(ws.researched_urls) < RESEARCH_MIN_SOURCES
+        )
+
     def _check_precondition(self, fn_name: str, fn_args: dict) -> str | None:
         """Block a tool call that is out of order, returning a corrective
         error message the LLM sees as the tool's result (same mechanism as the
@@ -894,7 +1484,57 @@ class AgentLoop:
                 "designing the remaining slides in the existing plan."
             )
 
-        if fn_name in ("select_layout", "design_slide_content", "generate_image_prompt"):
+        # ── The two consultation checkpoints ──────────────────────────────
+        #
+        # The prompt has asked for these all along and the model routinely
+        # skipped both, going from "here is a topic" to a finished deck without
+        # a word to the user. Enforcing them here is the difference between a
+        # suggestion and a rule: the planning call simply does not go through
+        # until the user has been consulted.
+        if fn_name == "plan_presentation_structure" and self._research_is_thin():
+            return (
+                f"Not enough research yet: {ws.web_search_calls} search(es) so far, "
+                f"turning up {len(ws.researched_urls)} distinct source(s). A deck is only "
+                "as trustworthy as the breadth behind it, and one query answers one facet "
+                f"of the topic. Run at least {self._min_web_searches()} web_search calls "
+                f"covering DIFFERENT facets - the subject itself, the specific figures the "
+                "deck needs, recent developments, and any counterpoint or context - until "
+                f"you have {RESEARCH_MIN_SOURCES}+ distinct sources, then plan."
+            )
+
+        if (
+            fn_name == "plan_presentation_structure"
+            and not ws.consulted_before_planning
+            and not self.questions_declined
+        ):
+            return (
+                "Consult the user before planning. Call ask_user_question ONCE with a "
+                "consolidated set of questions covering what you are actually unsure "
+                "about - typically the audience, the angle or sections to focus on, the "
+                "depth/slide count, and (when no template was uploaded) the visual style. "
+                "Give every question 2-5 concrete options drawn from THIS request and the "
+                "material you have read, not generic placeholders, so the user can answer "
+                "in one tap. Plan the deck once they have answered."
+            )
+
+        if (
+            fn_name in ("select_layout", "design_slide_content", *BUILD_VISUAL_TOOLS)
+            and ws.presentation_structure
+            and not ws.reviewed_outline_with_user
+            and not self.questions_declined
+        ):
+            return (
+                "Show the user the outline before drafting any slides. Call "
+                "ask_user_question with the planned slide titles laid out in the call's "
+                "top-level 'context' field (one line per slide, numbered), and ask whether "
+                "to go ahead. Every option must be an answer rather than a prompt for one: "
+                "'Go ahead as planned' plus the 2-3 specific adjustments most likely to be "
+                "wanted for THIS deck, naming its actual slides (merge these two, add one "
+                "on X, cut Y and go deeper on Z). Never offer 'No, I want changes' - it "
+                "tells you nothing. Draft the slides once they have answered."
+            )
+
+        if fn_name in ("select_layout", "design_slide_content", "select_source_image"):
             if not ws.presentation_structure:
                 return (
                     f"{fn_name} requires a presentation structure. Call "
@@ -903,6 +1543,32 @@ class AgentLoop:
 
         if fn_name == "design_slide_content":
             slide_index = fn_args.get("slide_index")
+
+            # After a validation pass flagged specific slides, only those get
+            # redesigned. Regenerating a slide that already renders correctly
+            # costs an LLM call and risks rewriting copy the user was happy
+            # with, to fix a problem it does not have.
+            #
+            # An index that has not been designed yet is always allowed: one of
+            # the fixes we actively suggest is moving an oversized chart onto a
+            # slide of its own, which means authoring a new one.
+            already_designed = {
+                slide.get("slideIndex") for slide in ws.accumulated_slides
+            }
+            if (
+                ws.slides_needing_revision
+                and slide_index is not None
+                and slide_index not in ws.slides_needing_revision
+                and slide_index in already_designed
+            ):
+                targets = ", ".join(str(i + 1) for i in ws.slides_needing_revision)
+                return (
+                    f"Slide {slide_index + 1} renders correctly and does not need "
+                    f"redesigning. Validation only flagged slide(s) {targets} - edit "
+                    "just those, then call finalize_and_render_pptx again. Every other "
+                    "slide is carried over unchanged automatically."
+                )
+
             if slide_index is not None and slide_index not in ws.selected_layouts:
                 return (
                     f"No layout has been selected for slide {slide_index} yet. Call "
@@ -924,6 +1590,27 @@ class AgentLoop:
                     f"Cannot finalize yet: {len(missing)} of {total} planned slides "
                     f"have not been designed (missing slideIndex: {missing}). Call "
                     "design_slide_content for each missing slide first."
+                )
+
+        if fn_name == "validate_rendered_output":
+            if not ws.has_called_finalize:
+                return (
+                    "validate_rendered_output checks the actual rendered .pptx file, which "
+                    "does not exist yet. Call finalize_and_render_pptx first."
+                )
+            if ws.validation_attempts >= ws.MAX_VALIDATION_ATTEMPTS:
+                return (
+                    f"Validation retry limit reached ({ws.MAX_VALIDATION_ATTEMPTS} attempts). "
+                    "Stop redesigning and finish now. The file is made available to the user "
+                    "as it stands, so tell them plainly which slides still render incorrectly "
+                    "and what is wrong with them - do not describe the deck as clean or "
+                    "problem-free, and do not claim the issues were fixed."
+                )
+            if ws.validation_failures >= ws.MAX_VALIDATION_FAILURES:
+                return (
+                    f"Validation could not be completed after {ws.MAX_VALIDATION_FAILURES} "
+                    "failed attempts. Finish now and report that the rendered output could "
+                    "not be verified, rather than claiming the presentation is problem-free."
                 )
 
         return None
@@ -974,25 +1661,38 @@ class AgentLoop:
                     "slideDimensions": bundle.slide_dimensions,
                     "masterElements": bundle.master_elements,
                     "embeddedMedia": bundle.embedded_media,
+                    # Bundles written before this column existed default to
+                    # {} here - table_style.py's resolvers already fall back
+                    # to deriving from palette when dataViz is empty.
+                    "dataViz": bundle.data_viz,
                 }
 
         return context
 
     async def _chat_with_retry(self, messages: list[dict], tools: list[dict] | None):
-        """Call the chat model, retrying transient rate limits.
+        """Call the chat model, retrying transient provider failures.
 
-        A 429 part-way through a generation used to abandon the whole run, and
-        with it every slide already designed - which on a low-tier API key
-        happens routinely, since one presentation makes dozens of calls in a
-        couple of minutes. Providers tell us how long to wait; when they do not,
-        exponential backoff is a reasonable guess.
+        Rate limits are deliberately NOT retried here. They are handled one
+        level down, in the provider, which is where the provider's own
+        "try again in 2.6s" advice is visible and where every tool's LLM call
+        passes through as well. Retrying them in both places multiplied the two
+        budgets (4 x 3 attempts) and made the wait reported to the user a
+        fraction of the real one - the interface said "retrying in 5s" while the
+        run actually sat there for a minute and a half.
+
+        What is left here is the rest: a 5xx or a timeout, where the provider
+        offers no advice and exponential backoff is a reasonable guess.
         """
         delay = self.RETRY_BASE_SECONDS
         for attempt in range(self.MAX_LLM_RETRIES + 1):
             try:
                 return await self.llm.chat(messages=messages, tools=tools)
             except Exception as e:
-                if attempt == self.MAX_LLM_RETRIES or not _is_retryable(e):
+                if (
+                    attempt == self.MAX_LLM_RETRIES
+                    or _is_rate_limit_error(e)
+                    or not _is_retryable(e)
+                ):
                     raise
                 wait = _retry_after_seconds(e) or delay
                 logger.warning(
@@ -1001,8 +1701,47 @@ class AgentLoop:
                     wait_seconds=round(wait, 2),
                     error=str(e)[:200],
                 )
+                publish_retry_notice(
+                    RetryNotice(
+                        reason=REASON_TRANSIENT,
+                        attempt=attempt + 1,
+                        max_attempts=self.MAX_LLM_RETRIES,
+                        delay_seconds=wait,
+                        detail=str(e)[:200],
+                    )
+                )
                 await asyncio.sleep(wait)
                 delay *= 2
+
+    async def _with_retry_notices(
+        self, awaitable, phase: str
+    ) -> AsyncIterator[tuple[str, object]]:
+        """Await ``awaitable``, narrating any provider back-off it runs into.
+
+        Yields ``("event", <rate_limit event>)`` for each wait as it starts, and
+        finally ``("result", <value>)``. The awaited work runs as a task so the
+        loop can keep emitting while it is blocked - the whole point being that
+        a 30-second rate-limit wait is announced when it begins rather than
+        inferred afterwards from a gap in the timestamps.
+        """
+        queue: asyncio.Queue[RetryNotice] = asyncio.Queue()
+        token = set_retry_observer(queue.put_nowait)
+        # The observer is installed before the task is created so the task's
+        # copied context carries it - that is what lets a notice raised inside
+        # a tool's own LLM call several frames down reach this generator.
+        task = asyncio.ensure_future(awaitable)
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=self.NOTICE_POLL_SECONDS)
+                while not queue.empty():
+                    yield "event", _retry_notice_event(queue.get_nowait(), phase)
+                if done:
+                    break
+            yield "result", task.result()
+        finally:
+            reset_retry_observer(token)
+            if not task.done():
+                task.cancel()
 
     def _tool_schemas_for_mode(self) -> list[dict]:
         """The tool schemas this run may call, filtered by effort level."""
@@ -1038,26 +1777,59 @@ class AgentLoop:
             "1. You MUST always call tools until you complete the presentation.",
             "2. You MUST call finalize_and_render_pptx as the final step to generate the PPTX file.",
             "3. NEVER respond with only text and stop - this will cause the generation to fail.",
-            "4. DEFAULT TO ASKING, NOT GUESSING, at every real decision point. This includes at least: "
-            "target audience; desired scope/slide count; tone; WHICH PARTS OF THE SOURCE MATERIAL TO "
-            "FOCUS ON OR EMPHASIZE when it covers more than can reasonably fit; how to resolve ambiguous "
-            "or conflicting information in what was provided; and VISUAL STYLE / COLOR PREFERENCE "
-            "whenever no template was uploaded (so the built-in default design system will be used) and "
-            "the user hasn't already indicated one. Call ask_user_question rather than guessing whenever "
-            "a wrong assumption would produce a presentation the user did not want. This is the default; "
-            "only skip asking when you are genuinely confident in the answer, not merely when an answer "
-            "is possible.",
-            "5. EVERY ask_user_question call MUST include well-chosen suggested options via the "
-            "'options' parameter (a real array, 2-5 items) - concrete, mutually distinct choices the "
-            "user can pick in one tap, not just an open-ended question with nothing to react to. "
-            "OPTIONS MUST BE TAILORED TO THE ACTUAL REQUEST, never generic placeholders: for content "
-            "focus, name the 2-4 candidate angles/sections you actually saw in the material (not "
-            "'Option A/B/C') and let the user pick or say 'cover them all'.",
-            "6. Color/style questions ONLY when no template was uploaded - never ask about colors if "
+            "3b. NEVER write a download link or file path into your reply. The interface provides the "
+            "download itself once the deck has passed validation; a link you compose points at a path "
+            "inside the service container and is dead for the user. Say the deck is ready and describe "
+            "it - do not link to it. Equally, do not announce that the presentation is complete while "
+            "validate_rendered_output still reports unresolved issues; fix those first.",
+            "4. THE DECK IS PLANNED WITH THE USER, NOT AT THEM. There are two consultation "
+            "checkpoints, and the tools enforce both - plan_presentation_structure is rejected "
+            "until the first has happened, and select_layout/design_slide_content/build_* are "
+            "rejected until the second has:\n"
+            "   (a) BEFORE PLANNING: call ask_user_question once with a consolidated set of "
+            "questions about what you are genuinely unsure of - target audience; scope/slide "
+            "count; WHICH PARTS OF THE MATERIAL TO FOCUS ON when it covers more than fits; tone; "
+            "how to resolve anything ambiguous or contradictory you found; HOW TO PRESENT THE "
+            "DATA when the material has figures, time series, breakdowns or comparisons and it "
+            "is not obvious whether they belong in a chart (and which kind), a table, or prose; "
+            "and VISUAL STYLE / COLOR when no template was uploaded and the user has not said.\n"
+            "   (b) BEFORE DRAFTING: call ask_user_question again with the planned outline "
+            "spelled out - the slide titles, numbered, one per line, in the call's top-level "
+            "'context' field (not inside a question object) - and ask whether to go ahead. "
+            "EVERY OPTION MUST BE AN ANSWER, NOT A PROMPT FOR ONE: 'Go ahead as planned', "
+            "'Merge slides 4 and 5 on trends', 'Add a slide on risks', 'Cut the history slide "
+            "and go deeper on pricing' - naming the actual slides in THIS outline. An option "
+            "like 'No, I want changes' tells you nothing and wastes the user's turn, so never "
+            "offer one. This is their chance to redirect the deck while it is still cheap; do "
+            "not skip it and do not bury it in a question about something else.\n"
+            "   Beyond the two checkpoints, still ask whenever a new ambiguity turns up and a "
+            "wrong assumption would produce a presentation the user did not want.",
+            "5. ASK EVERYTHING AT ONCE. ask_user_question takes a 'questions' array - up to 4 "
+            "{question, options} objects answered together in a single pause. Use it: four "
+            "separate pauses for audience, focus, length and colour is an interrogation, and each "
+            "one costs the user a round trip. EVERY question MUST carry 2-5 suggested options "
+            "(a real array), concrete and mutually distinct, so the user can answer by tapping. "
+            "OPTIONS MUST BE TAILORED TO THE ACTUAL REQUEST, never generic placeholders: for "
+            "content focus, name the 2-4 candidate angles/sections you actually saw in the "
+            "material (not 'Option A/B/C') and let the user pick or say 'cover them all'; for "
+            "data presentation, offer the concrete alternatives for THAT data ('Line chart of "
+            "revenue 2011-2025', 'Table of year-by-year figures', 'Keep it as bullets') rather "
+            "than asking abstractly whether the user likes charts. A question whose options are "
+            "missing or generic is rejected and has to be asked again, so write them properly "
+            "the first time.",
+            "6. When no template was uploaded you MUST settle the colour/style choice with the user "
+            "before designing content - fold it into your consolidated question rather than "
+            "defaulting silently, because an unanswered colour choice renders the deck in a generic "
+            "preset that looks nothing like the subject's brand. Never ask about colors if "
             "the user gave a template, since its own colors are always used as-is and the question "
             "would be meaningless. When you do ask: if the topic clearly implies a real brand/entity "
-            "with a known color (e.g. a presentation about a specific company), offer that brand's "
-            "actual color as one option using its real hex code (e.g. 'Starbucks green (#00704A)'), "
+            "with a known color (e.g. a presentation about a specific company), offer THAT SUBJECT'S "
+            "OWN brand color as one option, named and given as its real hex code - derived from the "
+            "company actually being presented, never carried over from another deck, another company, "
+            "or an example in these instructions. State the brand and the hex together so the choice "
+            "is checkable (the pattern is \"<Company> <colour name> (#RRGGBB)\"). If you are not "
+            "confident of the brand's real hex, say so and offer the closest preset instead of "
+            "inventing or reusing one. Offer that "
             "alongside 2-3 of these general presets as other options - Professional, Warm, Monochrome, "
             "Bold, Nature. Whatever is chosen, pass the SAME value (the hex code, or the preset's "
             "lowercase name) as color_theme to BOTH extract_template_design_system and "
@@ -1065,15 +1837,16 @@ class AgentLoop:
             "7. EXCEPTION: if the user has explicitly said not to ask questions (e.g. 'don't ask me "
             "anything', 'just build it', 'use your best judgment', 'no more questions'), make the most "
             "reasonable assumption yourself and proceed without asking - briefly note any significant "
-            "assumption in the relevant slide's notes instead.",
-            "8. Prefer asking before planning, batching multiple uncertainties into ONE consolidated "
-            "ask_user_question rather than asking one at a time. But do not suppress a genuine question "
-            "just because planning has already started - if a new ambiguity only becomes apparent "
-            "partway through (e.g. conflicting figures in an uploaded document), ask then too rather "
-            "than silently guessing.",
+            "assumption in the relevant slide's notes instead. Both checkpoints lift automatically in "
+            "that case; you do not need to ask permission to skip them.",
+            "8. Both checkpoints are one pause each. Fold everything you need into that call rather "
+            "than pausing repeatedly - but do not suppress a genuine question just because drafting "
+            "has started: if a new ambiguity only becomes apparent partway through (e.g. conflicting "
+            "figures in an uploaded document), ask then too rather than silently guessing.",
             "9. Do NOT ask about things you can already infer confidently from the conversation or "
             "uploaded documents, or about minor stylistic choices with no real stakes - that is noise, "
-            "not the kind of question this rule is asking for.",
+            "not the kind of question this rule is asking for. Every question you do ask should be one "
+            "where the two answers lead to visibly different decks.",
             "10. Tool calls that are out of order (e.g. finalizing before every planned slide is "
             "designed) will be rejected with an explanation - read it and follow the corrective "
             "instruction rather than retrying the same call.",
@@ -1089,9 +1862,12 @@ class AgentLoop:
             "## Presentation Detail Level",
             "",
             f"The user has selected the **{self.detail_level or DETAIL_LEVEL_DETAILED}** detail level. "
-            "plan_presentation_structure and design_slide_content are told this automatically - "
-            "you do not need to pass it yourself - but keep your own reasoning and notes "
-            "consistent with it rather than defaulting to the shortest possible phrasing.",
+            "analyze_document, extract_key_data, plan_presentation_structure, and "
+            "design_slide_content are all told this automatically - you do not need to pass it "
+            "yourself - but keep your own reasoning and notes consistent with it rather than "
+            "defaulting to the shortest possible phrasing. Higher levels also mean more of the "
+            "source material is actually considered (not just written more verbosely) and more "
+            "willingness to use real tables/charts where the data supports them.",
             "",
         ]
 
@@ -1099,10 +1875,28 @@ class AgentLoop:
         # topic on the web. Describing only the tools it actually has keeps the
         # prompt honest - in simple mode web_search is not in the schema list.
         if self.mode == MODE_DEEP:
+            min_searches, max_searches = self._research_budget()
             prompt_parts.extend([
                 "## Researching Facts & Citing Sources (Deep Thinking is ON)",
                 "",
                 "- When the topic involves real-world facts, statistics, history, or current information that you may not know precisely, call web_search FIRST and base your content on the returned results.",
+                f"- RESEARCH THE TOPIC FROM SEVERAL ANGLES, NOT ONE. Run at least "
+                f"{min_searches} searches (up to {max_searches}) with genuinely different "
+                "queries before planning: the subject itself, the specific figures the deck "
+                "needs, what has happened recently, and the context or counterpoint a "
+                "sceptical audience would raise. One query returning a handful of links is "
+                "not a body of research, and planning is blocked until you have looked "
+                f"properly - aim for {RESEARCH_MIN_SOURCES}+ distinct sources.",
+                "- Vary the wording between searches. Re-asking the same question in slightly "
+                "different words returns the same pages and teaches you nothing new; if a "
+                "query returns little, change what you are asking, not just how.",
+                "- CORROBORATE ANYTHING THAT CARRIES WEIGHT. A headline figure, a market size, "
+                "a growth rate or a superlative should appear in more than one independent "
+                "source before you put it on a slide. Where sources disagree, say so on the "
+                "slide or in its notes rather than silently picking one; where a number rests "
+                "on a single source, attribute it in the slide's notes.",
+                "- Prefer primary and recent sources (the company's own filing, the statistics "
+                "office, the standards body) over aggregators repeating each other.",
                 "- Do NOT call web_search for opinions, the user's own documents, or topics you already know well - avoid unnecessary calls.",
                 "- The web_search results are shown to the user as sources, so prefer it whenever a claim benefits from a citation.",
                 "",
@@ -1113,6 +1907,14 @@ class AgentLoop:
                 "",
                 "- You have no web access on this run. Write from the user's documents, the conversation, and your own knowledge.",
                 "- Do NOT invent precise statistics, dates, or quotations you are not confident in. Prefer qualitative statements over fabricated numbers.",
+                "- This applies with full force to build_chart, build_table and "
+                "build_key_metrics. A chart makes a number look sourced, so charting a "
+                "figure you actually guessed is worse than writing no chart at all. "
+                "Only build a visual from figures present in the user's documents, the "
+                "conversation, or facts you are genuinely confident of. If the request "
+                "needs current results you do not have, say so on the slide and in its "
+                "notes, and chart the shape of the question rather than inventing "
+                "values for it.",
                 "- If the request genuinely needs current or verifiable facts, say so in your slides' framing rather than guessing.",
                 "",
             ])
@@ -1126,12 +1928,38 @@ class AgentLoop:
             *research_tool,
             "plan_presentation_structure — Plan the slide structure and outline",
             "select_layout — Choose the best layout for each slide based on content",
-            "design_slide_content — Generate slide content (text, image prompts, tables, charts)",
+            "build_chart — Build a validated chart for a slide from typed arguments (categories, series, axis titles). Use this rather than writing chart JSON yourself",
+            "build_table — Build a validated table for a slide from typed columns and rows",
+            "build_key_metrics — Build a row of 2-4 headline figures for a slide",
+            "design_slide_content — Generate a slide's title and copy (visuals come from the build_* tools)",
             "validate_slide_json — Validate slide JSON against the schema before rendering",
-            "generate_image_prompt — Create prompts for AI-generated images",
-            "ask_user_question — Ask the user for clarification or input (pauses workflow)",
-            "finalize_and_render_pptx — Render the final PPTX file (MUST be called last)",
+            "select_source_image — Reuse a confidently-matching image already extracted from the user's own source material (never generates new images)",
+            "ask_user_question — Put up to 4 questions to the user at once, each with 2-5 "
+            "suggested answers (pauses the workflow until they reply)",
+            "finalize_and_render_pptx — Render the final PPTX file",
+            "validate_rendered_output — Check the ACTUAL rendered output: overflow/overlap in the real geometry, plus placeholder copy, repeated points, bullets restating a chart, and package integrity (MUST be called after finalize_and_render_pptx, and is the true last step)",
         ]
+        prompt_parts.extend([
+            "## Building Visuals",
+            "",
+            "- Charts, tables and metric rows are built with the build_* tools, not "
+            "written as JSON inside design_slide_content. Each one validates what you "
+            "give it (series lengths against categories, plain numbers, rows against "
+            "columns) and tells you exactly what is wrong if it does not fit, so a "
+            "malformed visual is caught where you stated it rather than silently "
+            "dropped at render time.",
+            "- Call build_chart/build_table/build_key_metrics with the slide_index "
+            "BEFORE calling design_slide_content for that slide.",
+            "- Units belong in the series name or the axis title, never inside the "
+            "numbers: \"Revenue (US$ billions)\" with values [29.1, 32.3], not "
+            "[\"29.1B\", \"32.3B\"].",
+            "- A visual REPLACES the prose it shows. Once a chart is attached, the "
+            "slide's bullets should interpret it, not repeat its figures.",
+            "- Only ever chart or tabulate figures that genuinely appear in the source "
+            "material, the research results or the conversation. Never invent, "
+            "estimate or round-trip a number you are not sure of.",
+            "",
+        ])
         prompt_parts.append("## Available Tools")
         prompt_parts.append("Use the provided function tools to accomplish each step:")
         prompt_parts.extend(f"{i}. {line}" for i, line in enumerate(tool_lines, 1))
@@ -1161,31 +1989,52 @@ class AgentLoop:
             prompt_parts.append("")
 
         if context.get("research"):
-            import json as _json2
+            findings = context["research"]
+            distinct_sources = len({r.get("url") for r in findings if r.get("url")})
             prompt_parts.append("## Research Findings (from web_search)")
             prompt_parts.append(
-                "Base your factual content on these findings. Do NOT call web_search again for "
-                "topics already covered below. These sources are shown to the user as citations."
+                f"{len(findings)} findings from {distinct_sources} distinct sources. Base your "
+                "factual content on them, and prefer a figure that appears in more than one of "
+                "them over one that appears in only a single source. Do NOT call web_search "
+                "again for topics already covered below. These sources are shown to the user "
+                "as citations."
             )
-            for idx, r in enumerate(context["research"], 1):
+            for idx, r in enumerate(findings, 1):
+                snippet = (r.get("snippet") or "")[:RESEARCH_SNIPPET_CHARS]
                 prompt_parts.append(
-                    f"{idx}. [{r.get('title', '')}]({r.get('url', '')}) - {r.get('snippet', '')}"
+                    f"{idx}. [{r.get('title', '')}]({r.get('url', '')}) - {snippet}"
                 )
             prompt_parts.append("")
 
-        research_step = ["For factual topics, research with web_search before writing content"] \
-            if self.mode == MODE_DEEP else []
+        research_step = [
+            "Research the topic with web_search from several different angles "
+            f"({self._min_web_searches()}+ distinct queries) before writing anything"
+        ] if self.mode == MODE_DEEP else []
         workflow_steps = [
             "If documents are provided, analyze them first with analyze_document",
             "Extract key data with extract_key_data",
             "If no design system is in your context, get the built-in default with extract_template_design_system (no template_path)",
             *research_step,
-            "If anything about the request is genuinely unsure/ambiguous, ask ONE consolidated question with ask_user_question before planning, unless the user already said not to ask (see CRITICAL RULES above)",
+            "CHECKPOINT 1 - consult the user: one ask_user_question call carrying every "
+            "question you have (audience, focus, depth, style), each with tailored options. "
+            "Skipped only if the user said not to ask (see CRITICAL RULES above)",
             "Plan the presentation structure with plan_presentation_structure",
+            "CHECKPOINT 2 - review the outline: ask_user_question with the numbered slide "
+            "titles in 'context' and options for going ahead or adjusting it",
             "For each slide, select a layout with select_layout",
-            "Generate content for each slide with design_slide_content",
+            "If candidate source images exist and a slide's topic plausibly has a relevant one, call select_source_image for that slide before designing its content - otherwise skip it",
+            "For any slide whose point is carried by numbers, build its visual FIRST: "
+            "build_chart for a trend/comparison/breakdown, build_table for genuinely "
+            "tabular data, build_key_metrics for a few standout figures. Each is "
+            "validated and attached to that slide automatically, so the numbers are "
+            "checked once where you state them",
+            "Generate content for each slide with design_slide_content - it writes the "
+            "title and copy; a visual already built for that slide is attached for you "
+            "and must not be restated as bullets",
             "Validate all slides with validate_slide_json",
             "Render with finalize_and_render_pptx - THIS IS MANDATORY",
+            "Then call validate_rendered_output to check the ACTUAL rendered file - THIS IS ALSO MANDATORY, and comes after finalize, not before",
+            "If validate_rendered_output reports real issues (overflow, overlap, placeholder copy, a repeated point, bullets restating a chart) for a slide, call design_slide_content again for that slide with shorter/adjusted content reflecting the reported detail, then finalize_and_render_pptx and validate_rendered_output again - up to a few times; if issues remain after that, accept the output and finish rather than looping forever. Purely 'aesthetic' findings are optional polish, not something to chase indefinitely",
         ]
         prompt_parts.append("## Workflow")
         prompt_parts.extend(f"{i}. {step}" for i, step in enumerate(workflow_steps, 1))
@@ -1196,6 +2045,75 @@ class AgentLoop:
         ])
 
         return "\n".join(prompt_parts)
+
+    def _describe_validation_issues(self, limit: int = 8) -> str:
+        """Render the last validation run's issues as a slide-numbered list."""
+        issues = self.working_state.validation_issues
+        if not issues:
+            return "  (no specific issues recorded)"
+
+        lines = []
+        for issue in issues[:limit]:
+            slide_index = issue.get("slideIndex")
+            where = f"Slide {slide_index + 1}" if isinstance(slide_index, int) else "Deck"
+            lines.append(f"  - {where}: {issue.get('detail', issue.get('type', 'issue'))}")
+        if len(issues) > limit:
+            lines.append(f"  - ...and {len(issues) - limit} more")
+        return "\n".join(lines)
+
+    def _flush_slide_previews(self) -> list[dict]:
+        """
+        Publish the staged ``slide_finalized`` events for the current render.
+
+        Previews are staged at render time and released only once the deck is
+        settled, so the UI never shows a slide that validation is about to send
+        back for redesign. Idempotent: repeated calls after a flush emit
+        nothing until the next render stages a fresh set.
+        """
+        if self.working_state.previews_published:
+            return []
+
+        events = [
+            _event("slide_finalized", "rendering", {**preview, "timestamp": _iso_now()})
+            for preview in self.working_state.pending_slide_previews
+        ]
+
+        render_result = self.working_state.pending_render_result
+        if render_result:
+            if self.working_state.validation_clean:
+                # Only a deck that actually renders correctly is offered for
+                # download. This event - not the finalize_and_render_pptx
+                # tool_result - is what persists the file and emits
+                # file_generated (see api/generate.py).
+                events.append(_event("deck_finalized", "validation", {
+                    "renderResult": render_result,
+                    "validationClean": True,
+                    "timestamp": _iso_now(),
+                }))
+            else:
+                # Exhausted the revision budget with defects still present.
+                # The deck IS still handed over - once the agent has stopped
+                # trying, withholding the file only leaves the user with
+                # nothing, and its own closing message tells them to download
+                # it. What must not happen is passing it off as clean, so the
+                # unresolved issues are published alongside it and
+                # validationClean stays false for anything reading the event.
+                events.append(_event("validation_unresolved", "validation", {
+                    "issues": self.working_state.validation_issues,
+                    "issueCount": len(self.working_state.validation_issues),
+                    "attempts": self.working_state.validation_attempts,
+                    "timestamp": _iso_now(),
+                }))
+                events.append(_event("deck_finalized", "validation", {
+                    "renderResult": render_result,
+                    "validationClean": False,
+                    "issues": self.working_state.validation_issues,
+                    "timestamp": _iso_now(),
+                }))
+
+        if events:
+            self.working_state.previews_published = True
+        return events
 
     def _extract_sources(self, data) -> list[dict]:
         """Extract source URLs from tool result data for display in chat.
@@ -1297,6 +2215,51 @@ class AgentLoop:
         ]
 
 
+def _project_design_system(fn_name: str, design_system: dict) -> dict:
+    """
+    Narrow the design system to the keys a given tool actually reads.
+
+    The whole bundle used to be serialised into every call. For
+    design_slide_content that meant the full layout catalog - every
+    placeholder's EMU geometry for every layout, a few thousand characters -
+    rode along on each slide, in the tool-call arguments AND again in the
+    echoed tool result, despite that tool only ever reading the fonts and the
+    palette. On a token-per-minute budget that is what pushes a normal deck
+    into rate-limit territory partway through, and a 429 mid-revision is what
+    strands a deck with an unfixed slide.
+    """
+    if not design_system:
+        return {}
+
+    if fn_name == "design_slide_content":
+        typography = design_system.get("typography", {}) or {}
+        palette = design_system.get("palette", {}) or {}
+        return {
+            "typography": {
+                key: typography[key]
+                for key in ("titleFont", "bodyFont")
+                if key in typography
+            },
+            # The prompt only ever renders the first five swatches.
+            "palette": {"colors": (palette.get("colors") or [])[:5]},
+        }
+
+    if fn_name == "plan_presentation_structure":
+        # Only the layout NAMES are surfaced to the planner; the geometry is
+        # select_layout's business.
+        return {
+            "layouts": [
+                {
+                    "layoutId": layout.get("layoutId"),
+                    "layoutName": layout.get("layoutName"),
+                }
+                for layout in design_system.get("layouts", []) or []
+            ]
+        }
+
+    return design_system
+
+
 def _event(event_type: str, phase: str, data: dict) -> dict:
     """Create a typed agent event dict."""
     return {
@@ -1304,6 +2267,20 @@ def _event(event_type: str, phase: str, data: dict) -> dict:
         "phase": phase,
         **data,
     }
+
+
+def _retry_notice_event(notice: RetryNotice, phase: str) -> dict:
+    """Turn a provider back-off into the event the interface counts down."""
+    return _event("rate_limit", phase, {
+        "reason": notice.reason,
+        "attempt": notice.attempt,
+        "maxAttempts": notice.max_attempts,
+        "retryInSeconds": round(notice.delay_seconds, 1),
+        "provider": notice.provider,
+        "model": notice.model,
+        "message": notice.message(),
+        "timestamp": _iso_now(),
+    })
 
 
 def _iso_now() -> str:

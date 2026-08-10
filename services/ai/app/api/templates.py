@@ -5,8 +5,7 @@ import uuid
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from typing import Optional, List
+from typing import Optional
 import asyncio
 
 from app.db.session import get_db
@@ -109,6 +108,7 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
         slide_dimensions=design_system.get("slideDimensions", {}),
         master_elements=design_system.get("masterElements", []),
         embedded_media=design_system.get("embeddedMedia", []),
+        data_viz=design_system.get("dataViz", {}),
         raw_xml_snapshot=json.dumps(design_system),
     )
     db.add(bundle)

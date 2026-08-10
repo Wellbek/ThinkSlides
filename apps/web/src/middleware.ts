@@ -24,6 +24,14 @@ export function middleware(request: NextRequest) {
     return NextResponse.rewrite(url);
   }
 
+  // Proxy per-slide preview images (served by the orchestrator's static
+  // file route at /previews/{session_id}/slide_N.png).
+  if (pathname.startsWith('/previews/')) {
+    const backendUrl = process.env.ORCHESTRATOR_URL || 'http://localhost:8080';
+    const url = new URL(pathname + request.nextUrl.search, backendUrl);
+    return NextResponse.rewrite(url);
+  }
+
   // Proxy AI service requests
   if (pathname.startsWith('/api/ai/')) {
     // SSE streams (template upload-stream) are handled by a dedicated
@@ -45,5 +53,5 @@ export function middleware(request: NextRequest) {
 
 // Only run on API routes
 export const config = {
-  matcher: ['/api/orchestrator/:path*', '/api/ai/:path*'],
+  matcher: ['/api/orchestrator/:path*', '/api/ai/:path*', '/previews/:path*'],
 };

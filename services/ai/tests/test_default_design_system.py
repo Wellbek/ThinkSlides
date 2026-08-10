@@ -25,9 +25,11 @@ def test_generator_dimensions_match_design_system():
 
     assert width_emu == dims["widthEmu"]
     assert height_emu == dims["heightEmu"]
-    # 16:9 sanity check: 10in x 5.625in
-    assert width_emu == Emu(9144000)
-    assert height_emu == Emu(5143500)
+    # PowerPoint's own 16:9 page, 13.333in x 7.5in. Sizing against the
+    # standard canvas is what makes the design system's point sizes render
+    # at the size they claim (see slideDimensions' comment).
+    assert width_emu == Emu(12191695)
+    assert height_emu == Emu(6858000)
 
 
 def test_generator_palette_matches_design_system():
@@ -82,10 +84,17 @@ def test_default_design_system_schema_is_complete():
         "masterElements",
         "embeddedMedia",
         "sourceType",
+        "dataViz",
     ):
         assert key in ds, f"design system missing key '{key}'"
     assert ds["sourceType"] == "default"
-    assert len(ds["layouts"]) == 6
+    # Named rather than counted, so adding a layout is not a test failure
+    # but losing one the planner can emit still is.
+    layout_ids = {layout["layoutId"] for layout in ds["layouts"]}
+    assert {"title", "section", "content", "twoColumn",
+            "image", "table", "chart", "conclusion"} <= layout_ids
+    # Every layout declares the light/dark role the renderer paints it in.
+    assert all(layout.get("role") for layout in ds["layouts"])
     assert any(c["name"] == "white" for c in ds["palette"]["colors"])
 
 
@@ -174,15 +183,35 @@ def test_resolve_palette_hex_without_leading_hash():
     assert label == "#00704A"
 
 
-def test_resolve_palette_hex_is_uppercased_and_only_overrides_primary():
+def test_resolve_palette_hex_derives_a_whole_palette_around_the_brand_colour():
+    """A brand hex must not leave unrelated preset colours behind it.
+
+    Overriding only ``primary`` (the old behaviour) meant a deck asked to use
+    Starbucks green rendered green titles and *coral* bullet glyphs, because
+    ``accent`` was still the professional preset's #FF7F50. Two unrelated
+    hues on every slide is exactly what makes a deck look un-designed.
+    """
     from app.design_system import resolve_palette
+    from app import colors
 
     _, palette = resolve_palette("#00704a")
     by_name = {c["name"]: c["value"] for c in palette}
+
     assert by_name["primary"] == "#00704A"
-    # Everything else still comes from the professional base palette.
-    assert by_name["secondary"] == COLOR_THEMES["professional"][1]["value"]
     assert by_name["white"] == "#FFFFFF"
+
+    professional = {c["name"]: c["value"] for c in COLOR_THEMES["professional"]}
+    for slot in ("secondary", "accent", "dark", "light", "gray"):
+        assert by_name[slot] != professional[slot], (
+            f"{slot} was inherited from the professional preset "
+            "instead of being derived from the brand colour"
+        )
+
+    # The dark slot backs the cover/section/closing slides, so white titles
+    # on it have to clear WCAG AA.
+    assert colors.contrast_ratio("#FFFFFF", by_name["dark"]) >= 4.5
+    # And the light slot has to stay a light surface, not a mid-tone.
+    assert colors.relative_luminance(by_name["light"]) > 0.7
 
 
 def test_resolve_palette_named_theme_still_works():
@@ -204,3 +233,50 @@ def test_invalid_hex_like_string_falls_back_to_professional():
     """Not a real hex (wrong length / bad chars) must not be treated as one."""
     ds = get_default_design_system(color_theme="#GGGGGG")
     assert ds["colorTheme"] == "professional"
+
+
+class TestDeriveDataVizConfig:
+    """derive_data_viz_config turns an already-extracted palette into
+    table/chart styling tokens without an LLM call - the deterministic
+    fallback used by the PPTX/XML extraction path (which makes no LLM call
+    at all) and by the built-in default design system."""
+
+    def test_uses_named_palette_roles_in_priority_order(self):
+        from app.design_system import derive_data_viz_config
+
+        palette = [
+            {"name": "gray", "value": "#808080"},
+            {"name": "accent", "value": "#FF7F50"},
+            {"name": "primary", "value": "#00704A"},
+            {"name": "secondary", "value": "#1E3932"},
+        ]
+        config = derive_data_viz_config(palette, body_font="Calibri")
+        # primary first, then secondary, then accent, then gray - dark absent.
+        assert config["chartColorSequence"][:4] == ["#00704A", "#1E3932", "#FF7F50", "#808080"]
+        assert config["tableHeaderBg"] == "#00704A"
+        assert config["fontFamily"] == "Calibri"
+
+    def test_empty_palette_falls_back_to_hardcoded_defaults(self):
+        from app.design_system import derive_data_viz_config
+
+        config = derive_data_viz_config([])
+        assert len(config["chartColorSequence"]) >= 1
+        assert config["tableHeaderBg"].startswith("#")
+        assert config["tableHeaderFg"] == "#FFFFFF"
+
+    def test_unnamed_palette_still_produces_a_sequence(self):
+        """A palette whose colors have no recognized role names (primary/
+        secondary/...) must still yield usable chart colors, not an empty
+        sequence."""
+        from app.design_system import derive_data_viz_config
+
+        palette = [{"name": "dk1", "value": "#111111"}, {"name": "lt1", "value": "#EEEEEE"}]
+        config = derive_data_viz_config(palette)
+        assert set(config["chartColorSequence"]) <= {"#111111", "#EEEEEE"}
+        assert len(config["chartColorSequence"]) == 2
+
+    def test_default_design_system_data_viz_is_internally_consistent(self):
+        ds = get_default_design_system(color_theme="professional")
+        primary = next(c["value"] for c in ds["palette"]["colors"] if c["name"] == "primary")
+        assert ds["dataViz"]["tableHeaderBg"] == primary
+        assert primary in ds["dataViz"]["chartColorSequence"]
