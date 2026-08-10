@@ -95,6 +95,16 @@ class DesignSlideContentTool:
                     required=False,
                 ),
                 ToolParameter(
+                    name="prepared_visuals",
+                    type="string",
+                    description=(
+                        "JSON list of visual kinds already built and attached to this "
+                        "slide by build_chart/build_table/build_key_metrics. "
+                        "Auto-supplied by the system - do not pass it yourself."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
                     name="selected_image_context",
                     type="string",
                     description=(
@@ -118,6 +128,7 @@ class DesignSlideContentTool:
         design_system_context: str = "{}",
         detail_level: str = "detailed",
         selected_image_context: str = "{}",
+        prepared_visuals: str = "[]",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -149,6 +160,9 @@ class DesignSlideContentTool:
             layout = coerce_json_arg(layout_info, {})
             ds = coerce_json_arg(design_system_context, {})
             selected_image = coerce_json_arg(selected_image_context, {})
+            attached = [
+                str(kind) for kind in (coerce_json_arg(prepared_visuals, []) or [])
+            ]
 
             placeholders = layout.get("placeholders", [])
             layout_name = layout.get("layoutName", "Default")
@@ -198,6 +212,12 @@ Design System Context:
 
             detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
 
+            # A visual built through build_chart/build_table/build_key_metrics
+            # is attached to the slide server-side. Telling the model it exists
+            # (but not what is in it) is what keeps the copy from restating the
+            # same figures next to the chart that already shows them.
+            visual_info = _prepared_visual_guidance(attached)
+
             prompt = f"""Generate content for a single presentation slide.
 
 Slide Outline:
@@ -212,6 +232,7 @@ Available Placeholders:
 Resolved placeholder indices: title={title_idx}, body={body_idx}
 {ds_info}
 {image_info}
+{visual_info}
 
 Return a JSON object with this exact structure:
 {{
@@ -305,3 +326,27 @@ Rules:
             )
         except Exception as e:
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
+
+def _prepared_visual_guidance(attached: list[str]) -> str:
+    """What to tell the model about visuals already attached to this slide."""
+    if not attached:
+        return (
+            "\nNo chart, table or metric row has been built for this slide. If its "
+            "key points are carried by figures, stop and call build_chart, "
+            "build_table or build_key_metrics for this slide_index first - do not "
+            "write chart or table JSON here yourself."
+        )
+
+    names = {
+        "chart": "a chart",
+        "table": "a table",
+        "metrics": "a row of headline figures",
+    }
+    described = " and ".join(names.get(kind, kind) for kind in attached)
+    return (
+        f"\n{described.capitalize()} has ALREADY been built for this slide and will "
+        "be placed on it automatically. Do NOT emit chart, table or metrics content "
+        "yourself, and do NOT restate the figures it shows as bullets - write the "
+        "title and at most one or two short bullets interpreting what the visual "
+        "shows ('growth flattened after 2023'), not a list of the same numbers."
+    )

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import ai_settings
 from app.agent import run_context
 from app.agent.registry import get_registry, ToolResult
+from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
 from app.llm.provider import build_chat_provider, get_llm_provider
 from app.observability.logging import get_logger
 import asyncio
@@ -108,6 +109,9 @@ TOOL_PHASES = {
     "design_slide_content": "content_generation",
     "validate_slide_json": "validation",
     "select_source_image": "content_generation",
+    "build_chart": "content_generation",
+    "build_table": "content_generation",
+    "build_key_metrics": "content_generation",
     "finalize_and_render_pptx": "rendering",
     "validate_rendered_output": "validation",
     "ask_user_question": "user_input",  # Future: pause for user input
@@ -135,6 +139,12 @@ class WorkingState:
         # auto-supplied a pre-vetted image instead of re-selecting or (worse)
         # having to carry raw image bytes through its own LLM output.
         self.selected_images: dict[int, dict] = {}
+        # slide_index -> content blocks built by build_chart/build_table/
+        # build_key_metrics. Held here rather than asked back from the model
+        # because these carry the deck's actual figures: routing validated
+        # numbers through a second LLM response is how a chart ends up
+        # disagreeing with the bullets beside it.
+        self.prepared_visuals: dict[int, list[dict]] = {}
         self.current_step_index: int = 0
         self.pending_question: dict | None = None
         self.is_paused_for_user: bool = False
@@ -263,6 +273,19 @@ class WorkingState:
                     continue
                 new_contents.append(item)
             slide_data = {**slide_data, "contents": new_contents}
+
+        # Attach anything build_chart/build_table/build_key_metrics prepared
+        # for this slide. Any chart or table the model wrote inline is
+        # dropped in favour of the validated one, so a slide cannot end up
+        # carrying the same figures twice.
+        prepared = self.prepared_visuals.get(slide_index)
+        if prepared:
+            prepared_types = {block.get("type") for block in prepared}
+            kept = [
+                item for item in slide_data.get("contents", [])
+                if not (isinstance(item, dict) and item.get("type") in prepared_types)
+            ]
+            slide_data = {**slide_data, "contents": [*kept, *prepared]}
 
         self.add_slide(slide_data)
 
@@ -860,6 +883,14 @@ class AgentLoop:
                         fn_args["selected_image_context"] = json.dumps(
                             self.working_state.selected_images[slide_index]
                         )
+                    prepared = self.working_state.prepared_visuals.get(slide_index)
+                    if prepared:
+                        # Only what kind of visual is coming, never its data:
+                        # the figures are already validated and attached, and
+                        # the copy's job is to interpret them, not repeat them.
+                        fn_args["prepared_visuals"] = json.dumps(
+                            [block.get("type") for block in prepared]
+                        )
                 elif fn_name == "finalize_and_render_pptx":
                     # Needed so generated tables/charts can be styled from
                     # the template's own brand colors instead of a generic
@@ -1152,6 +1183,19 @@ class AgentLoop:
                         image_catalog.extend(tool_result.data["images"])
                         if len(image_catalog) > 20:
                             context["imageCatalog"] = image_catalog[-20:]
+
+                    # Charts/tables/metric rows are attached to their slide
+                    # here rather than handed back for the model to re-state.
+                    if fn_name in BUILD_VISUAL_TOOLS and tool_result.data:
+                        target = tool_result.data.get("slideIndex")
+                        block = tool_result.data.get("content")
+                        if target is not None and block:
+                            slots = self.working_state.prepared_visuals.setdefault(target, [])
+                            slots[:] = [
+                                existing for existing in slots
+                                if existing.get("type") != block.get("type")
+                            ]
+                            slots.append(block)
 
                     # Resolve select_source_image's chosen id back to the
                     # real image data (the LLM only ever saw lightweight
@@ -1551,13 +1595,37 @@ class AgentLoop:
             *research_tool,
             "plan_presentation_structure — Plan the slide structure and outline",
             "select_layout — Choose the best layout for each slide based on content",
-            "design_slide_content — Generate slide content (text, tables, charts, and images via select_source_image)",
+            "build_chart — Build a validated chart for a slide from typed arguments (categories, series, axis titles). Use this rather than writing chart JSON yourself",
+            "build_table — Build a validated table for a slide from typed columns and rows",
+            "build_key_metrics — Build a row of 2-4 headline figures for a slide",
+            "design_slide_content — Generate a slide's title and copy (visuals come from the build_* tools)",
             "validate_slide_json — Validate slide JSON against the schema before rendering",
             "select_source_image — Reuse a confidently-matching image already extracted from the user's own source material (never generates new images)",
             "ask_user_question — Ask the user for clarification or input (pauses workflow)",
             "finalize_and_render_pptx — Render the final PPTX file",
             "validate_rendered_output — Check the ACTUAL rendered output for overflow/overlap (MUST be called after finalize_and_render_pptx, and is the true last step)",
         ]
+        prompt_parts.extend([
+            "## Building Visuals",
+            "",
+            "- Charts, tables and metric rows are built with the build_* tools, not "
+            "written as JSON inside design_slide_content. Each one validates what you "
+            "give it (series lengths against categories, plain numbers, rows against "
+            "columns) and tells you exactly what is wrong if it does not fit, so a "
+            "malformed visual is caught where you stated it rather than silently "
+            "dropped at render time.",
+            "- Call build_chart/build_table/build_key_metrics with the slide_index "
+            "BEFORE calling design_slide_content for that slide.",
+            "- Units belong in the series name or the axis title, never inside the "
+            "numbers: \"Revenue (US$ billions)\" with values [29.1, 32.3], not "
+            "[\"29.1B\", \"32.3B\"].",
+            "- A visual REPLACES the prose it shows. Once a chart is attached, the "
+            "slide's bullets should interpret it, not repeat its figures.",
+            "- Only ever chart or tabulate figures that genuinely appear in the source "
+            "material, the research results or the conversation. Never invent, "
+            "estimate or round-trip a number you are not sure of.",
+            "",
+        ])
         prompt_parts.append("## Available Tools")
         prompt_parts.append("Use the provided function tools to accomplish each step:")
         prompt_parts.extend(f"{i}. {line}" for i, line in enumerate(tool_lines, 1))
@@ -1609,7 +1677,14 @@ class AgentLoop:
             "Plan the presentation structure with plan_presentation_structure",
             "For each slide, select a layout with select_layout",
             "If candidate source images exist and a slide's topic plausibly has a relevant one, call select_source_image for that slide before designing its content - otherwise skip it",
-            "Generate content for each slide with design_slide_content",
+            "For any slide whose point is carried by numbers, build its visual FIRST: "
+            "build_chart for a trend/comparison/breakdown, build_table for genuinely "
+            "tabular data, build_key_metrics for a few standout figures. Each is "
+            "validated and attached to that slide automatically, so the numbers are "
+            "checked once where you state them",
+            "Generate content for each slide with design_slide_content - it writes the "
+            "title and copy; a visual already built for that slide is attached for you "
+            "and must not be restated as bullets",
             "Validate all slides with validate_slide_json",
             "Render with finalize_and_render_pptx - THIS IS MANDATORY",
             "Then call validate_rendered_output to check the ACTUAL rendered file (not the slide JSON) for overflow/overlap - THIS IS ALSO MANDATORY, and comes after finalize, not before",

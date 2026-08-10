@@ -681,7 +681,10 @@ class PPTXRenderer:
             return
 
         text_items = [c for c in contents if c.get("type") == "text"]
-        object_items = [c for c in contents if c.get("type") in ("image", "table", "chart")]
+        object_items = [
+            c for c in contents
+            if c.get("type") in ("image", "table", "chart", "metrics")
+        ]
 
         # The content designer emits the title first, then body items (see
         # design_slide_content's prompt), so position in the list is the
@@ -757,6 +760,8 @@ class PPTXRenderer:
                 self._add_image(slide, item.get("image", {}), region)
             elif kind == "table":
                 self._add_table(slide, item.get("table", {}), region)
+            elif kind == "metrics":
+                self._add_key_metrics(slide, item.get("metrics", {}), region)
             else:
                 self._add_chart(slide, item.get("chart", {}), region, slide_title)
 
@@ -1006,6 +1011,13 @@ class PPTXRenderer:
             return self._type_scale.title_style(hero=hero)
         return self._type_scale.body_style(run_data.get("level", 0))
 
+    @staticmethod
+    def _set_run_color(run, color_hex: str) -> None:
+        try:
+            run.font.color.rgb = _hex_to_rgbcolor(color_hex)
+        except ValueError:
+            pass
+
     def _apply_text_color(self, run, is_title: bool) -> None:
         """Colour a run for the background the current slide is actually on.
 
@@ -1049,6 +1061,73 @@ class PPTXRenderer:
             )
         finally:
             os.unlink(img_stream.name)
+
+    def _add_key_metrics(self, slide, metrics_data: dict, pos: PositionConfig) -> None:
+        """Draw a row of headline figures: a large number over a short label.
+
+        The one visual a qualitative slide can carry honestly - it invents
+        nothing, it just sets figures the deck already states at the size
+        their importance deserves. Without it, a slide whose point is "we
+        grew 3% and opened 400 stores" renders as two plain bullets.
+        """
+        items = [
+            item for item in (metrics_data.get("items") or [])
+            if isinstance(item, dict) and str(item.get("value", "")).strip()
+        ]
+        if not items:
+            return
+
+        style = self._style or self._theme.style_for(deck_theme.ROLE_CONTENT)
+        gap = 0.3
+        column_width = (pos.width - gap * (len(items) - 1)) / len(items)
+        if column_width <= 0:
+            return
+
+        # Sized off the column so four figures do not overflow where two fit.
+        value_pt = max(24.0, min(56.0, column_width * 12.0))
+        label_pt = max(11.0, min(16.0, value_pt * 0.32))
+        block_height = (value_pt * 1.25 + label_pt * 2.6) / 72.0
+        top = pos.top + max(0.0, pos.height - block_height) / 3.0
+
+        for index, item in enumerate(items):
+            left = pos.left + index * (column_width + gap)
+            box = slide.shapes.add_textbox(
+                Inches(left), Inches(top), Inches(column_width), Inches(block_height)
+            )
+            frame = box.text_frame
+            frame.word_wrap = True
+            frame.margin_left = frame.margin_right = 0
+            frame.vertical_anchor = MSO_ANCHOR.TOP
+
+            value = frame.paragraphs[0]
+            value.alignment = PP_ALIGN.LEFT
+            value_run = value.add_run()
+            value_run.text = str(item.get("value", "")).strip()
+            value_run.font.size = Pt(value_pt)
+            value_run.font.bold = True
+            value_run.font.name = self._type_scale.title_font
+            self._set_run_color(value_run, style.title_color)
+            _clear_text_transform(value_run)
+            _apply_bullet_formatting(value, False, 0, None)
+
+            label = frame.add_paragraph()
+            label.alignment = PP_ALIGN.LEFT
+            label_run = label.add_run()
+            label_run.text = str(item.get("label", "")).strip()
+            label_run.font.size = Pt(label_pt)
+            label_run.font.name = self._type_scale.body_font
+            self._set_run_color(label_run, style.body_color)
+            _clear_text_transform(label_run)
+            _apply_bullet_formatting(label, False, 0, None)
+
+            # A short accent rule under each figure, tying the row back to
+            # the deck's one repeated motif.
+            self._add_accent_rule(
+                slide,
+                PositionConfig(left=left, top=top + block_height + 0.06,
+                               width=min(0.9, column_width * 0.4), height=0.05),
+                style.accent_color,
+            )
 
     def _add_table(self, slide, table_data: dict, pos: PositionConfig) -> None:
         """Add a native, design-system-styled table, laid out from its content.
