@@ -24,14 +24,18 @@ function toolLabel(toolName: string): string {
     analyze_document: "Analyze document",
     extract_key_data: "Extract key data",
     extract_template_design_system: "Extract template design system",
+    web_search: "Search the web",
     plan_presentation_structure: "Plan presentation structure",
     select_layout: "Select layout",
+    build_chart: "Build a chart",
+    build_table: "Build a table",
+    build_key_metrics: "Build a metric row",
     design_slide_content: "Design slide content",
     validate_slide_json: "Validate slide JSON",
     select_source_image: "Check for a matching source image",
     finalize_and_render_pptx: "Finalize and render PPTX",
     validate_rendered_output: "Validating rendered output with LibreOffice",
-    ask_user_question: "Ask user",
+    ask_user_question: "Ask the user",
   };
   return map[toolName] ?? toolName.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -72,6 +76,7 @@ interface StepNode {
   startTs: string;
   endTs?: string;
   result?: unknown;
+  summary?: string;
   success?: boolean;
   error?: string;
   durationMs?: number;
@@ -89,8 +94,20 @@ interface EventNode {
   kind: "event";
   key: string;
   ev: any;
+  /** How many identical-type events this node stands for (1 = not merged). */
+  merged: any[];
 }
-type FeedNode = StepNode | ThoughtsNode | EventNode;
+/** A run of consecutive calls to the same tool, shown as one line. */
+interface StepGroupNode {
+  kind: "group";
+  key: string;
+  toolName: string;
+  steps: StepNode[];
+}
+type FeedNode = StepNode | ThoughtsNode | EventNode | StepGroupNode;
+
+/** Event types where a run of them in a row says nothing more than one does. */
+const MERGEABLE_EVENTS = new Set(["slide_finalized", "rate_limit"]);
 
 function buildNodes(events: AgentEvent[]): FeedNode[] {
   const nodes: FeedNode[] = [];
@@ -146,6 +163,7 @@ function buildNodes(events: AgentEvent[]): FeedNode[] {
           step.running = false;
           step.endTs = ev.timestamp;
           step.result = ev.result;
+          step.summary = ev.summary;
           step.success = ev.success;
           step.error = ev.error;
           step.durationMs = ev.durationMs;
@@ -169,6 +187,7 @@ function buildNodes(events: AgentEvent[]): FeedNode[] {
             startTs: ev.timestamp,
             endTs: ev.timestamp,
             result: ev.result,
+            summary: ev.summary,
             success: ev.success,
             error: ev.error,
             durationMs: ev.durationMs,
@@ -183,10 +202,11 @@ function buildNodes(events: AgentEvent[]): FeedNode[] {
       case "file_generated":
       case "question":
       case "error":
+      case "rate_limit":
       case "validation_unresolved":
       case "done":
         flushThoughts();
-        nodes.push({ kind: "event", key: `ev-${nodes.length}-${ev.type}`, ev });
+        nodes.push({ kind: "event", key: `ev-${nodes.length}-${ev.type}`, ev, merged: [ev] });
         break;
       default:
         break;
@@ -201,7 +221,71 @@ function buildNodes(events: AgentEvent[]): FeedNode[] {
       progress: pendingProgress,
     });
   }
-  return nodes;
+  return collapseRepeats(nodes);
+}
+
+/**
+ * Fold runs of the same thing into one line.
+ *
+ * A ten-slide deck produced ten identical "Design slide content" entries and
+ * ten "Slide N finalized" entries in a row, which reads as noise and buries
+ * the steps that are actually different. A run of the same tool becomes one
+ * expandable group; a run of the same mergeable event becomes one entry that
+ * says how many. Nothing is dropped - the individual steps are one click away.
+ */
+function collapseRepeats(nodes: FeedNode[]): FeedNode[] {
+  const out: FeedNode[] = [];
+  let i = 0;
+
+  while (i < nodes.length) {
+    const node = nodes[i];
+
+    if (node.kind === "step") {
+      let end = i + 1;
+      while (
+        end < nodes.length &&
+        nodes[end].kind === "step" &&
+        (nodes[end] as StepNode).toolName === node.toolName
+      ) {
+        end++;
+      }
+      if (end - i > 1) {
+        const steps = nodes.slice(i, end) as StepNode[];
+        out.push({
+          kind: "group",
+          key: `grp-${node.key}`,
+          toolName: node.toolName,
+          steps,
+        });
+        i = end;
+        continue;
+      }
+    }
+
+    if (node.kind === "event" && MERGEABLE_EVENTS.has(node.ev.type)) {
+      let end = i + 1;
+      while (
+        end < nodes.length &&
+        nodes[end].kind === "event" &&
+        (nodes[end] as EventNode).ev.type === node.ev.type
+      ) {
+        end++;
+      }
+      if (end - i > 1) {
+        const merged = (nodes.slice(i, end) as EventNode[]).map((n) => n.ev);
+        // The last one is the current state of the thing being reported (the
+        // latest retry attempt, the last slide finalized).
+        out.push({ ...node, ev: merged[merged.length - 1], merged });
+        i = end;
+        continue;
+      }
+    }
+
+    out.push(node);
+    i++;
+  }
+
+  return out;
 }
 
 // ──────────────────────────────────────────────
@@ -295,22 +379,27 @@ function AssistantBlock({ message, isAnswered, answerText }: { message: any; isA
   // Which step is auto-expanded: a running step wins, else the most recent
   // completed step. Everything else auto-collapses to a one-line summary so
   // the feed keeps only the latest step in full detail. Manual toggles
-  // override the auto behaviour.
+  // override the auto behaviour. Steps inside a group count too, so the group
+  // holding the live step opens itself.
   const autoKey = useMemo(() => {
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const n = nodes[i];
-      if (n.kind === "step" && n.running) return n.key;
+    const steps: StepNode[] = [];
+    for (const n of nodes) {
+      if (n.kind === "step") steps.push(n);
+      else if (n.kind === "group") steps.push(...n.steps);
     }
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const n = nodes[i];
-      if (n.kind === "step" && !n.running) return n.key;
+    for (let i = steps.length - 1; i >= 0; i--) {
+      if (steps[i].running) return steps[i].key;
+    }
+    for (let i = steps.length - 1; i >= 0; i--) {
+      if (!steps[i].running) return steps[i].key;
     }
     return null;
   }, [nodes]);
 
   const [manual, setManual] = useState<Record<string, boolean>>({});
   const isExpanded = (key: string) => (key in manual ? manual[key] : key === autoKey);
-  const toggle = (key: string) => setManual((m) => ({ ...m, [key]: !isExpanded(key) }));
+  const toggle = (key: string, currentlyOpen?: boolean) =>
+    setManual((m) => ({ ...m, [key]: !(currentlyOpen ?? isExpanded(key)) }));
 
   // Live "working" shimmer: shown when the agent is live but there is no open
   // tool step to render the timer against (it is still reasoning).
@@ -337,12 +426,33 @@ function AssistantBlock({ message, isAnswered, answerText }: { message: any; isA
             />
           );
         }
+        if (node.kind === "group") {
+          const holdsAuto = node.steps.some((s) => s.key === autoKey);
+          return (
+            <StepGroup
+              key={node.key}
+              group={node}
+              expanded={node.key in manual ? manual[node.key] : holdsAuto}
+              onToggle={() => toggle(node.key, holdsAuto)}
+              isExpanded={isExpanded}
+              onToggleStep={toggle}
+            />
+          );
+        }
         if (node.kind === "thoughts") {
           // Trailing thoughts while live → shimmer working block.
           if (node === nodes[nodes.length - 1] && isLive) return null; // rendered via shimmer below
           return <ThoughtsBlock key={node.key} node={node} />;
         }
-        return <EventItem key={node.key} ev={node.ev} isAnswered={isAnswered} answerText={answerText} />;
+        return (
+          <EventItem
+            key={node.key}
+            ev={node.ev}
+            merged={node.merged}
+            isAnswered={isAnswered}
+            answerText={answerText}
+          />
+        );
       })}
 
       {showLiveShimmer && (
@@ -392,6 +502,90 @@ function ThoughtsBlock({ node }: { node: ThoughtsNode }) {
   );
 }
 
+/**
+ * A run of consecutive calls to the same tool, as one line.
+ *
+ * Designing ten slides is ten calls to design_slide_content; listing them
+ * individually says the same thing ten times. Collapsed, this reports what
+ * the run as a whole did; expanded, the individual steps are all still there.
+ */
+function StepGroup({
+  group,
+  expanded,
+  onToggle,
+  isExpanded,
+  onToggleStep,
+}: {
+  group: StepGroupNode;
+  expanded: boolean;
+  onToggle: () => void;
+  isExpanded: (key: string) => boolean;
+  onToggleStep: (key: string) => void;
+}) {
+  const running = group.steps.some((s) => s.running);
+  const failed = group.steps.filter((s) => s.success === false).length;
+  const totalMs = group.steps.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
+  const dotClass = failed ? "ws-dot-error" : running ? "ws-dot-status" : "ws-dot-fact";
+  const dot = failed ? "●" : running ? "↺" : "✓";
+
+  // Everything the run cited, gathered onto the one line that represents it -
+  // collapsing three searches into a group must not hide the sources they
+  // found, which are the whole reason those searches happened.
+  const sources = useMemo(() => {
+    const byUrl = new Map<string, SourceInfo>();
+    for (const step of group.steps) {
+      for (const source of step.sources ?? []) {
+        if (!byUrl.has(source.url)) byUrl.set(source.url, source);
+      }
+    }
+    return [...byUrl.values()];
+  }, [group.steps]);
+
+  return (
+    <>
+      <FeedItem dot={dot} dotClass={dotClass}>
+        <div
+          className="ws-step-summary ws-step-group"
+          onClick={onToggle}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+        >
+          <span className="lbl">{toolLabel(group.toolName)}</span>
+          <span className="ws-step-count">×{group.steps.length}</span>
+          <span className="ws-step-group-note">
+            {running
+              ? `${group.steps.filter((s) => !s.running).length} of ${group.steps.length} done`
+              : failed
+                ? `${failed} failed`
+                : "all complete"}
+          </span>
+          <span className="ws-spacer-sm" />
+          <span className="ws-step-dur">{fmtDuration(totalMs)}</span>
+          {!!sources.length && (
+            <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+              <SourcesInline sources={sources} />
+            </span>
+          )}
+          <span className="ws-step-toggle">{expanded ? "▴ collapse" : `▾ show ${group.steps.length} steps`}</span>
+        </div>
+      </FeedItem>
+      {expanded && (
+        <div className="ws-step-group-body">
+          {group.steps.map((step) => (
+            <StepItem
+              key={step.key}
+              step={step}
+              expanded={isExpanded(step.key)}
+              onToggle={() => onToggleStep(step.key)}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: boolean; onToggle: () => void }) {
   const failed = step.success === false;
   const ok = step.success === true;
@@ -404,7 +598,12 @@ function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: bool
         <div className="ws-step-summary" onClick={onToggle} role="button" tabIndex={0}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}>
           <span className="lbl">{toolLabel(step.toolName)}</span>
-          {step.phase && <span className="ws-step-phase">{PHASE_LABEL[step.phase] ?? step.phase}</span>}
+          {/* What it did, in words - the collapsed line is where most steps
+              are read, so it carries the finding rather than the phase tag. */}
+          {step.summary
+            ? <span className="ws-step-said one-line">{step.summary}</span>
+            : step.phase && <span className="ws-step-phase">{PHASE_LABEL[step.phase] ?? step.phase}</span>}
+          <span className="ws-spacer-sm" />
           <StepTimer startTs={step.startTs} endTs={step.endTs} durationMs={step.durationMs} running={step.running} />
           {/* Sources stay visible and independently expandable even while the
               step itself is collapsed - previously this was a static icon
@@ -444,9 +643,8 @@ function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: bool
           </MarkdownText>
         ))}
 
-        {Object.keys(step.args || {}).length > 0 && (
-          <DetailBlock label="Args" content={stringify(step.args)} />
-        )}
+        {/* What the step actually did, in a sentence. */}
+        {step.summary && <div className="ws-step-said">{step.summary}</div>}
 
         {step.progress.map((p: any, i: number) => (
           <div className="ws-step-progress" key={`pg-${i}`}>
@@ -455,14 +653,15 @@ function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: bool
           </div>
         ))}
 
-        {/* Result - full detail; only clamped when extremely long. */}
-        {!step.running && (
-          step.error ? (
-            <DetailBlock label="Error" content={String(step.error)} error />
-          ) : (
-            <DetailBlock label="Result" content={stringify(step.result)} />
-          )
+        {/* A failure is never hidden - the error is the point of the step. */}
+        {!step.running && step.error && (
+          <DetailBlock label="Error" content={String(step.error)} error />
         )}
+
+        {/* Everything the step was given and returned, verbatim, one more
+            click away. It is here for when the summary is not enough, not as
+            the default way to read the feed. */}
+        <RawDetails args={step.args} result={step.running ? undefined : step.result} />
 
         {/* Cited sources that this step produced (web_search). Sits right
             under the step that fetched them: a compact overlapping-circles
@@ -479,6 +678,29 @@ function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: bool
         )}
       </div>
     </FeedItem>
+  );
+}
+
+/** The step's raw arguments and result, behind one disclosure. */
+function RawDetails({ args, result }: { args?: Record<string, unknown>; result?: unknown }) {
+  const [open, setOpen] = useState(false);
+  const hasArgs = Object.keys(args || {}).length > 0;
+  const hasResult = result !== undefined && result !== null && result !== "";
+  if (!hasArgs && !hasResult) return null;
+
+  return (
+    <div className="ws-raw">
+      <button type="button" className="ws-raw-toggle" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <ChevronDown size={11} className={`ws-raw-chev ${open ? "open" : ""}`} />
+        Raw
+      </button>
+      {open && (
+        <>
+          {hasArgs && <DetailBlock label="Args" content={stringify(args)} />}
+          {hasResult && <DetailBlock label="Result" content={stringify(result)} />}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -611,15 +833,44 @@ function ProgressBar({ current, total }: { current?: number; total?: number }) {
   );
 }
 
-function EventItem({ ev, isAnswered, answerText }: { ev: any; isAnswered?: boolean; answerText?: string }) {
+function EventItem({
+  ev,
+  merged,
+  isAnswered,
+  answerText,
+}: { ev: any; merged?: any[]; isAnswered?: boolean; answerText?: string }) {
+  const repeats = merged && merged.length > 1 ? merged : null;
+
   switch (ev.type) {
-    case "slide_finalized":
+    case "slide_finalized": {
+      // A whole deck's worth of these arrive in a row; one line covers them.
+      if (repeats) {
+        const indices = repeats
+          .map((e: any) => (e.slideIndex ?? 0) + 1)
+          .sort((a: number, b: number) => a - b);
+        const contiguous = indices[indices.length - 1] - indices[0] === indices.length - 1;
+        return (
+          <FeedItem dot="↺" dotClass="ws-dot-status">
+            <div className="ws-feed-header sys">
+              <b>{indices.length}</b> slides finalized
+              <span className="ts">{fmtTime(ev.timestamp)}</span>
+            </div>
+            <div className="ws-feed-text">
+              {contiguous ? `Slides ${indices[0]}-${indices[indices.length - 1]}` : `Slides ${indices.join(", ")}`}
+              {" - previews ready."}
+            </div>
+          </FeedItem>
+        );
+      }
       return (
         <FeedItem dot="↺" dotClass="ws-dot-status">
           <div className="ws-feed-header sys">Slide <b>{(ev.slideIndex ?? 0) + 1}</b> finalized<span className="ts">{fmtTime(ev.timestamp)}</span></div>
           <div className="ws-feed-text">{ev.previewUrl ? <code>preview ready</code> : "Layout cloned from template; placeholders filled."}</div>
         </FeedItem>
       );
+    }
+    case "rate_limit":
+      return <RateLimitItem ev={ev} earlier={repeats ? repeats.length - 1 : 0} />;
     case "file_generated": {
       const url = buildDownloadUrl(`/api/orchestrator/files/${ev.fileId}`);
       return (
@@ -635,13 +886,20 @@ function EventItem({ ev, isAnswered, answerText }: { ev: any; isAnswered?: boole
         </FeedItem>
       );
     }
-    case "question":
+    case "question": {
+      // A single pause can carry several questions; events from before that
+      // was possible only have the flat pair.
+      const questions = Array.isArray(ev.questions) && ev.questions.length
+        ? ev.questions
+        : [{ question: ev.question, options: ev.options || [] }];
+      const label = questions.length > 1 ? `${questions.length} questions for you` : "Agent question";
       return (
         <FeedItem dot={isAnswered ? "✓" : "?"} dotClass={isAnswered ? "ws-dot-success" : "ws-dot-q"}>
-          <div className="ws-feed-header"><span className="lbl">Agent question</span>{isAnswered ? <span className="ws-qbadge answered">answered</span> : <span className="ws-qbadge">needs your input</span>}<span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          <QuestionCard question={ev.question} options={ev.options} context={ev.context} answered={isAnswered} answerText={answerText} />
+          <div className="ws-feed-header"><span className="lbl">{label}</span>{isAnswered ? <span className="ws-qbadge answered">answered</span> : <span className="ws-qbadge">needs your input</span>}<span className="ts">{fmtTime(ev.timestamp)}</span></div>
+          <QuestionCard questions={questions} context={ev.context} answered={isAnswered} answerText={answerText} />
         </FeedItem>
       );
+    }
     case "error":
       return (
         <FeedItem dot="●" dotClass="ws-dot-error">
@@ -688,6 +946,62 @@ function EventItem({ ev, isAnswered, answerText }: { ev: any; isAnswered?: boole
     default:
       return null;
   }
+}
+
+/**
+ * A provider back-off, counted down live.
+ *
+ * Rate limiting is the single most common thing to interrupt a generation, and
+ * an unexplained pause reads as a hang. This says who imposed the wait, how
+ * long is left of it, and which attempt this is out of the budget - so the
+ * user can tell "waiting 20 seconds" apart from "stuck forever".
+ */
+function RateLimitItem({ ev, earlier }: { ev: any; earlier: number }) {
+  const startedAt = useMemo(() => {
+    const parsed = ev.timestamp ? new Date(ev.timestamp).getTime() : NaN;
+    return Number.isNaN(parsed) ? Date.now() : parsed;
+  }, [ev.timestamp]);
+  const total = Number(ev.retryInSeconds) || 0;
+  const [now, setNow] = useState(() => Date.now());
+
+  const remaining = Math.max(0, total - (now - startedAt) / 1000);
+  useEffect(() => {
+    if (remaining <= 0) return;
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [remaining]);
+
+  const isRateLimit = ev.reason !== "transient";
+  const who = ev.provider ? ` by ${ev.provider}` : "";
+  const headline = isRateLimit ? `Rate limited${who}` : "Provider error";
+
+  return (
+    <FeedItem dot="◷" dotClass="ws-dot-warn">
+      <div className="ws-feed-header">
+        <span className="lbl ws-rl-lbl">{headline}</span>
+        <span className="ws-rl-attempt">
+          retry {ev.attempt} of {ev.maxAttempts}
+        </span>
+        <span className="ts">{fmtTime(ev.timestamp)}</span>
+      </div>
+      <div className="ws-feed-text">
+        {remaining > 0.05
+          ? `Waiting ${remaining < 10 ? remaining.toFixed(1) : Math.ceil(remaining)}s before trying again`
+          : "Retrying now"}
+        {ev.model ? ` - ${ev.model}` : ""}.
+        {earlier > 0 && ` ${earlier} earlier ${earlier === 1 ? "wait" : "waits"} on this call.`}
+        {" Nothing is lost; the run continues where it left off."}
+      </div>
+      {total > 0 && (
+        <div className="ws-rl-bar">
+          <div
+            className="fill"
+            style={{ width: `${Math.min(100, Math.max(0, ((total - remaining) / total) * 100))}%` }}
+          />
+        </div>
+      )}
+    </FeedItem>
+  );
 }
 
 function FeedItem({

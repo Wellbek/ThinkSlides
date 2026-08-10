@@ -13,6 +13,8 @@ export type SSEEventType =
   | 'progress'
   | 'session_title_updated'
   | 'question'
+  | 'rate_limit'
+  | 'validation_unresolved'
   | 'done'
   | 'timer_update';
 
@@ -73,7 +75,11 @@ export class SSEClient {
       }
     };
 
-    // Listen for each typed event
+    // Listen for each typed event. EventSource dispatches by name, so an
+    // event missing from this list is delivered nowhere and only appears
+    // after a reload, from the persisted stream - which is exactly what
+    // happened to validation_unresolved: the one event telling the user their
+    // deck still had layout defects was invisible while it mattered.
     const eventTypes: SSEEventType[] = [
       'thought',
       'tool_call',
@@ -84,6 +90,8 @@ export class SSEClient {
       'progress',
       'session_title_updated',
       'question',
+      'rate_limit',
+      'validation_unresolved',
       'done',
       'timer_update',
     ];

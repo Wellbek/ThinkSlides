@@ -310,6 +310,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
         } catch (err) { console.error(err); }
       });
       client.on('question', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
+      // A provider back-off, narrated while it happens. isGenerating stays
+      // true: the run is waiting, not finished.
+      client.on('rate_limit', (e) => {
+        try {
+          appendEventToActiveMessage(JSON.parse(e.data));
+          set({ isGenerating: true });
+        } catch (err) { console.error(err); }
+      });
+      client.on('validation_unresolved', (e) => {
+        try {
+          appendEventToActiveMessage(JSON.parse(e.data));
+        } catch (err) { console.error(err); }
+      });
       client.on('timer_update', (e) => {
         try {
           const data = JSON.parse(e.data) as { elapsedMs: number };

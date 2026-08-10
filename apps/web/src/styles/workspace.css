@@ -409,6 +409,18 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-q-option.selected .radio { border-color: var(--ws-ai-text); }
 .ws-q-option.selected .radio::after { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: var(--ws-ai-text); }
 .ws-q-option .otxt { flex: 1; min-width: 0; }
+/* Several questions in one pause: each is its own block, separated so the
+   options underneath are unambiguously attached to the question above. */
+.ws-q-block + .ws-q-block { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--ws-border); }
+.ws-q-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 17px; height: 17px; margin-right: 7px; border-radius: 50%;
+  background: var(--ws-ai-bg); border: 1px solid var(--ws-ai-border);
+  color: var(--ws-ai-text); font-size: 10px; font-weight: 700;
+  vertical-align: 1px;
+}
+.ws-q-option .radio.checked { border-color: var(--ws-ai-text); color: var(--ws-ai-text); display: flex; align-items: center; justify-content: center; }
+.ws-q-option .radio.checked::after { content: none; }
 .ws-q-elab { margin-top: 9px; }
 .ws-q-elab label { font-size: 11px; color: #555; display: block; margin-bottom: 4px; }
 .ws-q-elab textarea { width: 100%; resize: none; border: 1px solid var(--ws-border); border-radius: var(--ws-radius-sm); background: var(--ws-bg); color: var(--ws-text-primary); font-family: var(--ws-font-ui); font-size: 12.5px; padding: 7px 9px; min-height: 36px; outline: none; }
@@ -588,6 +600,50 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
   max-height: 420px; overflow: auto;
 }
 .ws-step-pre.bad { color: var(--ws-red-text); }
+
+/* What the step did, in words. Leads the step wherever it appears; on the
+   collapsed line it takes the space between the label and the timer. */
+.ws-step-said { margin-top: 6px; font-size: 12.5px; color: #B4B4B4; line-height: 1.5; }
+.ws-step-said.one-line {
+  margin-top: 0; flex: 1; min-width: 0; color: #7E7E7E; font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ws-step-summary:hover .ws-step-said.one-line { color: #9A9A9A; }
+
+/* Raw args/result - available, not in the way. */
+.ws-raw { margin-top: 7px; }
+.ws-raw-toggle {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px 2px 5px;
+  border: 1px solid var(--ws-border); border-radius: 999px; background: var(--ws-surface-2);
+  color: #666; font-family: var(--ws-font-code); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.05em; cursor: pointer; transition: color 0.12s, border-color 0.12s;
+}
+.ws-raw-toggle:hover { color: #999; border-color: var(--ws-border-sub); }
+.ws-raw-chev { transition: transform 0.14s; }
+.ws-raw-chev.open { transform: rotate(180deg); }
+.ws-raw .ws-step-detail { margin-top: 6px; }
+
+/* ---- Merged run of the same tool ---- */
+.ws-step-group .ws-step-count {
+  font-family: var(--ws-font-code); font-size: 11px; color: var(--ws-ai-text);
+  background: var(--ws-ai-bg); border: 1px solid var(--ws-ai-border);
+  padding: 0 6px; border-radius: 999px; font-weight: 600;
+}
+/* The group line is itself a .ws-step-summary, so the sources badge inherits
+   the same in-row popover treatment as a collapsed step's. */
+.ws-step-group-note { font-size: 11.5px; color: #5E5E5E; }
+.ws-step-group-body {
+  margin-left: 8px; padding-left: 10px; border-left: 1px solid var(--ws-border);
+}
+
+/* ---- Rate-limit wait, counted down ---- */
+.ws-rl-lbl { color: #FBBF24; }
+.ws-rl-attempt {
+  font-family: var(--ws-font-code); font-size: 10.5px; color: #FBBF24;
+  background: #1A1200; border: 1px solid #3A2A00; padding: 1px 6px; border-radius: 4px;
+}
+.ws-rl-bar { margin-top: 7px; height: 3px; border-radius: 2px; background: var(--ws-surface-3); overflow: hidden; }
+.ws-rl-bar .fill { height: 100%; background: #FBBF24; transition: width 0.25s linear; }
 
 /* ---- Inline cited sources (under the step that produced them) ---- */
 .ws-src-inline { margin-top: 8px; }
