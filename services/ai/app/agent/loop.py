@@ -907,12 +907,14 @@ class AgentLoop:
                         )
                     prepared = self.working_state.prepared_visuals.get(slide_index)
                     if prepared:
-                        # Only what kind of visual is coming, never its data:
-                        # the figures are already validated and attached, and
-                        # the copy's job is to interpret them, not repeat them.
-                        fn_args["prepared_visuals"] = json.dumps(
-                            [block.get("type") for block in prepared]
-                        )
+                        # What the visual actually shows, not just that one
+                        # exists. Passing only the type produced copy about a
+                        # different subject entirely - a Starbucks deck whose
+                        # donut read Beverages/Food/Merchandise carried bullets
+                        # about the "technology" and "healthcare" segments,
+                        # because the model had a vague outline, no figures,
+                        # and filled the gap by inventing some.
+                        fn_args["prepared_visuals"] = json.dumps(prepared)
                 elif fn_name == "finalize_and_render_pptx":
                     # Needed so generated tables/charts can be styled from
                     # the template's own brand colors instead of a generic
@@ -1613,6 +1615,14 @@ class AgentLoop:
                 "",
                 "- You have no web access on this run. Write from the user's documents, the conversation, and your own knowledge.",
                 "- Do NOT invent precise statistics, dates, or quotations you are not confident in. Prefer qualitative statements over fabricated numbers.",
+                "- This applies with full force to build_chart, build_table and "
+                "build_key_metrics. A chart makes a number look sourced, so charting a "
+                "figure you actually guessed is worse than writing no chart at all. "
+                "Only build a visual from figures present in the user's documents, the "
+                "conversation, or facts you are genuinely confident of. If the request "
+                "needs current results you do not have, say so on the slide and in its "
+                "notes, and chart the shape of the question rather than inventing "
+                "values for it.",
                 "- If the request genuinely needs current or verifiable facts, say so in your slides' framing rather than guessing.",
                 "",
             ])

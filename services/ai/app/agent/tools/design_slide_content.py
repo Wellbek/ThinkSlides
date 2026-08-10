@@ -161,7 +161,8 @@ class DesignSlideContentTool:
             ds = coerce_json_arg(design_system_context, {})
             selected_image = coerce_json_arg(selected_image_context, {})
             attached = [
-                str(kind) for kind in (coerce_json_arg(prepared_visuals, []) or [])
+                block for block in (coerce_json_arg(prepared_visuals, []) or [])
+                if isinstance(block, dict)
             ]
 
             placeholders = layout.get("placeholders", [])
@@ -327,7 +328,31 @@ Rules:
         except Exception as e:
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
 
-def _prepared_visual_guidance(attached: list[str]) -> str:
+def _describe_visual(block: dict) -> str:
+    """One line naming what a prepared visual actually shows."""
+    kind = block.get("type")
+    if kind == "chart":
+        chart = block.get("chart") or {}
+        series = "; ".join(
+            f"{s.get('name')}: {', '.join(str(v) for v in (s.get('values') or [])[:12])}"
+            for s in (chart.get("series") or [])
+        )
+        categories = ", ".join(str(c) for c in (chart.get("categories") or [])[:12])
+        return (
+            f"a {chart.get('chartType', 'bar')} chart over [{categories}] showing {series}"
+        )
+    if kind == "table":
+        rows = (block.get("table") or {}).get("rows") or []
+        header = ", ".join(str(c) for c in (rows[0] if rows else [])[:8])
+        return f"a table with columns [{header}] and {max(0, len(rows) - 1)} data rows"
+    if kind == "metrics":
+        items = (block.get("metrics") or {}).get("items") or []
+        figures = "; ".join(f"{i.get('value')} {i.get('label')}" for i in items)
+        return f"a row of headline figures: {figures}"
+    return str(kind)
+
+
+def _prepared_visual_guidance(attached: list[dict]) -> str:
     """What to tell the model about visuals already attached to this slide."""
     if not attached:
         return (
@@ -337,16 +362,14 @@ def _prepared_visual_guidance(attached: list[str]) -> str:
             "write chart or table JSON here yourself."
         )
 
-    names = {
-        "chart": "a chart",
-        "table": "a table",
-        "metrics": "a row of headline figures",
-    }
-    described = " and ".join(names.get(kind, kind) for kind in attached)
+    described = "\n".join(f"  - {_describe_visual(block)}" for block in attached)
     return (
-        f"\n{described.capitalize()} has ALREADY been built for this slide and will "
-        "be placed on it automatically. Do NOT emit chart, table or metrics content "
-        "yourself, and do NOT restate the figures it shows as bullets - write the "
-        "title and at most one or two short bullets interpreting what the visual "
-        "shows ('growth flattened after 2023'), not a list of the same numbers."
+        "\nThe following has ALREADY been built for this slide and will be placed "
+        f"on it automatically:\n{described}\n"
+        "Do NOT emit chart, table or metrics content yourself. Write the title and "
+        "at most one or two short bullets that INTERPRET this data - what it means, "
+        "what changed, what follows from it. Your copy must be about THIS data and "
+        "these categories: naming any other subject, segment or figure would "
+        "contradict the visual sitting next to it. Do not list its numbers back; "
+        "the reader can already see them."
     )
