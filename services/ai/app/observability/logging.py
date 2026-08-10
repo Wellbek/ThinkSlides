@@ -9,7 +9,6 @@ and human-readable format for development.
 from __future__ import annotations
 import logging
 import structlog
-from typing import Optional
 
 
 def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:

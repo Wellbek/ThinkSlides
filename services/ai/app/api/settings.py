@@ -253,10 +253,10 @@ async def test_chat_credentials(
 
     if req.role == "deepSearch":
         stored = ai_settings.resolve_deep_search_model(row)
-        stored_prefix, key_field = "search_", ai_settings.SEARCH_KEY_FIELD
+        key_field = ai_settings.SEARCH_KEY_FIELD
     else:
         stored = ai_settings.resolve_chat_credentials(row)
-        stored_prefix, key_field = "chat_", ai_settings.CHAT_KEY_FIELD
+        key_field = ai_settings.CHAT_KEY_FIELD
 
     provider = req.provider or (stored.provider if stored else None)
     model = req.model or (stored.model if stored else None)

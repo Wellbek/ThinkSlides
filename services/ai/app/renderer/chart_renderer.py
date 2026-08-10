@@ -220,7 +220,7 @@ def _draw_pie(ax, series, categories, style, font, base_pt) -> None:
     """
     values = [v for v in series[0]["values"] if v == v and v >= 0]
     labels = categories[:len(values)] or [f"Slice {i + 1}" for i in range(len(values))]
-    labels = [str(l) for l in labels]
+    labels = [str(name) for name in labels]
     if len(labels) < len(values):
         labels += [f"Slice {i + 1}" for i in range(len(labels), len(values))]
     labels, values = _group_pie_tail(labels, values)

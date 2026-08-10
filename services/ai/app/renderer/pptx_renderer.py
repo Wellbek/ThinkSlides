@@ -23,7 +23,7 @@ from pptx.enum.shapes import MSO_SHAPE, PP_PLACEHOLDER
 from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
 from app.observability.logging import get_logger
-from app.renderer.layout import LayoutEngine, LayoutType, PositionConfig
+from app.renderer.layout import LayoutEngine, PositionConfig
 from app.renderer.typography import TypeScale
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
 from app.renderer import text_fit

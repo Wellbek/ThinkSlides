@@ -19,7 +19,7 @@ through vision models like GLM-4.6V.
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 from app.config import settings
 from app.llm.catalog import PROVIDERS_BY_ID
 from app.observability.logging import get_logger

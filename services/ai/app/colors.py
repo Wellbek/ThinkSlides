@@ -43,8 +43,10 @@ def _to_hls(hex_value: str) -> tuple[float, float, float] | None:
     return colorsys.rgb_to_hls(r, g, b)
 
 
-def _from_hls(h: float, l: float, s: float) -> str:
-    r, g, b = colorsys.hls_to_rgb(h % 1.0, max(0.0, min(1.0, l)), max(0.0, min(1.0, s)))
+def _from_hls(hue: float, lightness: float, saturation: float) -> str:
+    r, g, b = colorsys.hls_to_rgb(
+        hue % 1.0, max(0.0, min(1.0, lightness)), max(0.0, min(1.0, saturation))
+    )
     return to_hex((r * 255, g * 255, b * 255))
 
 
@@ -53,8 +55,8 @@ def with_lightness(hex_value: str, lightness: float, saturation_scale: float = 1
     hls = _to_hls(hex_value)
     if hls is None:
         return hex_value
-    h, _, s = hls
-    return _from_hls(h, lightness, s * saturation_scale)
+    hue, _, saturation = hls
+    return _from_hls(hue, lightness, saturation * saturation_scale)
 
 
 def shift_hue(hex_value: str, degrees: float, lightness: float | None = None,
@@ -63,11 +65,11 @@ def shift_hue(hex_value: str, degrees: float, lightness: float | None = None,
     hls = _to_hls(hex_value)
     if hls is None:
         return hex_value
-    h, l, s = hls
+    hue, current_lightness, saturation = hls
     return _from_hls(
-        h + degrees / 360.0,
-        l if lightness is None else lightness,
-        max(s, min_saturation),
+        hue + degrees / 360.0,
+        current_lightness if lightness is None else lightness,
+        max(saturation, min_saturation),
     )
 
 

@@ -7,7 +7,6 @@ from app.agent.loop import AgentLoop, MODE_SIMPLE, DETAIL_LEVEL_DETAILED, normal
 from app.api.tenancy import resolve_org_id
 from app.observability.logging import get_logger
 from pydantic import BaseModel
-from typing import Optional
 import uuid
 import json
 import asyncio
@@ -476,7 +475,6 @@ async def simple_fallback(
 
     from app.renderer.pptx_renderer import PPTXRenderer
     import os
-    import time
 
     logger.info("simple_fallback: generating 2-slide presentation for session %s", session_id)
 
