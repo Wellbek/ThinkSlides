@@ -257,3 +257,39 @@ class TestTypographyReachesTheSlide:
 
         assert (cover_title.text_frame.paragraphs[0].runs[0].font.size
                 > content_title.text_frame.paragraphs[0].runs[0].font.size)
+
+
+class TestSlidesAreVerticallyBalanced:
+    def test_a_short_body_does_not_leave_the_bottom_half_empty(self):
+        """Bullets were top-anchored at a fixed size in a fixed band, so a
+        two-bullet slide left 40-60% of the page blank."""
+        from app.design_system import get_default_design_system
+
+        slides = [
+            _slide("title", "Cover"),
+            _slide("content", "Two points", ["Labour cost inflation",
+                                             "Slower China recovery"]),
+        ]
+        renderer = PPTXRenderer(template_path=None, color_theme=BRAND)
+        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
+            output_path = f.name
+        try:
+            renderer.render(slides=slides, metadata={"title": "T"},
+                            output_path=output_path)
+            prs = Presentation(output_path)
+        finally:
+            os.unlink(output_path)
+
+        catalog = get_default_design_system()
+        content = next(l for l in catalog["layouts"] if l["layoutId"] == "content")
+        band = next(p for p in content["placeholders"] if p["type"] == "body")
+
+        body = next(s for s in prs.slides[1].shapes
+                    if s.has_text_frame and "Labour cost inflation" in s.text_frame.text)
+
+        # The block starts below the top of its band rather than flush with it.
+        assert body.top > band["yEmu"]
+        # And its type is set larger than the base body size.
+        size = body.text_frame.paragraphs[0].runs[0].font.size.pt
+        base = catalog["typography"]["bodyFont"]["sizePt"]
+        assert size > base

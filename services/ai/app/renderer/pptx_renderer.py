@@ -30,6 +30,7 @@ from app.renderer import text_fit
 from app.renderer import table_layout
 from app.renderer import table_style
 from app.renderer import chart_renderer
+from app.renderer import composition
 from app.renderer import deck_theme
 from app.renderer.deck_theme import DeckTheme, SlideStyle
 from app.renderer.xml_utils import get_shape_position, emu_to_inches, inches_to_emu
@@ -890,11 +891,42 @@ class PPTXRenderer:
         """
         Write text runs into an existing placeholder's text frame.
 
-        Sizing/bullet decisions mirror ``_add_text_box`` so both code paths
-        produce the same typography; the difference is purely that the box
-        already exists and carries the layout's own text defaults.
+        Typography and bullets are shared with ``_add_text_box`` via
+        ``_write_runs``; the difference is only that the box already exists.
+        A balanced body block is moved down inside its own band rather than
+        being flushed to the top of it - see ``_write_runs``.
         """
-        tf = placeholder.text_frame
+        box_width_in = emu_to_inches(placeholder.width)
+        box_height_in = emu_to_inches(placeholder.height)
+
+        balance = self._write_runs(
+            placeholder.text_frame, runs, is_title, box_width_in, box_height_in
+        )
+
+        if balance.top_offset_in > 0:
+            # Move the top edge down and pull the height in by the same
+            # amount, so the block sits lower without its bottom edge
+            # reaching any further into the footer band.
+            placeholder.top = Inches(emu_to_inches(placeholder.top) + balance.top_offset_in)
+            placeholder.height = Inches(max(0.1, box_height_in - balance.top_offset_in))
+
+    def _write_runs(
+        self,
+        tf,
+        runs: list[dict],
+        is_title: bool,
+        box_width_in: float,
+        box_height_in: float,
+    ) -> composition.BodyBalance:
+        """
+        Write ``runs`` into a text frame in the deck's own typography.
+
+        Returns the vertical balance that was applied, so the caller can
+        place the block: a body block short enough to leave the bottom half
+        of the slide empty is set a little larger, led a little further
+        apart, and started lower down its band. That combination is what
+        stops a three-bullet slide reading as a half-finished page.
+        """
         tf.clear()
         tf.word_wrap = True
         # A title sits at the bottom of its band, directly above the accent
@@ -905,23 +937,41 @@ class PPTXRenderer:
         tf.vertical_anchor = MSO_ANCHOR.BOTTOM if is_title else MSO_ANCHOR.TOP
 
         styles = [self._style_for_run(run_data, is_title) for run_data in runs]
-        resolved_sizes = [style.font_size_pt for style in styles]
+        texts = [str(r.get("text", "")) for r in runs]
+
+        balance = composition.NO_CHANGE
+        if not is_title and runs:
+            balance = composition.balance_body(
+                texts,
+                [style.font_size_pt for style in styles],
+                box_width_in,
+                box_height_in,
+            )
+
+        resolved_sizes = [style.font_size_pt * balance.size_scale for style in styles]
 
         blocks = [
-            text_fit.TextBlock(text=r.get("text", ""), font_size_pt=size)
-            for r, size in zip(runs, resolved_sizes)
+            text_fit.TextBlock(text=text, font_size_pt=size)
+            for text, size in zip(texts, resolved_sizes)
         ]
-        box_width_pt = emu_to_inches(placeholder.width) * 72.0
-        box_height_pt = emu_to_inches(placeholder.height) * 72.0
-        font_scale, _ = text_fit.compute_autofit_scale(blocks, box_width_pt, box_height_pt)
+        box_width_pt = box_width_in * 72.0
+        box_height_pt = box_height_in * 72.0
+        # The gaps between paragraphs are part of the block's height, so the
+        # autofit has to fit the text into what is left after them.
+        gap_total_pt = balance.paragraph_gap_pt * max(0, len(runs) - 1)
+        font_scale, _ = text_fit.compute_autofit_scale(
+            blocks, box_width_pt, max(1.0, box_height_pt - gap_total_pt)
+        )
 
-        for i, (run_data, style) in enumerate(zip(runs, styles)):
-            base_size = style.font_size_pt
+        for i, (run_data, style, base_size) in enumerate(zip(runs, styles, resolved_sizes)):
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
             # Explicit on every paragraph, not just titles: stock Office
             # layouts centre their subtitle placeholder, so a cover slide's
             # subtitle floated centre-of-slide while its title sat hard left.
             p.alignment = PP_ALIGN.LEFT
+            if i > 0 and balance.paragraph_gap_pt > 0:
+                p.space_before = Pt(balance.paragraph_gap_pt)
+
             run = p.add_run()
             run.text = run_data.get("text", "")
 
@@ -938,6 +988,8 @@ class PPTXRenderer:
             if bulleted:
                 p.level = level
             _apply_bullet_formatting(p, bulleted, level, self._bullet_hex())
+
+        return balance
 
     def _style_for_run(self, run_data: dict, is_title: bool):
         """The deck's own typography for one run.
@@ -1101,7 +1153,12 @@ class PPTXRenderer:
         pos: PositionConfig,
         is_title: bool = False,
     ) -> float:
-        """Add a text box with proper styling. Returns the estimated height (inches) the text actually occupies."""
+        """Add a text box in the deck's typography. Returns its height in inches.
+
+        Used when the layout supplied no placeholder for a block - a user
+        template that omits one, or more content items than the catalog
+        declared slots for.
+        """
         # PositionConfig fields are inches (plain floats, see layout.py) -
         # python-pptx's shape-creation calls take EMU Length values, and
         # silently treat a raw int/float as EMU rather than raising. Passing
@@ -1110,63 +1167,29 @@ class PPTXRenderer:
         # the no-template render path had its content positioned into a
         # sub-pixel box. This is the "right slide count, no visible content"
         # bug.
+        balance = composition.NO_CHANGE
+        if not is_title and runs:
+            balance = composition.balance_body(
+                [str(r.get("text", "")) for r in runs],
+                [self._style_for_run(r, is_title).font_size_pt for r in runs],
+                pos.width,
+                pos.height,
+            )
+
+        top = pos.top + balance.top_offset_in
+        height = max(0.1, pos.height - balance.top_offset_in)
+
         txBox = slide.shapes.add_textbox(
-            Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
+            Inches(pos.left), Inches(top), Inches(pos.width), Inches(height)
         )
         tf = txBox.text_frame
-        tf.word_wrap = True
         # Second line of defense: let LibreOffice/PowerPoint's own autofit
-        # shrink further at render/open time if our own estimate below still
+        # shrink further at render/open time if our own estimate still
         # undershoots for a given font's real metrics.
         tf.auto_size = MSO_AUTO_SIZE.NONE
 
-        # Resolve each run's base (pre-fit) style first, so the fit estimate
-        # and the actually-applied size always agree.
-        styles = [self._style_for_run(run_data, is_title) for run_data in runs]
-        resolved_sizes = [style.font_size_pt for style in styles]
-
-        blocks = [
-            text_fit.TextBlock(text=r.get("text", ""), font_size_pt=size)
-            for r, size in zip(runs, resolved_sizes)
-        ]
-        box_width_pt = pos.width * 72.0
-        box_height_pt = pos.height * 72.0
-        font_scale, _ = text_fit.compute_autofit_scale(blocks, box_width_pt, box_height_pt)
-
-        for i, (run_data, style) in enumerate(zip(runs, styles)):
-            base_size = style.font_size_pt
-            if i == 0:
-                p = tf.paragraphs[0]
-            else:
-                p = tf.add_paragraph()
-
-            p.alignment = PP_ALIGN.LEFT
-            run = p.add_run()
-            run.text = run_data.get("text", "")
-
-            run.font.name = style.font_name
-            fitted_size = max(text_fit.MIN_FONT_SCALE * base_size, base_size * font_scale)
-            run.font.size = Pt(fitted_size)
-            run.font.bold = style.bold or run_data.get("bold", False)
-            run.font.italic = style.italic or run_data.get("italic", False)
-            run.font.underline = style.underline or run_data.get("underline", False)
-            self._apply_text_color(run, is_title)
-            _clear_text_transform(run)
-
-            # Bullets. A title never takes a marker even if the model set the
-            # flag, since the title box is a single heading line.
-            level = int(run_data.get("level", 0) or 0)
-            bulleted = bool(run_data.get("bullet", False)) and not is_title
-            if bulleted:
-                p.level = level
-            _apply_bullet_formatting(p, bulleted, level, self._bullet_hex())
-
-        fitted_blocks = [
-            text_fit.TextBlock(text=b.text, font_size_pt=b.font_size_pt * font_scale)
-            for b in blocks
-        ]
-        used_height_pt = text_fit.estimate_blocks_height_pt(fitted_blocks, box_width_pt)
-        return used_height_pt / 72.0
+        self._write_runs(tf, runs, is_title, pos.width, height)
+        return height
 
     def _add_image(self, slide, img_data: dict, pos: PositionConfig) -> None:
         """Add an image to the slide. Supports base64 (raw or data-URI) and remote URL sources."""
