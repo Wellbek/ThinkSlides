@@ -68,7 +68,20 @@ class Settings(BaseSettings):
     jwt_secret: str = "thinkslides-dev-jwt-secret-change-in-production"
     jwt_algorithm: str = "HS256"
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    # `extra="ignore"` is load-bearing, not tidiness. `.env` at the repo root
+    # is the single file the setup docs tell you to create, and it carries the
+    # web and orchestrator settings too (PORT, AI_SERVICE_URL,
+    # NEXT_PUBLIC_*, ...). Pydantic's default is `extra="forbid"`, so every one
+    # of those raised `extra_forbidden` and `Settings()` - constructed at
+    # import time on the last line of this module - aborted the import of
+    # anything under `app.`. That made the whole AI service unimportable from
+    # the repo root: tests, the renderer, `uvicorn app.main:app`. It only
+    # worked in Docker because the container's WORKDIR has no `.env`.
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 settings = Settings()

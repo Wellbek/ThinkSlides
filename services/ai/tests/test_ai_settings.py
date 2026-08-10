@@ -302,3 +302,32 @@ def test_the_search_test_query_is_phrased_as_a_question():
     from app.api.settings import TEST_SEARCH_QUERY
 
     assert TEST_SEARCH_QUERY.endswith("?")
+
+
+def test_settings_ignores_unrelated_env_file_keys(tmp_path, monkeypatch):
+    """Regression: the shared repo-root .env made `app` unimportable.
+
+    `.env` is the one file the setup docs tell you to create, and it holds the
+    web and orchestrator settings alongside the AI service's. With pydantic's
+    default `extra="forbid"`, each of those raised `extra_forbidden` from the
+    module-level `Settings()` call, so importing anything under `app.` failed
+    outside Docker.
+    """
+    from app.config import Settings
+
+    # The real process environment wins over an env file, and conftest sets
+    # ZHIPU_API_KEY - clear it so the file is what's actually under test.
+    monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ZHIPU_API_KEY=from-env-file\n"
+        "PORT=8080\n"
+        "NEXT_PUBLIC_ORCHESTRATOR_URL=http://localhost:8080\n"
+        "AI_SERVICE_URL=http://ai-service:8000\n"
+    )
+
+    loaded = Settings(_env_file=str(env_file))
+
+    assert loaded.zhipu_api_key == "from-env-file"
+    assert not hasattr(loaded, "port")
