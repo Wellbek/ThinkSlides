@@ -182,3 +182,78 @@ class TestInheritedStylingIsNeutralised:
         run = title.text_frame.paragraphs[0].runs[0]
 
         assert run._r.find(qn("a:rPr")).get("cap") == "none"
+
+
+class TestTypographyReachesTheSlide:
+    def test_every_run_names_the_design_system_font(self, deck):
+        """`run.font.name` was never assigned, so the design system advertised
+        Arial to the model and the deck rendered in the base template's
+        theme font."""
+        expected = get_default_design_system()["typography"]["bodyFont"]["typeface"]
+
+        runs = [
+            run
+            for slide in deck.slides
+            for shape in slide.shapes
+            if shape.has_text_frame and not is_chrome_shape(shape)
+            for paragraph in shape.text_frame.paragraphs
+            for run in paragraph.runs
+        ]
+        assert runs
+        assert all(run.font.name == expected for run in runs)
+
+    def test_an_uploaded_templates_fonts_and_sizes_are_used(self):
+        """A template's typography is extracted and shown to the model; it has
+        to survive as far as the rendered run, not stop at the prompt."""
+        from app.renderer.typography import TypeScale
+
+        scale = TypeScale.from_design_system({
+            "typography": {
+                "titleFont": {"typeface": "Georgia", "sizePt": 40, "bold": False},
+                "bodyFont": {"typeface": "Verdana", "sizePt": 22},
+            }
+        })
+
+        assert scale.title_style().font_name == "Georgia"
+        assert scale.title_style().font_size_pt == 40
+        assert scale.title_style().bold is False
+        assert scale.body_style().font_name == "Verdana"
+        assert scale.body_style().font_size_pt == 22
+
+    def test_sub_bullets_step_down_but_stay_legible(self):
+        from app.renderer.typography import MIN_BODY_PT, TypeScale
+
+        scale = TypeScale.from_design_system({
+            "typography": {"bodyFont": {"typeface": "Arial", "sizePt": 20}}
+        })
+
+        assert scale.body_style(0).font_size_pt > scale.body_style(1).font_size_pt
+        assert scale.body_style(2).font_size_pt >= MIN_BODY_PT
+
+    def test_a_document_sized_type_scale_is_floored_for_slides(self):
+        """A template specifying 11pt body copy is describing a document."""
+        from app.renderer.typography import MIN_BODY_PT, MIN_TITLE_PT, TypeScale
+
+        scale = TypeScale.from_design_system({
+            "typography": {
+                "titleFont": {"typeface": "Arial", "sizePt": 14},
+                "bodyFont": {"typeface": "Arial", "sizePt": 11},
+            }
+        })
+
+        assert scale.title_style().font_size_pt == MIN_TITLE_PT
+        assert scale.body_style().font_size_pt == MIN_BODY_PT
+
+    def test_a_hero_title_is_larger_than_a_content_title(self, deck):
+        """The cover's title is the only thing on the slide."""
+        cover_title = next(
+            s for s in deck.slides[0].shapes
+            if s.has_text_frame and s.text_frame.text == "Cover"
+        )
+        content_title = next(
+            s for s in deck.slides[1].shapes
+            if s.has_text_frame and s.text_frame.text == "Where the business stands"
+        )
+
+        assert (cover_title.text_frame.paragraphs[0].runs[0].font.size
+                > content_title.text_frame.paragraphs[0].runs[0].font.size)

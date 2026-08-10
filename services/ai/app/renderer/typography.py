@@ -57,6 +57,83 @@ class TextStyle:
     color_rgb: Optional[tuple[int, int, int]] = None
 
 
+# Legibility floors, applied after the design system's own sizes. A template
+# that specifies 11pt body copy is describing a document, not a slide.
+MIN_TITLE_PT = 28
+MIN_BODY_PT = 16
+
+# Sub-bullets step down from the body size by these ratios. Two levels is as
+# deep as slide copy should ever go; anything further reuses level 2.
+_LEVEL_RATIOS = (1.0, 0.85, 0.75)
+
+
+@dataclass(frozen=True)
+class TypeScale:
+    """
+    The concrete point sizes and typefaces one deck renders in.
+
+    Resolved from the run's design system - an uploaded template's fonts, or
+    the built-in default's. ``TypographyEngine``'s class methods return a
+    hardcoded Arial 36/20/18 regardless of what was extracted, so a template
+    whose fonts had been read, published to the model and used to write the
+    copy still rendered in whatever the base template's theme font was. This
+    is the type half of that: the renderer asks a TypeScale, not the engine.
+    """
+    title_font: str = "Arial"
+    body_font: str = "Arial"
+    title_size_pt: float = 36.0
+    body_size_pt: float = 20.0
+    caption_size_pt: float = 12.0
+    title_bold: bool = True
+
+    @classmethod
+    def from_design_system(cls, design_system: dict | None) -> "TypeScale":
+        typography = ((design_system or {}).get("typography") or {})
+        title = typography.get("titleFont") or {}
+        body = typography.get("bodyFont") or {}
+        caption = typography.get("captionFont") or {}
+
+        defaults = cls()
+        title_font = str(title.get("typeface") or defaults.title_font)
+        body_font = str(body.get("typeface") or title_font)
+
+        return cls(
+            title_font=title_font,
+            body_font=body_font,
+            title_size_pt=_positive(title.get("sizePt"), defaults.title_size_pt),
+            body_size_pt=_positive(body.get("sizePt"), defaults.body_size_pt),
+            caption_size_pt=_positive(caption.get("sizePt"), defaults.caption_size_pt),
+            title_bold=bool(title.get("bold", defaults.title_bold)),
+        )
+
+    def title_style(self, hero: bool = False) -> TextStyle:
+        """Title styling. ``hero`` is the cover/section/closing treatment,
+        which steps up a size because it is the only thing on the slide."""
+        size = self.title_size_pt * (1.15 if hero else 1.0)
+        return TextStyle(
+            font_name=self.title_font,
+            font_size_pt=max(MIN_TITLE_PT, round(size)),
+            bold=self.title_bold,
+        )
+
+    def body_style(self, level: int = 0) -> TextStyle:
+        ratio = _LEVEL_RATIOS[min(max(int(level or 0), 0), len(_LEVEL_RATIOS) - 1)]
+        return TextStyle(
+            font_name=self.body_font,
+            font_size_pt=max(MIN_BODY_PT, round(self.body_size_pt * ratio)),
+            bold=False,
+        )
+
+
+def _positive(value, fallback: float) -> float:
+    """A usable point size from a design system field, or the fallback."""
+    try:
+        size = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return size if size > 0 else fallback
+
+
 class TypographyEngine:
     """
     Provides typography rules and utilities.

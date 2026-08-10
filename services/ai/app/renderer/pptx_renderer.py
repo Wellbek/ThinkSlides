@@ -24,7 +24,7 @@ from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
 from app.observability.logging import get_logger
 from app.renderer.layout import LayoutEngine, LayoutType, PositionConfig
-from app.renderer.typography import TypographyEngine
+from app.renderer.typography import TypeScale
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
 from app.renderer import text_fit
 from app.renderer import table_style
@@ -329,6 +329,9 @@ class PPTXRenderer:
         self.design_system = design_system or {}
         # All set by _render_from_default before it adds any slides.
         self._theme: Optional[DeckTheme] = None
+        # The deck's resolved type scale - the design system's typefaces and
+        # point sizes, with legibility floors applied.
+        self._type_scale = TypeScale()
         # The style of the slide currently being written, so the text helpers
         # colour their runs for the background they are actually landing on.
         self._style: Optional[SlideStyle] = None
@@ -429,6 +432,7 @@ class PPTXRenderer:
             self.design_system = default_design_system
 
         self._theme = DeckTheme.from_design_system(self.design_system)
+        self._type_scale = TypeScale.from_design_system(self.design_system)
         # The layout catalog is what the model planned against; it is also
         # what actually positions every shape below, so the two cannot drift.
         catalog = self.design_system if self.design_system.get("layouts") else default_design_system
@@ -794,12 +798,10 @@ class PPTXRenderer:
                 continue
             blocks = []
             for run in item.get("runs", []):
-                style = TypographyEngine.get_body_style(run.get("level", 0))
+                style = self._type_scale.body_style(run.get("level", 0))
                 blocks.append(text_fit.TextBlock(
                     text=run.get("text", ""),
-                    font_size_pt=TypographyEngine.validate_font_size(
-                        style.font_size_pt, is_title=False
-                    ),
+                    font_size_pt=style.font_size_pt,
                 ))
             measured = text_fit.estimate_blocks_height_pt(blocks, base.width * 72.0) / 72.0
             desired.append(max(measured, MIN_TEXT_BAND_IN))
@@ -892,16 +894,8 @@ class PPTXRenderer:
         # title and rule depend on how long the title happened to be.
         tf.vertical_anchor = MSO_ANCHOR.BOTTOM if is_title else MSO_ANCHOR.TOP
 
-        resolved_sizes: list[float] = []
-        for run_data in runs:
-            style = (
-                TypographyEngine.get_title_style(1)
-                if is_title
-                else TypographyEngine.get_body_style(run_data.get("level", 0))
-            )
-            resolved_sizes.append(
-                TypographyEngine.validate_font_size(style.font_size_pt, is_title=is_title)
-            )
+        styles = [self._style_for_run(run_data, is_title) for run_data in runs]
+        resolved_sizes = [style.font_size_pt for style in styles]
 
         blocks = [
             text_fit.TextBlock(text=r.get("text", ""), font_size_pt=size)
@@ -911,7 +905,8 @@ class PPTXRenderer:
         box_height_pt = emu_to_inches(placeholder.height) * 72.0
         font_scale, _ = text_fit.compute_autofit_scale(blocks, box_width_pt, box_height_pt)
 
-        for i, (run_data, base_size) in enumerate(zip(runs, resolved_sizes)):
+        for i, (run_data, style) in enumerate(zip(runs, styles)):
+            base_size = style.font_size_pt
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
             # Explicit on every paragraph, not just titles: stock Office
             # layouts centre their subtitle placeholder, so a cover slide's
@@ -920,11 +915,7 @@ class PPTXRenderer:
             run = p.add_run()
             run.text = run_data.get("text", "")
 
-            style = (
-                TypographyEngine.get_title_style(1)
-                if is_title
-                else TypographyEngine.get_body_style(run_data.get("level", 0))
-            )
+            run.font.name = style.font_name
             run.font.size = Pt(max(text_fit.MIN_FONT_SCALE * base_size, base_size * font_scale))
             run.font.bold = style.bold or run_data.get("bold", False)
             run.font.italic = style.italic or run_data.get("italic", False)
@@ -937,6 +928,21 @@ class PPTXRenderer:
             if bulleted:
                 p.level = level
             _apply_bullet_formatting(p, bulleted, level, self._bullet_hex())
+
+    def _style_for_run(self, run_data: dict, is_title: bool):
+        """The deck's own typography for one run.
+
+        Hero titles (cover, section, closing) step up a size: they are the
+        only thing on the slide, so the content-slide title size reads small
+        there. The scale itself comes from the run's design system, which is
+        the point - an uploaded template's fonts were previously extracted,
+        shown to the model, and then rendered in the base template's theme
+        font anyway because ``run.font.name`` was never assigned.
+        """
+        if is_title:
+            hero = self._style is not None and self._style.role in deck_theme.DARK_ROLES
+            return self._type_scale.title_style(hero=hero)
+        return self._type_scale.body_style(run_data.get("level", 0))
 
     def _apply_text_color(self, run, is_title: bool) -> None:
         """Colour a run for the background the current slide is actually on.
@@ -1044,16 +1050,10 @@ class PPTXRenderer:
         # undershoots for a given font's real metrics.
         tf.auto_size = MSO_AUTO_SIZE.NONE
 
-        # Resolve each run's base (pre-fit) font size first, so the fit
-        # estimate and the actually-applied size always agree.
-        resolved_sizes: list[float] = []
-        for run_data in runs:
-            if is_title:
-                style = TypographyEngine.get_title_style(1)
-            else:
-                style = TypographyEngine.get_body_style(run_data.get("level", 0))
-            size_pt = TypographyEngine.validate_font_size(style.font_size_pt, is_title=is_title)
-            resolved_sizes.append(size_pt)
+        # Resolve each run's base (pre-fit) style first, so the fit estimate
+        # and the actually-applied size always agree.
+        styles = [self._style_for_run(run_data, is_title) for run_data in runs]
+        resolved_sizes = [style.font_size_pt for style in styles]
 
         blocks = [
             text_fit.TextBlock(text=r.get("text", ""), font_size_pt=size)
@@ -1063,7 +1063,8 @@ class PPTXRenderer:
         box_height_pt = pos.height * 72.0
         font_scale, _ = text_fit.compute_autofit_scale(blocks, box_width_pt, box_height_pt)
 
-        for i, (run_data, base_size) in enumerate(zip(runs, resolved_sizes)):
+        for i, (run_data, style) in enumerate(zip(runs, styles)):
+            base_size = style.font_size_pt
             if i == 0:
                 p = tf.paragraphs[0]
             else:
@@ -1073,11 +1074,7 @@ class PPTXRenderer:
             run = p.add_run()
             run.text = run_data.get("text", "")
 
-            style = (
-                TypographyEngine.get_title_style(1)
-                if is_title
-                else TypographyEngine.get_body_style(run_data.get("level", 0))
-            )
+            run.font.name = style.font_name
             fitted_size = max(text_fit.MIN_FONT_SCALE * base_size, base_size * font_scale)
             run.font.size = Pt(fitted_size)
             run.font.bold = style.bold or run_data.get("bold", False)
