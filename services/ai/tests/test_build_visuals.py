@@ -211,3 +211,44 @@ class TestBuildKeyMetrics:
         )
 
         assert not result.success
+
+
+class TestTableSparsity:
+    """A table is a claim that these things are comparable.
+
+    A real deep-research run built a segment table with four of its six data
+    cells set to "-", because the search had only turned up two figures. A
+    table of dashes presents a gap in the research as a finding.
+    """
+
+    async def test_a_table_that_is_mostly_dashes_is_refused(self):
+        result = await BuildTableTool.run(
+            slide_index=2,
+            columns=["Segment", "Q1 Revenue ($B)", "Q2 Revenue ($B)", "Q3 Revenue ($B)"],
+            rows=[["North America", "7.28", "6.89", "-"],
+                  ["International", "-", "-", "1.3"]],
+        )
+
+        assert not result.success
+        assert "no value" in result.error
+
+    async def test_an_entirely_empty_column_is_named(self):
+        result = await BuildTableTool.run(
+            slide_index=0,
+            columns=["Segment", "Revenue", "Margin"],
+            rows=[["A", "1", "-"], ["B", "2", "-"], ["C", "3", "-"], ["D", "4", "-"]],
+        )
+
+        assert not result.success
+        assert "'Margin'" in result.error
+
+    async def test_an_occasional_gap_is_still_accepted(self):
+        result = await BuildTableTool.run(
+            slide_index=0,
+            columns=["Segment", "Revenue", "Stores"],
+            rows=[["North America", "26.8", "18,400"],
+                  ["International", "7.6", "21,900"],
+                  ["Channel Development", "1.8", "-"]],
+        )
+
+        assert result.success

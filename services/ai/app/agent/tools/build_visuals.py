@@ -40,6 +40,11 @@ MAX_TABLE_COLUMNS = 8
 MAX_TABLE_ROWS = 15
 MAX_METRICS = 4
 
+# Cells standing in for "no value". A table made mostly of these is a
+# research gap presented as a finding.
+_EMPTY_CELLS = frozenset({"", "-", "–", "—", "n/a", "na", "tbd", "?"})
+MAX_EMPTY_CELL_RATIO = 0.34
+
 
 def _as_number(value) -> float | None:
     """A plain number, or None when the value carries formatting."""
@@ -376,6 +381,10 @@ class BuildTableTool:
                 )
             body.append([str(c).strip() for c in cells])
 
+        gap = cls._sparsity_error(columns, body)
+        if gap:
+            return cls._error(gap, start)
+
         logger.info(
             "table_built", slide_index=slide_index,
             columns=len(columns), rows=len(body),
@@ -395,6 +404,38 @@ class BuildTableTool:
             },
             duration_ms=int((time.time() - start) * 1000),
         )
+
+    @staticmethod
+    def _sparsity_error(columns: list[str], body: list[list[str]]) -> str:
+        """Refuse a table that is mostly "no value".
+
+        A real run built a segment table with four of its six data cells set
+        to "-", because the research had only turned up two figures. A table
+        is a claim that these things are comparable; one made of dashes is a
+        research gap presented as a finding, and it reads worse on a slide
+        than the two numbers would as plain text.
+        """
+        cells = [cell for row in body for cell in row]
+        if not cells:
+            return ""
+
+        empty = sum(1 for cell in cells if cell.strip().lower() in _EMPTY_CELLS)
+        if empty / len(cells) > MAX_EMPTY_CELL_RATIO:
+            return (
+                f"{empty} of this table's {len(cells)} cells have no value. A table "
+                "of dashes presents a gap in the research as a finding - drop the "
+                "columns or rows you have no figures for, or state the few numbers "
+                "you do have as bullets instead."
+            )
+
+        for index, column in enumerate(columns):
+            values = [row[index] for row in body if index < len(row)]
+            if values and all(v.strip().lower() in _EMPTY_CELLS for v in values):
+                return (
+                    f"The {column!r} column has no values at all. Remove it rather "
+                    "than rendering an empty column."
+                )
+        return ""
 
     @staticmethod
     def _error(message: str, start: float) -> ToolResult:
