@@ -1448,3 +1448,46 @@ class TestInjectedDesignSystemIsNarrowedPerTool:
         from app.agent.loop import _project_design_system
 
         assert _project_design_system("design_slide_content", {}) == {}
+
+
+class TestSlidesRenderInReadingOrder:
+    """Regression: the deck rendered in the order slides were designed.
+
+    A model routinely designs out of order - and always does after a
+    validation pass sends specific slides back for revision - so a closing
+    "Implications" slide rendered second in a real generated deck.
+    """
+
+    def _state(self):
+        from app.agent.loop import WorkingState
+
+        state = WorkingState()
+        for index in (0, 4, 2, 1, 3):
+            state.add_slide({"slideIndex": index, "contents": []})
+        return state
+
+    def test_ordered_slides_follows_the_planned_index(self):
+        state = self._state()
+
+        assert [s["slideIndex"] for s in state.ordered_slides()] == [0, 1, 2, 3, 4]
+
+    def test_the_json_handed_to_the_renderer_is_ordered(self):
+        import json
+
+        state = self._state()
+
+        slides = json.loads(state.get_slides_json())
+        assert [s["slideIndex"] for s in slides] == [0, 1, 2, 3, 4]
+
+    def test_a_slide_without_an_index_keeps_its_relative_position(self):
+        from app.agent.loop import WorkingState
+
+        state = WorkingState()
+        state.add_slide({"slideIndex": 1, "contents": []})
+        state.add_slide({"contents": [], "layoutId": "extra"})
+        state.add_slide({"slideIndex": 0, "contents": []})
+
+        ordered = state.ordered_slides()
+        assert ordered[0]["slideIndex"] == 0
+        assert ordered[1]["slideIndex"] == 1
+        assert ordered[2]["layoutId"] == "extra"

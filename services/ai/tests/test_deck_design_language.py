@@ -293,3 +293,41 @@ class TestSlidesAreVerticallyBalanced:
         size = body.text_frame.paragraphs[0].runs[0].font.size.pt
         base = catalog["typography"]["bodyFont"]["sizePt"]
         assert size > base
+
+
+class TestUnderfilledLayouts:
+    def test_a_single_body_block_uses_the_full_content_band(self):
+        """A twoColumn layout with one body block filled only its left column,
+        so the text wrapped at half width with the other half of the slide
+        blank - which is exactly what the model produces when it picks
+        twoColumn and then writes a single block."""
+        from app.design_system import get_default_design_system
+
+        slides = [
+            _slide("title", "Cover"),
+            _slide("twoColumn", "Implications", [
+                "Traditional manufacturers face increasingly competitive markets",
+                "Adapting means investing in electric vehicle technology",
+            ]),
+        ]
+        renderer = PPTXRenderer(template_path=None, color_theme=BRAND)
+        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
+            output_path = f.name
+        try:
+            renderer.render(slides=slides, metadata={"title": "T"},
+                            output_path=output_path)
+            prs = Presentation(output_path)
+        finally:
+            os.unlink(output_path)
+
+        catalog = get_default_design_system()
+        two_column = next(l for l in catalog["layouts"] if l["layoutId"] == "twoColumn")
+        column_width = next(
+            p for p in two_column["placeholders"] if p["name"] == "Left Column"
+        )["cxEmu"]
+
+        body = next(s for s in prs.slides[1].shapes
+                    if s.has_text_frame
+                    and "Traditional manufacturers" in s.text_frame.text)
+
+        assert body.width > column_width * 1.5

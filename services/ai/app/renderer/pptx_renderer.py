@@ -730,12 +730,17 @@ class PPTXRenderer:
             self._strip_empty_placeholders(slide)
             return
 
-        if len(body_entries) <= len(plan.body_regions):
+        if len(body_entries) == len(plan.body_regions):
             # The catalog declared a slot per item - a two-column layout's two
             # columns, a picture layout's image and caption. Use them as
             # authored rather than re-deriving a stack.
-            regions = plan.body_regions[:len(body_entries)]
+            regions = plan.body_regions
         else:
+            # Fewer items than slots is as wrong as more. Filling only the
+            # first slot left a two-column layout with one narrow column of
+            # text wrapping at half width and the other half of the slide
+            # blank - which is what the model gets when it picks twoColumn
+            # and then writes a single body block.
             regions = self._split_region_vertically(plan.content_region, body_entries)
 
         for i, ((kind, item), region) in enumerate(zip(body_entries, regions)):

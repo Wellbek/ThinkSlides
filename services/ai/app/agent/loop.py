@@ -290,8 +290,30 @@ class WorkingState:
         self.add_slide(slide_data)
 
     def get_slides_json(self) -> str:
-        """Get accumulated slides as JSON string."""
-        return json.dumps(self.accumulated_slides)
+        """The deck as JSON, in the order the slides are meant to be read.
+
+        Slides accumulate in the order ``design_slide_content`` happened to be
+        called, which is not the order they were planned in - a model that
+        designs slide 5 before slide 2 (routinely, and always after a
+        validation pass sends specific slides back) produced a deck whose
+        narrative ran out of sequence: the closing "Implications" slide
+        rendered second. Ordering here rather than at each consumer means the
+        renderer, the markdown fallback and the validator all see the same
+        deck.
+        """
+        return json.dumps(self.ordered_slides())
+
+    def ordered_slides(self) -> list[dict]:
+        """Accumulated slides sorted by their planned index.
+
+        A slide with no index keeps its position relative to the slides
+        around it, since a stable sort leaves equal keys in insertion order.
+        """
+        def key(slide: dict) -> int:
+            index = slide.get("slideIndex")
+            return index if isinstance(index, int) else 10**6
+
+        return sorted(self.accumulated_slides, key=key)
 
     def record_completed_tool(self, name: str, args: dict, result: dict) -> None:
         """Record a successfully completed tool call."""
@@ -355,7 +377,7 @@ class WorkingState:
 
         if self.accumulated_slides:
             lines.append(f"### Slides Already Designed ({len(self.accumulated_slides)} slides)")
-            for i, slide in enumerate(self.accumulated_slides):
+            for i, slide in enumerate(self.ordered_slides()):
                 contents = slide.get("contents") or [{}]
                 runs = contents[0].get("runs") or [{}]
                 title = runs[0].get("text", f"Slide {i+1}")
@@ -1009,12 +1031,17 @@ class AgentLoop:
                     self.working_state.last_rendered_path = tool_result.data.get("filePath")
                     preview_urls = tool_result.data.get("previewUrls", [])
 
+                    # Preview page N is the Nth slide of the RENDERED deck, so
+                    # it has to be matched against the same ordering the
+                    # renderer was given - not the order the slides happened to
+                    # be designed in.
+                    rendered_order = self.working_state.ordered_slides()
                     self.working_state.pending_slide_previews = [
                         {
                             "slideIndex": slide_idx,
                             "slideData": (
-                                self.working_state.accumulated_slides[slide_idx]
-                                if slide_idx < len(self.working_state.accumulated_slides)
+                                rendered_order[slide_idx]
+                                if slide_idx < len(rendered_order)
                                 else None
                             ),
                             "previewUrl": preview_url,
