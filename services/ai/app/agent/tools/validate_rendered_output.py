@@ -23,7 +23,8 @@ import tempfile
 import time
 
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
-from app.agent.tools._json_extract import extract_json_object
+from app.agent.tools import output_qa
+from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.observability.logging import get_logger
 from app.renderer.preview_generator import PreviewGenerator
 
@@ -40,8 +41,11 @@ OVERFLOW_TOLERANCE_PT = 2.0
 # above that to avoid flagging ordinary line spacing as a defect.
 OVERLAP_AREA_RATIO_THRESHOLD = 0.35
 # Vision review is a per-slide LLM call; cap it so a large deck doesn't turn
-# "comprehensive" into a slow, expensive validation step.
-MAX_VISION_REVIEW_SLIDES = 8
+# validation into a slow, expensive step. It runs at every detail level that
+# reaches this tool, not only "comprehensive" - gating the only pass that
+# looks at the deck's own output behind a level the default run never uses
+# meant nothing ever saw it.
+MAX_VISION_REVIEW_SLIDES = 12
 # Pictures (which is how charts are embedded - see chart_renderer) are held to
 # a looser overflow tolerance than text. A rendered chart PNG routinely carries
 # a hairline of transparent padding, and LibreOffice's PDF export rounds image
@@ -75,6 +79,16 @@ class ValidateRenderedOutputTool:
                     description="Session ID - used to find the already-generated preview PDF, avoiding a second LibreOffice conversion",
                 ),
                 ToolParameter(
+                    name="slides_json",
+                    type="string",
+                    description=(
+                        "The deck's slide JSON. Optional - auto-supplied by the system, "
+                        "and used for the content checks (placeholder text, repeated "
+                        "points, copy restating a chart) that geometry cannot see."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
                     name="detail_level",
                     type="string",
                     description=(
@@ -88,7 +102,13 @@ class ValidateRenderedOutputTool:
         )
 
     @classmethod
-    async def run(cls, pptx_path: str, session_id: str, detail_level: str = "detailed") -> ToolResult:
+    async def run(
+        cls,
+        pptx_path: str,
+        session_id: str,
+        detail_level: str = "detailed",
+        slides_json: str = "[]",
+    ) -> ToolResult:
         start = time.time()
         try:
             if not os.path.exists(pptx_path):
@@ -113,10 +133,18 @@ class ValidateRenderedOutputTool:
                     duration_ms=int((time.time() - start) * 1000),
                 )
 
+            advisories: list[dict] = []
             try:
                 issues = cls._check_geometry(pdf_path)
-                if detail_level == "comprehensive":
-                    issues.extend(await cls._check_aesthetics(pdf_path))
+                issues.extend(output_qa.check_package(pptx_path))
+                slides = coerce_json_arg(slides_json, []) or []
+                if isinstance(slides, list):
+                    issues.extend(output_qa.check_content(slides))
+                # Sparse slides are reported but never gate the deck: a
+                # spacious cover is a legitimate design, and sending the deck
+                # back for it would spend the revision budget on taste.
+                advisories = output_qa.check_density(pdf_path)
+                issues.extend(await cls._check_aesthetics(pdf_path))
             finally:
                 if cleanup_dir:
                     shutil.rmtree(cleanup_dir, ignore_errors=True)
@@ -128,12 +156,19 @@ class ValidateRenderedOutputTool:
                 session_id=session_id,
                 valid=valid,
                 issue_count=len(issues),
+                advisory_count=len(advisories),
                 duration_ms=duration_ms,
             )
 
             return ToolResult(
                 success=True,
-                data={"sessionId": session_id, "valid": valid, "issueCount": len(issues), "issues": issues},
+                data={
+                    "sessionId": session_id,
+                    "valid": valid,
+                    "issueCount": len(issues),
+                    "issues": issues,
+                    "advisories": advisories,
+                },
                 duration_ms=duration_ms,
             )
         except Exception as e:

@@ -915,6 +915,10 @@ class AgentLoop:
                         fn_args["pptx_path"] = self.working_state.last_rendered_path
                     fn_args["session_id"] = str(session_id)
                     fn_args["detail_level"] = self.detail_level
+                    # The content checks read the deck's own JSON, which the
+                    # loop already holds - asking the model to hand it back
+                    # would risk it being paraphrased on the way.
+                    fn_args["slides_json"] = self.working_state.get_slides_json()
 
                 # Narrate the validation step explicitly, server-authored so
                 # it's always present and consistent rather than depending
@@ -1603,7 +1607,7 @@ class AgentLoop:
             "select_source_image — Reuse a confidently-matching image already extracted from the user's own source material (never generates new images)",
             "ask_user_question — Ask the user for clarification or input (pauses workflow)",
             "finalize_and_render_pptx — Render the final PPTX file",
-            "validate_rendered_output — Check the ACTUAL rendered output for overflow/overlap (MUST be called after finalize_and_render_pptx, and is the true last step)",
+            "validate_rendered_output — Check the ACTUAL rendered output: overflow/overlap in the real geometry, plus placeholder copy, repeated points, bullets restating a chart, and package integrity (MUST be called after finalize_and_render_pptx, and is the true last step)",
         ]
         prompt_parts.extend([
             "## Building Visuals",
@@ -1687,8 +1691,8 @@ class AgentLoop:
             "and must not be restated as bullets",
             "Validate all slides with validate_slide_json",
             "Render with finalize_and_render_pptx - THIS IS MANDATORY",
-            "Then call validate_rendered_output to check the ACTUAL rendered file (not the slide JSON) for overflow/overlap - THIS IS ALSO MANDATORY, and comes after finalize, not before",
-            "If validate_rendered_output reports real issues (overflow/overlap) for a slide, call design_slide_content again for that slide with shorter/adjusted content reflecting the reported detail, then finalize_and_render_pptx and validate_rendered_output again - up to a few times; if issues remain after that, accept the output and finish rather than looping forever. Purely 'aesthetic' findings are optional polish, not something to chase indefinitely",
+            "Then call validate_rendered_output to check the ACTUAL rendered file - THIS IS ALSO MANDATORY, and comes after finalize, not before",
+            "If validate_rendered_output reports real issues (overflow, overlap, placeholder copy, a repeated point, bullets restating a chart) for a slide, call design_slide_content again for that slide with shorter/adjusted content reflecting the reported detail, then finalize_and_render_pptx and validate_rendered_output again - up to a few times; if issues remain after that, accept the output and finish rather than looping forever. Purely 'aesthetic' findings are optional polish, not something to chase indefinitely",
         ]
         prompt_parts.append("## Workflow")
         prompt_parts.extend(f"{i}. {step}" for i, step in enumerate(workflow_steps, 1))
