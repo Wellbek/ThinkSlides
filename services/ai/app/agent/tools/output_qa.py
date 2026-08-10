@@ -50,6 +50,14 @@ RESTATED_FIGURE_THRESHOLD = 2
 # Below this share of the page covered by content, a slide reads as empty.
 # Deliberately low: this is an advisory, and a spacious slide is a choice.
 SPARSE_COVERAGE_RATIO = 0.06
+# ...and only for a slide carrying this many elements. A cover, a section
+# break and a closing slide are *meant* to be sparse; what this is really
+# looking for is a slide with plenty of content that still covers almost
+# nothing, which means it rendered wrong rather than sparse.
+MIN_ELEMENTS_TO_EXPECT_FILL = 8
+# The footer band, as a fraction of page height. Deck chrome is not content
+# and must not count towards a slide looking full.
+FOOTER_BAND_TOP = 0.88
 
 # Parts every readable .pptx must carry.
 _REQUIRED_PARTS = (
@@ -223,6 +231,7 @@ def check_density(pdf_path: str) -> list[dict]:
             if page_area <= 0:
                 continue
 
+            footer_top = page.rect.height * FOOTER_BAND_TOP
             covered = 0.0
             blocks = 0
             for block in page.get_text("dict").get("blocks", []):
@@ -231,6 +240,8 @@ def check_density(pdf_path: str) -> list[dict]:
                         if not (span.get("text") or "").strip():
                             continue
                         x0, y0, x1, y1 = span["bbox"]
+                        if y0 >= footer_top:
+                            continue  # deck chrome, not content
                         covered += max(0.0, x1 - x0) * max(0.0, y1 - y0)
                         blocks += 1
             for info in page.get_image_info():
@@ -241,15 +252,15 @@ def check_density(pdf_path: str) -> list[dict]:
                 covered += max(0.0, x1 - x0) * max(0.0, y1 - y0)
                 blocks += 1
 
-            # A cover or section slide is meant to be sparse; only a slide
-            # carrying several elements is expected to fill its page.
-            if blocks > 4 and covered / page_area < SPARSE_COVERAGE_RATIO:
+            if (blocks >= MIN_ELEMENTS_TO_EXPECT_FILL
+                    and covered / page_area < SPARSE_COVERAGE_RATIO):
                 advisories.append({
                     "slideIndex": page_index,
                     "type": "density",
                     "detail": (
-                        "This slide renders nearly empty. Consider adding a chart, "
-                        "table or metric row, or merging it with a neighbour."
+                        "This slide carries several elements but renders almost "
+                        "blank - its content is probably not landing where it "
+                        "should. Check the layout it was assigned."
                     ),
                 })
     finally:

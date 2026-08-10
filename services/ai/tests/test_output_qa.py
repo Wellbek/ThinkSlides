@@ -204,5 +204,9 @@ class TestDensity:
 
     def test_the_sparse_threshold_stays_conservative(self):
         """A validator that sends a deck back over whitespace would spend the
-        revision budget on taste."""
+        revision budget on taste. A cover, a section break and a closing
+        slide are all meant to be sparse; what this looks for is a slide with
+        plenty of content that still covers almost nothing, which means it
+        rendered wrong rather than sparse."""
         assert output_qa.SPARSE_COVERAGE_RATIO <= 0.1
+        assert output_qa.MIN_ELEMENTS_TO_EXPECT_FILL >= 8
