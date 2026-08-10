@@ -67,6 +67,12 @@ CONTENT_GAP_IN = 0.18
 # chart gets squeezed into an unreadable sliver.
 MIN_TEXT_BAND_IN = 0.4
 MIN_OBJECT_BAND_IN = 1.5
+# The most of a shared band that text may claim when a chart or table is on
+# the slide too. Giving text everything it measured and the object whatever
+# was left produced a six-row table compressed into 1.7in and typeset at
+# 8pt, under five bullets - on a slide whose entire point was the table.
+# When a slide carries a visual, the copy is the supporting act.
+MAX_TEXT_SHARE_WITH_OBJECT = 0.42
 
 # Standard PowerPoint body-bullet geometry: a 0.25" hanging indent per level.
 BULLET_INDENT_EMU = 228600
@@ -830,6 +836,16 @@ class PPTXRenderer:
         object_count = sum(1 for d in desired if d is None)
         if object_count:
             text_total = sum(d for d in desired if d is not None)
+            text_cap = available * MAX_TEXT_SHARE_WITH_OBJECT
+            if text_total > text_cap and text_total > 0:
+                # Shrink the text bands proportionally rather than the object.
+                # The text still fits: _write_runs autofits into whatever band
+                # it is finally given, down to its own legibility floor.
+                squeeze = text_cap / text_total
+                desired = [None if d is None else max(MIN_TEXT_BAND_IN, d * squeeze)
+                           for d in desired]
+                text_total = sum(d for d in desired if d is not None)
+
             share = (available - text_total) / object_count
             share = max(share, MIN_OBJECT_BAND_IN)
             desired = [share if d is None else d for d in desired]
@@ -994,12 +1010,27 @@ class PPTXRenderer:
             _clear_text_transform(run)
 
             level = int(run_data.get("level", 0) or 0)
-            bulleted = bool(run_data.get("bullet", False)) and not is_title
+            bulleted = (
+                bool(run_data.get("bullet", False))
+                and not is_title
+                and not self._is_cover
+            )
             if bulleted:
                 p.level = level
             _apply_bullet_formatting(p, bulleted, level, self._bullet_hex())
 
         return balance
+
+    @property
+    def _is_cover(self) -> bool:
+        """A cover slide's body is a standfirst, not a list.
+
+        The planner is told the title slide takes 0-1 key points and the
+        model routinely gives it three anyway. Bulleting them turns the
+        opening slide into an agenda nobody asked for; setting them as
+        running lines keeps it a cover whatever it was handed.
+        """
+        return self._style is not None and self._style.role == deck_theme.ROLE_COVER
 
     def _style_for_run(self, run_data: dict, is_title: bool):
         """The deck's own typography for one run.

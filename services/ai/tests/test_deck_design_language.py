@@ -331,3 +331,74 @@ class TestUnderfilledLayouts:
                     and "Traditional manufacturers" in s.text_frame.text)
 
         assert body.width > column_width * 1.5
+
+
+class TestASlideThatCarriesBothCopyAndAVisual:
+    def _render(self, slides):
+        renderer = PPTXRenderer(template_path=None, color_theme=BRAND)
+        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
+            output_path = f.name
+        try:
+            renderer.render(slides=slides, metadata={"title": "T"},
+                            output_path=output_path)
+            return Presentation(output_path)
+        finally:
+            os.unlink(output_path)
+
+    def test_the_table_keeps_a_legible_size_under_five_bullets(self):
+        """Giving text every inch it measured and the object the remainder
+        compressed a six-row table into 1.7in at 8pt, under five bullets, on
+        a slide whose entire point was the table."""
+        from app.renderer.table_layout import MIN_CELL_PT
+
+        slides = [_slide("title", "Cover"), {
+            "slideIndex": 1, "layoutId": "table", "contents": [
+                {"type": "text", "runs": [{"text": "Segments", "bold": True}]},
+                {"type": "text", "runs": [
+                    {"text": f"A full sentence of supporting commentary, number {i}, "
+                             "which runs to a comfortable line and a half of copy",
+                     "bullet": True, "level": 0}
+                    for i in range(5)]},
+                {"type": "table", "table": {"headerRow": True, "rows": [
+                    ["Segment", "Revenue ($B)", "Growth (%)"],
+                    ["Gaming", "2.5", "4"],
+                    ["Data Centre", "4.5", "20"],
+                    ["Professional Visualization", "0.3", "6"],
+                    ["Automotive", "0.2", "15"],
+                    ["OEM & Others", "0.79", "-5"]]}}]}]
+
+        prs = self._render(slides)
+        table = next(s.table for s in prs.slides[1].shapes if s.has_table)
+        sizes = [
+            run.font.size.pt
+            for row in table.rows for cell in row.cells
+            for paragraph in cell.text_frame.paragraphs for run in paragraph.runs
+        ]
+
+        assert min(sizes) > MIN_CELL_PT, "the table was squeezed to its floor"
+
+    def test_the_cover_sets_its_body_as_a_standfirst_not_a_list(self):
+        """The planner is told the title slide takes 0-1 key points; the model
+        routinely gives it three, and bulleting them turns the opening slide
+        into an agenda nobody asked for."""
+        from pptx.oxml.ns import qn
+
+        slides = [_slide("title", "NVIDIA Q2 FY2026 Results",
+                         ["Revenue grew on AI demand", "Net income rose sharply"]),
+                  _slide("content", "Detail", ["A point", "Another point"])]
+
+        prs = self._render(slides)
+        cover_body = next(s for s in prs.slides[0].shapes
+                          if s.has_text_frame and "Revenue grew" in s.text_frame.text)
+        content_body = next(s for s in prs.slides[1].shapes
+                            if s.has_text_frame and "A point" in s.text_frame.text)
+
+        def has_glyph(shape):
+            return any(
+                p._p.find(qn("a:pPr")) is not None
+                and p._p.find(qn("a:pPr")).find(qn("a:buChar")) is not None
+                for p in shape.text_frame.paragraphs
+            )
+
+        assert not has_glyph(cover_body)
+        assert has_glyph(content_body), "content slides must still be bulleted"
