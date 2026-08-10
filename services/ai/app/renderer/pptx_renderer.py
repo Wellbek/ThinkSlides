@@ -27,11 +27,13 @@ from app.renderer.layout import LayoutEngine, LayoutType, PositionConfig
 from app.renderer.typography import TypeScale
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
 from app.renderer import text_fit
+from app.renderer import table_layout
 from app.renderer import table_style
 from app.renderer import chart_renderer
 from app.renderer import deck_theme
 from app.renderer.deck_theme import DeckTheme, SlideStyle
 from app.renderer.xml_utils import get_shape_position, emu_to_inches, inches_to_emu
+from app import colors
 from app.design_system import get_default_design_system
 
 logger = get_logger(__name__)
@@ -997,7 +999,15 @@ class PPTXRenderer:
             os.unlink(img_stream.name)
 
     def _add_table(self, slide, table_data: dict, pos: PositionConfig) -> None:
-        """Add a native, design-system-styled table to the slide."""
+        """Add a native, design-system-styled table, laid out from its content.
+
+        Columns are sized to what they hold, figures are right-aligned,
+        rows take the height their text needs, and the whole table is
+        centred in its band. Splitting the band equally per row - the
+        previous behaviour - stretched a four-row table across four inches
+        and produced visibly uneven rows, because LibreOffice enforces its
+        own minimum row height and then distributes the surplus unevenly.
+        """
         rows_data = table_data.get("rows", [])
         if not rows_data:
             return
@@ -1006,38 +1016,83 @@ class PPTXRenderer:
         if n_cols == 0:
             return
 
+        header_row = bool(table_data.get("headerRow"))
+        layout = table_layout.plan_table(
+            [[str(c) for c in row] for row in rows_data],
+            has_header=header_row,
+            region_width_in=pos.width,
+            region_height_in=pos.height,
+        )
+        if layout is None:
+            return
+
+        # Sit the table in its band rather than filling it: a short table
+        # stretched to a tall region is what left a dead strip above and
+        # below with rows an inch apart. Optically centred (a third of the
+        # surplus above, two thirds below) rather than mathematically, so it
+        # reads as hanging from the title instead of floating mid-slide.
+        top = pos.top + max(0.0, (pos.height - layout.height_in)) / 3.0
+
         graphic_frame = slide.shapes.add_table(
-            n_rows, n_cols, Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
+            n_rows, n_cols,
+            Inches(pos.left), Inches(top),
+            Inches(pos.width), Inches(layout.height_in),
         )
         table = graphic_frame.table
         style = table_style.resolve_table_style(self.design_system)
-        header_row = bool(table_data.get("headerRow"))
+
+        for index, fraction in enumerate(layout.col_fractions):
+            table.columns[index].width = Inches(pos.width * fraction)
+        for index, height in enumerate(layout.row_heights_in):
+            table.rows[index].height = Inches(height)
+
+        # python-pptx applies a banded PowerPoint table style by default,
+        # which paints its own accent1 header over the fills set below.
+        table.first_row = header_row
+        table.horz_banding = False
 
         header_rgb = _hex_to_rgbcolor(style.header_bg)
         header_fg_rgb = _hex_to_rgbcolor(style.header_fg)
         band_rgb = _hex_to_rgbcolor(style.band_bg)
         row_rgb = _hex_to_rgbcolor(style.row_bg)
+        body_fg_rgb = _hex_to_rgbcolor(deck_theme.BODY_ON_LIGHT)
 
         for r_idx, row in enumerate(rows_data):
             is_header = header_row and r_idx == 0
+            is_total = r_idx == layout.total_row_index
             for c_idx in range(n_cols):
                 cell = table.cell(r_idx, c_idx)
                 cell.text = str(row[c_idx]) if c_idx < len(row) else ""
+                cell.vertical_anchor = MSO_ANCHOR.MIDDLE
                 cell.fill.solid()
                 if is_header:
                     cell.fill.fore_color.rgb = header_rgb
+                elif is_total:
+                    # A summary row reads as part of the data unless it is
+                    # set apart; a tint of the header does that without
+                    # introducing another colour.
+                    cell.fill.fore_color.rgb = _hex_to_rgbcolor(
+                        colors.mix(style.band_bg, style.header_bg, 0.22)
+                    )
                 elif r_idx % 2 == 1:
                     cell.fill.fore_color.rgb = band_rgb
                 else:
                     cell.fill.fore_color.rgb = row_rgb
 
+                # Figures right-align so their digits line up and can be
+                # compared down the column; prose stays left.
+                alignment = (
+                    PP_ALIGN.RIGHT if c_idx in layout.numeric_columns else PP_ALIGN.LEFT
+                )
                 for paragraph in cell.text_frame.paragraphs:
+                    paragraph.alignment = alignment
                     for run in paragraph.runs:
-                        run.font.size = Pt(14 if is_header else 12)
-                        run.font.bold = is_header
+                        run.font.size = Pt(
+                            layout.header_pt if is_header else layout.body_pt
+                        )
+                        run.font.bold = is_header or is_total
                         run.font.name = style.font_name
-                        if is_header:
-                            run.font.color.rgb = header_fg_rgb
+                        run.font.color.rgb = header_fg_rgb if is_header else body_fg_rgb
 
     def _add_text_box(
         self,
