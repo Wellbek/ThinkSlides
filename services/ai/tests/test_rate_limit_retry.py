@@ -13,9 +13,16 @@ import pytest
 
 from app.llm.provider import (
     MAX_RATE_LIMIT_RETRIES,
+    MAX_RATE_LIMIT_SLEEP_S,
     _is_rate_limit_error,
     _rate_limit_delay,
     _with_rate_limit_retry,
+)
+from app.llm.retry_notices import (
+    REASON_RATE_LIMIT,
+    RetryNotice,
+    reset_retry_observer,
+    set_retry_observer,
 )
 
 _REAL_SLEEP = asyncio.sleep
@@ -68,6 +75,31 @@ class TestRateLimitDetection:
     def test_a_500_is_not_a_rate_limit(self):
         assert _is_rate_limit_error(_RateLimited("server error", status_code=500)) is False
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            'Error code: 429 - {"error":{"code":"1113","message":"余额不足"}}',
+            "Error code: 429 - You exceeded your current quota, please check your plan and billing details",
+            "insufficient_quota",
+        ],
+    )
+    def test_an_exhausted_account_is_not_treated_as_a_rate_limit(self, message):
+        """It arrives as a 429 but no amount of waiting clears it - retrying
+        just hangs the run for two minutes before failing anyway."""
+        assert _is_rate_limit_error(_RateLimited(message)) is False
+
+    @pytest.mark.asyncio
+    async def test_an_exhausted_account_fails_immediately(self, no_sleep):
+        calls = {"n": 0}
+
+        async def call():
+            calls["n"] += 1
+            raise _RateLimited('Error code: 429 - {"error":{"code":"1113","message":"余额不足"}}')
+
+        with pytest.raises(_RateLimited):
+            await _with_rate_limit_retry(call, provider="zhipu", model="glm-4.7")
+        assert calls["n"] == 1
+
 
 class TestRateLimitDelay:
     def test_the_providers_own_suggestion_is_used(self):
@@ -96,7 +128,7 @@ class TestRateLimitDelay:
 
     def test_the_wait_is_capped(self):
         exc = Exception("Please try again in 900s.")
-        assert _rate_limit_delay(exc, 0) <= 30.0
+        assert _rate_limit_delay(exc, 0) <= MAX_RATE_LIMIT_SLEEP_S
 
 
 class TestRetryBehaviour:
@@ -150,3 +182,90 @@ class TestRetryBehaviour:
         with pytest.raises(_RateLimited):
             await _with_rate_limit_retry(call, provider="openai", model="gpt-4o")
         assert calls["n"] == MAX_RATE_LIMIT_RETRIES + 1
+
+
+class TestTheWaitIsAnnounced:
+    """A silent back-off is indistinguishable from a hang, so each wait is
+    published to whoever is watching the run - the agent loop turns them into
+    the events the interface counts down."""
+
+    @pytest.mark.asyncio
+    async def test_every_wait_is_published_with_its_attempt_number(self, no_sleep):
+        seen: list[RetryNotice] = []
+        token = set_retry_observer(seen.append)
+        calls = {"n": 0}
+
+        async def call():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise _RateLimited("Rate limit reached. Please try again in 4s.")
+            return "ok"
+
+        try:
+            await _with_rate_limit_retry(call, provider="openai", model="gpt-4o")
+        finally:
+            reset_retry_observer(token)
+
+        assert [n.attempt for n in seen] == [1, 2]
+        assert all(n.max_attempts == MAX_RATE_LIMIT_RETRIES for n in seen)
+        assert all(n.reason == REASON_RATE_LIMIT for n in seen)
+        assert all(n.provider == "openai" for n in seen)
+        assert seen[0].delay_seconds == pytest.approx(4.5)
+
+    @pytest.mark.asyncio
+    async def test_a_successful_call_announces_nothing(self, no_sleep):
+        seen: list[RetryNotice] = []
+        token = set_retry_observer(seen.append)
+
+        async def call():
+            return "ok"
+
+        try:
+            await _with_rate_limit_retry(call, provider="zhipu", model="glm-4.7")
+        finally:
+            reset_retry_observer(token)
+
+        assert seen == []
+
+    @pytest.mark.asyncio
+    async def test_a_broken_observer_cannot_break_the_run(self, no_sleep):
+        """Narration is not worth failing a generation over."""
+        def _explode(_notice):
+            raise RuntimeError("observer is broken")
+
+        token = set_retry_observer(_explode)
+        calls = {"n": 0}
+
+        async def call():
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise _RateLimited()
+            return "ok"
+
+        try:
+            assert await _with_rate_limit_retry(call, provider="openai", model="gpt-4o") == "ok"
+        finally:
+            reset_retry_observer(token)
+
+    def test_the_message_reads_the_way_a_person_would_say_it(self):
+        notice = RetryNotice(
+            reason=REASON_RATE_LIMIT,
+            attempt=2,
+            max_attempts=6,
+            delay_seconds=12.4,
+            provider="zhipu",
+            model="glm-4.7",
+        )
+
+        assert notice.message() == "Rate limited by zhipu. Retrying in 12s (2 of 6)."
+
+    def test_a_sub_second_wait_keeps_a_decimal(self):
+        notice = RetryNotice(
+            reason=REASON_RATE_LIMIT,
+            attempt=1,
+            max_attempts=6,
+            delay_seconds=0.8,
+            provider="openai",
+        )
+
+        assert "0.8s" in notice.message()

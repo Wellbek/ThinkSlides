@@ -8,6 +8,7 @@ only two methods that touch the DB) are monkeypatched where a full _run pass
 is needed.
 """
 
+import asyncio
 import json
 import uuid
 
@@ -17,8 +18,18 @@ from app.agent.loop import MODE_SIMPLE, AgentLoop, WorkingState
 from app.agent.registry import ToolResult
 
 
-def _loop(mode: str | None = MODE_SIMPLE) -> AgentLoop:
-    return AgentLoop(db=None, mode=mode)
+def _loop(mode: str | None = MODE_SIMPLE, *, consult_user: bool = False) -> AgentLoop:
+    """A loop for tests.
+
+    ``consult_user`` defaults to False - the state of a run whose user said
+    "just build it" - because the two consultation checkpoints (see
+    AgentLoop._check_precondition) otherwise block planning and drafting, which
+    is exactly what almost every test in this file is exercising. The
+    checkpoints themselves are covered by TestConsultationCheckpoints below.
+    """
+    loop = AgentLoop(db=None, mode=mode)
+    loop.questions_declined = not consult_user
+    return loop
 
 
 class _FakeRedis:
@@ -177,7 +188,9 @@ def test_tools_with_no_precondition_are_never_blocked():
 def test_prompt_defaults_to_asking_when_unsure():
     prompt = _loop(MODE_SIMPLE)._build_system_prompt({})
 
-    assert "DEFAULT TO ASKING, NOT GUESSING" in prompt
+    assert "THE DECK IS PLANNED WITH THE USER, NOT AT THEM" in prompt
+    assert "BEFORE PLANNING" in prompt
+    assert "BEFORE DRAFTING" in prompt
 
 
 def test_prompt_states_the_explicit_opt_out():
@@ -1491,3 +1504,342 @@ class TestSlidesRenderInReadingOrder:
         assert ordered[0]["slideIndex"] == 0
         assert ordered[1]["slideIndex"] == 1
         assert ordered[2]["layoutId"] == "extra"
+
+
+class TestConsultationCheckpoints:
+    """The deck is planned with the user, not at them.
+
+    The prompt asked for this all along and the model routinely went from "here
+    is a topic" straight to a finished deck. These are the two points where the
+    tools themselves refuse to go on until the user has been consulted.
+    """
+
+    def _planned(self, loop):
+        loop.working_state.presentation_structure = {"totalSlides": 3}
+        loop.working_state.selected_layouts[0] = {"layoutId": "content"}
+
+    def test_planning_is_blocked_until_the_user_has_been_asked(self):
+        loop = _loop(consult_user=True)
+
+        error = loop._check_precondition("plan_presentation_structure", {})
+
+        assert error is not None
+        assert "ask_user_question" in error
+
+    def test_planning_is_allowed_once_the_question_has_been_asked(self):
+        loop = _loop(consult_user=True)
+        loop.working_state.consulted_before_planning = True
+
+        assert loop._check_precondition("plan_presentation_structure", {}) is None
+
+    def test_drafting_is_blocked_until_the_outline_has_been_reviewed(self):
+        loop = _loop(consult_user=True)
+        loop.working_state.consulted_before_planning = True
+        self._planned(loop)
+
+        for tool in ("select_layout", "design_slide_content", "build_chart"):
+            error = loop._check_precondition(tool, {"slide_index": 0})
+            assert error is not None, f"{tool} should wait for the outline review"
+            assert "outline" in error
+
+    def test_drafting_is_allowed_once_the_outline_has_been_reviewed(self):
+        loop = _loop(consult_user=True)
+        loop.working_state.consulted_before_planning = True
+        loop.working_state.reviewed_outline_with_user = True
+        self._planned(loop)
+
+        assert loop._check_precondition("select_layout", {"slide_index": 0}) is None
+        assert loop._check_precondition("design_slide_content", {"slide_index": 0}) is None
+
+    def test_a_user_who_said_just_build_it_is_never_interrupted(self):
+        loop = _loop(consult_user=True)
+        loop.questions_declined = True
+        self._planned(loop)
+
+        assert loop._check_precondition("plan_presentation_structure", {}) is None
+        assert loop._check_precondition("design_slide_content", {"slide_index": 0}) is None
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Make me a deck about coffee, don't ask me anything",
+            "Just build it",
+            "Use your best judgement, no more questions please",
+            "Build a deck about Rome without asking me first",
+        ],
+    )
+    def test_opt_out_phrasings_are_recognised(self, message):
+        from app.agent.loop import user_declined_questions
+
+        assert user_declined_questions([{"role": "user", "content": message}]) is True
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Make me a deck about coffee",
+            "Ask me if anything is unclear",
+            "I want to be asked about the colour scheme",
+        ],
+    )
+    def test_ordinary_requests_keep_the_checkpoints(self, message):
+        from app.agent.loop import user_declined_questions
+
+        assert user_declined_questions([{"role": "user", "content": message}]) is False
+
+    def test_an_assistant_message_cannot_opt_the_user_out(self):
+        from app.agent.loop import user_declined_questions
+
+        history = [{"role": "assistant", "content": "I will just build it for you"}]
+        assert user_declined_questions(history) is False
+
+    @pytest.mark.asyncio
+    async def test_asking_before_a_plan_exists_satisfies_the_planning_checkpoint(self, monkeypatch):
+        """And the flag survives the pause, so the resumed run does not ask again."""
+        session_id = uuid.uuid4()
+        loop = _loop(consult_user=True)
+        loop.redis_client = _FakeRedis()
+
+        monkeypatch.setattr(loop, "_load_context", lambda *a, **k: _async({}))
+        monkeypatch.setattr(
+            loop,
+            "_build_chat_messages",
+            lambda *a, **k: _async([{"role": "user", "content": "A deck about coffee"}]),
+        )
+
+        async def _chat(*args, **kwargs):
+            return {
+                "message": {"content": ""},
+                "tool_calls": [{"id": "1", "function": {
+                    "name": "ask_user_question",
+                    "arguments": json.dumps({"questions": [
+                        {"question": "Who is it for?", "options": ["Investors", "Staff"]},
+                    ]}),
+                }}],
+            }
+
+        monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+
+        events = [ev async for ev in loop.run(session_id)]
+
+        question = next(e for e in events if e["type"] == "question")
+        assert question["questions"][0]["options"] == ["Investors", "Staff"]
+        assert loop.working_state.consulted_before_planning is True
+        assert loop.working_state.reviewed_outline_with_user is False
+
+        saved = json.loads(loop.redis_client.store[f"working_state:{session_id}"])
+        assert saved["consulted_before_planning"] is True
+
+    def test_asking_after_planning_satisfies_the_outline_checkpoint(self):
+        """Which checkpoint a question answers is decided by where the run is."""
+        loop = _loop(consult_user=True)
+        loop.working_state.consulted_before_planning = True
+        self._planned(loop)
+
+        # Same code path as the loop takes when ask_user_question succeeds.
+        if loop.working_state.presentation_structure:
+            loop.working_state.reviewed_outline_with_user = True
+
+        assert loop._check_precondition("design_slide_content", {"slide_index": 0}) is None
+
+
+class TestResearchBreadth:
+    """One search returning two links was being treated as the whole truth."""
+
+    def _deep(self, *, searches: int = 0, sources: int = 0):
+        from app.agent.loop import MODE_DEEP
+
+        loop = _loop(MODE_DEEP)
+        loop.working_state.consulted_before_planning = True
+        loop.working_state.web_search_calls = searches
+        loop.working_state.researched_urls = {f"https://example.com/{i}" for i in range(sources)}
+        return loop
+
+    def test_planning_is_blocked_after_a_single_search(self):
+        loop = self._deep(searches=1, sources=2)
+
+        error = loop._check_precondition("plan_presentation_structure", {})
+
+        assert error is not None
+        assert "web_search" in error
+
+    def test_planning_is_allowed_once_the_topic_has_been_covered(self):
+        loop = self._deep(searches=4, sources=12)
+
+        assert loop._check_precondition("plan_presentation_structure", {}) is None
+
+    def test_enough_searches_but_too_few_sources_keeps_looking(self):
+        loop = self._deep(searches=4, sources=2)
+
+        assert loop._check_precondition("plan_presentation_structure", {}) is not None
+
+    def test_a_search_backend_returning_nothing_cannot_stall_the_run(self):
+        """Attempts spend the budget, so a dead backend still lets the run plan."""
+        loop = self._deep(searches=9, sources=0)
+
+        assert loop._check_precondition("plan_presentation_structure", {}) is None
+
+    def test_simple_mode_has_no_research_requirement(self):
+        loop = _loop(MODE_SIMPLE)
+        loop.working_state.consulted_before_planning = True
+
+        assert loop._check_precondition("plan_presentation_structure", {}) is None
+
+    def test_the_budget_scales_with_the_requested_depth(self):
+        from app.agent.loop import (
+            DETAIL_LEVEL_COMPREHENSIVE,
+            DETAIL_LEVEL_CONCISE,
+            MODE_DEEP,
+        )
+
+        concise = AgentLoop(db=None, mode=MODE_DEEP, detail_level=DETAIL_LEVEL_CONCISE)
+        thorough = AgentLoop(
+            db=None, mode=MODE_DEEP, detail_level=DETAIL_LEVEL_COMPREHENSIVE
+        )
+
+        assert concise._min_web_searches() < thorough._min_web_searches()
+        assert concise._max_web_searches() < thorough._max_web_searches()
+
+    def test_sources_seen_are_remembered_across_a_pause(self):
+        state = WorkingState()
+        state.researched_urls = {"https://a.example", "https://b.example"}
+
+        assert len(state.researched_urls) == 2
+
+
+class TestRateLimitIsNarrated:
+    """A silent 30-second back-off is indistinguishable from a hang."""
+
+    @pytest.mark.asyncio
+    async def test_a_provider_wait_becomes_an_event_while_it_is_waiting(self, monkeypatch):
+        import app.llm.provider as provider_module
+
+        session_id = uuid.uuid4()
+        loop = _loop()
+        loop.redis_client = _FakeRedis()
+
+        monkeypatch.setattr(loop, "_load_context", lambda *a, **k: _async({}))
+        monkeypatch.setattr(loop, "_build_chat_messages", lambda *a, **k: _async([]))
+
+        async def _instant(_seconds):
+            pass
+
+        monkeypatch.setattr(provider_module.asyncio, "sleep", _instant)
+
+        attempts = {"n": 0}
+
+        # Patched at the loop's own call site rather than on loop.llm, which
+        # _configure() replaces with the environment's provider.
+        async def _chat(*args, **kwargs):
+            async def _call():
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    err = Exception("Rate limit reached. Please try again in 2s.")
+                    err.status_code = 429
+                    raise err
+                return {"message": {"content": "hi"}, "tool_calls": []}
+
+            return await provider_module._with_rate_limit_retry(
+                _call, provider="openai", model="gpt-4o"
+            )
+
+        monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+
+        events = [ev async for ev in loop.run(session_id)]
+
+        notices = [e for e in events if e["type"] == "rate_limit"]
+        assert len(notices) == 1
+        assert notices[0]["attempt"] == 1
+        assert notices[0]["maxAttempts"] == provider_module.MAX_RATE_LIMIT_RETRIES
+        assert notices[0]["retryInSeconds"] == pytest.approx(2.5)
+        assert "Rate limited by openai" in notices[0]["message"]
+        # The event arrives before the call it is describing completes.
+        assert events.index(notices[0]) < len(events) - 1
+
+    @pytest.mark.asyncio
+    async def test_a_wait_inside_a_tool_is_narrated_too(self, monkeypatch):
+        """Tools make their own LLM calls, so a 429 can strike inside one."""
+        from app.llm.retry_notices import REASON_RATE_LIMIT, RetryNotice, publish_retry_notice
+
+        session_id = uuid.uuid4()
+        loop = _loop()
+        loop.redis_client = _FakeRedis()
+
+        monkeypatch.setattr(loop, "_load_context", lambda *a, **k: _async({}))
+        monkeypatch.setattr(loop, "_build_chat_messages", lambda *a, **k: _async([]))
+
+        calls = {"n": 0}
+
+        async def _chat(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"message": {"content": ""}, "tool_calls": [
+                    {"id": "1", "function": {"name": "extract_key_data", "arguments": "{}"}}
+                ]}
+            return {"message": {"content": "done"}, "tool_calls": []}
+
+        monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+
+        async def _execute_tool(name, args):
+            publish_retry_notice(RetryNotice(
+                reason=REASON_RATE_LIMIT,
+                attempt=2,
+                max_attempts=6,
+                delay_seconds=8.0,
+                provider="zhipu",
+            ))
+            await asyncio.sleep(0)
+            return ToolResult(success=True, data={"metrics": []})
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+        events = [ev async for ev in loop.run(session_id)]
+
+        notices = [e for e in events if e["type"] == "rate_limit"]
+        assert [n["attempt"] for n in notices] == [2]
+        assert "Retrying in 8s (2 of 6)" in notices[0]["message"]
+
+
+class TestStepsAreExplained:
+    """The feed leads with a sentence; the JSON sits behind a disclosure."""
+
+    @pytest.mark.asyncio
+    async def test_a_tool_result_event_carries_its_summary(self, monkeypatch):
+        session_id = uuid.uuid4()
+        loop = _loop()
+        loop.redis_client = _FakeRedis()
+
+        monkeypatch.setattr(loop, "_load_context", lambda *a, **k: _async({}))
+        monkeypatch.setattr(loop, "_build_chat_messages", lambda *a, **k: _async([]))
+
+        calls = {"n": 0}
+
+        async def _chat(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"message": {"content": ""}, "tool_calls": [{
+                    "id": "1",
+                    "function": {"name": "plan_presentation_structure", "arguments": "{}"},
+                }]}
+            return {"message": {"content": "done"}, "tool_calls": []}
+
+        monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+
+        async def _execute_tool(name, args):
+            return ToolResult(success=True, data={
+                "title": "Coffee",
+                "totalSlides": 3,
+                "slides": [
+                    {"slideIndex": 0, "title": "Cover"},
+                    {"slideIndex": 1, "title": "Market"},
+                    {"slideIndex": 2, "title": "Outlook"},
+                ],
+            })
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+        events = [ev async for ev in loop.run(session_id)]
+
+        result = next(e for e in events if e["type"] == "tool_result")
+        assert result["summary"] == "Planned 3 slides: Cover, Market, Outlook."
+        # The raw payload is still there for anyone who expands the step.
+        assert result["result"]["totalSlides"] == 3

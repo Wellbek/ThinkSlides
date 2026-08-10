@@ -20,6 +20,9 @@ export type AgentEventType =
   | "file_generated"
   | "error"
   | "progress"
+  | "question"
+  | "rate_limit"
+  | "validation_unresolved"
   | "done";
 
 export interface ThoughtEvent {
@@ -51,6 +54,9 @@ export interface ToolResultEvent {
   toolName: string;
   callId: string;
   result: unknown;
+  /** Server-authored plain-language description of what this step did.
+   *  The feed leads with it and keeps `result` behind a "Raw" disclosure. */
+  summary?: string;
   durationMs: number;
   success: boolean;      // required – indicates tool execution success
   error?: string;        // optional error message if success is false
@@ -97,6 +103,53 @@ export interface FileGeneratedEvent {
   timestamp: string;
 }
 
+/** One question put to the user, with the answers they can pick in a tap. */
+export interface AgentQuestion {
+  question: string;
+  options: string[];
+}
+
+export interface QuestionEvent {
+  type: "question";
+  phase: "user_input";
+  /** Every question asked in this pause. */
+  questions: AgentQuestion[];
+  /** The first question, also sent flat for consumers written before a
+   *  single pause could carry several. */
+  question: string;
+  options: string[];
+  context?: string;
+  timestamp: string;
+}
+
+/**
+ * A provider back-off, announced while it is happening. Without this a rate
+ * limit looks exactly like a hang: the retry happens inside the provider call,
+ * so the interface would show a step sitting there for half a minute.
+ */
+export interface RateLimitEvent {
+  type: "rate_limit";
+  phase: AgentEventPhase;
+  reason: "rate_limit" | "transient";
+  attempt: number;
+  maxAttempts: number;
+  retryInSeconds: number;
+  provider?: string;
+  model?: string;
+  message: string;
+  timestamp: string;
+}
+
+/** The deck ran out of revision attempts with defects still in it. */
+export interface ValidationUnresolvedEvent {
+  type: "validation_unresolved";
+  phase: "validation";
+  attempts: number;
+  issueCount: number;
+  issues: { slideIndex?: number; type?: string; detail?: string }[];
+  timestamp: string;
+}
+
 export interface DoneEvent {
   type: "done";
   phase?: "complete";
@@ -115,6 +168,9 @@ export type AgentEvent =
   | FileGeneratedEvent
   | ErrorEvent
   | ProgressEvent
+  | QuestionEvent
+  | RateLimitEvent
+  | ValidationUnresolvedEvent
   | DoneEvent;
 
 export interface SSEMessage {

@@ -22,7 +22,12 @@ from app.agent.loop import (
 
 
 def _loop(mode: str | None = MODE_SIMPLE, detail_level: str | None = None) -> AgentLoop:
-    return AgentLoop(db=None, mode=mode, detail_level=detail_level)
+    loop = AgentLoop(db=None, mode=mode, detail_level=detail_level)
+    # These tests drive planning and drafting directly, so they stand in for a
+    # run whose user opted out of the consultation checkpoints - which are
+    # covered in test_agent_loop_workflow.py.
+    loop.questions_declined = True
+    return loop
 
 
 class _FakeRedis:

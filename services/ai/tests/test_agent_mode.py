@@ -399,8 +399,8 @@ def test_the_provider_s_own_retry_advice_is_honoured():
 
 
 @pytest.mark.asyncio
-async def test_a_rate_limited_call_is_retried_rather_than_abandoning_the_run(monkeypatch):
-    """Regression: one 429 threw away every slide designed so far."""
+async def test_a_transient_server_error_is_retried_rather_than_abandoning_the_run(monkeypatch):
+    """Regression: one hiccup threw away every slide designed so far."""
     import app.agent.loop as loop_module
 
     sleeps: list[float] = []
@@ -416,8 +416,8 @@ async def test_a_rate_limited_call_is_retried_rather_than_abandoning_the_run(mon
         async def chat(self, **kwargs):
             attempts["n"] += 1
             if attempts["n"] == 1:
-                err = Exception("Rate limit reached. Please try again in 2s.")
-                err.status_code = 429
+                err = Exception("Bad gateway")
+                err.status_code = 502
                 raise err
             return {"message": {"content": "done"}, "tool_calls": []}
 
@@ -428,7 +428,37 @@ async def test_a_rate_limited_call_is_retried_rather_than_abandoning_the_run(mon
 
     assert result["message"]["content"] == "done"
     assert attempts["n"] == 2
-    assert sleeps == [pytest.approx(2.5)]
+    assert sleeps == [pytest.approx(loop.RETRY_BASE_SECONDS)]
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limit_is_left_to_the_provider_layer(monkeypatch):
+    """The provider retries 429s, honouring the provider's own retry-after.
+    Retrying them here as well multiplied the two budgets and made the wait
+    reported to the user a fraction of the one actually being served."""
+    import app.agent.loop as loop_module
+
+    async def _no_sleep(seconds):
+        raise AssertionError("the loop must not sit on a rate limit itself")
+
+    monkeypatch.setattr(loop_module.asyncio, "sleep", _no_sleep)
+
+    attempts = {"n": 0}
+
+    class _RateLimited:
+        async def chat(self, **kwargs):
+            attempts["n"] += 1
+            err = Exception("Rate limit reached. Please try again in 2s.")
+            err.status_code = 429
+            raise err
+
+    loop = _loop(MODE_SIMPLE)
+    loop.llm = _RateLimited()
+
+    with pytest.raises(Exception, match="Rate limit"):
+        await loop._chat_with_retry(messages=[], tools=None)
+
+    assert attempts["n"] == 1
 
 
 @pytest.mark.asyncio

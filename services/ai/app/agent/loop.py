@@ -16,8 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import ai_settings
 from app.agent import run_context
 from app.agent.registry import get_registry, ToolResult
+from app.agent.summaries import summarize_tool_result
 from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
-from app.llm.provider import build_chat_provider, get_llm_provider
+from app.llm.provider import _is_rate_limit_error, build_chat_provider, get_llm_provider
+from app.llm.retry_notices import (
+    REASON_TRANSIENT,
+    RetryNotice,
+    publish_retry_notice,
+    reset_retry_observer,
+    set_retry_observer,
+)
 from app.observability.logging import get_logger
 import asyncio
 import json
@@ -52,6 +60,55 @@ DETAIL_LEVEL_CONCISE = "concise"
 DETAIL_LEVEL_DETAILED = "detailed"
 DETAIL_LEVEL_COMPREHENSIVE = "comprehensive"
 DETAIL_LEVELS = {DETAIL_LEVEL_CONCISE, DETAIL_LEVEL_DETAILED, DETAIL_LEVEL_COMPREHENSIVE}
+
+# How much research a Deep Thinking run does, by content depth: (floor, cap)
+# on the number of searches. The floor exists because one lookup returning a
+# handful of links was being treated as the whole truth about a topic - a deck
+# is only as trustworthy as the breadth behind it, and a single query answers
+# one facet of a subject that has several. The cap stops the agent grinding
+# through near-identical queries when the results stop improving.
+RESEARCH_BUDGET = {
+    DETAIL_LEVEL_CONCISE: (3, 6),
+    DETAIL_LEVEL_DETAILED: (4, 9),
+    DETAIL_LEVEL_COMPREHENSIVE: (5, 12),
+}
+
+# How many distinct sources a run aims to have gathered before it writes
+# anything. Below this the agent is told to keep looking rather than plan.
+RESEARCH_MIN_SOURCES = 6
+
+# How many findings stay in the prompt. Large enough to hold every search a run
+# is asked to make, since evicting the early ones would throw away the breadth
+# the floor above exists to produce; snippets are trimmed instead so the
+# context cost stays flat.
+MAX_RESEARCH_IN_CONTEXT = 48
+RESEARCH_SNIPPET_CHARS = 320
+
+# Ways a user tells us to stop asking and just build the thing. Matched against
+# what they actually typed, because the alternative - trusting the model to
+# remember an instruction from six tool calls ago - is how a "don't ask me
+# anything" run ends up interrogating someone anyway. Kept deliberately narrow:
+# a false positive silently disables the consultation the user asked for.
+_NO_QUESTIONS_PATTERNS = (
+    r"\bdon'?t ask\b",
+    r"\bdo not ask\b",
+    r"\bno (?:more )?questions?\b",
+    r"\bstop asking\b",
+    r"\bwithout asking\b",
+    r"\bjust (?:build|make|create|do|generate) it\b",
+    r"\b(?:use )?your best judgement?\b",
+    r"\bno need to ask\b",
+    r"\bskip the questions?\b",
+)
+_NO_QUESTIONS_RE = re.compile("|".join(_NO_QUESTIONS_PATTERNS), re.IGNORECASE)
+
+
+def user_declined_questions(chat_messages: list[dict]) -> bool:
+    """True when the user has explicitly asked not to be interrupted."""
+    return any(
+        m.get("role") == "user" and _NO_QUESTIONS_RE.search(m.get("content") or "")
+        for m in chat_messages
+    )
 
 
 def normalize_detail_level(level: str | None) -> str:
@@ -195,8 +252,18 @@ class WorkingState:
         self.completed_tools: dict[str, dict] = {}  # tool_name -> {args, result, timestamp}
         self.last_error: str | None = None
         self.answered_questions: list[dict] = []  # Track questions that have been answered
-        self.web_search_calls: int = 0  # Cap repeated web_search calls per run
-        self.MAX_WEB_SEARCH_CALLS = 3
+        # How many web searches this run has attempted, and how many distinct
+        # sources they produced between them. Both are gates: the run may not
+        # start planning off a single lookup (see RESEARCH_MIN_SEARCHES), and
+        # may not keep searching forever either (see RESEARCH_MAX_SEARCHES).
+        self.web_search_calls: int = 0
+        self.researched_urls: set[str] = set()
+        # Questions the agent has put to the user, by checkpoint. The planning
+        # consultation is enforced rather than merely encouraged - see
+        # AgentLoop._check_precondition - so it has to be remembered across the
+        # pause/resume cycle that answering a question involves.
+        self.consulted_before_planning: bool = False
+        self.reviewed_outline_with_user: bool = False
 
     # Above this share of the deck being flagged, redesigning everything is
     # simpler (and no more expensive) than steering slide-by-slide edits.
@@ -430,6 +497,9 @@ class WorkingState:
         self.last_error = None
         self.answered_questions = []
         self.web_search_calls = 0
+        self.researched_urls = set()
+        self.consulted_before_planning = False
+        self.reviewed_outline_with_user = False
 
 
 class AgentLoop:
@@ -446,10 +516,16 @@ class AgentLoop:
 
     MAX_ITERATIONS = 25
 
-    # A rate limit is a wait, not a failure. Three retries covers the usual
-    # per-minute window without letting a genuinely broken key hang the run.
+    # Transient provider failures (5xx, timeouts) are a wait, not a failure.
+    # Rate limits are retried in the provider layer instead - see
+    # _chat_with_retry for why they must not be retried in both places.
     MAX_LLM_RETRIES = 3
     RETRY_BASE_SECONDS = 5.0
+
+    # How often the loop looks for retry notices while a call is in flight.
+    # Fast enough that a countdown appears promptly, cheap enough to be
+    # invisible next to calls measured in seconds.
+    NOTICE_POLL_SECONDS = 0.2
 
     def __init__(
         self,
@@ -490,6 +566,9 @@ class AgentLoop:
         self.search_config: ai_settings.SearchConfig | None = None
         self._search_token = None
         self._provider_token = None
+        # Set from the conversation in _run: the consultation checkpoints are
+        # enforced, so the user's "just build it" has to be able to lift them.
+        self.questions_declined: bool = False
 
     async def _configure(self) -> None:
         """Resolve the organisation's settings into this run's provider and mode.
@@ -577,6 +656,11 @@ class AgentLoop:
             "pending_question": self.working_state.pending_question,
             "answered_questions": self.working_state.answered_questions,
             "web_search_calls": self.working_state.web_search_calls,
+            "researched_urls": sorted(self.working_state.researched_urls),
+            # Without these, the run that resumes after answering the planning
+            # question would find the checkpoint unmet and ask all over again.
+            "consulted_before_planning": self.working_state.consulted_before_planning,
+            "reviewed_outline_with_user": self.working_state.reviewed_outline_with_user,
             # Carried so a run paused on a question resumes at the same effort
             # level - the resume request has no mode of its own.
             "mode": self.mode,
@@ -632,6 +716,13 @@ class AgentLoop:
             self.working_state.pending_question = state_dict.get("pending_question")
             self.working_state.answered_questions = state_dict.get("answered_questions", [])
             self.working_state.web_search_calls = state_dict.get("web_search_calls", 0)
+            self.working_state.researched_urls = set(state_dict.get("researched_urls", []))
+            self.working_state.consulted_before_planning = state_dict.get(
+                "consulted_before_planning", False
+            )
+            self.working_state.reviewed_outline_with_user = state_dict.get(
+                "reviewed_outline_with_user", False
+            )
             # Only inherit the saved mode when the caller did not pick one, so
             # a resumed run keeps its effort level while a fresh message is
             # free to change it.
@@ -722,6 +813,11 @@ class AgentLoop:
 
         # ── Phase 2: Build messages ──────────────────
         chat_messages = await self._build_chat_messages(session_id)
+        # Never un-declined: "just build it" said once holds for the run (and
+        # lets a caller driving the loop directly switch the checkpoints off).
+        self.questions_declined = self.questions_declined or user_declined_questions(
+            chat_messages
+        )
 
         # ── Phase 3: ReAct loop ──────────────────────
         tool_schemas = self._tool_schemas_for_mode()
@@ -737,11 +833,19 @@ class AgentLoop:
         for iteration in range(self.MAX_ITERATIONS):
             # Call LLM
             start_time = time.time()
+            response = None
             try:
-                response = await self._chat_with_retry(
-                    messages=messages,
-                    tools=tool_schemas if tool_schemas else None,
-                )
+                async for kind, payload in self._with_retry_notices(
+                    self._chat_with_retry(
+                        messages=messages,
+                        tools=tool_schemas if tool_schemas else None,
+                    ),
+                    current_phase,
+                ):
+                    if kind == "event":
+                        yield payload
+                    else:
+                        response = payload
             except Exception as e:
                 logger.error("llm_call_failed", error=str(e), iteration=iteration)
                 yield _event("error", "content_analysis", {
@@ -970,40 +1074,49 @@ class AgentLoop:
 
                 # Execute tool
                 tool_start = time.time()
+                tool_result = None
                 precondition_error = self._check_precondition(fn_name, fn_args)
                 if precondition_error:
                     tool_result = ToolResult(success=False, error=precondition_error)
-                elif fn_name == "finalize_and_render_pptx" and self.working_state.accumulated_slides:
-                    # Trust the slides actually designed via design_slide_content
-                    # over whatever the LLM re-typed as the argument string - the
-                    # latter is a verbatim re-serialization of the whole deck and
-                    # is the single biggest truncation/drift risk on multi-slide
-                    # presentations.
-                    fn_args["slides_json"] = self.working_state.get_slides_json()
-                    tool_result = await self._execute_tool(fn_name, fn_args)
-                elif fn_name == "web_search":
+                elif (
+                    fn_name == "web_search"
+                    and self.working_state.web_search_calls >= self._max_web_searches()
+                ):
                     # Cap repeated web searches so the agent cannot loop on
                     # low-quality results. After the cap, return a gentle
                     # "use existing research" result instead of executing.
-                    if self.working_state.web_search_calls >= self.working_state.MAX_WEB_SEARCH_CALLS:
-                        tool_result = ToolResult(
-                            success=True,
-                            data={
-                                "query": fn_args.get("query", ""),
-                                "results": [],
-                                "result_count": 0,
-                                "note": (
-                                    "Maximum number of web searches reached. Use the Research "
-                                    "Findings already in your context to write the content, and "
-                                    "do not call web_search again. Proceed to the next step."
-                                ),
-                            },
-                        )
-                    else:
-                        self.working_state.web_search_calls += 1
-                        tool_result = await self._execute_tool(fn_name, fn_args)
+                    tool_result = ToolResult(
+                        success=True,
+                        data={
+                            "query": fn_args.get("query", ""),
+                            "results": [],
+                            "result_count": 0,
+                            "note": (
+                                "Maximum number of web searches reached. Use the Research "
+                                "Findings already in your context to write the content, and "
+                                "do not call web_search again. Proceed to the next step."
+                            ),
+                        },
+                    )
                 else:
-                    tool_result = await self._execute_tool(fn_name, fn_args)
+                    if fn_name == "finalize_and_render_pptx" and self.working_state.accumulated_slides:
+                        # Trust the slides actually designed via design_slide_content
+                        # over whatever the LLM re-typed as the argument string - the
+                        # latter is a verbatim re-serialization of the whole deck and
+                        # is the single biggest truncation/drift risk on multi-slide
+                        # presentations.
+                        fn_args["slides_json"] = self.working_state.get_slides_json()
+                    if fn_name == "web_search":
+                        self.working_state.web_search_calls += 1
+                    # Tools make their own LLM calls, so a rate limit can strike
+                    # inside one - narrate those waits the same way.
+                    async for kind, payload in self._with_retry_notices(
+                        self._execute_tool(fn_name, fn_args), current_phase
+                    ):
+                        if kind == "event":
+                            yield payload
+                        else:
+                            tool_result = payload
                 tool_duration = int((time.time() - tool_start) * 1000)
 
                 # Extract sources from tool result data (URLs that can be displayed to user)
@@ -1011,11 +1124,15 @@ class AgentLoop:
                 if tool_result.success and tool_result.data:
                     sources = self._extract_sources(tool_result.data)
 
-                # Yield tool_result event
+                # Yield tool_result event. The summary is what the feed leads
+                # with; the raw result stays on the event behind a disclosure.
                 yield _event("tool_result", current_phase, {
                     "toolName": fn_name,
                     "callId": call_id,
                     "result": tool_result.data if tool_result.success else tool_result.error,
+                    "summary": summarize_tool_result(
+                        fn_name, fn_args, tool_result.data, tool_result.success
+                    ),
                     "durationMs": tool_duration,
                     "success": tool_result.success,
                     "tokenCount": tool_result.token_count,
@@ -1102,9 +1219,18 @@ class AgentLoop:
                 if fn_name == "ask_user_question" and tool_result.success:
                     self.working_state.is_paused_for_user = True
                     self.working_state.pending_question = tool_result.data
+                    # Which checkpoint this satisfied is decided by where the
+                    # run is, not by what the model says it is doing: before a
+                    # plan exists the question is the planning consultation,
+                    # after it the outline review.
+                    if self.working_state.presentation_structure:
+                        self.working_state.reviewed_outline_with_user = True
+                    else:
+                        self.working_state.consulted_before_planning = True
                     yield _event("question", "user_input", {
                         "question": tool_result.data.get("question"),
                         "options": tool_result.data.get("options", []),
+                        "questions": tool_result.data.get("questions", []),
                         "context": tool_result.data.get("context", ""),
                         "timestamp": _iso_now(),
                     })
@@ -1184,6 +1310,8 @@ class AgentLoop:
                         research = context.setdefault("research", [])
                         image_catalog = context.setdefault("imageCatalog", [])
                         for item in tool_result.data["results"]:
+                            if item.get("url"):
+                                self.working_state.researched_urls.add(item["url"])
                             research.append({
                                 "query": tool_result.data.get("query", ""),
                                 "title": item.get("title", ""),
@@ -1202,9 +1330,13 @@ class AgentLoop:
                                     "data": img_url,
                                     "context": f"{item.get('title', '')}: {item.get('snippet', '')}"[:300],
                                 })
-                        # Bound the research context to avoid unbounded prompt growth.
-                        if len(research) > 15:
-                            context["research"] = research[-15:]
+                        # Bound the research context to avoid unbounded prompt
+                        # growth. The bound has to clear several searches' worth
+                        # of results, or the breadth the run was just made to go
+                        # and find is thrown away before it can be written from:
+                        # at 15, a fourth search silently evicted the first one.
+                        if len(research) > MAX_RESEARCH_IN_CONTEXT:
+                            context["research"] = research[-MAX_RESEARCH_IN_CONTEXT:]
                         if len(image_catalog) > 20:
                             context["imageCatalog"] = image_catalog[-20:]
 
@@ -1299,6 +1431,36 @@ class AgentLoop:
                 "timestamp": _iso_now(),
             })
 
+    def _research_budget(self) -> tuple[int, int]:
+        """(floor, cap) on this run's number of web searches."""
+        return RESEARCH_BUDGET.get(
+            self.detail_level or DETAIL_LEVEL_DETAILED,
+            RESEARCH_BUDGET[DETAIL_LEVEL_DETAILED],
+        )
+
+    def _min_web_searches(self) -> int:
+        return self._research_budget()[0]
+
+    def _max_web_searches(self) -> int:
+        return self._research_budget()[1]
+
+    def _research_is_thin(self) -> bool:
+        """True while a Deep Thinking run has not looked around enough yet.
+
+        Counted in attempts rather than successes, so a search backend that is
+        down or returning nothing cannot stall the run - each attempt spends
+        the budget either way, and the cap is above the floor.
+        """
+        if self.mode != MODE_DEEP:
+            return False
+        ws = self.working_state
+        if ws.web_search_calls >= self._max_web_searches():
+            return False
+        return (
+            ws.web_search_calls < self._min_web_searches()
+            or len(ws.researched_urls) < RESEARCH_MIN_SOURCES
+        )
+
     def _check_precondition(self, fn_name: str, fn_args: dict) -> str | None:
         """Block a tool call that is out of order, returning a corrective
         error message the LLM sees as the tool's result (same mechanism as the
@@ -1320,6 +1482,56 @@ class AgentLoop:
                 "structure genuinely needs to change, ask the user with "
                 "ask_user_question before restructuring; otherwise continue "
                 "designing the remaining slides in the existing plan."
+            )
+
+        # ── The two consultation checkpoints ──────────────────────────────
+        #
+        # The prompt has asked for these all along and the model routinely
+        # skipped both, going from "here is a topic" to a finished deck without
+        # a word to the user. Enforcing them here is the difference between a
+        # suggestion and a rule: the planning call simply does not go through
+        # until the user has been consulted.
+        if fn_name == "plan_presentation_structure" and self._research_is_thin():
+            return (
+                f"Not enough research yet: {ws.web_search_calls} search(es) so far, "
+                f"turning up {len(ws.researched_urls)} distinct source(s). A deck is only "
+                "as trustworthy as the breadth behind it, and one query answers one facet "
+                f"of the topic. Run at least {self._min_web_searches()} web_search calls "
+                f"covering DIFFERENT facets - the subject itself, the specific figures the "
+                "deck needs, recent developments, and any counterpoint or context - until "
+                f"you have {RESEARCH_MIN_SOURCES}+ distinct sources, then plan."
+            )
+
+        if (
+            fn_name == "plan_presentation_structure"
+            and not ws.consulted_before_planning
+            and not self.questions_declined
+        ):
+            return (
+                "Consult the user before planning. Call ask_user_question ONCE with a "
+                "consolidated set of questions covering what you are actually unsure "
+                "about - typically the audience, the angle or sections to focus on, the "
+                "depth/slide count, and (when no template was uploaded) the visual style. "
+                "Give every question 2-5 concrete options drawn from THIS request and the "
+                "material you have read, not generic placeholders, so the user can answer "
+                "in one tap. Plan the deck once they have answered."
+            )
+
+        if (
+            fn_name in ("select_layout", "design_slide_content", *BUILD_VISUAL_TOOLS)
+            and ws.presentation_structure
+            and not ws.reviewed_outline_with_user
+            and not self.questions_declined
+        ):
+            return (
+                "Show the user the outline before drafting any slides. Call "
+                "ask_user_question with the planned slide titles laid out in the call's "
+                "top-level 'context' field (one line per slide, numbered), and ask whether "
+                "to go ahead. Every option must be an answer rather than a prompt for one: "
+                "'Go ahead as planned' plus the 2-3 specific adjustments most likely to be "
+                "wanted for THIS deck, naming its actual slides (merge these two, add one "
+                "on X, cut Y and go deeper on Z). Never offer 'No, I want changes' - it "
+                "tells you nothing. Draft the slides once they have answered."
             )
 
         if fn_name in ("select_layout", "design_slide_content", "select_source_image"):
@@ -1458,20 +1670,29 @@ class AgentLoop:
         return context
 
     async def _chat_with_retry(self, messages: list[dict], tools: list[dict] | None):
-        """Call the chat model, retrying transient rate limits.
+        """Call the chat model, retrying transient provider failures.
 
-        A 429 part-way through a generation used to abandon the whole run, and
-        with it every slide already designed - which on a low-tier API key
-        happens routinely, since one presentation makes dozens of calls in a
-        couple of minutes. Providers tell us how long to wait; when they do not,
-        exponential backoff is a reasonable guess.
+        Rate limits are deliberately NOT retried here. They are handled one
+        level down, in the provider, which is where the provider's own
+        "try again in 2.6s" advice is visible and where every tool's LLM call
+        passes through as well. Retrying them in both places multiplied the two
+        budgets (4 x 3 attempts) and made the wait reported to the user a
+        fraction of the real one - the interface said "retrying in 5s" while the
+        run actually sat there for a minute and a half.
+
+        What is left here is the rest: a 5xx or a timeout, where the provider
+        offers no advice and exponential backoff is a reasonable guess.
         """
         delay = self.RETRY_BASE_SECONDS
         for attempt in range(self.MAX_LLM_RETRIES + 1):
             try:
                 return await self.llm.chat(messages=messages, tools=tools)
             except Exception as e:
-                if attempt == self.MAX_LLM_RETRIES or not _is_retryable(e):
+                if (
+                    attempt == self.MAX_LLM_RETRIES
+                    or _is_rate_limit_error(e)
+                    or not _is_retryable(e)
+                ):
                     raise
                 wait = _retry_after_seconds(e) or delay
                 logger.warning(
@@ -1480,8 +1701,47 @@ class AgentLoop:
                     wait_seconds=round(wait, 2),
                     error=str(e)[:200],
                 )
+                publish_retry_notice(
+                    RetryNotice(
+                        reason=REASON_TRANSIENT,
+                        attempt=attempt + 1,
+                        max_attempts=self.MAX_LLM_RETRIES,
+                        delay_seconds=wait,
+                        detail=str(e)[:200],
+                    )
+                )
                 await asyncio.sleep(wait)
                 delay *= 2
+
+    async def _with_retry_notices(
+        self, awaitable, phase: str
+    ) -> AsyncIterator[tuple[str, object]]:
+        """Await ``awaitable``, narrating any provider back-off it runs into.
+
+        Yields ``("event", <rate_limit event>)`` for each wait as it starts, and
+        finally ``("result", <value>)``. The awaited work runs as a task so the
+        loop can keep emitting while it is blocked - the whole point being that
+        a 30-second rate-limit wait is announced when it begins rather than
+        inferred afterwards from a gap in the timestamps.
+        """
+        queue: asyncio.Queue[RetryNotice] = asyncio.Queue()
+        token = set_retry_observer(queue.put_nowait)
+        # The observer is installed before the task is created so the task's
+        # copied context carries it - that is what lets a notice raised inside
+        # a tool's own LLM call several frames down reach this generator.
+        task = asyncio.ensure_future(awaitable)
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=self.NOTICE_POLL_SECONDS)
+                while not queue.empty():
+                    yield "event", _retry_notice_event(queue.get_nowait(), phase)
+                if done:
+                    break
+            yield "result", task.result()
+        finally:
+            reset_retry_observer(token)
+            if not task.done():
+                task.cancel()
 
     def _tool_schemas_for_mode(self) -> list[dict]:
         """The tool schemas this run may call, filtered by effort level."""
@@ -1522,28 +1782,41 @@ class AgentLoop:
             "inside the service container and is dead for the user. Say the deck is ready and describe "
             "it - do not link to it. Equally, do not announce that the presentation is complete while "
             "validate_rendered_output still reports unresolved issues; fix those first.",
-            "4. DEFAULT TO ASKING, NOT GUESSING, at every real decision point. This includes at least: "
-            "target audience; desired scope/slide count; tone; WHICH PARTS OF THE SOURCE MATERIAL TO "
-            "FOCUS ON OR EMPHASIZE when it covers more than can reasonably fit; how to resolve ambiguous "
-            "or conflicting information in what was provided; HOW TO PRESENT THE DATA whenever the "
-            "material contains figures, time series, breakdowns or comparisons and it is not obvious "
-            "whether they belong in a chart, a table, or prose - and if a chart, which kind (a trend "
-            "over time reads differently as a line than as a bar, and a breakdown reads differently as "
-            "a pie than as a table). Offer the concrete alternatives for THAT data as options (e.g. "
-            "'Line chart of revenue 2011-2025', 'Table of year-by-year figures', 'Keep it as bullets') "
-            "rather than asking abstractly whether the user likes charts; and VISUAL STYLE / COLOR "
-            "PREFERENCE whenever no template was uploaded (so the built-in default design system will "
-            "be used) and "
-            "the user hasn't already indicated one. Call ask_user_question rather than guessing whenever "
-            "a wrong assumption would produce a presentation the user did not want. This is the default; "
-            "only skip asking when you are genuinely confident in the answer, not merely when an answer "
-            "is possible.",
-            "5. EVERY ask_user_question call MUST include well-chosen suggested options via the "
-            "'options' parameter (a real array, 2-5 items) - concrete, mutually distinct choices the "
-            "user can pick in one tap, not just an open-ended question with nothing to react to. "
-            "OPTIONS MUST BE TAILORED TO THE ACTUAL REQUEST, never generic placeholders: for content "
-            "focus, name the 2-4 candidate angles/sections you actually saw in the material (not "
-            "'Option A/B/C') and let the user pick or say 'cover them all'.",
+            "4. THE DECK IS PLANNED WITH THE USER, NOT AT THEM. There are two consultation "
+            "checkpoints, and the tools enforce both - plan_presentation_structure is rejected "
+            "until the first has happened, and select_layout/design_slide_content/build_* are "
+            "rejected until the second has:\n"
+            "   (a) BEFORE PLANNING: call ask_user_question once with a consolidated set of "
+            "questions about what you are genuinely unsure of - target audience; scope/slide "
+            "count; WHICH PARTS OF THE MATERIAL TO FOCUS ON when it covers more than fits; tone; "
+            "how to resolve anything ambiguous or contradictory you found; HOW TO PRESENT THE "
+            "DATA when the material has figures, time series, breakdowns or comparisons and it "
+            "is not obvious whether they belong in a chart (and which kind), a table, or prose; "
+            "and VISUAL STYLE / COLOR when no template was uploaded and the user has not said.\n"
+            "   (b) BEFORE DRAFTING: call ask_user_question again with the planned outline "
+            "spelled out - the slide titles, numbered, one per line, in the call's top-level "
+            "'context' field (not inside a question object) - and ask whether to go ahead. "
+            "EVERY OPTION MUST BE AN ANSWER, NOT A PROMPT FOR ONE: 'Go ahead as planned', "
+            "'Merge slides 4 and 5 on trends', 'Add a slide on risks', 'Cut the history slide "
+            "and go deeper on pricing' - naming the actual slides in THIS outline. An option "
+            "like 'No, I want changes' tells you nothing and wastes the user's turn, so never "
+            "offer one. This is their chance to redirect the deck while it is still cheap; do "
+            "not skip it and do not bury it in a question about something else.\n"
+            "   Beyond the two checkpoints, still ask whenever a new ambiguity turns up and a "
+            "wrong assumption would produce a presentation the user did not want.",
+            "5. ASK EVERYTHING AT ONCE. ask_user_question takes a 'questions' array - up to 4 "
+            "{question, options} objects answered together in a single pause. Use it: four "
+            "separate pauses for audience, focus, length and colour is an interrogation, and each "
+            "one costs the user a round trip. EVERY question MUST carry 2-5 suggested options "
+            "(a real array), concrete and mutually distinct, so the user can answer by tapping. "
+            "OPTIONS MUST BE TAILORED TO THE ACTUAL REQUEST, never generic placeholders: for "
+            "content focus, name the 2-4 candidate angles/sections you actually saw in the "
+            "material (not 'Option A/B/C') and let the user pick or say 'cover them all'; for "
+            "data presentation, offer the concrete alternatives for THAT data ('Line chart of "
+            "revenue 2011-2025', 'Table of year-by-year figures', 'Keep it as bullets') rather "
+            "than asking abstractly whether the user likes charts. A question whose options are "
+            "missing or generic is rejected and has to be asked again, so write them properly "
+            "the first time.",
             "6. When no template was uploaded you MUST settle the colour/style choice with the user "
             "before designing content - fold it into your consolidated question rather than "
             "defaulting silently, because an unanswered colour choice renders the deck in a generic "
@@ -1564,15 +1837,16 @@ class AgentLoop:
             "7. EXCEPTION: if the user has explicitly said not to ask questions (e.g. 'don't ask me "
             "anything', 'just build it', 'use your best judgment', 'no more questions'), make the most "
             "reasonable assumption yourself and proceed without asking - briefly note any significant "
-            "assumption in the relevant slide's notes instead.",
-            "8. Prefer asking before planning, batching multiple uncertainties into ONE consolidated "
-            "ask_user_question rather than asking one at a time. But do not suppress a genuine question "
-            "just because planning has already started - if a new ambiguity only becomes apparent "
-            "partway through (e.g. conflicting figures in an uploaded document), ask then too rather "
-            "than silently guessing.",
+            "assumption in the relevant slide's notes instead. Both checkpoints lift automatically in "
+            "that case; you do not need to ask permission to skip them.",
+            "8. Both checkpoints are one pause each. Fold everything you need into that call rather "
+            "than pausing repeatedly - but do not suppress a genuine question just because drafting "
+            "has started: if a new ambiguity only becomes apparent partway through (e.g. conflicting "
+            "figures in an uploaded document), ask then too rather than silently guessing.",
             "9. Do NOT ask about things you can already infer confidently from the conversation or "
             "uploaded documents, or about minor stylistic choices with no real stakes - that is noise, "
-            "not the kind of question this rule is asking for.",
+            "not the kind of question this rule is asking for. Every question you do ask should be one "
+            "where the two answers lead to visibly different decks.",
             "10. Tool calls that are out of order (e.g. finalizing before every planned slide is "
             "designed) will be rejected with an explanation - read it and follow the corrective "
             "instruction rather than retrying the same call.",
@@ -1601,10 +1875,28 @@ class AgentLoop:
         # topic on the web. Describing only the tools it actually has keeps the
         # prompt honest - in simple mode web_search is not in the schema list.
         if self.mode == MODE_DEEP:
+            min_searches, max_searches = self._research_budget()
             prompt_parts.extend([
                 "## Researching Facts & Citing Sources (Deep Thinking is ON)",
                 "",
                 "- When the topic involves real-world facts, statistics, history, or current information that you may not know precisely, call web_search FIRST and base your content on the returned results.",
+                f"- RESEARCH THE TOPIC FROM SEVERAL ANGLES, NOT ONE. Run at least "
+                f"{min_searches} searches (up to {max_searches}) with genuinely different "
+                "queries before planning: the subject itself, the specific figures the deck "
+                "needs, what has happened recently, and the context or counterpoint a "
+                "sceptical audience would raise. One query returning a handful of links is "
+                "not a body of research, and planning is blocked until you have looked "
+                f"properly - aim for {RESEARCH_MIN_SOURCES}+ distinct sources.",
+                "- Vary the wording between searches. Re-asking the same question in slightly "
+                "different words returns the same pages and teaches you nothing new; if a "
+                "query returns little, change what you are asking, not just how.",
+                "- CORROBORATE ANYTHING THAT CARRIES WEIGHT. A headline figure, a market size, "
+                "a growth rate or a superlative should appear in more than one independent "
+                "source before you put it on a slide. Where sources disagree, say so on the "
+                "slide or in its notes rather than silently picking one; where a number rests "
+                "on a single source, attribute it in the slide's notes.",
+                "- Prefer primary and recent sources (the company's own filing, the statistics "
+                "office, the standards body) over aggregators repeating each other.",
                 "- Do NOT call web_search for opinions, the user's own documents, or topics you already know well - avoid unnecessary calls.",
                 "- The web_search results are shown to the user as sources, so prefer it whenever a claim benefits from a citation.",
                 "",
@@ -1642,7 +1934,8 @@ class AgentLoop:
             "design_slide_content — Generate a slide's title and copy (visuals come from the build_* tools)",
             "validate_slide_json — Validate slide JSON against the schema before rendering",
             "select_source_image — Reuse a confidently-matching image already extracted from the user's own source material (never generates new images)",
-            "ask_user_question — Ask the user for clarification or input (pauses workflow)",
+            "ask_user_question — Put up to 4 questions to the user at once, each with 2-5 "
+            "suggested answers (pauses the workflow until they reply)",
             "finalize_and_render_pptx — Render the final PPTX file",
             "validate_rendered_output — Check the ACTUAL rendered output: overflow/overlap in the real geometry, plus placeholder copy, repeated points, bullets restating a chart, and package integrity (MUST be called after finalize_and_render_pptx, and is the true last step)",
         ]
@@ -1696,26 +1989,38 @@ class AgentLoop:
             prompt_parts.append("")
 
         if context.get("research"):
+            findings = context["research"]
+            distinct_sources = len({r.get("url") for r in findings if r.get("url")})
             prompt_parts.append("## Research Findings (from web_search)")
             prompt_parts.append(
-                "Base your factual content on these findings. Do NOT call web_search again for "
-                "topics already covered below. These sources are shown to the user as citations."
+                f"{len(findings)} findings from {distinct_sources} distinct sources. Base your "
+                "factual content on them, and prefer a figure that appears in more than one of "
+                "them over one that appears in only a single source. Do NOT call web_search "
+                "again for topics already covered below. These sources are shown to the user "
+                "as citations."
             )
-            for idx, r in enumerate(context["research"], 1):
+            for idx, r in enumerate(findings, 1):
+                snippet = (r.get("snippet") or "")[:RESEARCH_SNIPPET_CHARS]
                 prompt_parts.append(
-                    f"{idx}. [{r.get('title', '')}]({r.get('url', '')}) - {r.get('snippet', '')}"
+                    f"{idx}. [{r.get('title', '')}]({r.get('url', '')}) - {snippet}"
                 )
             prompt_parts.append("")
 
-        research_step = ["For factual topics, research with web_search before writing content"] \
-            if self.mode == MODE_DEEP else []
+        research_step = [
+            "Research the topic with web_search from several different angles "
+            f"({self._min_web_searches()}+ distinct queries) before writing anything"
+        ] if self.mode == MODE_DEEP else []
         workflow_steps = [
             "If documents are provided, analyze them first with analyze_document",
             "Extract key data with extract_key_data",
             "If no design system is in your context, get the built-in default with extract_template_design_system (no template_path)",
             *research_step,
-            "If anything about the request is genuinely unsure/ambiguous, ask ONE consolidated question with ask_user_question before planning, unless the user already said not to ask (see CRITICAL RULES above)",
+            "CHECKPOINT 1 - consult the user: one ask_user_question call carrying every "
+            "question you have (audience, focus, depth, style), each with tailored options. "
+            "Skipped only if the user said not to ask (see CRITICAL RULES above)",
             "Plan the presentation structure with plan_presentation_structure",
+            "CHECKPOINT 2 - review the outline: ask_user_question with the numbered slide "
+            "titles in 'context' and options for going ahead or adjusting it",
             "For each slide, select a layout with select_layout",
             "If candidate source images exist and a slide's topic plausibly has a relevant one, call select_source_image for that slide before designing its content - otherwise skip it",
             "For any slide whose point is carried by numbers, build its visual FIRST: "
@@ -1962,6 +2267,20 @@ def _event(event_type: str, phase: str, data: dict) -> dict:
         "phase": phase,
         **data,
     }
+
+
+def _retry_notice_event(notice: RetryNotice, phase: str) -> dict:
+    """Turn a provider back-off into the event the interface counts down."""
+    return _event("rate_limit", phase, {
+        "reason": notice.reason,
+        "attempt": notice.attempt,
+        "maxAttempts": notice.max_attempts,
+        "retryInSeconds": round(notice.delay_seconds, 1),
+        "provider": notice.provider,
+        "model": notice.model,
+        "message": notice.message(),
+        "timestamp": _iso_now(),
+    })
 
 
 def _iso_now() -> str:

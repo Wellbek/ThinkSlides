@@ -33,8 +33,10 @@ from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-# How many results to request from each backend.
-DEFAULT_COUNT = 8
+# How many results to request from each backend. Backends routinely return
+# fewer than asked for (and the loop then dedupes across searches), so this
+# sits above the number of sources a slide actually wants to cite.
+DEFAULT_COUNT = 10
 
 ZHIPU_SEARCH_URL = "https://open.bigmodel.cn/api/paas/v4/web_search"
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"

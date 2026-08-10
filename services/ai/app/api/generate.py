@@ -266,11 +266,18 @@ async def _run_agent(
                         question_text = event.get("question", "")
                         options = event.get("options", [])
                         context = event.get("context", "")
-                        question_content = f"Question: {question_text}\n"
-                        if options:
-                            question_content += "\nOptions:\n"
-                            for i, opt in enumerate(options, 1):
-                                question_content += f"{i}. {opt}\n"
+                        # A single call can carry several questions; older
+                        # events only have the one, so fall back to it.
+                        questions = event.get("questions") or [
+                            {"question": question_text, "options": options}
+                        ]
+                        lines = []
+                        for q in questions:
+                            lines.append(f"Question: {q.get('question', '')}")
+                            for i, opt in enumerate(q.get("options") or [], 1):
+                                lines.append(f"{i}. {opt}")
+                            lines.append("")
+                        question_content = "\n".join(lines)
                         if context:
                             question_content += f"\nContext: {context}\n"
                         final_content = question_content
@@ -285,6 +292,7 @@ async def _run_agent(
                                 "type": "question",
                                 "question": question_text,
                                 "options": options,
+                                "questions": questions,
                                 "context": context,
                             }),
                         )
