@@ -578,13 +578,16 @@ class PPTXRenderer:
             return
         size_pt = int(footer.get("sizePt", 10) or 10)
 
+        font_name = self._type_scale.body_font
         label = str(metadata.get("title") or "").strip()
         if label:
             self._add_chrome_text(
-                slide, label, region, size_pt, plan.style.footer_color, PP_ALIGN.LEFT
+                slide, label, region, size_pt, plan.style.footer_color,
+                PP_ALIGN.LEFT, font_name,
             )
         self._add_chrome_text(
-            slide, str(index + 1), region, size_pt, plan.style.footer_color, PP_ALIGN.RIGHT
+            slide, str(index + 1), region, size_pt, plan.style.footer_color,
+            PP_ALIGN.RIGHT, font_name,
         )
 
     @staticmethod
@@ -622,6 +625,7 @@ class PPTXRenderer:
         size_pt: int,
         color_hex: str,
         alignment,
+        font_name: str,
     ) -> None:
         """A single small line of deck chrome (footer label or slide number)."""
         box = slide.shapes.add_textbox(
@@ -638,6 +642,7 @@ class PPTXRenderer:
         run = paragraph.add_run()
         run.text = text
         run.font.size = Pt(size_pt)
+        run.font.name = font_name
         try:
             run.font.color.rgb = _hex_to_rgbcolor(color_hex)
         except ValueError:
@@ -681,6 +686,9 @@ class PPTXRenderer:
         # which misfired on any body run the model happened to bold.
         title_item = text_items[0] if text_items else None
         body_items = text_items[1:]
+        slide_title = " ".join(
+            str(run.get("text", "")) for run in (title_item or {}).get("runs", [])
+        ).strip()
 
         title_ph, body_phs = self._classify_placeholders(slide)
 
@@ -747,7 +755,7 @@ class PPTXRenderer:
             elif kind == "table":
                 self._add_table(slide, item.get("table", {}), region)
             else:
-                self._add_chart(slide, item.get("chart", {}), region)
+                self._add_chart(slide, item.get("chart", {}), region, slide_title)
 
         self._strip_empty_placeholders(slide)
 
@@ -963,10 +971,17 @@ class PPTXRenderer:
         """The current slide's bullet-glyph colour, if a style is in effect."""
         return self._style.bullet_color if self._style is not None else None
 
-    def _add_chart(self, slide, chart_data: dict, pos: PositionConfig) -> None:
+    def _add_chart(
+        self,
+        slide,
+        chart_data: dict,
+        pos: PositionConfig,
+        slide_title: str = "",
+    ) -> None:
         """Render chart_data to a design-system-styled PNG and place it on the slide."""
         chart_bytes = chart_renderer.render_chart_to_png(
-            chart_data, self.design_system, pos.width, pos.height
+            chart_data, self.design_system, pos.width, pos.height,
+            slide_title=slide_title,
         )
         if not chart_bytes:
             return
