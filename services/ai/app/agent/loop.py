@@ -18,6 +18,7 @@ from app.agent import run_context
 from app.agent.event_types import ALL_EVENT_TYPES
 from app.agent.registry import get_registry, ToolResult
 from app.agent.summaries import summarize_tool_result
+from app.agent.tools._json_extract import extract_json_object
 from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
 from app.llm.provider import _is_rate_limit_error, build_chat_provider, get_llm_provider
 from app.llm.retry_notices import (
@@ -48,6 +49,20 @@ MODE_DEEP = "deep"
 # what actually enforces the mode - the model cannot call a tool it was never
 # offered, which is more reliable than asking it not to in the prompt.
 DEEP_ONLY_TOOLS = {"web_search"}
+
+# The deck-writing tools, split at the two consultation checkpoints. A
+# checkpoint that has not happened yet withholds everything from its own step
+# onwards, so the model is never offered a tool it would only be refused for
+# calling. See _tools_withheld_by_checkpoint.
+PLANNING_TOOLS = frozenset({"plan_presentation_structure"})
+DRAFTING_TOOLS = frozenset({
+    "select_layout",
+    "design_slide_content",
+    "select_source_image",
+    "finalize_and_render_pptx",
+    "validate_rendered_output",
+    *BUILD_VISUAL_TOOLS,
+})
 
 
 def normalize_mode(mode: str | None) -> str:
@@ -120,35 +135,53 @@ def user_declined_questions(chat_messages: list[dict]) -> bool:
 # figure is ~$37B. The number was invented, and putting it in a chart with a
 # labelled axis is what makes it look sourced.
 #
-# Hardening the prompt helps and does not guarantee anything (#72). What the
-# request is *asking for* is knowable, though: a deck about a named company's
-# results, a market size, a "latest"/"current" anything, wants figures that
-# have to come from somewhere.
-_FACTUAL_REQUEST_PATTERNS = (
-    # Financial and corporate results
-    r"\b(?:revenue|earnings|profit|margin|ebitda|turnover|valuation|arr|mrr)\b",
-    r"\b(?:q[1-4]|fy)\s*'?\d{2,4}\b",
-    r"\b(?:quarterly|annual|full[- ]year)\s+(?:results|report|figures|performance)\b",
-    # Market and competitive figures
-    r"\bmarket (?:size|share|cap|growth)\b",
-    r"\b(?:industry|sector) (?:trends?|outlook|forecast)\b",
-    r"\b(?:competitor|competitive) (?:analysis|landscape)\b",
-    # Anything explicitly time-anchored to now
-    r"\b(?:latest|current|recent|today'?s|up[- ]to[- ]date|this year'?s)\b",
-    r"\b20[2-9]\d\b",
-    # Explicit asks for numbers
-    r"\b(?:statistics|benchmarks?|figures|data points?|metrics)\b",
-    r"\b(?:how many|how much)\b",
-)
-_FACTUAL_REQUEST_RE = re.compile("|".join(_FACTUAL_REQUEST_PATTERNS), re.IGNORECASE)
+# Hardening the prompt helps and does not guarantee anything (#72). Whether the
+# request is *asking for* facts is a judgement call, so a model makes it: a
+# single cheap classification call, separate from the agent loop, whose only
+# job is to say whether this deck stands on real-world figures and which ones.
+#
+# It is deliberately not keyword matching. The first attempt was a regex over
+# financial vocabulary, and it missed the most ordinary phrasing there is -
+# "financial slides for starbucks" matched nothing, because a list of words is
+# always a list of the words somebody thought of. The judgement generalises;
+# the word list does not.
+_GROUNDING_JUDGE_SYSTEM = """\
+You decide one thing about a request for a slide deck: does the deck stand on \
+real-world facts that ought to be looked up, rather than recalled?
+
+Answer YES when the deck is about a real organisation, product, market, place, \
+person or event, or when it asks for figures, results, trends, comparisons or \
+anything time-anchored. These decks carry numbers, and a number recalled from \
+memory is presented to the reader as a measurement.
+
+Answer NO when the deck is conceptual, instructional, motivational, creative, \
+process- or framework-shaped, or built entirely from material the user has \
+supplied. Nothing in it would be checked against the world.
+
+Reply with a JSON object and nothing else:
+{"needs_research": true|false, "figures": ["short phrase", ...]}
+
+"figures" names, in the user's own terms, up to four specific things this deck \
+would need and cannot verify - "Starbucks FY2025 revenue", "US EV market size". \
+Leave it empty when needs_research is false."""
 
 
-def request_needs_grounding(chat_messages: list[dict]) -> bool:
-    """True when the user is asking for facts rather than for a framework."""
-    return any(
-        m.get("role") == "user" and _FACTUAL_REQUEST_RE.search(m.get("content") or "")
+def _judge_messages(chat_messages: list[dict]) -> list[dict]:
+    """The conversation as the grounding judge sees it: the user's words only.
+
+    Assistant turns are dropped deliberately. They contain the agent's own
+    narration of the deck it is about to build, which reads as corroboration
+    and pushes the judgement towards whatever it has already decided to do.
+    """
+    said = [
+        (m.get("content") or "").strip()
         for m in chat_messages
-    )
+        if m.get("role") == "user" and (m.get("content") or "").strip()
+    ]
+    return [
+        {"role": "system", "content": _GROUNDING_JUDGE_SYSTEM},
+        {"role": "user", "content": "\n\n".join(said[-6:])},
+    ]
 
 
 # The exact wording the agent is told to offer, so the answer can be recognised
@@ -669,9 +702,16 @@ class AgentLoop:
         # Set from the conversation in _run: the consultation checkpoints are
         # enforced, so the user's "just build it" has to be able to lift them.
         self.questions_declined: bool = False
-        # Set per run in _run: whether the planning checkpoint should currently
-        # be demanding the web-research offer.
-        self._offer_deep_research_pending: bool = False
+        # Loaded once in _configure. The organisation's saved AI settings are
+        # read by three separate decisions (chat provider, deep mode, the
+        # research offer); loading them once keeps those decisions consistent
+        # with each other and off the database.
+        self._settings_row = None
+        # Set in _load_context: whether the session has uploaded documents.
+        # Grounding-in-waiting - they have not been read yet on a fresh run, so
+        # _has_grounding is still False, but offering to search the web instead
+        # of reading the user's own file would be the wrong question.
+        self._session_has_documents: bool = False
 
     async def _configure(self) -> None:
         """Resolve the organisation's settings into this run's provider and mode.
@@ -695,6 +735,7 @@ class AgentLoop:
                 logger.error(
                     "settings_load_failed", organisation_id=str(self.org_id), error=str(e)
                 )
+        self._settings_row = row
 
         credentials = ai_settings.resolve_chat_credentials(row)
         if credentials is not None:
@@ -968,7 +1009,51 @@ class AgentLoop:
                     ),
                     "timestamp": _iso_now(),
                 })
-        self._offer_deep_research_pending = self._should_offer_deep_research(chat_messages)
+        # ── The web-research offer, asked by the loop rather than the model ──
+        #
+        # This used to be a precondition: plan_presentation_structure was
+        # rejected with an instruction to go and ask. It did not work. The
+        # model would call the planner anyway, take the rejection as a failed
+        # tool call - which is exactly what the interface then showed the user,
+        # a red error the agent had thrown at itself - and often carry on
+        # without ever asking. Preconditions are the right mechanism for
+        # "you cannot do that yet"; they are the wrong one for "ask this
+        # specific question", because getting it asked still depends on the
+        # model choosing to comply.
+        #
+        # Whether the deck needs looking up is a judgement, and a model makes
+        # it (_judge_needs_grounding). What the model does NOT get to decide is
+        # whether the user is then asked: one question, two fixed answers that
+        # have to be matched verbatim on the way back. So the loop asks it
+        # directly, before the first tool call of the run, and pauses. Nothing
+        # can skip it because nothing is consulted about it.
+        offer, missing_figures = False, []
+        async for kind, payload in self._with_retry_notices(
+            self._should_offer_deep_research(chat_messages), "content_analysis"
+        ):
+            if kind == "event":
+                yield payload
+            else:
+                offer, missing_figures = payload
+        if offer:
+            question = self._deep_research_question(missing_figures)
+            self.working_state.offered_deep_research = True
+            self.working_state.is_paused_for_user = True
+            self.working_state.pending_question = question
+            yield _event("question", "user_input", {
+                "question": question["question"],
+                "options": question["options"],
+                "questions": question["questions"],
+                "context": question["context"],
+                "timestamp": _iso_now(),
+            })
+            await self._save_working_state(session_id)
+            yield _event("done", "user_input", {
+                "content": f"Waiting for user input: {question['question']}",
+                "paused": True,
+                "timestamp": _iso_now(),
+            })
+            return
 
         # Publish the citation settings for the tools, after the research
         # answer has been read - a run that just switched to deep research is
@@ -1386,16 +1471,11 @@ class AgentLoop:
                     # Which checkpoint this satisfied is decided by where the
                     # run is, not by what the model says it is doing: before a
                     # plan exists the question is the planning consultation,
-                    # after it the outline review.
+                    # after it the outline review. The research offer is not in
+                    # this list - the loop asks that one itself, before the
+                    # first LLM call, and returns.
                     if self.working_state.presentation_structure:
                         self.working_state.reviewed_outline_with_user = True
-                    elif self._offer_deep_research_pending:
-                        # The research offer is a checkpoint of its own and
-                        # comes before the planning consultation. Recording it
-                        # here (not only when the answer is read back) is what
-                        # stops a resumed run asking the same thing twice.
-                        self.working_state.offered_deep_research = True
-                        self._offer_deep_research_pending = False
                     else:
                         self.working_state.consulted_before_planning = True
                     yield _event("question", "user_input", {
@@ -1655,22 +1735,110 @@ class AgentLoop:
             for tool in ("analyze_document", "extract_key_data")
         )
 
-    def _should_offer_deep_research(self, chat_messages: list[dict]) -> bool:
+    async def _judge_needs_grounding(
+        self, chat_messages: list[dict]
+    ) -> tuple[bool, list[str]]:
+        """Ask a model whether this deck stands on facts it would have to look up.
+
+        Returns ``(needs_research, figures)``. On any failure - the provider is
+        down, the reply is not JSON - returns ``(False, [])``: an offer that
+        cannot be judged is not made, because the alternative is interrupting
+        every run with a question nothing supports.
+
+        Goes through _chat_with_retry rather than calling the provider directly,
+        so a transient 5xx or a rate-limit wait costs a retry instead of
+        silently costing the checkpoint.
+        """
+        try:
+            response = await self._chat_with_retry(
+                messages=_judge_messages(chat_messages), tools=None
+            )
+        except Exception as e:  # noqa: BLE001 - a judgement is never worth a run
+            logger.warning("grounding_judge_failed", error=str(e))
+            return False, []
+
+        content = ((response or {}).get("message") or {}).get("content") or ""
+        verdict = extract_json_object(content)
+        if not verdict:
+            logger.warning("grounding_judge_unparseable", reply=content[:200])
+            return False, []
+
+        needs = bool(verdict.get("needs_research"))
+        figures = [
+            str(f).strip()
+            for f in (verdict.get("figures") or [])
+            if str(f).strip()
+        ][:4]
+        logger.info("grounding_judged", needs_research=needs, figures=figures)
+        return needs, figures
+
+    async def _should_offer_deep_research(
+        self, chat_messages: list[dict]
+    ) -> tuple[bool, list[str]]:
         """
         Whether to stop and ask before planning a factual deck with nothing
-        behind it.
+        behind it, and which figures to say are missing.
 
-        Only in simple mode (deep mode already researches), only when the ask
-        is for facts, and only when the run has no grounding at all. A user who
-        said "just build it" is not interrupted.
+        Only in simple mode (deep mode already researches), only when the run
+        has no grounding at all, and - the point that makes the offer honest -
+        only when there is a search backend to switch on. Offering to research
+        on a workspace with no search model configured is offering something
+        that cannot happen. A user who said "just build it" is not interrupted,
+        and neither is a session that uploaded a document: the answer there is
+        to read the file, not to go looking on the web.
+
+        The judgement itself is the last step, because it costs an LLM call and
+        everything above it is free.
         """
         if self.mode == MODE_DEEP:
-            return False
+            return False, []
         if self.working_state.offered_deep_research or self.questions_declined:
-            return False
-        if self._has_grounding():
-            return False
-        return request_needs_grounding(chat_messages)
+            return False, []
+        if self._has_grounding() or self._session_has_documents:
+            return False, []
+        # Too late to be useful once the deck is being written: the point of
+        # the offer is to change where the numbers come from, not to interrupt
+        # a run that already has them on slides.
+        if self.working_state.accumulated_slides:
+            return False, []
+        config, reason = ai_settings.resolve_search_config(self._settings_row)
+        if config is None:
+            logger.info("deep_research_offer_skipped", reason=reason)
+            return False, []
+        needs, figures = await self._judge_needs_grounding(chat_messages)
+        return needs, figures
+
+    def _deep_research_question(self, figures: list[str]) -> dict:
+        """The web-research offer, in the shape ask_user_question would return.
+
+        Authored here rather than by the model. The offer has exactly one
+        sensible wording and exactly two answers, both of which have to be
+        matched verbatim afterwards, so there is nothing for a model to decide
+        and everything for it to get wrong. What the judge does contribute is
+        the specifics - naming the figures beats saying "some figures".
+        """
+        text = "This deck needs figures I have no source for. Research them on the web?"
+        missing = ""
+        if figures:
+            missing = (
+                " For this deck that means "
+                + ", ".join(figures[:-1] + [f"and {figures[-1]}"] if len(figures) > 1
+                            else figures)
+                + "."
+            )
+        return {
+            "question": text,
+            "options": [DEEP_RESEARCH_YES, DEEP_RESEARCH_NO],
+            "questions": [{"question": text, "options": [DEEP_RESEARCH_YES, DEEP_RESEARCH_NO]}],
+            "context": (
+                "You have asked for a deck built on facts and figures, and this run "
+                "has nothing to base them on: web search is off and no document was "
+                "uploaded." + missing + " I can still write it from memory, but anything "
+                "I put in a chart would be a recollection presented as a measurement - "
+                "which is how a wrong number ends up looking sourced. Turning on web "
+                "research lets me look the figures up and cite where each one came from."
+            ),
+        }
 
     async def _enable_deep_research(self) -> bool:
         """
@@ -1681,16 +1849,7 @@ class AgentLoop:
         is told to say on the slide that the figures are unverified rather than
         chart them as though they were not.
         """
-        row = None
-        if self.org_id is not None:
-            try:
-                row = await ai_settings.load_row(self.db, self.org_id)
-            except Exception as e:  # noqa: BLE001 - never fail a run over settings
-                logger.error(
-                    "settings_load_failed", organisation_id=str(self.org_id), error=str(e)
-                )
-
-        config, reason = ai_settings.resolve_search_config(row)
+        config, reason = ai_settings.resolve_search_config(self._settings_row)
         if config is None:
             logger.info("deep_research_unavailable", reason=reason)
             return False
@@ -1742,24 +1901,6 @@ class AgentLoop:
                 f"covering DIFFERENT facets - the subject itself, the specific figures the "
                 "deck needs, recent developments, and any counterpoint or context - until "
                 f"you have {RESEARCH_MIN_SOURCES}+ distinct sources, then plan."
-            )
-
-        # A factual request with nothing behind it. Asking for this in the
-        # prompt does not work - the model was told for months to default to
-        # asking and went from prompt to finished deck without a word - so the
-        # planning call simply does not go through until the offer is made.
-        if fn_name == "plan_presentation_structure" and self._offer_deep_research_pending:
-            return (
-                "This deck is being asked for facts and figures, and this run has "
-                "nothing to base them on: no web access and no uploaded documents. "
-                "Writing numbers from memory and charting them is what makes an "
-                "invented figure look sourced. Before planning, call "
-                "ask_user_question ONCE with a single question asking whether to "
-                "research the topic on the web, using EXACTLY these two options:\n"
-                f"  1. \"{DEEP_RESEARCH_YES}\"\n"
-                f"  2. \"{DEEP_RESEARCH_NO}\"\n"
-                "Put in the question's 'context' field which specific figures this "
-                "deck needs and cannot currently verify. Plan once they answer."
             )
 
         if (
@@ -1904,8 +2045,8 @@ class AgentLoop:
 
     async def _load_context(self, session_id: uuid.UUID) -> dict:
         """Load session context including design system and ingested documents."""
-        from sqlalchemy import select
-        from app.db.models import ChatSession, DesignSystemBundle
+        from sqlalchemy import func, select
+        from app.db.models import ChatSession, DesignSystemBundle, IngestedDocument
 
         context: dict = {}
 
@@ -1915,6 +2056,25 @@ class AgentLoop:
         session = result.scalar_one_or_none()
         if not session:
             return context
+
+        # Whether this session has anything of the user's own to read. Checked
+        # before the run starts because the web-research offer must not fire on
+        # a deck that already has a source attached, and analyze_document has
+        # not run yet at that point.
+        try:
+            doc_count = await self.db.execute(
+                select(func.count())
+                .select_from(IngestedDocument)
+                .where(IngestedDocument.session_id == session_id)
+            )
+            self._session_has_documents = bool(doc_count.scalar() or 0)
+        except Exception as e:  # noqa: BLE001 - never fail a run over this count
+            logger.error(
+                "document_count_failed", session_id=str(session_id), error=str(e)
+            )
+            # Assume there is something to read rather than interrupting a run
+            # that may not need interrupting.
+            self._session_has_documents = True
 
         # Load design system if template is set
         if session.template_id:
@@ -2016,16 +2176,44 @@ class AgentLoop:
             if not task.done():
                 task.cancel()
 
+    def _tools_withheld_by_checkpoint(self) -> set[str]:
+        """The deck-writing tools a pending consultation puts out of reach.
+
+        Rejecting these calls (which _check_precondition still does, as a
+        backstop) came too late to be the whole answer: the model would try the
+        planner anyway, and the rejection surfaced in the interface as a failed
+        tool call - an error the agent appeared to have thrown at itself, right
+        where the user was expecting a question. Withholding the schema is the
+        same rule enforced one step earlier, where it costs nothing and shows
+        nothing. The model is left holding ask_user_question and the reading
+        tools, which is exactly what it should be doing.
+
+        Safe to compute once per run: both flags are only ever set on the way
+        into a pause, and a pause ends the run.
+        """
+        if self.questions_declined:
+            return set()
+        ws = self.working_state
+        withheld: set[str] = set()
+        if not ws.reviewed_outline_with_user:
+            withheld.update(DRAFTING_TOOLS)
+        if not ws.consulted_before_planning:
+            withheld.update(PLANNING_TOOLS)
+        return withheld
+
     def _tool_schemas_for_mode(self) -> list[dict]:
-        """The tool schemas this run may call, filtered by effort level."""
+        """The tool schemas this run may call, by effort level and checkpoint."""
         schemas = self.registry.get_function_schemas()
-        if self.mode == MODE_DEEP:
-            return schemas
+        blocked = self._tools_withheld_by_checkpoint()
+        if self.mode != MODE_DEEP:
+            blocked |= DEEP_ONLY_TOOLS
 
         def name_of(schema: dict) -> str:
             return schema.get("function", {}).get("name", schema.get("name", ""))
 
-        return [s for s in schemas if name_of(s) not in DEEP_ONLY_TOOLS]
+        if not blocked:
+            return schemas
+        return [s for s in schemas if name_of(s) not in blocked]
 
     def _build_system_prompt(self, context: dict, working_state: WorkingState | None = None) -> str:
         """Build the system prompt with embedded design system context."""
@@ -2056,9 +2244,11 @@ class AgentLoop:
             "it - do not link to it. Equally, do not announce that the presentation is complete while "
             "validate_rendered_output still reports unresolved issues; fix those first.",
             "4. THE DECK IS PLANNED WITH THE USER, NOT AT THEM. There are two consultation "
-            "checkpoints, and the tools enforce both - plan_presentation_structure is rejected "
-            "until the first has happened, and select_layout/design_slide_content/build_* are "
-            "rejected until the second has:\n"
+            "checkpoints, and the tool list enforces both - until the first has happened you "
+            "are not given plan_presentation_structure, and until the second has you are not "
+            "given select_layout/design_slide_content/build_*/finalize_and_render_pptx. If a "
+            "tool you expected is missing, that is why: ask the outstanding question rather "
+            "than looking for a way around it.\n"
             "   (a) BEFORE PLANNING: call ask_user_question once with a consolidated set of "
             "questions about what you are genuinely unsure of - target audience; scope/slide "
             "count; WHICH PARTS OF THE MATERIAL TO FOCUS ON when it covers more than fits; tone; "
