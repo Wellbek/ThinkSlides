@@ -18,14 +18,40 @@ export interface AuthState {
 }
 
 /**
+ * Decode one base64url JWT segment.
+ *
+ * `atob` speaks standard base64 and throws on the `-` and `_` that base64url
+ * substitutes for `+` and `/`. Those turn up in most real payloads, so decoding
+ * a segment directly with `atob` works only by luck. It also returns one
+ * latin1 char per byte, which mangles any non-ASCII claim, hence the explicit
+ * UTF-8 decode.
+ */
+function decodeBase64Url(segment: string): string {
+  const base64 = segment.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+/**
  * Parse a JWT token to extract user info (without verification — that's server-side).
+ *
+ * Returns null for a token that is malformed or past its `exp`. Signature
+ * verification stays server-side, but an expired token cannot identify anyone,
+ * and callers use this result to decide whether a stored session is still live.
  */
 export function parseToken(token: string): AuthUser | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
 
-    const payload = JSON.parse(atob(parts[1]));
+    const payload = JSON.parse(decodeBase64Url(parts[1]));
+
+    if (typeof payload.exp === "number" && payload.exp * 1000 <= Date.now()) {
+      return null;
+    }
+
     const orgId = payload.org_id || null;
     return {
       id: payload.user_id || "",
