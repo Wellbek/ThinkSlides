@@ -43,6 +43,8 @@ type GenerateRequest struct {
 	Mode        string
 	DetailLevel string
 	Identity    Identity
+	// "Include source references in the document", from the composer.
+	IncludeSources bool
 }
 
 // postJSON issues an authenticated JSON POST and decodes the response.
@@ -98,10 +100,11 @@ func (c *AIServiceClient) SendMessage(gen GenerateRequest) (map[string]interface
 		detailLevel = "detailed"
 	}
 	payload := map[string]interface{}{
-		"content":      gen.Content,
-		"attachments":  gen.Attachments,
-		"mode":         mode,
-		"detail_level": detailLevel,
+		"content":         gen.Content,
+		"attachments":     gen.Attachments,
+		"mode":            mode,
+		"detail_level":    detailLevel,
+		"include_sources": gen.IncludeSources,
 	}
 	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/messages", c.baseURL, gen.SessionID)
 	return c.postJSON(url, payload, gen.Identity)

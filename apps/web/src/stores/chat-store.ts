@@ -69,6 +69,8 @@ interface ChatState {
    * the in-session composer.
    */
   detailLevel: DetailLevel;
+  /** Whether generated decks carry their research sources as references. */
+  includeSources: boolean;
   totalElapsedMs: number | null;
   isGenerating: boolean;
   setIsGenerating: (generating: boolean) => void;
@@ -91,6 +93,7 @@ interface ChatState {
   setSettingsOpen: (open: boolean) => void;
   setMode: (mode: EffortMode) => void;
   setDetailLevel: (detailLevel: DetailLevel) => void;
+  setIncludeSources: (includeSources: boolean) => void;
 }
 
 /**
@@ -160,6 +163,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   settingsOpen: false,
   mode: 'simple',
   detailLevel: 'detailed',
+  // Off by default: a deck that cites its sources is a deliberate choice, and
+  // most decks have no research behind them to cite.
+  includeSources: false,
   totalElapsedMs: null,
   isGenerating: false,
 
@@ -461,7 +467,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content: string, files?: File[]) => {
-    const { activeSessionId, mode, detailLevel } = get();
+    const { activeSessionId, mode, detailLevel, includeSources } = get();
     if (!activeSessionId) return;
 
     // Deep Thinking needs a configured search backend. The selector is already
@@ -507,6 +513,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         formData.append('content', content);
         formData.append('mode', effectiveMode);
         formData.append('detail_level', detailLevel);
+        formData.append('include_sources', String(includeSources));
         for (const file of files) formData.append('files', file);
         const res = await fetch(`/api/orchestrator/sessions/${activeSessionId}/messages`, {
           method: 'POST',
@@ -532,7 +539,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } else {
         const data = await apiPost<{ messages?: ChatMessage[] }>(
           `/api/orchestrator/sessions/${activeSessionId}/messages`,
-          { content, mode: effectiveMode, detail_level: detailLevel }
+          { content, mode: effectiveMode, detail_level: detailLevel, include_sources: includeSources }
         );
         const serverMessages = data?.messages;
         if (serverMessages && Array.isArray(serverMessages)) {
@@ -610,4 +617,5 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setMode: (mode: EffortMode) => set({ mode }),
 
   setDetailLevel: (detailLevel: DetailLevel) => set({ detailLevel }),
+  setIncludeSources: (includeSources: boolean) => set({ includeSources }),
 }));

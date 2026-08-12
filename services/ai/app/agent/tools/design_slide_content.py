@@ -6,6 +6,7 @@ The renderer will consume this to clone layout XML and fill placeholders.
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent import run_context
 from app.agent.run_context import get_chat_provider
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.llm.provider import get_llm_provider
@@ -14,6 +15,20 @@ import json
 import time
 
 logger = get_logger(__name__)
+
+def _distinct_by_url(findings: list[dict]) -> list[dict]:
+    """The reference list, numbered exactly as renderer/citations.py will."""
+    ordered, seen = [], set()
+    for finding in findings or []:
+        if not isinstance(finding, dict):
+            continue
+        url = (finding.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        ordered.append(finding)
+    return ordered
+
 
 # How much depth each bullet/note should carry, keyed by the composer's
 # detail_level. Concise mirrors the original single-sentence-only behaviour;
@@ -213,6 +228,28 @@ Design System Context:
 
             detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
 
+            # Only ask for source tags when the deck is actually going to show
+            # them and there is research to point at. Asking unconditionally
+            # would have the model inventing reference numbers for a deck with
+            # no reference list - a marker with nothing behind it is worse than
+            # no marker.
+            citation_guidance = ""
+            findings = run_context.get_research_findings() or []
+            if run_context.get_include_sources() and findings:
+                numbered = "\n".join(
+                    f"  [{i}] {(f.get('title') or f.get('url') or '').strip()[:90]}"
+                    for i, f in enumerate(_distinct_by_url(findings), start=1)
+                )
+                citation_guidance = (
+                    "- This deck cites its sources. When a run's content comes from a "
+                    "specific finding below, add \"sourceRef\": N to that run, using the "
+                    "number in brackets. Tag the run carrying the fact, not every run on "
+                    "the slide, and leave a run untagged when it is your own framing "
+                    "rather than something you read. Never use a number that is not "
+                    "listed.\n"
+                    f"  Available sources:\n{numbered}"
+                )
+
             # A visual built through build_chart/build_table/build_key_metrics
             # is attached to the slide server-side. Telling the model it exists
             # (but not what is in it) is what keeps the copy from restating the
@@ -269,7 +306,8 @@ Rules:
 - Use "table" type for tbl placeholders (or any content placeholder, if no dedicated table placeholder exists) when the content is genuinely tabular (comparisons, structured data with 2+ rows and 2+ columns) - do not force prose bullet points into a table, and do not use a table for anything that reads better as bullets. Shape: {{type: "table", placeholderIdx: N, table: {{headerRow: true, rows: [["Column A", "Column B"], ["Row 1 value", "Row 1 value"], ["Row 2 value", "Row 2 value"]]}}}}. Every row must have the same number of cells as the header row. Keep cell text short (a few words) - tables are rendered at a fixed size, not auto-expanded.
 - Use "chart" type whenever the key points for this slide carry numbers that tell a story a reader would rather SEE than read: a trend over time, a comparison across categories, a breakdown of a whole, or a correlation. A slide whose points are mostly figures ("revenue rose from $11.7B to $37.2B across 2011-2025") should render that data as a chart, not as a list of sentences. Shape: {{type: "chart", placeholderIdx: N, chart: {{chartType: "bar"|"line"|"pie"|"scatter", categories: ["2011", "2020", "2025"], series: [{{name: "Revenue ($B)", values: [11.7, 23.5, 37.2]}}]}}}}. Pick chartType by intent: "line" for change over time, "bar" for comparison across categories, "pie" for parts of a single whole (one series, values summing to a meaningful total), "scatter" for relationships between two measures. Every series must have exactly as many values as there are categories, and values must be plain numbers - no units, no "%" or "$" inside the number (put those in the series name). Only chart figures that are actually present in the key points or key data; never invent or estimate values to fill a chart.
 - A chart or a table REPLACES the prose it visualizes - do not emit a chart and then also restate the same figures as bullets in the same body placeholder. A short bullet or two of interpretation ("growth flattened after 2023") alongside a chart is good; a duplicate of the chart's own numbers is not.
-- Each content item must have a placeholderIdx matching one of the available placeholders."""
+- Each content item must have a placeholderIdx matching one of the available placeholders.
+{citation_guidance}"""
 
             response = await llm.chat(
                 messages=[{"role": "user", "content": prompt}],

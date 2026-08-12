@@ -9,6 +9,8 @@ Also generates preview images for each slide.
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._json_extract import coerce_json_arg
+from app.agent import run_context
+from app.renderer.citations import apply_source_citations
 from app.renderer.pptx_renderer import PPTXRenderer
 from app.renderer.preview_generator import PreviewGenerator
 from app.observability.logging import get_logger
@@ -117,6 +119,16 @@ class FinalizeAndRenderPptxTool:
             output_path = os.path.join(output_dir, f"{output_id}.pptx")
             markdown_path = os.path.join(output_dir, f"{output_id}.md")
 
+            # Put the citation trail in the file itself, before anything is
+            # rendered or written, so the markdown fallback carries it too.
+            # A run with the toggle off, or with nothing to cite, passes
+            # straight through - see renderer/citations.py.
+            slides, cited_sources = apply_source_citations(
+                slides,
+                run_context.get_research_findings(),
+                enabled=run_context.get_include_sources(),
+            )
+
             # Generate fallback markdown first (so we always have something to give the user)
             fallback_markdown = cls._generate_markdown_fallback(slides, metadata)
             with open(markdown_path, "w", encoding="utf-8") as f:
@@ -216,6 +228,7 @@ class FinalizeAndRenderPptxTool:
                     "fileName": metadata.get("title", "presentation") + ".pptx",
                     "fileSizeBytes": file_size,
                     "slideCount": len(slides),
+                    "citedSources": cited_sources,
                     "sessionId": session_id,
                     "previewUrls": preview_urls,
                     "fallbackMarkdownPath": markdown_path,

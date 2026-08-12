@@ -533,6 +533,7 @@ class AgentLoop:
         mode: str | None = None,
         org_id: uuid.UUID | None = None,
         detail_level: str | None = None,
+        include_sources: bool | None = None,
     ) -> None:
         """
         ``mode`` is the effort level the user picked in the composer. Pass None
@@ -546,6 +547,10 @@ class AgentLoop:
 
         ``detail_level`` is the content depth chosen in the composer, and
         follows the same None-means-inherit-on-resume convention as ``mode``.
+
+        ``include_sources`` is the composer's "cite sources in the document"
+        toggle, and follows the same convention again - the resume request has
+        no composer to read it from, so None inherits it from the paused run.
         """
         self.db = db
         self.registry = get_registry()
@@ -563,9 +568,11 @@ class AgentLoop:
         self.mode = normalize_mode(mode) if mode is not None else None
         self.detail_level = normalize_detail_level(detail_level) if detail_level is not None else None
         self.org_id = org_id
+        self.include_sources = include_sources
         self.search_config: ai_settings.SearchConfig | None = None
         self._search_token = None
         self._provider_token = None
+        self._citation_tokens: list = []
         # Set from the conversation in _run: the consultation checkpoints are
         # enforced, so the user's "just build it" has to be able to lift them.
         self.questions_declined: bool = False
@@ -581,6 +588,8 @@ class AgentLoop:
             self.mode = MODE_SIMPLE
         if self.detail_level is None:
             self.detail_level = DETAIL_LEVEL_DETAILED
+        if self.include_sources is None:
+            self.include_sources = False
 
         row = None
         if self.org_id is not None:
@@ -664,6 +673,7 @@ class AgentLoop:
             # Carried so a run paused on a question resumes at the same effort
             # level - the resume request has no mode of its own.
             "mode": self.mode,
+            "include_sources": self.include_sources,
             # Issue #20: without these, resuming after ask_user_question forced
             # a re-extraction of the design system and lost all accumulated web
             # research, since only WorkingState (not context) was persisted.
@@ -728,6 +738,8 @@ class AgentLoop:
             # free to change it.
             if self.mode is None:
                 self.mode = normalize_mode(state_dict.get("mode"))
+            if self.include_sources is None:
+                self.include_sources = bool(state_dict.get("include_sources", False))
             # Issue #20: stashed here since context itself is rebuilt fresh by
             # _load_context after this call - _run merges these in afterwards.
             self._resumed_design_system = state_dict.get("design_system")
@@ -770,6 +782,17 @@ class AgentLoop:
             if self._provider_token is not None:
                 run_context.reset_chat_provider(self._provider_token)
                 self._provider_token = None
+            # Reset in reverse, so nested sets unwind to what was there before.
+            while self._citation_tokens:
+                token = self._citation_tokens.pop()
+                try:
+                    if token.var is run_context._include_sources:
+                        run_context.reset_include_sources(token)
+                    else:
+                        run_context.reset_research_findings(token)
+                except ValueError:
+                    # Set in a different context than the one tearing down.
+                    pass
 
     async def _run(
         self,
@@ -817,6 +840,17 @@ class AgentLoop:
         # lets a caller driving the loop directly switch the checkpoints off).
         self.questions_declined = self.questions_declined or user_declined_questions(
             chat_messages
+        )
+
+        # Publish the citation settings for the tools. finalize_and_render_pptx
+        # reads both when it puts the reference trail into the .pptx itself;
+        # the findings are re-published as research accumulates, so the list is
+        # whatever the run actually gathered by the time it renders.
+        self._citation_tokens.append(
+            run_context.set_include_sources(bool(self.include_sources))
+        )
+        self._citation_tokens.append(
+            run_context.set_research_findings(context.get("research"))
         )
 
         # ── Phase 3: ReAct loop ──────────────────────
@@ -1337,6 +1371,11 @@ class AgentLoop:
                         # at 15, a fourth search silently evicted the first one.
                         if len(research) > MAX_RESEARCH_IN_CONTEXT:
                             context["research"] = research[-MAX_RESEARCH_IN_CONTEXT:]
+                        # Keep what the renderer will cite in step with what
+                        # the run has actually found.
+                        self._citation_tokens.append(
+                            run_context.set_research_findings(context["research"])
+                        )
                         if len(image_catalog) > 20:
                             context["imageCatalog"] = image_catalog[-20:]
 

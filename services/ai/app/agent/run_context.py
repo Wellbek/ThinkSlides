@@ -9,6 +9,9 @@ for the duration of one run, and any tool executing inside that run reads them.
 Two things travel this way:
 
 - the **search configuration**, read by the web_search tool;
+- the **citation settings** - whether the user asked for source references in
+  the document, and what the run has researched - read by
+  finalize_and_render_pptx when it puts the trail into the .pptx itself;
 - the **chat provider**, read by every tool that makes its own LLM call.
   Without it those tools would quietly fall back to the process-wide provider
   built from environment variables, so choosing Claude in Settings would change
@@ -33,6 +36,45 @@ _search_config: ContextVar[SearchConfig | None] = ContextVar(
 _chat_provider: ContextVar[LLMProvider | None] = ContextVar(
     "thinkslides_chat_provider", default=None
 )
+
+# Whether the user asked for source references in the rendered document, and
+# the findings to draw them from. Both default to "no citations", so a tool
+# running outside a configured run renders exactly what it always did.
+_include_sources: ContextVar[bool] = ContextVar(
+    "thinkslides_include_sources", default=False
+)
+
+_research_findings: ContextVar[list | None] = ContextVar(
+    "thinkslides_research_findings", default=None
+)
+
+
+def set_include_sources(enabled: bool) -> Token:
+    """Install whether this run cites its sources in the document."""
+    return _include_sources.set(bool(enabled))
+
+
+def get_include_sources() -> bool:
+    """Whether the current run cites its sources; False outside a run."""
+    return _include_sources.get()
+
+
+def reset_include_sources(token: Token) -> None:
+    _include_sources.reset(token)
+
+
+def set_research_findings(findings: list | None) -> Token:
+    """Install the findings this run has gathered, for the reference list."""
+    return _research_findings.set(findings)
+
+
+def get_research_findings() -> list | None:
+    """The current run's research findings, or None outside a run."""
+    return _research_findings.get()
+
+
+def reset_research_findings(token: Token) -> None:
+    _research_findings.reset(token)
 
 
 def set_search_config(config: SearchConfig | None) -> Token:

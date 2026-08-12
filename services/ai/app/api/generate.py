@@ -36,6 +36,9 @@ class SendMessageRequest(BaseModel):
     # Content depth chosen in the composer. Anything unrecognised (including
     # the field being absent) means detailed.
     detail_level: str = DETAIL_LEVEL_DETAILED
+    # "Include source references in the document" from the composer. Only ever
+    # does anything when Deep Thinking actually researched something.
+    include_sources: bool = False
 
 
 class SimplePresentationRequest(BaseModel):
@@ -111,6 +114,7 @@ async def send_message(
                 mode=normalize_mode(req.mode),
                 org_id=org_id,
                 detail_level=normalize_detail_level(req.detail_level),
+                include_sources=req.include_sources,
             )
         except Exception as e:
             logger.error("_run_agent failed", error=str(e), traceback=traceback.format_exc())
@@ -133,6 +137,7 @@ async def _run_agent(
     mode: str | None = None,
     org_id: uuid.UUID | None = None,
     detail_level: str | None = None,
+    include_sources: bool | None = None,
 ):
     """Run the agent loop for a session and stream its events to Redis.
 
@@ -197,7 +202,13 @@ async def _run_agent(
 
             try:
                 logger.info("_run_agent: creating AgentLoop for %s", session_id)
-                loop = AgentLoop(db=db, mode=mode, org_id=org_id, detail_level=detail_level)
+                loop = AgentLoop(
+                    db=db,
+                    mode=mode,
+                    org_id=org_id,
+                    detail_level=detail_level,
+                    include_sources=include_sources,
+                )
 
                 logger.info("_run_agent: starting loop.run() for %s", session_id)
                 event_count = 0

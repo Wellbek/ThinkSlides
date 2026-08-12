@@ -278,6 +278,7 @@ func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) erro
 	content, _ := job.Payload["content"].(string)
 	mode, _ := job.Payload["mode"].(string)
 	detailLevel, _ := job.Payload["detail_level"].(string)
+	includeSources, _ := job.Payload["include_sources"].(bool)
 	attachmentsRaw, _ := job.Payload["attachments"].([]interface{})
 
 	attachments := make([]map[string]interface{}, 0)
@@ -300,12 +301,13 @@ func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) erro
 
 	// Call AI service – this returns immediately after the AI accepts the job.
 	_, err := p.aiClient.SendMessage(client.GenerateRequest{
-		SessionID:   job.SessionID,
-		Content:     content,
-		Attachments: attachments,
-		Mode:        mode,
-		DetailLevel: detailLevel,
-		Identity:    jobIdentity(job),
+		SessionID:      job.SessionID,
+		Content:        content,
+		Attachments:    attachments,
+		Mode:           mode,
+		DetailLevel:    detailLevel,
+		Identity:       jobIdentity(job),
+		IncludeSources: includeSources,
 	})
 	if err != nil {
 		return err

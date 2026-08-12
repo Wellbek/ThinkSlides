@@ -105,6 +105,11 @@ export interface TextRun {
   fontName?: string;
   bullet?: boolean;
   level?: number;       // indent level 0-8
+  /** 1-based index into the deck's reference list, when this run's content
+   *  came from a specific web_search finding. Consumed before rendering (see
+   *  renderer/citations.py), which turns it into a "[n]" marker and a numbered
+   *  entry on the Sources slide - the renderer itself never sees this field. */
+  sourceRef?: number;
 }
 
 export interface ImageContent {
