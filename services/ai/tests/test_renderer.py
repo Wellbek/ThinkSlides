@@ -266,7 +266,7 @@ class TestCloneLayoutPreservesFormatting:
             "contents": [{"type": "text", "placeholderIdx": 1, "runs": runs}],
         }
 
-        xml_bytes, _image_rels = renderer._clone_layout_as_slide(
+        xml_bytes, _image_rels, _link_rels = renderer._clone_layout_as_slide(
             default_template_layout2, slide_data, str(tmp_path), slide_num=1
         )
 
@@ -592,7 +592,7 @@ class TestCloneLayoutAutofit:
             "contents": [{"type": "text", "placeholderIdx": 1, "runs": runs}],
         }
 
-        xml_bytes, _ = renderer._clone_layout_as_slide(small_boxed_layout, slide_data, str(tmp_path), slide_num=1)
+        xml_bytes, _, _ = renderer._clone_layout_as_slide(small_boxed_layout, slide_data, str(tmp_path), slide_num=1)
         root = ET.fromstring(xml_bytes)
 
         sp = next(sp for sp in root.findall(".//p:sp", NS) if sp.find(".//p:ph", NS).get("idx") == "1")
@@ -609,7 +609,7 @@ class TestCloneLayoutAutofit:
             "layoutId": "9",
             "contents": [{"type": "text", "placeholderIdx": 1, "runs": [{"text": "Hi", "bullet": True}]}],
         }
-        xml_bytes, _ = renderer._clone_layout_as_slide(small_boxed_layout, slide_data, str(tmp_path), slide_num=1)
+        xml_bytes, _, _ = renderer._clone_layout_as_slide(small_boxed_layout, slide_data, str(tmp_path), slide_num=1)
         root = ET.fromstring(xml_bytes)
         sp = next(sp for sp in root.findall(".//p:sp", NS) if sp.find(".//p:ph", NS).get("idx") == "1")
         bodyPr = sp.find(".//p:txBody/a:bodyPr", NS)
@@ -650,7 +650,7 @@ class TestCloneLayoutImages:
             }],
         }
 
-        xml_bytes, image_rels = renderer._clone_layout_as_slide(layout_file, slide_data, working_dir, slide_num=1)
+        xml_bytes, image_rels, _ = renderer._clone_layout_as_slide(layout_file, slide_data, working_dir, slide_num=1)
 
         assert len(image_rels) == 1
         assert image_rels[0]["rId"] == "rId2"
@@ -677,7 +677,7 @@ class TestCloneLayoutImages:
                 "image": {"source": "base64", "data": f"data:image/png;base64,{self.ONE_PX_PNG_B64}"},
             }],
         }
-        xml_bytes, image_rels = renderer._clone_layout_as_slide(layout_file, slide_data, working_dir, slide_num=1)
+        xml_bytes, image_rels, _ = renderer._clone_layout_as_slide(layout_file, slide_data, working_dir, slide_num=1)
         assert len(image_rels) == 1
 
     def test_unresolvable_image_is_skipped_not_crashed(self, renderer, default_template_layout2, tmp_path):
@@ -687,7 +687,7 @@ class TestCloneLayoutImages:
             "layoutId": "2",
             "contents": [{"type": "image", "image": {"source": "base64", "data": "not-valid-base64!!"}}],
         }
-        xml_bytes, image_rels = renderer._clone_layout_as_slide(layout_file, slide_data, working_dir, slide_num=1)
+        xml_bytes, image_rels, _ = renderer._clone_layout_as_slide(layout_file, slide_data, working_dir, slide_num=1)
         assert image_rels == []
         root = ET.fromstring(xml_bytes)
         assert root.findall(".//p:pic", NS) == []
@@ -930,7 +930,7 @@ class TestChartRendering:
         layout_file = str(working_dir / "ppt" / "slideLayouts" / "slideLayout2.xml")
 
         slide_data = {"slideIndex": 0, "layoutId": "2", "contents": [self.CHART_CONTENT]}
-        xml_bytes, image_rels = renderer._clone_layout_as_slide(layout_file, slide_data, str(working_dir), slide_num=1)
+        xml_bytes, image_rels, _ = renderer._clone_layout_as_slide(layout_file, slide_data, str(working_dir), slide_num=1)
 
         assert len(image_rels) == 1
         root = ET.fromstring(xml_bytes)
@@ -1246,3 +1246,331 @@ class TestTheCachedDefaultTemplateIsVersioned:
 
         assert first == second
         assert os.path.getmtime(second) == mtime, "template was needlessly regenerated"
+
+
+# A minimal valid 1x1 transparent PNG.
+ONE_PX_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+
+class TestHyperlinks:
+    """
+    A citation the reader cannot click is a citation they have to retype. Two
+    render paths, two mechanisms: python-pptx for the default theme, raw XML
+    (plus a package relationship) for the template clone.
+    """
+
+    @staticmethod
+    def _cited_slide() -> dict:
+        return {
+            "slideIndex": 0,
+            "layoutId": "2",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Revenue"}]},
+                {
+                    "type": "text",
+                    "placeholderIdx": 1,
+                    "runs": [
+                        {
+                            "text": "Revenue grew 15%",
+                            "bullet": True,
+                            "citation": {"text": " [1]", "link": "https://a.example/q3"},
+                        },
+                        {
+                            "text": "[1] Q3 results - a.example - 2026-03-11",
+                            "link": "https://a.example/q3",
+                        },
+                    ],
+                },
+            ],
+        }
+
+    def test_default_path_links_the_marker_without_linking_the_bullet(self, tmp_path):
+        """The "[1]" is its own run: clicking the sentence must not navigate."""
+        from pptx import Presentation
+
+        output = str(tmp_path / "out.pptx")
+        PPTXRenderer(template_path=None).render(
+            slides=[self._cited_slide()], metadata={"title": "T"}, output_path=output
+        )
+
+        prs = Presentation(output)
+        paragraphs = [
+            p
+            for shape in prs.slides[0].shapes
+            if shape.has_text_frame
+            for p in shape.text_frame.paragraphs
+        ]
+        bullet = next(p for p in paragraphs if p.text.startswith("Revenue grew"))
+
+        assert len(bullet.runs) == 2
+        assert bullet.runs[0].text == "Revenue grew 15%"
+        assert bullet.runs[0].hyperlink.address is None
+        assert bullet.runs[1].text == " [1]"
+        assert bullet.runs[1].hyperlink.address == "https://a.example/q3"
+
+    def test_default_path_links_a_whole_reference_line(self, tmp_path):
+        from pptx import Presentation
+
+        output = str(tmp_path / "out.pptx")
+        PPTXRenderer(template_path=None).render(
+            slides=[self._cited_slide()], metadata={"title": "T"}, output_path=output
+        )
+
+        prs = Presentation(output)
+        runs = [
+            r
+            for shape in prs.slides[0].shapes
+            if shape.has_text_frame
+            for p in shape.text_frame.paragraphs
+            for r in p.runs
+        ]
+        reference = next(r for r in runs if r.text.startswith("[1] Q3 results"))
+        assert reference.hyperlink.address == "https://a.example/q3"
+
+    def test_template_path_writes_hlinkclick_and_an_external_relationship(self, tmp_path):
+        from app.renderer.default_template import get_default_template_path
+
+        template_path = get_default_template_path(output_dir=str(tmp_path / "templates"))
+        output = str(tmp_path / "out.pptx")
+        PPTXRenderer(template_path=template_path).render(
+            slides=[self._cited_slide()], metadata={"title": "T"}, output_path=output
+        )
+
+        with zipfile.ZipFile(output) as zf:
+            slide_xml = zf.read("ppt/slides/slide1.xml").decode()
+            rels_xml = zf.read("ppt/slides/_rels/slide1.xml.rels").decode()
+
+        root = ET.fromstring(slide_xml)
+        links = root.findall(".//a:hlinkClick", NS)
+        assert links, "no hyperlink reached the cloned slide"
+        linked_ids = {link.get(f"{{{NS['r']}}}id") for link in links}
+
+        rels = ET.fromstring(rels_xml)
+        external = {
+            rel.get("Id"): rel
+            for rel in rels
+            if rel.get("Type", "").endswith("/hyperlink")
+        }
+        assert linked_ids <= set(external), "a hlinkClick pointed at no relationship"
+        for rel in external.values():
+            # Without TargetMode PowerPoint reads the URL as a path inside the
+            # package and calls the file corrupt.
+            assert rel.get("TargetMode") == "External"
+            assert rel.get("Target") == "https://a.example/q3"
+
+    def test_template_path_reuses_one_relationship_per_url(self, tmp_path):
+        """Both runs cite the same page; two rels for one URL is just bloat."""
+        from app.renderer.default_template import get_default_template_path
+
+        template_path = get_default_template_path(output_dir=str(tmp_path / "templates"))
+        renderer = PPTXRenderer(template_path=template_path)
+        working_dir = tmp_path / "extracted"
+        with zipfile.ZipFile(template_path) as zf:
+            zf.extractall(working_dir)
+        layout_file = str(working_dir / "ppt" / "slideLayouts" / "slideLayout2.xml")
+
+        _xml, _images, link_rels = renderer._clone_layout_as_slide(
+            layout_file, self._cited_slide(), str(working_dir), slide_num=1
+        )
+
+        assert [rel["target"] for rel in link_rels] == ["https://a.example/q3"]
+
+    def test_template_path_link_ids_cannot_collide_with_image_ids(self, tmp_path):
+        from app.renderer.default_template import get_default_template_path
+
+        template_path = get_default_template_path(output_dir=str(tmp_path / "templates"))
+        renderer = PPTXRenderer(template_path=template_path)
+        working_dir = tmp_path / "extracted"
+        with zipfile.ZipFile(template_path) as zf:
+            zf.extractall(working_dir)
+        layout_file = str(working_dir / "ppt" / "slideLayouts" / "slideLayout2.xml")
+
+        slide = self._cited_slide()
+        slide["contents"].append({
+            "type": "image",
+            "image": {
+                "source": "base64",
+                "data": ONE_PX_PNG_B64,
+            },
+        })
+
+        _xml, image_rels, link_rels = renderer._clone_layout_as_slide(
+            layout_file, slide, str(working_dir), slide_num=1
+        )
+
+        assert image_rels and link_rels
+        assert not ({r["rId"] for r in image_rels} & {r["rId"] for r in link_rels})
+
+    def test_a_slide_with_no_links_gets_no_hyperlink_relationships(self, tmp_path):
+        from app.renderer.default_template import get_default_template_path
+
+        template_path = get_default_template_path(output_dir=str(tmp_path / "templates"))
+        output = str(tmp_path / "out.pptx")
+        PPTXRenderer(template_path=template_path).render(
+            slides=[{
+                "slideIndex": 0,
+                "layoutId": "2",
+                "contents": [
+                    {"type": "text", "placeholderIdx": 1, "runs": [{"text": "Plain"}]}
+                ],
+            }],
+            metadata={"title": "T"},
+            output_path=output,
+        )
+
+        with zipfile.ZipFile(output) as zf:
+            rels_xml = zf.read("ppt/slides/_rels/slide1.xml.rels").decode()
+        assert "/hyperlink" not in rels_xml
+
+
+class TestTemplatePackageIntegrity:
+    """
+    A deck built on an uploaded template has to be a file the rest of the
+    world can open. Three defects here meant it was not: the slide master's
+    relationship was deleted, [Content_Types].xml came back with a generated
+    namespace prefix, and every title placeholder went unfilled. LibreOffice
+    refused the package outright ("source file could not be loaded"), which
+    also meant validate_rendered_output could never inspect one.
+    """
+
+    @pytest.fixture
+    def template_path(self, tmp_path):
+        from app.renderer.default_template import get_default_template_path
+        return get_default_template_path(output_dir=str(tmp_path / "templates"))
+
+    @staticmethod
+    def _render(template_path, tmp_path, slides):
+        output = str(tmp_path / "out.pptx")
+        PPTXRenderer(template_path=template_path).render(
+            slides=slides, metadata={"title": "T"}, output_path=output
+        )
+        return output
+
+    def _titled_slide(self):
+        return {
+            "slideIndex": 0,
+            "layoutId": "2",
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Sources"}]},
+                {
+                    "type": "text",
+                    "placeholderIdx": 1,
+                    "runs": [
+                        {"text": f"Point {i}", "bullet": True, "level": 0}
+                        for i in range(6)
+                    ],
+                },
+            ],
+        }
+
+    def test_the_slide_master_relationship_survives(self, template_path, tmp_path):
+        """presentation.xml points at it by rId; deleting it dangles the reference."""
+        output = self._render(template_path, tmp_path, [self._titled_slide()])
+
+        with zipfile.ZipFile(output) as zf:
+            rels = ET.fromstring(zf.read("ppt/_rels/presentation.xml.rels"))
+            presentation = ET.fromstring(zf.read("ppt/presentation.xml"))
+
+        declared = {rel.get("Id") for rel in rels}
+        master_ids = {
+            m.get(f"{{{NS['r']}}}id")
+            for m in presentation.findall("p:sldMasterIdLst/p:sldMasterId", NS)
+        }
+        assert master_ids
+        assert master_ids <= declared
+
+    def test_content_types_keeps_its_own_default_namespace(self, template_path, tmp_path):
+        """<ns0:Types> is namespace-equivalent and LibreOffice still rejects it."""
+        output = self._render(template_path, tmp_path, [self._titled_slide()])
+
+        with zipfile.ZipFile(output) as zf:
+            content_types = zf.read("[Content_Types].xml").decode()
+
+        assert "ns0:" not in content_types
+        assert 'xmlns="http://schemas.openxmlformats.org/package/2006/content-types"' in content_types
+
+    def test_rels_files_still_use_the_relationships_default_namespace(
+        self, template_path, tmp_path
+    ):
+        """The content-types write must not leave the prefix map disturbed."""
+        output = self._render(template_path, tmp_path, [self._titled_slide()])
+
+        with zipfile.ZipFile(output) as zf:
+            rels = zf.read("ppt/_rels/presentation.xml.rels").decode()
+
+        assert "ns0:" not in rels
+
+    def test_the_title_placeholder_is_filled(self, template_path, tmp_path):
+        """
+        A title placeholder is identified by type="title" and omits idx, so
+        reading "no idx" as "no match" left every slide showing the layout's
+        own prompt text.
+        """
+        output = self._render(template_path, tmp_path, [self._titled_slide()])
+
+        with zipfile.ZipFile(output) as zf:
+            slide = zf.read("ppt/slides/slide1.xml").decode()
+
+        assert "Sources" in slide
+        assert "Click to edit Master title style" not in slide
+
+    def test_flat_bullets_do_not_render_as_a_cascade(self, template_path, tmp_path):
+        """
+        The layout's own paragraphs run levels 0-4 and were reused in order,
+        so six level-0 bullets came out indented five deep.
+        """
+        output = self._render(template_path, tmp_path, [self._titled_slide()])
+
+        with zipfile.ZipFile(output) as zf:
+            root = ET.fromstring(zf.read("ppt/slides/slide1.xml"))
+
+        body = next(
+            sp for sp in root.findall(".//p:sp", NS)
+            if (sp.find(".//p:ph", NS) is not None
+                and sp.find(".//p:ph", NS).get("idx") == "1")
+        )
+        levels = [
+            (p.find("a:pPr", NS).get("lvl") if p.find("a:pPr", NS) is not None else None)
+            for p in body.findall(".//a:p", NS)
+        ]
+        assert set(levels) == {None}, f"expected every bullet at level 0, got {levels}"
+
+    def test_a_requested_level_is_still_honoured(self, template_path, tmp_path):
+        slide = self._titled_slide()
+        slide["contents"][1]["runs"][2]["level"] = 1
+        output = self._render(template_path, tmp_path, [slide])
+
+        with zipfile.ZipFile(output) as zf:
+            root = ET.fromstring(zf.read("ppt/slides/slide1.xml"))
+
+        body = next(
+            sp for sp in root.findall(".//p:sp", NS)
+            if (sp.find(".//p:ph", NS) is not None
+                and sp.find(".//p:ph", NS).get("idx") == "1")
+        )
+        levels = [
+            (p.find("a:pPr", NS).get("lvl") if p.find("a:pPr", NS) is not None else None)
+            for p in body.findall(".//a:p", NS)
+        ]
+        assert levels[2] == "1"
+
+    def test_autofit_uses_the_masters_geometry_when_the_layout_inherits_it(
+        self, template_path, tmp_path
+    ):
+        """
+        A layout placeholder with no <a:xfrm> takes its size from the master.
+        Giving up there meant the placeholders most likely to be overfilled
+        were the only ones that never got a scale hint.
+        """
+        renderer = PPTXRenderer(template_path=template_path)
+        working_dir = tmp_path / "extracted"
+        with zipfile.ZipFile(template_path) as zf:
+            zf.extractall(working_dir)
+        layout_file = str(working_dir / "ppt" / "slideLayouts" / "slideLayout2.xml")
+
+        boxes = renderer._master_placeholder_boxes(layout_file)
+
+        assert boxes, "no master geometry was resolved"
+        assert boxes[1]["cx"] > 0 and boxes[1]["cy"] > 0
+        # Cached: the second call must not reparse.
+        assert renderer._master_placeholder_boxes(layout_file) is boxes

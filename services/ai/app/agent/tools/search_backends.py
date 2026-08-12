@@ -1,8 +1,11 @@
 """
 Pluggable web-search backends for Deep Thinking mode.
 
-Every backend normalizes to ``{title, url, snippet, source}`` so the agent loop,
-the source extractor, and the chat UI never learn which one ran.
+Every backend normalizes to ``{title, url, snippet, source, published}`` so the
+agent loop, the source extractor, and the chat UI never learn which one ran.
+``published`` is best-effort - most backends only carry a date for news-shaped
+results - and empty when the backend did not say. A reference that reaches the
+rendered deck without one simply does not claim a date.
 
 Two families:
 
@@ -102,6 +105,26 @@ def host_from_url(url: str) -> str:
         return ""
 
 
+# Backends date a page in whatever their upstream said: an ISO timestamp, a
+# bare date, or (Anthropic) a relative "3 days ago". Only the first two carry
+# information a reader can act on, so the rest is dropped rather than printed
+# on a slide that will be read months later.
+_ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+
+
+def published_date(value) -> str:
+    """A page's publication date as ``YYYY-MM-DD``, or "" when not usable."""
+    if not value or not isinstance(value, str):
+        return ""
+    match = _ISO_DATE_RE.match(value.strip())
+    if not match:
+        return ""
+    year, month, day = (int(part) for part in match.groups())
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return ""
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
 async def post_json(url: str, headers: dict, body: dict, timeout: float = 30.0) -> dict:
     """POST JSON off the event loop and return the parsed body.
 
@@ -199,6 +222,9 @@ def parse_zhipu_response(response) -> list[dict]:
             "url": link,
             "snippet": get_field(item, "content", "snippet", "summary"),
             "source": get_field(item, "media", "source") or host_from_url(link),
+            "published": published_date(
+                get_field(item, "publish_date", "publishDate", "published_date", "date")
+            ),
         })
     return results
 
@@ -242,6 +268,8 @@ def parse_tavily_response(response) -> list[dict]:
             "snippet": item.get("content") or "",
             # Tavily returns no source field, so derive one from the URL.
             "source": host_from_url(link),
+            # Only populated for news-shaped results.
+            "published": published_date(item.get("published_date")),
         })
     return results
 
@@ -329,12 +357,19 @@ def parse_firecrawl_response(response) -> list[dict]:
             continue
         markdown = item.get("markdown") or ""
         snippet = (markdown or item.get("description") or "").strip()
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         results.append({
             "title": item.get("title") or link,
             "url": link,
             "snippet": snippet[:FIRECRAWL_SNIPPET_CHARS],
             "source": host_from_url(link),
             "images": _extract_image_urls_from_markdown(markdown),
+            # Scraped from the page's own <meta> tags when Firecrawl found any.
+            "published": published_date(
+                metadata.get("publishedTime")
+                or metadata.get("article:published_time")
+                or item.get("publishedTime")
+            ),
         })
     return results
 
@@ -417,6 +452,13 @@ def parse_anthropic_citations(response) -> list[dict]:
                 "url": url,
                 "snippet": (cited_text or "").strip(),
                 "source": host_from_url(url),
+                # Anthropic dates a result on the tool-result block ("3 days
+                # ago"), not on the citation, and a relative age is not
+                # something to print on a slide - so this is normally empty.
+                "published": published_date(
+                    citation.get("page_age") if isinstance(citation, dict)
+                    else getattr(citation, "page_age", None)
+                ),
             })
     return results
 
@@ -502,5 +544,7 @@ def parse_openai_annotations(response) -> list[dict]:
             "url": url,
             "snippet": snippet,
             "source": host_from_url(url),
+            # OpenAI's url_citation annotations carry no date.
+            "published": "",
         })
     return results
