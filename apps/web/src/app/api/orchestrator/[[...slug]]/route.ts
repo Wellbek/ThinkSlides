@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const ORCHESTRATOR_URL = process.env.NEXT_PUBLIC_API_URL || 'http://orchestrator:8080';
+// Same server-side variable the middleware proxy uses, so both hops agree on
+// where the orchestrator lives. It is deliberately not NEXT_PUBLIC_*: this
+// runs on the server, and the browser must not need to know the address.
+const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || 'http://localhost:8080';
+
+/** The orchestrator serves everything under /api; the proxy prefix is ours. */
+function upstream(slug: string[] | undefined, search: string): string {
+  const path = slug ? slug.join('/') : '';
+  return `${ORCHESTRATOR_URL}/api/${path}${search}`;
+}
 
 export async function GET(
   request: NextRequest,
   { params }: { params: { slug?: string[] } }
 ) {
-  const path = params.slug ? params.slug.join('/') : '';
-  const url = `${ORCHESTRATOR_URL}/${path}${request.nextUrl.search}`;
+  const url = upstream(params.slug, request.nextUrl.search);
   
   console.log('Proxying GET:', url);
 
@@ -39,6 +47,13 @@ export async function GET(
       // Create a ReadableStream that forwards chunks as they arrive
       const stream = new ReadableStream({
         async start(controller) {
+          // Node holds the response head back until the body's first byte, so
+          // an idle session would leave EventSource unopened until the
+          // orchestrator's 20s heartbeat - defeating the immediate flush it
+          // does precisely so the stream reports open while nothing is
+          // happening. A comment line comes straight back out and is ignored
+          // by EventSource.
+          controller.enqueue(encoder.encode(': connected\n\n'));
           try {
             while (true) {
               const { done, value } = await reader.read();
@@ -86,8 +101,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: { slug?: string[] } }
 ) {
-  const path = params.slug ? params.slug.join('/') : '';
-  const url = `${ORCHESTRATOR_URL}/${path}${request.nextUrl.search}`;
+  const url = upstream(params.slug, request.nextUrl.search);
   
   console.log('Proxying POST:', url);
 
@@ -128,8 +142,7 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: { slug?: string[] } }
 ) {
-  const path = params.slug ? params.slug.join('/') : '';
-  const url = `${ORCHESTRATOR_URL}/${path}${request.nextUrl.search}`;
+  const url = upstream(params.slug, request.nextUrl.search);
   
   console.log('Proxying DELETE:', url);
 

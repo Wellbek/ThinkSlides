@@ -10,15 +10,14 @@ export function middleware(request: NextRequest) {
     const newPathname = pathname.replace('/api/orchestrator', '/api');
     const url = new URL(newPathname + request.nextUrl.search, backendUrl);
 
-    // SSE streams require no buffering — use a direct fetch response passthrough
-    // instead of NextResponse.rewrite() which can buffer the response body.
+    // SSE streams must not be rewritten. NextResponse.rewrite() waits for the
+    // upstream response to complete before forwarding it, and an event stream
+    // never completes - the request simply hangs with no status and no body.
+    // Hand it to the Route Handler at /api/orchestrator/[[...slug]], which
+    // pipes chunks through as they arrive, the same way /api/ai/upload-stream
+    // is already handled below.
     if (pathname.endsWith('/events')) {
-      return NextResponse.rewrite(url, {
-        headers: {
-          'X-Accel-Buffering': 'no',
-          'Cache-Control': 'no-cache',
-        },
-      });
+      return NextResponse.next();
     }
 
     return NextResponse.rewrite(url);
