@@ -112,6 +112,92 @@ def user_declined_questions(chat_messages: list[dict]) -> bool:
     )
 
 
+# ── Deciding when a deck needs grounding it does not have ────────────────────
+#
+# In simple mode the agent has no web access and, unless documents were
+# uploaded, nothing but its own memory. It still produces charts. A real run
+# asked for "Starbucks FY2025" and charted revenue rising to $40.0B; the actual
+# figure is ~$37B. The number was invented, and putting it in a chart with a
+# labelled axis is what makes it look sourced.
+#
+# Hardening the prompt helps and does not guarantee anything (#72). What the
+# request is *asking for* is knowable, though: a deck about a named company's
+# results, a market size, a "latest"/"current" anything, wants figures that
+# have to come from somewhere.
+_FACTUAL_REQUEST_PATTERNS = (
+    # Financial and corporate results
+    r"\b(?:revenue|earnings|profit|margin|ebitda|turnover|valuation|arr|mrr)\b",
+    r"\b(?:q[1-4]|fy)\s*'?\d{2,4}\b",
+    r"\b(?:quarterly|annual|full[- ]year)\s+(?:results|report|figures|performance)\b",
+    # Market and competitive figures
+    r"\bmarket (?:size|share|cap|growth)\b",
+    r"\b(?:industry|sector) (?:trends?|outlook|forecast)\b",
+    r"\b(?:competitor|competitive) (?:analysis|landscape)\b",
+    # Anything explicitly time-anchored to now
+    r"\b(?:latest|current|recent|today'?s|up[- ]to[- ]date|this year'?s)\b",
+    r"\b20[2-9]\d\b",
+    # Explicit asks for numbers
+    r"\b(?:statistics|benchmarks?|figures|data points?|metrics)\b",
+    r"\b(?:how many|how much)\b",
+)
+_FACTUAL_REQUEST_RE = re.compile("|".join(_FACTUAL_REQUEST_PATTERNS), re.IGNORECASE)
+
+
+def request_needs_grounding(chat_messages: list[dict]) -> bool:
+    """True when the user is asking for facts rather than for a framework."""
+    return any(
+        m.get("role") == "user" and _FACTUAL_REQUEST_RE.search(m.get("content") or "")
+        for m in chat_messages
+    )
+
+
+# The exact wording the agent is told to offer, so the answer can be recognised
+# without guessing at free text. Matching stays deliberately loose around them:
+# a user may well type their own "yes, search the web" instead of tapping.
+DEEP_RESEARCH_YES = "Yes - research the web for current figures"
+DEEP_RESEARCH_NO = "No - build it from what you already know"
+
+_DEEP_RESEARCH_YES_RE = re.compile(
+    "|".join((
+        r"\bresearch the web\b",
+        r"\bsearch the web\b",
+        r"\bweb search\b",
+        r"\bdeep (?:thinking|research|mode)\b",
+        r"\b(?:enable|turn on|switch on|use) deep\b",
+        r"\blook (?:it |them )?up (?:online|on the web)\b",
+    )),
+    re.IGNORECASE,
+)
+_DEEP_RESEARCH_NO_RE = re.compile(
+    "|".join((
+        r"\bwhat you (?:already )?know\b",
+        r"\bno (?:web )?(?:research|search)\b",
+        r"\bwithout (?:web )?(?:research|searching)\b",
+        r"\bskip the (?:research|search)\b",
+        r"\bdon'?t (?:search|research)\b",
+    )),
+    re.IGNORECASE,
+)
+
+
+def user_answered_deep_research(chat_messages: list[dict]) -> bool | None:
+    """
+    Whether the user agreed to web research, from their latest say on it.
+
+    None when they have not addressed it. Declines are checked first because
+    "No - build it from what you already know" must never read as a yes.
+    """
+    for message in reversed(chat_messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content") or ""
+        if _DEEP_RESEARCH_NO_RE.search(content):
+            return False
+        if _DEEP_RESEARCH_YES_RE.search(content):
+            return True
+    return None
+
+
 def normalize_detail_level(level: str | None) -> str:
     """Map any caller-supplied value onto a known level, defaulting to detailed."""
     return level if level in DETAIL_LEVELS else DETAIL_LEVEL_DETAILED
@@ -265,6 +351,11 @@ class WorkingState:
         # pause/resume cycle that answering a question involves.
         self.consulted_before_planning: bool = False
         self.reviewed_outline_with_user: bool = False
+        # Whether the user has been offered web research for a factual request
+        # this run has no grounding for. Persisted like the others: the offer
+        # pauses the run, and a resumed run that forgot it had asked would ask
+        # again.
+        self.offered_deep_research: bool = False
 
     # Above this share of the deck being flagged, redesigning everything is
     # simpler (and no more expensive) than steering slide-by-slide edits.
@@ -501,6 +592,7 @@ class WorkingState:
         self.researched_urls = set()
         self.consulted_before_planning = False
         self.reviewed_outline_with_user = False
+        self.offered_deep_research = False
 
 
 class AgentLoop:
@@ -570,6 +662,9 @@ class AgentLoop:
         # Set from the conversation in _run: the consultation checkpoints are
         # enforced, so the user's "just build it" has to be able to lift them.
         self.questions_declined: bool = False
+        # Set per run in _run: whether the planning checkpoint should currently
+        # be demanding the web-research offer.
+        self._offer_deep_research_pending: bool = False
 
     async def _configure(self) -> None:
         """Resolve the organisation's settings into this run's provider and mode.
@@ -662,6 +757,7 @@ class AgentLoop:
             # question would find the checkpoint unmet and ask all over again.
             "consulted_before_planning": self.working_state.consulted_before_planning,
             "reviewed_outline_with_user": self.working_state.reviewed_outline_with_user,
+            "offered_deep_research": self.working_state.offered_deep_research,
             # Carried so a run paused on a question resumes at the same effort
             # level - the resume request has no mode of its own.
             "mode": self.mode,
@@ -720,6 +816,9 @@ class AgentLoop:
             self.working_state.researched_urls = set(state_dict.get("researched_urls", []))
             self.working_state.consulted_before_planning = state_dict.get(
                 "consulted_before_planning", False
+            )
+            self.working_state.offered_deep_research = state_dict.get(
+                "offered_deep_research", False
             )
             self.working_state.reviewed_outline_with_user = state_dict.get(
                 "reviewed_outline_with_user", False
@@ -819,6 +918,34 @@ class AgentLoop:
         self.questions_declined = self.questions_declined or user_declined_questions(
             chat_messages
         )
+
+        # Did the user answer the web-research offer? Reading it here, before
+        # the tool schemas are chosen, is what lets a "yes" actually put
+        # web_search on the table for the rest of this run.
+        research_answer = user_answered_deep_research(chat_messages)
+        if research_answer is not None:
+            self.working_state.offered_deep_research = True
+        if research_answer is True and self.mode != MODE_DEEP:
+            if await self._enable_deep_research():
+                yield _event("thought", "content_analysis", {
+                    "content": (
+                        "Deep research enabled - I will search the web for the "
+                        "figures this deck needs and cite what I find."
+                    ),
+                    "timestamp": _iso_now(),
+                })
+            else:
+                # Nothing to search with. Say so rather than silently carrying
+                # on as though the user's answer had been honoured.
+                yield _event("thought", "content_analysis", {
+                    "content": (
+                        "No web search backend is configured for this workspace, "
+                        "so I cannot research this. I will write the deck without "
+                        "figures I cannot verify and say so on the slides."
+                    ),
+                    "timestamp": _iso_now(),
+                })
+        self._offer_deep_research_pending = self._should_offer_deep_research(chat_messages)
 
         # ── Phase 3: ReAct loop ──────────────────────
         tool_schemas = self._tool_schemas_for_mode()
@@ -1226,6 +1353,13 @@ class AgentLoop:
                     # after it the outline review.
                     if self.working_state.presentation_structure:
                         self.working_state.reviewed_outline_with_user = True
+                    elif self._offer_deep_research_pending:
+                        # The research offer is a checkpoint of its own and
+                        # comes before the planning consultation. Recording it
+                        # here (not only when the answer is read back) is what
+                        # stops a resumed run asking the same thing twice.
+                        self.working_state.offered_deep_research = True
+                        self._offer_deep_research_pending = False
                     else:
                         self.working_state.consulted_before_planning = True
                     yield _event("question", "user_input", {
@@ -1462,6 +1596,72 @@ class AgentLoop:
             or len(ws.researched_urls) < RESEARCH_MIN_SOURCES
         )
 
+    def _has_grounding(self) -> bool:
+        """
+        Whether anything in this run could support a figure.
+
+        Research results or an analysed document count; the model's own memory
+        does not, which is the whole point - it is what produced a charted
+        $40.0B for a company that reported ~$37B.
+        """
+        ws = self.working_state
+        # Anything the web turned up, this run or before the pause.
+        if ws.researched_urls or self.context.get("research"):
+            return True
+        # Anything read out of the user's own uploads.
+        return any(
+            ws.has_completed_tool(tool)
+            for tool in ("analyze_document", "extract_key_data")
+        )
+
+    def _should_offer_deep_research(self, chat_messages: list[dict]) -> bool:
+        """
+        Whether to stop and ask before planning a factual deck with nothing
+        behind it.
+
+        Only in simple mode (deep mode already researches), only when the ask
+        is for facts, and only when the run has no grounding at all. A user who
+        said "just build it" is not interrupted.
+        """
+        if self.mode == MODE_DEEP:
+            return False
+        if self.working_state.offered_deep_research or self.questions_declined:
+            return False
+        if self._has_grounding():
+            return False
+        return request_needs_grounding(chat_messages)
+
+    async def _enable_deep_research(self) -> bool:
+        """
+        Switch a running simple-mode run over to web research.
+
+        Returns False when no search backend is configured for the
+        organisation, in which case the run stays in simple mode and the model
+        is told to say on the slide that the figures are unverified rather than
+        chart them as though they were not.
+        """
+        row = None
+        if self.org_id is not None:
+            try:
+                row = await ai_settings.load_row(self.db, self.org_id)
+            except Exception as e:  # noqa: BLE001 - never fail a run over settings
+                logger.error(
+                    "settings_load_failed", organisation_id=str(self.org_id), error=str(e)
+                )
+
+        config, reason = ai_settings.resolve_search_config(row)
+        if config is None:
+            logger.info("deep_research_unavailable", reason=reason)
+            return False
+
+        self.search_config = config
+        if self._search_token is not None:
+            run_context.reset_search_config(self._search_token)
+        self._search_token = run_context.set_search_config(config)
+        self.mode = MODE_DEEP
+        logger.info("deep_research_enabled_mid_run", backend=config.backend)
+        return True
+
     def _check_precondition(self, fn_name: str, fn_args: dict) -> str | None:
         """Block a tool call that is out of order, returning a corrective
         error message the LLM sees as the tool's result (same mechanism as the
@@ -1503,6 +1703,24 @@ class AgentLoop:
                 f"you have {RESEARCH_MIN_SOURCES}+ distinct sources, then plan."
             )
 
+        # A factual request with nothing behind it. Asking for this in the
+        # prompt does not work - the model was told for months to default to
+        # asking and went from prompt to finished deck without a word - so the
+        # planning call simply does not go through until the offer is made.
+        if fn_name == "plan_presentation_structure" and self._offer_deep_research_pending:
+            return (
+                "This deck is being asked for facts and figures, and this run has "
+                "nothing to base them on: no web access and no uploaded documents. "
+                "Writing numbers from memory and charting them is what makes an "
+                "invented figure look sourced. Before planning, call "
+                "ask_user_question ONCE with a single question asking whether to "
+                "research the topic on the web, using EXACTLY these two options:\n"
+                f"  1. \"{DEEP_RESEARCH_YES}\"\n"
+                f"  2. \"{DEEP_RESEARCH_NO}\"\n"
+                "Put in the question's 'context' field which specific figures this "
+                "deck needs and cannot currently verify. Plan once they answer."
+            )
+
         if (
             fn_name == "plan_presentation_structure"
             and not ws.consulted_before_planning
@@ -1533,6 +1751,19 @@ class AgentLoop:
                 "wanted for THIS deck, naming its actual slides (merge these two, add one "
                 "on X, cut Y and go deeper on Z). Never offer 'No, I want changes' - it "
                 "tells you nothing. Draft the slides once they have answered."
+            )
+
+        # The backstop for a user who declined research: the deck still gets
+        # built, but a number nobody can check does not get an axis and a
+        # legend. Text can be hedged on the slide; a chart cannot.
+        if fn_name in BUILD_VISUAL_TOOLS and not self._has_grounding():
+            return (
+                "There is no source behind this figure - no research was run and no "
+                "document was uploaded, so any number here would come from memory. "
+                "A chart or table presents it as measured, which is worse than "
+                "writing no visual at all. Put what you know in words on the slide, "
+                "say plainly that the figures are unverified and what would confirm "
+                "them, and carry on with the rest of the deck."
             )
 
         if fn_name in ("select_layout", "design_slide_content", "select_source_image"):
