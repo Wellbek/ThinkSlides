@@ -224,8 +224,20 @@ class ZhipuProvider(LLMProvider):
             kwargs["tools"] = tools
 
         try:
+            # The zhipuai SDK is synchronous, so calling it directly parks the
+            # uvicorn worker's event loop for the whole request - tens of
+            # seconds for a tool-calling turn. With --workers 2 that is two
+            # concurrent generations away from stalling the entire service,
+            # including health checks and SSE delivery for every other session.
+            # Hand it to a thread, exactly as ZhipuVisionProvider does.
+            # The future is built inside the lambda so each retry gets a fresh
+            # one rather than re-awaiting a future that already failed.
+            loop = asyncio.get_running_loop()
             response = await _with_rate_limit_retry(
-                lambda: self.client.chat.completions.create(**kwargs),
+                lambda: loop.run_in_executor(
+                    None,
+                    lambda: self.client.chat.completions.create(**kwargs),
+                ),
                 provider="zhipu",
                 model=self.model,
             )
