@@ -15,6 +15,7 @@ from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession
 from app import ai_settings
 from app.agent import run_context
+from app.agent.event_types import ALL_EVENT_TYPES
 from app.agent.registry import get_registry, ToolResult
 from app.agent.summaries import summarize_tool_result
 from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
@@ -2261,7 +2262,21 @@ def _project_design_system(fn_name: str, design_system: dict) -> dict:
 
 
 def _event(event_type: str, phase: str, data: dict) -> dict:
-    """Create a typed agent event dict."""
+    """
+    Create a typed agent event dict.
+
+    Rejects a name that is in neither half of the shared contract. An
+    unrecognised name is not a harmless typo: every event is published to
+    Redis, and one the browser was never told to listen for is dropped in
+    silence. Failing here is how that gets noticed.
+    """
+    if event_type not in ALL_EVENT_TYPES:
+        raise ValueError(
+            f"unknown agent event type {event_type!r}. Add it to "
+            f"app/agent/event_types.py and to AGENT_EVENT_TYPES (or "
+            f"INTERNAL_AGENT_EVENT_TYPES) in packages/schemas/src/agent-events.ts, "
+            f"or the browser will never receive it."
+        )
     return {
         "type": event_type,
         "phase": phase,

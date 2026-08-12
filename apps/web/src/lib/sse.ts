@@ -1,3 +1,5 @@
+import { AGENT_EVENT_TYPES, type AgentEventType } from '@thinkslides/schemas';
+
 // SSE goes through the same /api/orchestrator proxy as every other API call,
 // as a same-origin relative URL. A hardcoded absolute base only ever works
 // when the browser and the orchestrator are the same machine - from any other
@@ -11,20 +13,13 @@ const SSE_BASE = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || '';
 /** Path prefix: the proxy exposes the orchestrator's /api as /api/orchestrator. */
 const SSE_PREFIX = SSE_BASE ? '/api' : '/api/orchestrator';
 
-export type SSEEventType =
-  | 'thought'
-  | 'tool_call'
-  | 'tool_result'
-  | 'slide_finalized'
-  | 'file_generated'
-  | 'error'
-  | 'progress'
-  | 'session_title_updated'
-  | 'question'
-  | 'rate_limit'
-  | 'validation_unresolved'
-  | 'done'
-  | 'timer_update';
+/**
+ * The event names come from @thinkslides/schemas rather than being restated
+ * here. A local copy is how an event goes missing: EventSource dispatches by
+ * name, so one this client was never told about is delivered nowhere, with no
+ * error and no type error to catch it.
+ */
+export type SSEEventType = AgentEventType;
 
 export interface SSEEvent {
   id?: string;
@@ -81,28 +76,9 @@ export class SSEClient {
       }
     };
 
-    // Listen for each typed event. EventSource dispatches by name, so an
-    // event missing from this list is delivered nowhere and only appears
-    // after a reload, from the persisted stream - which is exactly what
-    // happened to validation_unresolved: the one event telling the user their
-    // deck still had layout defects was invisible while it mattered.
-    const eventTypes: SSEEventType[] = [
-      'thought',
-      'tool_call',
-      'tool_result',
-      'slide_finalized',
-      'file_generated',
-      'error',
-      'progress',
-      'session_title_updated',
-      'question',
-      'rate_limit',
-      'validation_unresolved',
-      'done',
-      'timer_update',
-    ];
-
-    for (const eventType of eventTypes) {
+    // Subscribe to every declared event name. Adding one to AGENT_EVENT_TYPES
+    // is all it takes to receive it here.
+    for (const eventType of AGENT_EVENT_TYPES) {
       this.eventSource.addEventListener(eventType, (e: MessageEvent) => {
         // 'error' is both one of our event names and EventSource's own
         // connection-failure event, which carries no data. Without this the
