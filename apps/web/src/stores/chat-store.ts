@@ -3,7 +3,14 @@ import { apiGet, apiPost, apiDelete, apiPut, apiUpload } from '@/lib/api';
 import { SSEClient, type SSEEventHandler } from '@/lib/sse';
 import { useSettingsStore } from '@/stores/settings-store';
 import { AGENT_EVENT_TYPES } from '@thinkslides/schemas';
-import type { AgentEvent, AgentEventType, DetailLevel, DoneEvent, EffortMode } from '@thinkslides/schemas';
+import type {
+  AgentEvent,
+  AgentEventType,
+  DetailLevel,
+  DoneEvent,
+  EffortMode,
+  RateLimitEvent,
+} from '@thinkslides/schemas';
 
 export interface ChatSession {
   id: string;
@@ -74,6 +81,15 @@ interface ChatState {
   includeSources: boolean;
   totalElapsedMs: number | null;
   isGenerating: boolean;
+  /**
+   * The provider back-off happening right now, or null when none is.
+   *
+   * Transient state rather than a recorded event: a wait is worth showing
+   * while it is on and worth nothing once it is over, so it lives here and is
+   * dropped as soon as the run moves on (see `beginRetry`). The transcript
+   * then records what the agent did, not how long it spent waiting.
+   */
+  activeRetry: RateLimitEvent | null;
   setIsGenerating: (generating: boolean) => void;
 
   // Computed getter (not stored)
@@ -141,6 +157,25 @@ function reconcileServerMessages(
   ];
 }
 
+/**
+ * How long a finished wait stays on screen after its countdown reaches zero.
+ *
+ * The retried call itself takes as long as it takes, and nothing announces
+ * that it started - so without this the strip would vanish the instant the
+ * countdown ran out, too fast to read the "retrying now" it ends on.
+ */
+const RETRY_LINGER_MS = 900;
+
+/** Retires the current back-off strip when its wait is up. */
+let retryExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelRetryExpiry(): void {
+  if (retryExpiryTimer !== null) {
+    clearTimeout(retryExpiryTimer);
+    retryExpiryTimer = null;
+  }
+}
+
 function findActiveAssistantMessage(messages: ChatMessage[]): ChatMessage | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -169,6 +204,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   includeSources: false,
   totalElapsedMs: null,
   isGenerating: false,
+  activeRetry: null,
 
   // Computed getter for isGenerating
   setIsGenerating: (generating: boolean) => set({ isGenerating: generating }),
@@ -201,12 +237,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   deleteSession: async (sessionId: string) => {
     try {
       await apiDelete(`/api/orchestrator/sessions/${sessionId}`);
+      if (get().activeSessionId === sessionId) cancelRetryExpiry();
       set((state) => ({
         sessions: state.sessions.filter((s) => s.id !== sessionId),
         activeSessionId: state.activeSessionId === sessionId ? null : state.activeSessionId,
         activeMessages: state.activeSessionId === sessionId ? [] : state.activeMessages,
         activeEvents: state.activeSessionId === sessionId ? [] : state.activeEvents,
         activeFiles: state.activeSessionId === sessionId ? [] : state.activeFiles,
+        activeRetry: state.activeSessionId === sessionId ? null : state.activeRetry,
       }));
       if (get().activeSessionId === sessionId) {
         get().sseClient?.disconnect();
@@ -222,11 +260,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (sseClient) {
       sseClient.disconnect();
     }
+    cancelRetryExpiry();
     set({
       activeSessionId: sessionId,
       activeMessages: [],
       activeEvents: [],
       activeFiles: [],
+      activeRetry: null,
       isLoading: true,
     });
     try {
@@ -280,11 +320,41 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return { activeMessages: updatedMessages };
         });
       };
+      /**
+       * Take down the back-off strip: the run has moved on.
+       *
+       * Any event the agent itself produces is proof the awaited provider
+       * call went through, since a wait is announced from inside that call
+       * and nothing else comes out until it returns. That makes "the next
+       * event" the honest end of a wait - more so than the countdown, which
+       * only says when the retry was due to be attempted.
+       */
+      const endRetry = () => {
+        cancelRetryExpiry();
+        if (get().activeRetry) set({ activeRetry: null });
+      };
+      /**
+       * Put a wait on screen, and arrange for it to leave.
+       *
+       * The linger is a backstop for the case the next event is slow: a
+       * retried call can take as long as the original, and a countdown frozen
+       * at zero would keep claiming a wait that is already over.
+       */
+      const beginRetry = (ev: RateLimitEvent) => {
+        cancelRetryExpiry();
+        set({ activeRetry: ev, isGenerating: true });
+        const waitMs = Math.max(0, (Number(ev.retryInSeconds) || 0) * 1000);
+        retryExpiryTimer = setTimeout(() => {
+          retryExpiryTimer = null;
+          if (get().activeRetry === ev) set({ activeRetry: null });
+        }, waitMs + RETRY_LINGER_MS);
+      };
       // Most events differ only in payload: record them on the active
       // message and keep the run marked live.
       const record: SSEEventHandler = (e) => {
         try {
           appendEventToActiveMessage(JSON.parse(e.data));
+          endRetry();
           set({ isGenerating: true });
         } catch (err) { console.error(err); }
       };
@@ -293,6 +363,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const recordOnly: SSEEventHandler = (e) => {
         try {
           appendEventToActiveMessage(JSON.parse(e.data));
+          endRetry();
+        } catch (err) { console.error(err); }
+      };
+      const onRateLimit: SSEEventHandler = (e) => {
+        try {
+          beginRetry(JSON.parse(e.data) as RateLimitEvent);
         } catch (err) { console.error(err); }
       };
       const onTimerUpdate: SSEEventHandler = (e) => {
@@ -313,6 +389,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       };
       const onFileGenerated: SSEEventHandler = (e) => {
         try {
+          endRetry();
           const data = JSON.parse(e.data);
           const generatedFile: GeneratedFile = {
             id: data.fileId,
@@ -338,6 +415,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       const onDone: SSEEventHandler = (e) => {
         try {
+          endRetry();
           const data = JSON.parse(e.data) as DoneEvent;
           const totalElapsedMs = (data as any).totalElapsedMs;
           // A done event fires on ask_user_question too - the run has
@@ -437,9 +515,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         slide_finalized: record,
         error: record,
         progress: record,
-        // A provider back-off, narrated while it happens. isGenerating stays
-        // true: the run is waiting, not finished.
-        rate_limit: record,
+        // A provider back-off, narrated while it happens - as store state,
+        // not as a transcript entry. isGenerating stays true: the run is
+        // waiting, not finished.
+        rate_limit: onRateLimit,
         question: recordOnly,
         validation_unresolved: recordOnly,
         timer_update: onTimerUpdate,
@@ -556,11 +635,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   clearActiveSession: () => {
     const { sseClient } = get();
     sseClient?.disconnect();
+    cancelRetryExpiry();
     set({
       activeSessionId: null,
       activeMessages: [],
       activeEvents: [],
       activeFiles: [],
+      activeRetry: null,
       sseClient: null,
       isSending: false,
     });

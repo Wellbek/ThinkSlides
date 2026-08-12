@@ -111,7 +111,7 @@ interface StepGroupNode {
 type FeedNode = StepNode | ThoughtsNode | EventNode | StepGroupNode;
 
 /** Event types where a run of them in a row says nothing more than one does. */
-const MERGEABLE_EVENTS = new Set(["slide_finalized", "rate_limit"]);
+const MERGEABLE_EVENTS = new Set(["slide_finalized"]);
 
 function buildNodes(events: AgentEvent[]): FeedNode[] {
   const nodes: FeedNode[] = [];
@@ -206,13 +206,17 @@ function buildNodes(events: AgentEvent[]): FeedNode[] {
       case "file_generated":
       case "question":
       case "error":
-      case "rate_limit":
       case "validation_unresolved":
       case "done":
         flushThoughts();
         nodes.push({ kind: "event", key: `ev-${nodes.length}-${ev.type}`, ev, merged: [ev] });
         break;
       default:
+        // rate_limit lands here on purpose. It is persisted like every other
+        // event, so a reloaded session still carries every wait it hit - but a
+        // wait is state, not history: it is shown live by RetryStrip while it
+        // is true, and replaying it afterwards would fill the transcript with
+        // the pauses instead of the work.
         break;
     }
   }
@@ -298,6 +302,9 @@ function collapseRepeats(nodes: FeedNode[]): FeedNode[] {
 
 export function ActivityFeed() {
   const messages = useChatStore((s) => s.activeMessages);
+  // Both this and the back-off strip hang off the bottom edge of the panel;
+  // the jump pill steps up out of the way while a wait is on screen.
+  const retrying = useChatStore((s) => s.activeRetry !== null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
@@ -361,7 +368,11 @@ export function ActivityFeed() {
       </div>
 
       {showJump && (
-        <button className="ws-jump" onClick={jumpToBottom} title="Jump to latest">
+        <button
+          className={`ws-jump${retrying ? " raised" : ""}`}
+          onClick={jumpToBottom}
+          title="Jump to latest"
+        >
           <span>New messages</span>
           <ChevronDown size={14} />
           <span className="ws-jump-arrow" />
@@ -887,8 +898,6 @@ function EventItem({
         </FeedItem>
       );
     }
-    case "rate_limit":
-      return <RateLimitItem ev={ev} earlier={repeats ? repeats.length - 1 : 0} />;
     case "file_generated": {
       const url = buildDownloadUrl(`/api/orchestrator/files/${ev.fileId}`);
       return (
@@ -964,62 +973,6 @@ function EventItem({
     default:
       return null;
   }
-}
-
-/**
- * A provider back-off, counted down live.
- *
- * Rate limiting is the single most common thing to interrupt a generation, and
- * an unexplained pause reads as a hang. This says who imposed the wait, how
- * long is left of it, and which attempt this is out of the budget - so the
- * user can tell "waiting 20 seconds" apart from "stuck forever".
- */
-function RateLimitItem({ ev, earlier }: { ev: any; earlier: number }) {
-  const startedAt = useMemo(() => {
-    const parsed = ev.timestamp ? new Date(ev.timestamp).getTime() : NaN;
-    return Number.isNaN(parsed) ? Date.now() : parsed;
-  }, [ev.timestamp]);
-  const total = Number(ev.retryInSeconds) || 0;
-  const [now, setNow] = useState(() => Date.now());
-
-  const remaining = Math.max(0, total - (now - startedAt) / 1000);
-  useEffect(() => {
-    if (remaining <= 0) return;
-    const id = setInterval(() => setNow(Date.now()), 250);
-    return () => clearInterval(id);
-  }, [remaining]);
-
-  const isRateLimit = ev.reason !== "transient";
-  const who = ev.provider ? ` by ${ev.provider}` : "";
-  const headline = isRateLimit ? `Rate limited${who}` : "Provider error";
-
-  return (
-    <FeedItem dot="◷" dotClass="ws-dot-warn">
-      <div className="ws-feed-header">
-        <span className="lbl ws-rl-lbl">{headline}</span>
-        <span className="ws-rl-attempt">
-          retry {ev.attempt} of {ev.maxAttempts}
-        </span>
-        <span className="ts">{fmtTime(ev.timestamp)}</span>
-      </div>
-      <div className="ws-feed-text">
-        {remaining > 0.05
-          ? `Waiting ${remaining < 10 ? remaining.toFixed(1) : Math.ceil(remaining)}s before trying again`
-          : "Retrying now"}
-        {ev.model ? ` - ${ev.model}` : ""}.
-        {earlier > 0 && ` ${earlier} earlier ${earlier === 1 ? "wait" : "waits"} on this call.`}
-        {" Nothing is lost; the run continues where it left off."}
-      </div>
-      {total > 0 && (
-        <div className="ws-rl-bar">
-          <div
-            className="fill"
-            style={{ width: `${Math.min(100, Math.max(0, ((total - remaining) / total) * 100))}%` }}
-          />
-        </div>
-      )}
-    </FeedItem>
-  );
 }
 
 function FeedItem({

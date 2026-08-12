@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ActivityFeed } from "./ActivityFeed";
 import { Composer } from "./Composer";
 import { TimerHeader } from "@/components/chat/TimerHeader";
+import { RetryStrip } from "@/components/chat/RetryStrip";
 import { useChatStore, type GeneratedFile } from "@/stores/chat-store";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
 import { PanelRightClose, Download, ExternalLink, Presentation, FileDown } from "lucide-react";
@@ -26,22 +27,29 @@ export function ChatFlow({ onCollapse }: { collapsed: boolean; onCollapse: () =>
 
       <TimerHeader />
 
-      {tab === "activity" && <ActivityFeed />}
-      {tab === "messages" && (
-        <div className="ws-feed">
-          <div className="ws-empty-note">The full transcript lives in the Activity tab. This view will list raw messages.</div>
-        </div>
-      )}
-      {tab === "files" && (
-        <div className="ws-feed">
-          {activeFiles.length === 0 && (
-            <div className="ws-empty-note">Generated files appear here once the deck is rendered.</div>
-          )}
-          {activeFiles.map((f) => (
-            <FileCard key={f.id} file={f} />
-          ))}
-        </div>
-      )}
+      {/* The tab bodies share one positioning context so a provider back-off
+          can be pinned over the bottom of whichever one is showing, without
+          entering its layout - a wait that pushed the feed would move the
+          content the user is reading, twice per wait. */}
+      <div className="ws-flow-body">
+        {tab === "activity" && <ActivityFeed />}
+        {tab === "messages" && (
+          <div className="ws-feed">
+            <div className="ws-empty-note">The full transcript lives in the Activity tab. This view will list raw messages.</div>
+          </div>
+        )}
+        {tab === "files" && (
+          <div className="ws-feed">
+            {activeFiles.length === 0 && (
+              <div className="ws-empty-note">Generated files appear here once the deck is rendered.</div>
+            )}
+            {activeFiles.map((f) => (
+              <FileCard key={f.id} file={f} />
+            ))}
+          </div>
+        )}
+        <RetryStrip />
+      </div>
 
       <Composer />
     </>
