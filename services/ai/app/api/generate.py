@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from app.db.session import get_db
 from app.db.models import ChatSession, ChatMessage, AgentEvent
 from app.agent.loop import AgentLoop, MODE_SIMPLE, DETAIL_LEVEL_DETAILED, normalize_mode, normalize_detail_level
@@ -36,6 +36,14 @@ class SendMessageRequest(BaseModel):
     # Content depth chosen in the composer. Anything unrecognised (including
     # the field being absent) means detailed.
     detail_level: str = DETAIL_LEVEL_DETAILED
+    # Rows the orchestrator has already written for this exchange. It is the
+    # HTTP entry point for the browser and persists the user message and an
+    # empty assistant placeholder before queueing the job, so when it supplies
+    # them here we adopt those rows instead of writing a second pair. They are
+    # optional because the AI service is also driven directly, with no
+    # orchestrator in front of it, and then it owns the rows itself.
+    user_message_id: str | None = None
+    assistant_message_id: str | None = None
 
 
 class SimplePresentationRequest(BaseModel):
@@ -54,6 +62,70 @@ class AnswerQuestionRequest(BaseModel):
     # event it relayed; when it is omitted we fall back to the pending
     # question recorded in the working state.
     question_text: str = ""
+    # As on SendMessageRequest: rows the orchestrator has already written for
+    # this exchange, adopted rather than duplicated.
+    user_message_id: str | None = None
+    assistant_message_id: str | None = None
+
+
+async def _exchange_rows(
+    db: AsyncSession,
+    session_id: uuid.UUID,
+    *,
+    content: str,
+    attachments: list | None,
+    user_message_id: str | None,
+    assistant_message_id: str | None,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """
+    Return the (user, assistant) chat_messages ids for one exchange.
+
+    Message persistence is owned by whoever is the entry point for the
+    request. In production that is the orchestrator: it writes the user message
+    and an empty assistant placeholder before queueing the job, hands the ids
+    back to the browser, and passes them here - so this adopts them.
+
+    Both services used to insert their own pair unconditionally, which left two
+    user rows and two empty assistant placeholders per message. Those are
+    invisible in the live UI (it works from the optimistic/SSE stream) but they
+    are what a page reload reads back, and what saveAssistantMessage searches
+    when it looks for "the newest assistant row with empty content" - with
+    several placeholders in flight it could fill the wrong one.
+
+    When the AI service is driven directly, with no orchestrator in front of
+    it, no ids arrive and it writes the rows itself.
+    """
+    if user_message_id and assistant_message_id:
+        try:
+            return uuid.UUID(user_message_id), uuid.UUID(assistant_message_id)
+        except ValueError:
+            logger.warning(
+                "ignoring malformed message ids from caller (user=%r assistant=%r); "
+                "writing our own rows",
+                user_message_id,
+                assistant_message_id,
+            )
+
+    user_msg = ChatMessage(
+        session_id=session_id,
+        role="user",
+        content=content,
+        attachments=attachments if attachments is not None else [],
+    )
+    db.add(user_msg)
+    await db.commit()
+    await db.refresh(user_msg)
+
+    assistant_msg = ChatMessage(
+        session_id=session_id,
+        role="assistant",
+        content="",
+    )
+    db.add(assistant_msg)
+    await db.commit()
+    await db.refresh(assistant_msg)
+
+    return user_msg.id, assistant_msg.id
 
 
 @router.post("/sessions/{session_id}/messages")
@@ -76,26 +148,14 @@ async def send_message(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Store user message
-    user_msg = ChatMessage(
-        session_id=sid,
-        role="user",
+    user_message_id, assistant_message_id = await _exchange_rows(
+        db,
+        sid,
         content=req.content,
         attachments=req.attachments,
+        user_message_id=req.user_message_id,
+        assistant_message_id=req.assistant_message_id,
     )
-    db.add(user_msg)
-    await db.commit()
-    await db.refresh(user_msg)
-
-    # Store assistant placeholder
-    assistant_msg = ChatMessage(
-        session_id=sid,
-        role="assistant",
-        content="",
-    )
-    db.add(assistant_msg)
-    await db.commit()
-    await db.refresh(assistant_msg)
 
     # Enqueue agent generation job
     # In production this goes through the orchestrator Redis queue.
@@ -106,8 +166,8 @@ async def send_message(
         try:
             await _run_agent(
                 sid,
-                user_msg.id,
-                assistant_msg.id,
+                user_message_id,
+                assistant_message_id,
                 mode=normalize_mode(req.mode),
                 org_id=org_id,
                 detail_level=normalize_detail_level(req.detail_level),
@@ -119,7 +179,7 @@ async def send_message(
 
     # Return immediately – the real work happens in the background
     return {
-        "message_id": str(assistant_msg.id),
+        "message_id": str(assistant_message_id),
         "session_id": str(sid),
     }
 
@@ -282,23 +342,29 @@ async def _run_agent(
                             question_content += f"\nContext: {context}\n"
                         final_content = question_content
 
-                        # Store the question as a proper assistant message with metadata
-                        # This ensures it appears in chat history and can be tracked
-                        question_msg = ChatMessage(
-                            session_id=session_id,
-                            role="assistant",
-                            content=question_content,
-                            attachments=json.dumps({
-                                "type": "question",
-                                "question": question_text,
-                                "options": options,
-                                "questions": questions,
-                                "context": context,
-                            }),
+                        # The question IS this turn's assistant reply, so it
+                        # fills the placeholder already waiting for it. It used
+                        # to be inserted as an extra row, which left the
+                        # placeholder empty and the transcript with two
+                        # assistant messages for one turn - and gave
+                        # saveAssistantMessage a second empty placeholder to
+                        # pick the wrong one from.
+                        question_attachments = json.dumps({
+                            "type": "question",
+                            "question": question_text,
+                            "options": options,
+                            "questions": questions,
+                            "context": context,
+                        })
+                        await db.execute(
+                            update(ChatMessage)
+                            .where(ChatMessage.id == assistant_message_id)
+                            .values(
+                                content=question_content,
+                                attachments=question_attachments,
+                            )
                         )
-                        db.add(question_msg)
                         await db.commit()
-                        await db.refresh(question_msg)
                         logger.info(
                             "Stored question as assistant message for session %s",
                             session_id
@@ -622,27 +688,15 @@ async def answer_question(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Store the user's answer as a new message
     answer_content = req.selected_option if req.selected_option else req.answer
-    user_msg = ChatMessage(
-        session_id=sid,
-        role="user",
+    user_message_id, assistant_message_id = await _exchange_rows(
+        db,
+        sid,
         content=answer_content,
         attachments=[],
+        user_message_id=req.user_message_id,
+        assistant_message_id=req.assistant_message_id,
     )
-    db.add(user_msg)
-    await db.commit()
-    await db.refresh(user_msg)
-
-    # Store assistant placeholder for the response
-    assistant_msg = ChatMessage(
-        session_id=sid,
-        role="assistant",
-        content="",
-    )
-    db.add(assistant_msg)
-    await db.commit()
-    await db.refresh(assistant_msg)
 
     # Get the pending question from working state
     question_text = req.question_text
@@ -661,8 +715,8 @@ async def answer_question(
     asyncio.create_task(
         _run_agent(
             sid,
-            user_msg.id,
-            assistant_msg.id,
+            user_message_id,
+            assistant_message_id,
             answer_content,
             question_text,
             mode=None,
@@ -676,7 +730,7 @@ async def answer_question(
     )
 
     return {
-        "message_id": str(assistant_msg.id),
+        "message_id": str(assistant_message_id),
         "session_id": str(sid),
         "answer": answer_content,
     }

@@ -43,6 +43,11 @@ type GenerateRequest struct {
 	Mode        string
 	DetailLevel string
 	Identity    Identity
+	// Rows this service already wrote for the exchange. The AI service adopts
+	// them instead of inserting a second user message and a second empty
+	// assistant placeholder.
+	UserMessageID      string
+	AssistantMessageID string
 }
 
 // postJSON issues an authenticated JSON POST and decodes the response.
@@ -102,6 +107,12 @@ func (c *AIServiceClient) SendMessage(gen GenerateRequest) (map[string]interface
 		"attachments":  gen.Attachments,
 		"mode":         mode,
 		"detail_level": detailLevel,
+	}
+	// Omitted when empty so the AI service falls back to owning the rows, as
+	// it must when it is driven directly rather than through this service.
+	if gen.UserMessageID != "" && gen.AssistantMessageID != "" {
+		payload["user_message_id"] = gen.UserMessageID
+		payload["assistant_message_id"] = gen.AssistantMessageID
 	}
 	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/messages", c.baseURL, gen.SessionID)
 	return c.postJSON(url, payload, gen.Identity)
@@ -217,11 +228,15 @@ func (c *AIServiceClient) GenerateTitle(message string) (string, error) {
 // AnswerQuestion sends a user's answer to a question to resume the agent workflow.
 // The mode the run started in is restored from the agent's saved working state,
 // so it does not need to be re-sent here.
-func (c *AIServiceClient) AnswerQuestion(sessionID string, selectedOption string, answer string, questionText string, identity Identity) (map[string]interface{}, error) {
+func (c *AIServiceClient) AnswerQuestion(sessionID string, selectedOption string, answer string, questionText string, identity Identity, userMessageID, assistantMessageID string) (map[string]interface{}, error) {
 	payload := map[string]interface{}{
 		"answer":          answer,
 		"selected_option": selectedOption,
 		"question_text":   questionText,
+	}
+	if userMessageID != "" && assistantMessageID != "" {
+		payload["user_message_id"] = userMessageID
+		payload["assistant_message_id"] = assistantMessageID
 	}
 	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/answer-question", c.baseURL, sessionID)
 	return c.postJSON(url, payload, identity)

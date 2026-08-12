@@ -108,7 +108,7 @@ func TestAnswerQuestionSendsTheQuestionAndIdentity(t *testing.T) {
 	c := NewAIServiceClient(server.URL)
 	if _, err := c.AnswerQuestion(
 		"session-2", "Option B", "Option B", "Which audience?",
-		Identity{OrgID: "org-2"},
+		Identity{OrgID: "org-2"}, "user-msg-2", "assistant-msg-2",
 	); err != nil {
 		t.Fatalf("AnswerQuestion: %v", err)
 	}
@@ -149,5 +149,78 @@ func TestErrorResponseIsSurfacedWithItsBody(t *testing.T) {
 	}
 	if want := "upstream exploded"; !strings.Contains(err.Error(), want) {
 		t.Errorf("error %q does not mention %q", err, want)
+	}
+}
+
+// The orchestrator writes the user message and the empty assistant placeholder
+// before it queues the job. It has to tell the AI service which rows those
+// are, or the AI service writes its own pair and the exchange ends up with two
+// user rows and two placeholders - the second of which saveAssistantMessage
+// can then fill instead of the right one.
+
+func TestSendMessageForwardsTheRowsItAlreadyWrote(t *testing.T) {
+	var got capture
+	server := newStubAIService(t, &got)
+	defer server.Close()
+
+	c := NewAIServiceClient(server.URL)
+	if _, err := c.SendMessage(GenerateRequest{
+		SessionID:          "session-3",
+		Content:            "Build me a deck",
+		UserMessageID:      "user-row-1",
+		AssistantMessageID: "assistant-row-1",
+	}); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	if got.body["user_message_id"] != "user-row-1" {
+		t.Errorf("user_message_id = %v, want user-row-1", got.body["user_message_id"])
+	}
+	if got.body["assistant_message_id"] != "assistant-row-1" {
+		t.Errorf("assistant_message_id = %v, want assistant-row-1", got.body["assistant_message_id"])
+	}
+}
+
+func TestAnswerQuestionForwardsTheRowsItAlreadyWrote(t *testing.T) {
+	var got capture
+	server := newStubAIService(t, &got)
+	defer server.Close()
+
+	c := NewAIServiceClient(server.URL)
+	if _, err := c.AnswerQuestion(
+		"session-4", "Option A", "Option A", "Which audience?",
+		Identity{OrgID: "org-4"}, "user-row-2", "assistant-row-2",
+	); err != nil {
+		t.Fatalf("AnswerQuestion: %v", err)
+	}
+
+	if got.body["user_message_id"] != "user-row-2" {
+		t.Errorf("user_message_id = %v, want user-row-2", got.body["user_message_id"])
+	}
+	if got.body["assistant_message_id"] != "assistant-row-2" {
+		t.Errorf("assistant_message_id = %v, want assistant-row-2", got.body["assistant_message_id"])
+	}
+}
+
+// Driven directly, with no orchestrator in front of it, the AI service must
+// still own the rows - so the fields are omitted rather than sent empty.
+func TestRowIdsAreOmittedWhenThereAreNone(t *testing.T) {
+	var got capture
+	server := newStubAIService(t, &got)
+	defer server.Close()
+
+	c := NewAIServiceClient(server.URL)
+	if _, err := c.SendMessage(GenerateRequest{
+		SessionID: "session-5",
+		Content:   "Build me a deck",
+	}); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	if _, ok := got.body["user_message_id"]; ok {
+		t.Error("user_message_id was sent when this service had not written a row")
+	}
+	if _, ok := got.body["assistant_message_id"]; ok {
+		t.Error("assistant_message_id was sent when this service had not written a row")
 	}
 }

@@ -279,6 +279,8 @@ func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) erro
 	mode, _ := job.Payload["mode"].(string)
 	detailLevel, _ := job.Payload["detail_level"].(string)
 	attachmentsRaw, _ := job.Payload["attachments"].([]interface{})
+	userMsgID, _ := job.Payload["user_message_id"].(string)
+	assistantMsgID, _ := job.Payload["assistant_message_id"].(string)
 
 	attachments := make([]map[string]interface{}, 0)
 	for _, att := range attachmentsRaw {
@@ -300,12 +302,14 @@ func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) erro
 
 	// Call AI service – this returns immediately after the AI accepts the job.
 	_, err := p.aiClient.SendMessage(client.GenerateRequest{
-		SessionID:   job.SessionID,
-		Content:     content,
-		Attachments: attachments,
-		Mode:        mode,
-		DetailLevel: detailLevel,
-		Identity:    jobIdentity(job),
+		SessionID:          job.SessionID,
+		Content:            content,
+		Attachments:        attachments,
+		Mode:               mode,
+		DetailLevel:        detailLevel,
+		Identity:           jobIdentity(job),
+		UserMessageID:      userMsgID,
+		AssistantMessageID: assistantMsgID,
 	})
 	if err != nil {
 		return err
@@ -317,6 +321,8 @@ func (p *Processor) processResumeJob(ctx context.Context, job *queue.Job) error 
 	answer, _ := job.Payload["answer"].(string)
 	questionText, _ := job.Payload["question_text"].(string)
 	selectedOption, _ := job.Payload["selected_option"].(string)
+	userMsgID, _ := job.Payload["user_message_id"].(string)
+	assistantMsgID, _ := job.Payload["assistant_message_id"].(string)
 
 	log.Printf("Resuming job %s for session %s with answer", job.ID, job.SessionID)
 
@@ -332,7 +338,10 @@ func (p *Processor) processResumeJob(ctx context.Context, job *queue.Job) error 
 	})
 
 	// Call AI service with answer – this returns immediately after the AI accepts the job
-	_, err := p.aiClient.AnswerQuestion(job.SessionID, selectedOption, answer, questionText, jobIdentity(job))
+	_, err := p.aiClient.AnswerQuestion(
+		job.SessionID, selectedOption, answer, questionText, jobIdentity(job),
+		userMsgID, assistantMsgID,
+	)
 	if err != nil {
 		return err
 	}
