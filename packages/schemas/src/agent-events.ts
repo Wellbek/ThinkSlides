@@ -163,6 +163,11 @@ export interface QuestionEvent {
  * A provider back-off, announced while it is happening. Without this a rate
  * limit looks exactly like a hang: the retry happens inside the provider call,
  * so the interface would show a step sitting there for half a minute.
+ *
+ * This is state, not history. It says "a wait is on right now", and it stops
+ * being true the moment the call goes through - which is why the client keeps
+ * the latest one on the store and shows it in a strip that retires itself,
+ * rather than appending it to the transcript.
  */
 export interface RateLimitEvent {
   type: "rate_limit";
@@ -221,14 +226,15 @@ export type AgentEvent =
   | ErrorEvent
   | ProgressEvent
   | QuestionEvent
-  | RateLimitEvent
   | ValidationUnresolvedEvent
   | DoneEvent;
-// TimerUpdateEvent and SessionTitleUpdatedEvent are deliberately absent: this
-// union models what lands in a message's `agentEventStream`, and those two are
-// side-channel updates (run clock, sidebar title) that the store applies
-// directly without recording them on a message. Neither carries a `timestamp`,
-// which is why consumers of this union can rely on that field being present.
+// TimerUpdateEvent, SessionTitleUpdatedEvent and RateLimitEvent are
+// deliberately absent: this union models what lands in a message's
+// `agentEventStream`, and those three are side-channel updates (run clock,
+// sidebar title, the wait currently in progress) that the store applies
+// directly without recording them on a message. Every member that is left
+// carries a `timestamp`, which is why consumers of this union can rely on that
+// field being present.
 
 export interface SSEMessage {
   event: AgentEventType;
