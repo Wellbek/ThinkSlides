@@ -24,7 +24,16 @@ from app.agent.loop import (
 
 
 def _loop(mode: str | None = None) -> AgentLoop:
-    return AgentLoop(db=None, mode=mode)
+    """A loop past both consultation checkpoints.
+
+    The checkpoints withhold the deck-writing tools until the user has been
+    consulted (see test_grounding_checkpoint.py). That is a separate axis from
+    the effort level, so these tests hold it open and vary only the mode.
+    """
+    loop = AgentLoop(db=None, mode=mode)
+    loop.working_state.consulted_before_planning = True
+    loop.working_state.reviewed_outline_with_user = True
+    return loop
 
 
 def _tool_names(schemas: list[dict]) -> set[str]:
