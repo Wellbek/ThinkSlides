@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
 import { EffortSelector } from "./EffortSelector";
 import { DetailLevelSelector } from "./DetailLevelSelector";
+import { SourcesToggle } from "./SourcesToggle";
 import { Paperclip, AtSign, Code2, ArrowUp, X } from "lucide-react";
 
 export function Composer() {
@@ -66,6 +67,7 @@ export function Composer() {
           <button className="ws-cm" title="Code mode"><Code2 size={14} /></button>
           <EffortSelector />
           <DetailLevelSelector />
+          <SourcesToggle />
           <span className="ws-hint ws-hint-collapsible">Enter to send</span>
           <div className="ws-spacer" />
           <button className="ws-send" disabled={!content.trim() || isSending} onClick={send}>

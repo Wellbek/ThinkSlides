@@ -681,6 +681,8 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 	mode := ModeSimple
 	// Content depth requested for the generation. See detail_level.go.
 	detailLevel := DetailLevelDetailed
+	// Whether the deck should carry its research sources as references.
+	includeSources := false
 
 	// Handle multipart/form-data (file uploads) vs JSON
 	if len(contentType) > 0 && contentType[:10] == "multipart/" {
@@ -705,6 +707,11 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		// Content depth chosen in the composer.
 		if levelValues := form.Value["detail_level"]; len(levelValues) > 0 {
 			detailLevel = levelValues[0]
+		}
+
+		// "Include source references in the document" from the composer.
+		if srcValues := form.Value["include_sources"]; len(srcValues) > 0 {
+			includeSources = srcValues[0] == "true"
 		}
 
 		// Process uploaded files
@@ -739,10 +746,11 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 	} else {
 		// JSON request
 		var req struct {
-			Content     string                   `json:"content" binding:"required"`
-			Attachments []map[string]interface{} `json:"attachments"`
-			Mode        string                   `json:"mode"`
-			DetailLevel string                   `json:"detail_level"`
+			Content        string                   `json:"content" binding:"required"`
+			Attachments    []map[string]interface{} `json:"attachments"`
+			Mode           string                   `json:"mode"`
+			DetailLevel    string                   `json:"detail_level"`
+			IncludeSources bool                     `json:"include_sources"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
@@ -752,6 +760,7 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		attachments = req.Attachments
 		mode = req.Mode
 		detailLevel = req.DetailLevel
+		includeSources = req.IncludeSources
 	}
 
 	if messageContent == "" && len(attachments) == 0 {
@@ -847,6 +856,7 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 			"assistant_message_id": assistantMsgID,
 			"mode":                 NormalizeMode(mode),
 			"detail_level":         NormalizeDetailLevel(detailLevel),
+			"include_sources":      includeSources,
 			// A resume job answers a pending ask_user_question. The worker
 			// reads the answer under its own keys, so send it under both -
 			// previously only "content" was set and the resume posted an

@@ -399,6 +399,7 @@ func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) erro
 	content, _ := job.Payload["content"].(string)
 	mode, _ := job.Payload["mode"].(string)
 	detailLevel, _ := job.Payload["detail_level"].(string)
+	includeSources, _ := job.Payload["include_sources"].(bool)
 	attachmentsRaw, _ := job.Payload["attachments"].([]interface{})
 	userMsgID, _ := job.Payload["user_message_id"].(string)
 	assistantMsgID, _ := job.Payload["assistant_message_id"].(string)
@@ -431,6 +432,7 @@ func (p *Processor) processGenerateJob(ctx context.Context, job *queue.Job) erro
 		Identity:           jobIdentity(job),
 		UserMessageID:      userMsgID,
 		AssistantMessageID: assistantMsgID,
+		IncludeSources:     includeSources,
 	})
 	if err != nil {
 		return err

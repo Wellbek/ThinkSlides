@@ -776,3 +776,21 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
 .ws-thumb-lines { display: flex; flex-direction: column; gap: 2px; margin-top: 1px; }
 .ws-thumb-lines span { height: 2px; background: #C9C9C0; border-radius: 1px; }
 .ws-slide-content { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; margin-top: 4.5%; overflow: hidden; }
+
+/* Composer "Cite sources" toggle. Reads as a switch rather than a button:
+   off is the same weight as the other composer controls, on borrows the AI
+   accent so the choice is visible at a glance next to them. */
+.ws-src-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--ws-border-sub); background: var(--ws-surface-2);
+  color: #777; padding: 5px 10px; border-radius: var(--ws-radius-sm);
+  font-size: 12px; font-family: inherit; cursor: pointer; white-space: nowrap;
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+.ws-src-toggle.md { padding: 6px 11px; font-size: 12.5px; }
+.ws-src-toggle:hover { color: #AAA; border-color: #333; }
+.ws-src-toggle.on {
+  background: var(--ws-ai-bg); border-color: var(--ws-ai-border); color: var(--ws-ai-text);
+}
+.ws-src-toggle.on:hover { background: #161630; }
+.ws-src-toggle:focus-visible { outline: 2px solid var(--ws-ai-border); outline-offset: 1px; }

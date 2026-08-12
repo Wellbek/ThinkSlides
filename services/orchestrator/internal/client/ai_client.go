@@ -48,6 +48,8 @@ type GenerateRequest struct {
 	// assistant placeholder.
 	UserMessageID      string
 	AssistantMessageID string
+	// "Include source references in the document", from the composer.
+	IncludeSources bool
 }
 
 // postJSON issues an authenticated JSON POST and decodes the response.
@@ -103,10 +105,11 @@ func (c *AIServiceClient) SendMessage(gen GenerateRequest) (map[string]interface
 		detailLevel = "detailed"
 	}
 	payload := map[string]interface{}{
-		"content":      gen.Content,
-		"attachments":  gen.Attachments,
-		"mode":         mode,
-		"detail_level": detailLevel,
+		"content":         gen.Content,
+		"attachments":     gen.Attachments,
+		"mode":            mode,
+		"detail_level":    detailLevel,
+		"include_sources": gen.IncludeSources,
 	}
 	// Omitted when empty so the AI service falls back to owning the rows, as
 	// it must when it is driven directly rather than through this service.
