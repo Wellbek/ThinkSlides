@@ -1,7 +1,15 @@
-// SSE always uses a relative URL so the request is proxied through the Next.js
-// middleware rewrite (/api/orchestrator/* → orchestrator /api/*).  Going direct
-// to the orchestrator caused CORS issues and bypassed the auth-cookie flow.
-const SSE_BASE = 'http://localhost:8080';
+// SSE goes through the same /api/orchestrator proxy as every other API call,
+// as a same-origin relative URL. A hardcoded absolute base only ever works
+// when the browser and the orchestrator are the same machine - from any other
+// device the event stream points at the *viewer's* localhost.
+//
+// Set NEXT_PUBLIC_ORCHESTRATOR_URL to connect straight to the orchestrator
+// instead (it serves Access-Control-Allow-Origin: *), for deployments that
+// terminate the stream somewhere that buffers it.
+const SSE_BASE = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || '';
+
+/** Path prefix: the proxy exposes the orchestrator's /api as /api/orchestrator. */
+const SSE_PREFIX = SSE_BASE ? '/api' : '/api/orchestrator';
 
 export type SSEEventType =
   | 'thought'
@@ -49,9 +57,7 @@ export class SSEClient {
 
     // EventSource cannot set custom headers, so pass token as query param.
     // The Go middleware checks both Authorization header and ?token= query param.
-    // The /api/orchestrator prefix is rewritten by Next.js middleware to the
-    // orchestrator's /api/sessions/:id/events endpoint.
-    let url = `${SSE_BASE}/api/sessions/${this.sessionId}/events`;
+    let url = `${SSE_BASE}${SSE_PREFIX}/sessions/${this.sessionId}/events`;
     if (token) {
       url += `?token=${encodeURIComponent(token)}`;
     }
