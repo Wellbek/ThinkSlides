@@ -36,10 +36,19 @@ export function WorkspaceShell() {
   const stateRef = useRef({ panes, leftW, rightW });
   stateRef.current = { panes, leftW, rightW };
 
-  // If a session becomes active while on home, drop into the workspace.
+  // Drop into the workspace when a *different* session becomes active - the
+  // signal is a session being picked or created, not the view being on home.
+  // Reading `view` here instead would make this an invariant ("a session is
+  // active, therefore show the workspace") and the Home button a no-op: it
+  // sets the view to home, the effect re-runs with the session still active,
+  // and flips it straight back.
+  const shownSessionId = useRef<string | null>(activeSessionId);
   useEffect(() => {
-    if (activeSessionId && view === "home") setView("workspace");
-  }, [activeSessionId, view]);
+    if (activeSessionId && activeSessionId !== shownSessionId.current) {
+      setView("workspace");
+    }
+    shownSessionId.current = activeSessionId;
+  }, [activeSessionId]);
 
   const enterSession = useCallback(() => {
     setNavExt(false);
