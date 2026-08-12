@@ -51,6 +51,10 @@ function fmtTime(ts?: string): string {
 
 function fmtDuration(ms?: number): string {
   if (ms == null) return "";
+  // A pure-Python schema check genuinely finishes inside a millisecond, so
+  // "0ms" is honest - it just reads as broken, six times in a row down a
+  // group. "<1ms" says the same thing without the eye tripping on it.
+  if (ms < 1) return "<1ms";
   if (ms < 1000) return `${Math.round(ms)}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   const m = Math.floor(ms / 60000);
@@ -436,6 +440,7 @@ function AssistantBlock({ message, isAnswered, answerText }: { message: any; isA
               onToggle={() => toggle(node.key, holdsAuto)}
               isExpanded={isExpanded}
               onToggleStep={toggle}
+              runLive={isLive}
             />
           );
         }
@@ -515,12 +520,17 @@ function StepGroup({
   onToggle,
   isExpanded,
   onToggleStep,
+  runLive,
 }: {
   group: StepGroupNode;
   expanded: boolean;
   onToggle: () => void;
   isExpanded: (key: string) => boolean;
   onToggleStep: (key: string) => void;
+  /** Whether the run as a whole is still going, which the group's own steps
+   *  cannot tell it - they can all be finished while the run waits on a
+   *  provider back-off with no open step to hang a timer on. */
+  runLive: boolean;
 }) {
   const running = group.steps.some((s) => s.running);
   const failed = group.steps.filter((s) => s.success === false).length;
@@ -558,7 +568,15 @@ function StepGroup({
               ? `${group.steps.filter((s) => !s.running).length} of ${group.steps.length} done`
               : failed
                 ? `${failed} failed`
-                : "all complete"}
+                : runLive
+                  // The group's own steps really have all finished, but while
+                  // the run continues elsewhere "all complete" reads as a
+                  // verdict on the whole run. A completed group sat there
+                  // saying it through a 25s rate-limit wait, and the run
+                  // looked finished-but-hung. A count is the same fact
+                  // without the finality.
+                  ? `${group.steps.length} of ${group.steps.length} done`
+                  : "all complete"}
           </span>
           <span className="ws-spacer-sm" />
           <span className="ws-step-dur">{fmtDuration(totalMs)}</span>
