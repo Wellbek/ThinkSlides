@@ -103,6 +103,74 @@ def _visual_figures(slide: dict) -> list[str]:
     return figures
 
 
+# A heading is written by the planner, before anyone knows what the data will
+# turn out to be. A deep run asked for "revenue trend over the last five years",
+# the search surfaced three, and the slide shipped "Revenue Trend Over Five
+# Years" above a three-point line. The claim in the heading is checkable
+# against the visual underneath it, so it gets checked.
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+}
+
+# Units that make a number a count of things on the chart rather than a date,
+# a currency amount or a percentage. "2025 Revenue" must not read as a span.
+_SPAN_UNITS = (
+    "years?|quarters?|months?|weeks?|decades?|"
+    "markets?|regions?|countries?|products?|segments?|categories|category|"
+    "competitors?|channels?|brands?|teams?|sites?|steps?|phases?|pillars?"
+)
+_SPAN_CLAIM_RE = re.compile(
+    r"\b(?P<n>\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")[-\s]+(?P<unit>" + _SPAN_UNITS + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _span_claim(text: str) -> tuple[int, str] | None:
+    """The count a heading claims, e.g. "Five Years" -> (5, "years")."""
+    match = _SPAN_CLAIM_RE.search(text or "")
+    if not match:
+        return None
+    raw = match.group("n").lower()
+    count = _NUMBER_WORDS.get(raw)
+    if count is None:
+        try:
+            count = int(raw)
+        except ValueError:
+            return None
+    return count, match.group("unit").lower()
+
+
+def _slide_title(slide: dict) -> str:
+    """The slide's heading: the first text block, as the renderer treats it."""
+    for item in slide.get("contents") or []:
+        if isinstance(item, dict) and item.get("type") == "text":
+            return " ".join(
+                str(run.get("text") or "")
+                for run in item.get("runs") or []
+                if isinstance(run, dict)
+            ).strip()
+    return ""
+
+
+def _visual_extent(slide: dict) -> tuple[int, str] | None:
+    """How many data points the slide's first chart or table actually shows."""
+    for item in slide.get("contents") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "chart":
+            categories = (item.get("chart") or {}).get("categories") or []
+            if categories:
+                return len(categories), "chart"
+        if item.get("type") == "table":
+            rows = (item.get("table") or {}).get("rows") or []
+            if rows:
+                body = rows[1:] if (item.get("table") or {}).get("headerRow") else rows
+                if body:
+                    return len(body), "table"
+    return None
+
+
 def check_content(slides: list[dict]) -> list[dict]:
     """Defects in what the deck says, checked against the slide JSON."""
     issues: list[dict] = []
@@ -127,6 +195,25 @@ def check_content(slides: list[dict]) -> list[dict]:
                         ),
                     })
                     break
+
+        # A heading that claims more (or fewer) data points than the visual
+        # under it actually has. The title is written before the data is
+        # known, so it has to be reconciled against what was built.
+        claim = _span_claim(_slide_title(slide))
+        extent = _visual_extent(slide)
+        if claim and extent and claim[0] != extent[0]:
+            claimed, unit = claim
+            actual, kind = extent
+            issues.append({
+                "slideIndex": slide_index,
+                "type": "content",
+                "detail": (
+                    f"The heading claims {claimed} {unit} but the {kind} on this "
+                    f"slide shows {actual}. Either cover {claimed} {unit} in the "
+                    f"data, or retitle the slide to the {actual} it actually has - "
+                    "a heading the visual does not support reads as missing data."
+                ),
+            })
 
         # The same point twice - within this slide, or already made earlier.
         local: set[str] = set()
