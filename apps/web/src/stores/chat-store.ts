@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { apiGet, apiPost, apiDelete, apiPut, apiUpload } from '@/lib/api';
-import { SSEClient } from '@/lib/sse';
+import { SSEClient, type SSEEventHandler } from '@/lib/sse';
 import { useSettingsStore } from '@/stores/settings-store';
-import type { AgentEvent, DetailLevel, DoneEvent, EffortMode } from '@thinkslides/schemas';
+import { AGENT_EVENT_TYPES } from '@thinkslides/schemas';
+import type { AgentEvent, AgentEventType, DetailLevel, DoneEvent, EffortMode } from '@thinkslides/schemas';
 
 export interface ChatSession {
   id: string;
@@ -273,63 +274,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return { activeMessages: updatedMessages };
         });
       };
-      client.on('thought', (e) => {
+      // Most events differ only in payload: record them on the active
+      // message and keep the run marked live.
+      const record: SSEEventHandler = (e) => {
         try {
           appendEventToActiveMessage(JSON.parse(e.data));
           set({ isGenerating: true });
         } catch (err) { console.error(err); }
-      });
-      client.on('tool_call', (e) => {
-        try {
-          appendEventToActiveMessage(JSON.parse(e.data));
-          set({ isGenerating: true });
-        } catch (err) { console.error(err); }
-      });
-      client.on('tool_result', (e) => {
-        try {
-          appendEventToActiveMessage(JSON.parse(e.data));
-          set({ isGenerating: true });
-        } catch (err) { console.error(err); }
-      });
-      client.on('slide_finalized', (e) => {
-        try {
-          appendEventToActiveMessage(JSON.parse(e.data));
-          set({ isGenerating: true });
-        } catch (err) { console.error(err); }
-      });
-      client.on('error', (e) => {
-        try {
-          appendEventToActiveMessage(JSON.parse(e.data));
-          set({ isGenerating: true });
-        } catch (err) { console.error(err); }
-      });
-      client.on('progress', (e) => {
-        try {
-          appendEventToActiveMessage(JSON.parse(e.data));
-          set({ isGenerating: true });
-        } catch (err) { console.error(err); }
-      });
-      client.on('question', (e) => { try { appendEventToActiveMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } });
-      // A provider back-off, narrated while it happens. isGenerating stays
-      // true: the run is waiting, not finished.
-      client.on('rate_limit', (e) => {
-        try {
-          appendEventToActiveMessage(JSON.parse(e.data));
-          set({ isGenerating: true });
-        } catch (err) { console.error(err); }
-      });
-      client.on('validation_unresolved', (e) => {
+      };
+      // The same, without asserting the run is live: a question pauses it, and
+      // validation_unresolved is reported once it has stopped trying.
+      const recordOnly: SSEEventHandler = (e) => {
         try {
           appendEventToActiveMessage(JSON.parse(e.data));
         } catch (err) { console.error(err); }
-      });
-      client.on('timer_update', (e) => {
+      };
+      const onTimerUpdate: SSEEventHandler = (e) => {
         try {
           const data = JSON.parse(e.data) as { elapsedMs: number };
           set({ totalElapsedMs: data.elapsedMs, isGenerating: true });
         } catch (err) { console.error(err); }
-      });
-      client.on('session_title_updated', (e) => {
+      };
+      const onSessionTitleUpdated: SSEEventHandler = (e) => {
         try {
           const data = JSON.parse(e.data) as { session_id: string; title: string };
           set((state) => ({
@@ -338,8 +304,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ),
           }));
         } catch (err) { console.error(err); }
-      });
-      client.on('file_generated', (e) => {
+      };
+      const onFileGenerated: SSEEventHandler = (e) => {
         try {
           const data = JSON.parse(e.data);
           const generatedFile: GeneratedFile = {
@@ -362,8 +328,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return { activeMessages: updatedMessages, activeFiles: [...state.activeFiles, generatedFile] };
           });
         } catch (err) { console.error(err); }
-      });
-      client.on('done', (e) => {
+      };
+
+      const onDone: SSEEventHandler = (e) => {
         try {
           const data = JSON.parse(e.data) as DoneEvent;
           const totalElapsedMs = (data as any).totalElapsedMs;
@@ -451,7 +418,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
             set({ isSending: false });
           }
         }
-      });
+      };
+
+      // One handler per declared event name. The Record type makes a missing
+      // one a compile error, so an event added to AGENT_EVENT_TYPES cannot end
+      // up subscribed but silently ignored - the failure mode that hid
+      // validation_unresolved.
+      const handlers: Record<AgentEventType, SSEEventHandler> = {
+        thought: record,
+        tool_call: record,
+        tool_result: record,
+        slide_finalized: record,
+        error: record,
+        progress: record,
+        // A provider back-off, narrated while it happens. isGenerating stays
+        // true: the run is waiting, not finished.
+        rate_limit: record,
+        question: recordOnly,
+        validation_unresolved: recordOnly,
+        timer_update: onTimerUpdate,
+        session_title_updated: onSessionTitleUpdated,
+        file_generated: onFileGenerated,
+        done: onDone,
+      };
+
+      for (const eventType of AGENT_EVENT_TYPES) {
+        client.on(eventType, handlers[eventType]);
+      }
+
       client.connect();
       set({ sseClient: client });
     } catch (err) {

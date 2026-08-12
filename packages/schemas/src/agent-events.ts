@@ -12,18 +12,55 @@ export type AgentEventPhase =
   | "rendering"
   | "complete";
 
-export type AgentEventType =
-  | "thought"
-  | "tool_call"
-  | "tool_result"
-  | "slide_finalized"
-  | "file_generated"
-  | "error"
-  | "progress"
-  | "question"
-  | "rate_limit"
-  | "validation_unresolved"
-  | "done";
+/**
+ * Every event name the browser subscribes to, in one place.
+ *
+ * This is the list, not a copy of it: `AgentEventType` is derived from it and
+ * `sse.ts` iterates it to register listeners, so adding a name here subscribes
+ * to it everywhere. That matters because `EventSource` dispatches by event
+ * name - a name it was never told about is delivered nowhere, with no error,
+ * no warning and no type error. The event just never arrives, and since the
+ * orchestrator persists the stream regardless, it reappears on reload, which
+ * reads as a rendering bug rather than a missing subscription.
+ *
+ * `validation_unresolved` - the event telling a user their deck still has
+ * layout defects - was emitted from day one and lost exactly this way.
+ */
+export const AGENT_EVENT_TYPES = [
+  "thought",
+  "tool_call",
+  "tool_result",
+  "slide_finalized",
+  "file_generated",
+  "error",
+  "progress",
+  "question",
+  "rate_limit",
+  "validation_unresolved",
+  "timer_update",
+  "session_title_updated",
+  "done",
+] as const;
+
+export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];
+
+/**
+ * Events the AI service publishes that are consumed server-side and are not
+ * meant for the browser. `deck_finalized` is what tells `api/generate.py` to
+ * persist the rendered deck and emit `file_generated`; the client hears about
+ * the deck through that, not through this.
+ *
+ * They are listed rather than left undeclared so that "not subscribed" is a
+ * recorded decision. A new event name that appears in neither list fails the
+ * contract test in the AI service, which is the point: every name has to be
+ * classified as client-facing or internal by someone.
+ */
+export const INTERNAL_AGENT_EVENT_TYPES = [
+  "deck_finalized",
+  "message_complete",
+] as const;
+
+export type InternalAgentEventType = (typeof INTERNAL_AGENT_EVENT_TYPES)[number];
 
 export interface ThoughtEvent {
   type: "thought";
@@ -150,6 +187,21 @@ export interface ValidationUnresolvedEvent {
   timestamp: string;
 }
 
+/** Wall-clock elapsed time for the run, ticked while it is in flight. */
+export interface TimerUpdateEvent {
+  type: "timer_update";
+  elapsedMs: number;
+  timestamp?: string;
+}
+
+/** The orchestrator renamed the session from its first exchange. */
+export interface SessionTitleUpdatedEvent {
+  type: "session_title_updated";
+  session_id: string;
+  title: string;
+  timestamp?: string;
+}
+
 export interface DoneEvent {
   type: "done";
   phase?: "complete";
@@ -172,6 +224,11 @@ export type AgentEvent =
   | RateLimitEvent
   | ValidationUnresolvedEvent
   | DoneEvent;
+// TimerUpdateEvent and SessionTitleUpdatedEvent are deliberately absent: this
+// union models what lands in a message's `agentEventStream`, and those two are
+// side-channel updates (run clock, sidebar title) that the store applies
+// directly without recording them on a message. Neither carries a `timestamp`,
+// which is why consumers of this union can rely on that field being present.
 
 export interface SSEMessage {
   event: AgentEventType;
