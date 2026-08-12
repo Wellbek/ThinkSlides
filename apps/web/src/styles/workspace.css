@@ -62,6 +62,49 @@
   --ws-radius-lg:  10px;
 
   --ws-rail-w: 18px;
+
+  /* Ambient backdrop, shared by the stage, the empty states and the home view.
+     The stops follow a smoothstep falloff (alpha = 0.5 * (1 - (3t^2 - 2t^3)))
+     so the ramp's slope reaches zero at both ends: a two-stop gradient that
+     lands on the base colour partway across the pane changes slope abruptly
+     there and the eye reads that as a hard circular edge. Peak alpha 0.5 over
+     #0D0D0D reproduces the original #141420 crest exactly. */
+  --ws-backdrop-glow: radial-gradient(125% 100% at 50% 0%,
+    rgba(26, 26, 52, 0.500)   0%,
+    rgba(26, 26, 52, 0.486)  10%,
+    rgba(26, 26, 52, 0.448)  20%,
+    rgba(26, 26, 52, 0.392)  30%,
+    rgba(26, 26, 52, 0.324)  40%,
+    rgba(26, 26, 52, 0.250)  50%,
+    rgba(26, 26, 52, 0.176)  60%,
+    rgba(26, 26, 52, 0.108)  70%,
+    rgba(26, 26, 52, 0.052)  80%,
+    rgba(26, 26, 52, 0.014)  90%,
+    rgba(26, 26, 52, 0.000) 100%);
+
+  /* A ~7-level ramp spread over several hundred pixels still quantises into
+     visible rings at 8 bits per channel. Tiling monochrome noise at 3% dithers
+     the step boundaries below the threshold where the eye picks them out. */
+  --ws-backdrop-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+}
+
+/* One backdrop definition for every surface that shows it. */
+.ws-stage,
+.ws-restore,
+.ws-home {
+  background-color: var(--ws-bg);
+  background-image: var(--ws-backdrop-noise), var(--ws-backdrop-glow);
+  background-size: 140px 140px, cover;
+  background-repeat: repeat, no-repeat;
+  background-position: center top;
+}
+
+/* The empty state inside the stage sits on a backdrop that is already painted.
+   Painting its own on top lit a second crest 22px in from the stage's padding
+   edge, and the box boundary read as a rectangular seam. */
+.ws-stage > .ws-restore {
+  background-image: none;
+  background-color: transparent;
 }
 
 .ws-root {
@@ -194,7 +237,6 @@
 .ws-restore {
   flex: 1 1 0; min-width: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
-  background: radial-gradient(circle at 50% 35%, #141420 0%, var(--ws-bg) 60%);
 }
 .ws-restore .r-icon { width: 56px; height: 56px; border-radius: var(--ws-radius-lg); border: 1px solid var(--ws-border); background: var(--ws-surface-1); display: flex; align-items: center; justify-content: center; color: #444; }
 .ws-restore .r-title { font-size: 14px; color: #777; font-weight: 500; }
@@ -266,7 +308,7 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-send-edit { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ws-ai-text); background: var(--ws-ai-bg); border: 1px solid var(--ws-ai-border); padding: 4px 10px; border-radius: var(--ws-radius-sm); cursor: pointer; }
 .ws-send-edit:hover { background: #161630; }
 
-.ws-stage { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 22px; background: radial-gradient(circle at 50% 0%, #141420 0%, var(--ws-bg) 60%); }
+.ws-stage { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 22px; }
 .ws-slide-wrap { position: relative; width: min(100%, 960px); aspect-ratio: 16 / 9; border-radius: var(--ws-radius-md); box-shadow: 0 24px 60px rgba(0,0,0,0.55), 0 0 0 1px var(--ws-border); overflow: hidden; background: #FAFAF7; }
 .ws-slide-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #FAFAF7; }
 .ws-slide { position: absolute; inset: 0; background: #FAFAF7; color: #1A1A1A; display: flex; flex-direction: column; }
@@ -511,7 +553,7 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-dd-item-check { flex-shrink: 0; margin-top: 2px; color: var(--ws-ai-text); }
 
 /* ---------- Home view ---------- */
-.ws-home { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px; background: radial-gradient(circle at 50% 0%, #141420 0%, var(--ws-bg) 60%); }
+.ws-home { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px; }
 .ws-home-greet { font-size: 26px; font-weight: 600; color: var(--ws-text-primary); }
 .ws-home-sub { font-size: 14px; color: #666; margin-top: 6px; }
 .ws-home-card { width: min(100%, 640px); margin-top: 28px; border: 1px solid var(--ws-border); border-radius: var(--ws-radius-lg); background: var(--ws-surface-1); padding: 12px; }
