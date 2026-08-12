@@ -105,6 +105,17 @@ def _rate_limit_delay(exc: Exception, attempt: int) -> float:
     return min(2.0 ** attempt, MAX_RATE_LIMIT_SLEEP_S)
 
 
+# The provider SDKs retry 429s internally by default. That happens *below*
+# _with_rate_limit_retry, so the exception never reaches it: no rate_limit
+# event is published, nothing counts down, and the interface shows a step
+# sitting there for half a minute looking like a hang. A live run logged
+# "Retrying request to /chat/completions in 24.886000 seconds" with the UI
+# showing nothing at all.
+#
+# One retry policy, in one place. _with_rate_limit_retry already honours
+# retry-after and narrates each wait, so the SDKs are told not to.
+SDK_MAX_RETRIES = 0
+
 async def _with_rate_limit_retry(call, *, provider: str, model: str):
     """
     Run ``call``, retrying while the provider reports a rate limit.
@@ -293,6 +304,7 @@ class AzureOpenAIProvider(LLMProvider):
             api_key=settings.azure_openai_api_key,
             azure_endpoint=settings.azure_openai_endpoint or "",
             api_version=settings.azure_openai_api_version,
+            max_retries=SDK_MAX_RETRIES,
         )
         self.deployment = settings.azure_openai_deployment
 
@@ -370,7 +382,7 @@ class OpenAIProvider(LLMProvider):
 
     def __init__(self, model: str, api_key: str, base_url: str | None = None) -> None:
         from openai import AsyncOpenAI
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": SDK_MAX_RETRIES}
         if base_url:
             kwargs["base_url"] = base_url
         self.client = AsyncOpenAI(**kwargs)
@@ -441,7 +453,7 @@ class AnthropicProvider(LLMProvider):
 
     def __init__(self, model: str, api_key: str, base_url: str | None = None) -> None:
         from anthropic import AsyncAnthropic
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": SDK_MAX_RETRIES}
         if base_url:
             kwargs["base_url"] = base_url
         self.client = AsyncAnthropic(**kwargs)
@@ -781,6 +793,7 @@ class AzureOpenAIVisionProvider(VisionLLMProvider):
             api_key=settings.azure_openai_api_key,
             azure_endpoint=settings.azure_openai_endpoint or "",
             api_version=settings.azure_openai_api_version,
+            max_retries=SDK_MAX_RETRIES,
         )
         self.deployment = settings.azure_openai_vision_deployment
 
