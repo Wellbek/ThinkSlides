@@ -14,7 +14,9 @@ import zipfile
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from typing import Optional
+from xml.sax.saxutils import escape
 from dataclasses import dataclass, field
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -218,6 +220,112 @@ def _apply_bullet_formatting(
     _insert_into_pPr(pPr, buChar)
 
 
+# Slide relationship ids for external hyperlinks. Images are numbered up from
+# rId2 in the same pass that discovers links, so the two sequences are kept
+# apart by starting this one somewhere a slide will never reach.
+LINK_RID_BASE = 1000
+
+# The relationship type for a slide part, spelled out once. Matching this by
+# substring is how the slide master's own relationship ("slideMaster") used to
+# get swept up and deleted - see _update_presentation_rels.
+SLIDE_REL_TYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
+)
+
+
+def _placeholder_index(ph) -> int:
+    """The placeholder index a slide's contents address, as OOXML defines it.
+
+    ``idx`` is optional and defaults to 0, and a title placeholder is exactly
+    the one that conventionally omits it - it is identified by ``type="title"``
+    instead. Reading it as "no idx means no match" meant no title ever got
+    written on the template-clone path: every slide of a deck built on an
+    uploaded template kept the layout's own prompt text, "Click to edit Master
+    title style".
+    """
+    raw = ph.get("idx")
+    if raw is None:
+        return 0 if ph.get("type") in ("title", "ctrTitle") else -1
+    try:
+        return int(raw)
+    except ValueError:
+        return -1
+
+
+def _set_paragraph_level(para, level: int) -> None:
+    """Set a cloned paragraph's outline level to the one the deck asked for.
+
+    The layout's own paragraphs run levels 0-4 in order, and filling them in
+    order without touching ``lvl`` rendered a flat five-bullet list as a
+    five-deep cascade of shrinking indents. The level is the deck's decision
+    (design_slide_content sets it per run); the styling at that level stays
+    the template's, which is what ``pPr`` otherwise carries.
+    """
+    pPr = para.find("a:pPr", NS)
+    if pPr is None:
+        if level <= 0:
+            return
+        pPr = ET.Element(f"{{{NS['a']}}}pPr")
+        para.insert(0, pPr)
+    if level <= 0:
+        pPr.attrib.pop("lvl", None)
+    else:
+        pPr.set("lvl", str(level))
+
+
+def _link_run(a_r, url: str, allocate_rid) -> None:
+    """Turn one cloned-template run into a hyperlink.
+
+    The template path writes raw XML rather than going through python-pptx, so
+    this writes the ``<a:hlinkClick>`` itself. It is added to the run's existing
+    ``<a:rPr>`` - never a replacement - because that element is the template's
+    own typography, and this whole renderer exists to leave it alone.
+    """
+    rPr = a_r.find("a:rPr", NS)
+    if rPr is None:
+        # rPr must precede a:t, so it goes first rather than being appended.
+        rPr = ET.Element(f"{{{NS['a']}}}rPr")
+        a_r.insert(0, rPr)
+    for existing in rPr.findall("a:hlinkClick", NS):
+        rPr.remove(existing)
+    hlink = ET.SubElement(rPr, f"{{{NS['a']}}}hlinkClick")
+    hlink.set(f"{{{NS['r']}}}id", allocate_rid(url))
+
+
+def _apply_run_links(para, a_r, run_data: dict, allocate_rid) -> None:
+    """Apply whatever links the slide JSON asked for to a cloned-template run.
+
+    Two shapes, matching the default renderer: ``link`` makes the paragraph's
+    own run a hyperlink (a reference list line, where the line *is* the
+    source), and ``citation`` appends a second run carrying just the "[3]" so
+    the marker is the only clickable part of a bullet.
+    """
+    run_data = run_data or {}
+
+    url = str(run_data.get("link") or "").strip()
+    if url:
+        _link_run(a_r, url, allocate_rid)
+
+    citation = run_data.get("citation") or {}
+    marker_text = str(citation.get("text") or "")
+    if not marker_text:
+        return
+
+    marker = ET.SubElement(para, f"{{{NS['a']}}}r")
+    rPr = a_r.find("a:rPr", NS)
+    if rPr is not None:
+        # The marker inherits the bullet's own typography, minus any link the
+        # bullet itself carried - the marker's link is its own.
+        marker_rPr = copy.deepcopy(rPr)
+        for existing in marker_rPr.findall("a:hlinkClick", NS):
+            marker_rPr.remove(existing)
+        marker.append(marker_rPr)
+    a_t = ET.SubElement(marker, f"{{{NS['a']}}}t")
+    a_t.text = marker_text
+    if citation.get("link"):
+        _link_run(marker, str(citation["link"]), allocate_rid)
+
+
 def _clear_text_transform(run) -> None:
     """
     Cancel any inherited capitalisation on a run.
@@ -302,6 +410,30 @@ ET.register_namespace("", "http://schemas.openxmlformats.org/package/2006/relati
 ET.register_namespace("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006")
 ET.register_namespace("c", "http://schemas.openxmlformats.org/drawingml/2006/chart")
 
+CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+
+
+@contextmanager
+def _default_namespace(uri: str):
+    """Serialise one document with ``uri`` as its default namespace.
+
+    ElementTree keeps a single process-wide prefix map, and "" is claimed
+    above by the relationships namespace because every .rels file in the
+    package needs it. [Content_Types].xml needs a different one, and an OPC
+    part written with a generated ``ns0:`` prefix instead of its own default
+    namespace is what LibreOffice refuses to open.
+    """
+    previous = ET._namespace_map.get(uri)
+    ET.register_namespace("", uri)
+    try:
+        yield
+    finally:
+        ET._namespace_map.pop(uri, None)
+        if previous is not None:
+            ET._namespace_map[uri] = previous
+        # "" belongs to the relationships namespace for everything else.
+        ET.register_namespace("", "http://schemas.openxmlformats.org/package/2006/relationships")
+
 
 class PPTXRenderer:
     """
@@ -344,6 +476,9 @@ class PPTXRenderer:
         # The style of the slide currently being written, so the text helpers
         # colour their runs for the background they are actually landing on.
         self._style: Optional[SlideStyle] = None
+        # Slide-master placeholder geometry per layout file, parsed on first
+        # use. Every slide of a deck typically reuses a handful of layouts.
+        self._master_box_cache: dict[str, dict[int, dict]] = {}
 
     def render(
         self,
@@ -390,8 +525,9 @@ class PPTXRenderer:
 
                 layout_file = layout_map.get(layout_id)
                 image_rels: list[dict] = []
+                link_rels: list[dict] = []
                 if layout_file and os.path.exists(layout_file):
-                    slide_xml, image_rels = self._clone_layout_as_slide(
+                    slide_xml, image_rels, link_rels = self._clone_layout_as_slide(
                         layout_file, slide_data, working_dir, slide_num
                     )
                 else:
@@ -402,7 +538,9 @@ class PPTXRenderer:
                 with open(slide_path, "wb") as f:
                     f.write(slide_xml)
 
-                self._create_slide_rels(working_dir, slide_num, layout_id, image_rels)
+                self._create_slide_rels(
+                    working_dir, slide_num, layout_id, image_rels, link_rels
+                )
 
             self._update_presentation_xml(working_dir, len(slides))
             self._update_content_types(working_dir, len(slides))
@@ -963,7 +1101,12 @@ class PPTXRenderer:
         tf.vertical_anchor = MSO_ANCHOR.BOTTOM if is_title else MSO_ANCHOR.TOP
 
         styles = [self._style_for_run(run_data, is_title) for run_data in runs]
-        texts = [str(r.get("text", "")) for r in runs]
+        # A citation marker is a second, hyperlinked run on the same paragraph
+        # (see below), so its width counts towards the fit.
+        texts = [
+            str(r.get("text", "")) + str((r.get("citation") or {}).get("text", ""))
+            for r in runs
+        ]
 
         balance = composition.NO_CHANGE
         if not is_title and runs:
@@ -1001,13 +1144,39 @@ class PPTXRenderer:
             run = p.add_run()
             run.text = run_data.get("text", "")
 
+            # A run may carry a URL (citation markers and the reference list -
+            # see renderer/citations.py). Set before the colour below, because
+            # PowerPoint only substitutes its own hyperlink colour when the run
+            # has no explicit fill, and the deck's palette should win.
+            link = str(run_data.get("link") or "").strip()
+            if link:
+                run.hyperlink.address = link
+
+            font_size = Pt(
+                max(text_fit.MIN_FONT_SCALE * base_size, base_size * font_scale)
+            )
             run.font.name = style.font_name
-            run.font.size = Pt(max(text_fit.MIN_FONT_SCALE * base_size, base_size * font_scale))
+            run.font.size = font_size
             run.font.bold = style.bold or run_data.get("bold", False)
             run.font.italic = style.italic or run_data.get("italic", False)
             run.font.underline = style.underline or run_data.get("underline", False)
             self._apply_text_color(run, is_title)
             _clear_text_transform(run)
+
+            # A citation marker rides on the end of its bullet as a second run,
+            # so only the "[3]" is the link - not the whole sentence, which is
+            # what a paragraph-level link would have made clickable.
+            citation = run_data.get("citation") or {}
+            marker_text = str(citation.get("text") or "")
+            if marker_text:
+                marker = p.add_run()
+                marker.text = marker_text
+                if citation.get("link"):
+                    marker.hyperlink.address = str(citation["link"])
+                marker.font.name = style.font_name
+                marker.font.size = font_size
+                self._apply_text_color(marker, is_title)
+                _clear_text_transform(marker)
 
             level = int(run_data.get("level", 0) or 0)
             bulleted = (
@@ -1342,10 +1511,25 @@ class PPTXRenderer:
         slide_data: dict,
         working_dir: str,
         slide_num: int,
-    ) -> tuple[bytes, list[dict]]:
+    ) -> tuple[bytes, list[dict], list[dict]]:
         tree = ET.parse(layout_file)
         root = tree.getroot()
         image_rels: list[dict] = []
+        link_rels: list[dict] = []
+
+        def link_rid(url: str) -> str:
+            """The relationship id for ``url``, creating one on first use.
+
+            Numbered from LINK_RID_BASE so the sequence cannot collide with the
+            image ids, which are allocated in the same pass and whose final
+            count is not known until it finishes.
+            """
+            for rel in link_rels:
+                if rel["target"] == url:
+                    return rel["rId"]
+            rel_id = f"rId{LINK_RID_BASE + len(link_rels)}"
+            link_rels.append({"rId": rel_id, "target": url})
+            return rel_id
 
         for content in slide_data.get("contents", []):
             content_type = content.get("type")
@@ -1376,7 +1560,7 @@ class PPTXRenderer:
 
             for sp in root.findall(".//p:sp", NS):
                 ph = sp.find(".//p:ph", NS)
-                if ph is not None and int(ph.get("idx", "-1")) == placeholder_idx:
+                if ph is not None and _placeholder_index(ph) == placeholder_idx:
                     txBody = sp.find(".//p:txBody", NS)
                     if txBody is None:
                         continue
@@ -1391,13 +1575,16 @@ class PPTXRenderer:
                         if p_idx < len(runs):
                             run_data = runs[p_idx]
                             if existing_runs:
-                                a_t = existing_runs[0].find("a:t", NS)
+                                a_r = existing_runs[0]
+                                a_t = a_r.find("a:t", NS)
                                 if a_t is not None:
                                     a_t.text = run_data.get("text", "")
                             else:
                                 a_r = ET.SubElement(para, f"{{{NS['a']}}}r")
                                 a_t = ET.SubElement(a_r, f"{{{NS['a']}}}t")
                                 a_t.text = run_data.get("text", "")
+                            _set_paragraph_level(para, int(run_data.get("level", 0) or 0))
+                            _apply_run_links(para, a_r, run_data, link_rid)
 
                             for excess_run in existing_runs[1:]:
                                 para.remove(excess_run)
@@ -1429,15 +1616,75 @@ class PPTXRenderer:
                                 a_r.append(copy.deepcopy(template_rPr))
                             a_t = ET.SubElement(a_r, f"{{{NS['a']}}}t")
                             a_t.text = run_data.get("text", "")
+                            _set_paragraph_level(new_para, int(run_data.get("level", 0) or 0))
+                            _apply_run_links(new_para, a_r, run_data, link_rid)
 
                         paragraphs = txBody.findall("a:p", NS)
 
-                    self._apply_autofit_to_placeholder(sp, txBody, paragraphs)
+                    self._apply_autofit_to_placeholder(
+                        sp,
+                        txBody,
+                        paragraphs,
+                        self._master_placeholder_boxes(layout_file).get(placeholder_idx),
+                    )
                     break
 
-        return ET.tostring(root, encoding="unicode", xml_declaration=True).encode("utf-8"), image_rels
+        return (
+            ET.tostring(root, encoding="unicode", xml_declaration=True).encode("utf-8"),
+            image_rels,
+            link_rels,
+        )
 
-    def _apply_autofit_to_placeholder(self, sp: ET.Element, txBody: ET.Element, paragraphs: list[ET.Element]) -> None:
+    def _master_placeholder_boxes(self, layout_file: str) -> dict[int, dict]:
+        """Placeholder geometry from the layout's own slide master, by index.
+
+        A layout placeholder may carry no ``<a:xfrm>`` of its own and inherit
+        the master's - which is the normal case for stock "Title and Content"
+        layouts. The autofit estimate below used to give up on those, so the
+        placeholders most likely to be filled with a lot of text were the ones
+        that never got a scale hint, and long bodies simply ran off the slide.
+        """
+        cached = self._master_box_cache.get(layout_file)
+        if cached is not None:
+            return cached
+
+        boxes: dict[int, dict] = {}
+        rels_path = os.path.join(
+            os.path.dirname(layout_file),
+            "_rels",
+            os.path.basename(layout_file) + ".rels",
+        )
+        try:
+            master_target = None
+            for rel in ET.parse(rels_path).getroot():
+                if rel.get("Type", "").endswith("/slideMaster"):
+                    master_target = rel.get("Target")
+                    break
+            if master_target:
+                master_path = os.path.normpath(
+                    os.path.join(os.path.dirname(layout_file), master_target)
+                )
+                master_root = ET.parse(master_path).getroot()
+                for sp in master_root.findall(".//p:sp", NS):
+                    ph = sp.find(".//p:ph", NS)
+                    if ph is None:
+                        continue
+                    box = get_shape_position(sp)
+                    if box["cx"] > 0 and box["cy"] > 0:
+                        boxes[_placeholder_index(ph)] = box
+        except (OSError, ET.ParseError) as e:
+            logger.debug("master_geometry_unavailable", layout=layout_file, error=str(e))
+
+        self._master_box_cache[layout_file] = boxes
+        return boxes
+
+    def _apply_autofit_to_placeholder(
+        self,
+        sp: ET.Element,
+        txBody: ET.Element,
+        paragraphs: list[ET.Element],
+        fallback_box: Optional[dict] = None,
+    ) -> None:
         """
         Estimate whether the just-filled placeholder's text overflows its
         box, and if so set <a:normAutofit fontScale/lnSpcReduction> on its
@@ -1448,8 +1695,10 @@ class PPTXRenderer:
         """
         box = get_shape_position(sp)
         if box["cx"] <= 0 or box["cy"] <= 0:
-            # No explicit xfrm on this placeholder (size inherited from the
-            # slide master) - not enough geometry to judge, leave as-is.
+            # No explicit xfrm on this placeholder: its size comes from the
+            # slide master, so judge against that rather than giving up.
+            box = fallback_box or box
+        if box["cx"] <= 0 or box["cy"] <= 0:
             return
 
         box_width_pt = emu_to_inches(box["cx"]) * 72.0
@@ -1812,7 +2061,14 @@ class PPTXRenderer:
 </p:sld>"""
         return slide_xml.encode("utf-8")
 
-    def _create_slide_rels(self, working_dir: str, slide_num: int, layout_id: str, image_rels: Optional[list[dict]] = None) -> None:
+    def _create_slide_rels(
+        self,
+        working_dir: str,
+        slide_num: int,
+        layout_id: str,
+        image_rels: Optional[list[dict]] = None,
+        link_rels: Optional[list[dict]] = None,
+    ) -> None:
         rels_dir = os.path.join(working_dir, "ppt", "slides", "_rels")
         os.makedirs(rels_dir, exist_ok=True)
         rels_path = os.path.join(rels_dir, f"slide{slide_num}.xml.rels")
@@ -1824,12 +2080,23 @@ class PPTXRenderer:
             for rel in (image_rels or [])
         )
 
+        # External targets, so TargetMode="External" - without it PowerPoint
+        # reads the URL as a path inside the package and reports the file as
+        # corrupt rather than opening the link.
+        link_rel_xml = "\n".join(
+            f'  <Relationship Id="{rel["rId"]}" '
+            f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" '
+            f'Target="{escape(rel["target"], {chr(34): "&quot;"})}" TargetMode="External"/>'
+            for rel in (link_rels or [])
+        )
+
         rels_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1"
     Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout"
     Target="../slideLayouts/slideLayout{layout_id}.xml"/>
 {image_rel_xml}
+{link_rel_xml}
 </Relationships>"""
 
         with open(rels_path, "w", encoding="utf-8") as f:
@@ -1895,9 +2162,18 @@ class PPTXRenderer:
         rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
 
         # Remove existing slide relationships - they get regenerated below.
+        #
+        # Matched exactly rather than by substring. The previous test was
+        # `"slide" in type and "master" not in type`, and the slide master's
+        # relationship type is ".../slideMaster" - capital M - so it never
+        # matched the guard and the master relationship was deleted from every
+        # template-based render. presentation.xml still pointed at it
+        # (<p:sldMasterId r:id="rId1"/>), leaving a dangling reference:
+        # LibreOffice refuses the file outright ("source file could not be
+        # loaded"), which also meant validate_rendered_output could never
+        # inspect a deck built on an uploaded template.
         for rel in list(root):
-            rel_type = rel.get("Type", "")
-            if "slide" in rel_type and "layout" not in rel_type and "master" not in rel_type:
+            if rel.get("Type", "") == SLIDE_REL_TYPE:
                 root.remove(rel)
 
         # Find the next free numeric rId instead of hardcoding rId{i+2}, which
@@ -1917,7 +2193,7 @@ class PPTXRenderer:
         for i, rid in enumerate(rids):
             rel = ET.SubElement(root, f"{{{rel_ns}}}Relationship")
             rel.set("Id", rid)
-            rel.set("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide")
+            rel.set("Type", SLIDE_REL_TYPE)
             rel.set("Target", f"slides/slide{i + 1}.xml")
 
         tree = ET.ElementTree(root)
@@ -1933,8 +2209,6 @@ class PPTXRenderer:
         tree = ET.parse(ct_path)
         root = tree.getroot()
 
-        ct_ns = "http://schemas.openxmlformats.org/package/2006/content-types"
-
         # Remove existing slide overrides
         for override in list(root):
             part_name = override.get("PartName", "")
@@ -1943,14 +2217,24 @@ class PPTXRenderer:
 
         # Add slide content type overrides
         for i in range(slide_count):
-            override = ET.SubElement(root, f"{{{ct_ns}}}Override")
+            override = ET.SubElement(root, f"{{{CONTENT_TYPES_NS}}}Override")
             override.set("PartName", f"/ppt/slides/slide{i + 1}.xml")
             override.set(
                 "ContentType",
                 "application/vnd.openxmlformats-officedocument.presentationml.slide+xml",
             )
 
-        tree.write(ct_path, xml_declaration=True, encoding="UTF-8")
+        # Written with the content-types namespace as the document default.
+        #
+        # ElementTree has one global prefix map, and this module registers ""
+        # for the *relationships* namespace (which every .rels file needs), so
+        # [Content_Types].xml came back out as <ns0:Types><ns0:Default .../>.
+        # That is well-formed and namespace-equivalent, and LibreOffice's OPC
+        # reader rejects the package outright anyway - "source file could not
+        # be loaded" - which is why no deck built on an uploaded template could
+        # be opened, previewed, or validated.
+        with _default_namespace(CONTENT_TYPES_NS):
+            tree.write(ct_path, xml_declaration=True, encoding="UTF-8")
 
     def _apply_metadata(self, working_dir: str, metadata: dict) -> None:
         """Apply presentation metadata to core.xml."""

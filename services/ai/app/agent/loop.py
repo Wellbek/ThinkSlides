@@ -1351,6 +1351,11 @@ class AgentLoop:
                                 "title": item.get("title", ""),
                                 "url": item.get("url", ""),
                                 "snippet": item.get("snippet", ""),
+                                # Best-effort, and usually absent: only some
+                                # backends date a page. The reference list in
+                                # the rendered deck prints it when present, so
+                                # a reader can tell how current a figure is.
+                                "published": item.get("published", ""),
                             })
                             # Candidate images a search backend found on this
                             # page (currently only Firecrawl, whose scraped

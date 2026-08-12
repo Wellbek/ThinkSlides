@@ -73,7 +73,7 @@ async def test_tavily_search_normalizes_results():
     assert result.success is True
     assert result.data["result_count"] == 2
     first = result.data["results"][0]
-    assert set(first.keys()) == {"title", "url", "snippet", "source"}
+    assert set(first.keys()) == {"title", "url", "snippet", "source", "published"}
     assert first["url"] == "https://en.wikipedia.org/wiki/List_of_highest_mountains"
     assert first["snippet"] == "Mount Everest is 8,848 m tall."
     assert first["source"] == "en.wikipedia.org"
@@ -277,6 +277,9 @@ def test_anthropic_citations_become_normalized_results():
         "url": "https://www.nationalgeographic.com/everest",
         "snippet": "Everest rises to 8,848 metres.",
         "source": "nationalgeographic.com",
+        # Anthropic dates the tool-result block, not the citation, and only
+        # ever relatively ("3 days ago") - so this stays empty.
+        "published": "",
     }]
 
 
@@ -450,3 +453,70 @@ def test_openai_parser_accepts_dict_shaped_annotations():
 
     assert parsed[0]["url"] == "https://example.com/everest"
     assert parsed[0]["snippet"] == content
+
+
+# ── Publication dates ──────────────────────────────────────────────────
+#
+# Only some backends date a page, and the ones that do are inconsistent about
+# the format. A reference in the rendered deck prints the date when there is
+# one, so the reader can see how current a figure is - which means a date that
+# cannot be trusted must not be invented.
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("2026-03-11", "2026-03-11"),
+        ("2026-03-11T09:30:00Z", "2026-03-11"),
+        ("2026-03-11 09:30:00", "2026-03-11"),
+        ("  2026-03-11  ", "2026-03-11"),
+        # Relative ages and free text say nothing a reader can act on.
+        ("3 days ago", ""),
+        ("March 2026", ""),
+        ("2026-13-11", ""),
+        ("2026-03-99", ""),
+        ("", ""),
+        (None, ""),
+        (20260311, ""),
+    ],
+)
+def test_published_date_only_accepts_a_real_calendar_date(value, expected):
+    assert search_backends.published_date(value) == expected
+
+
+def test_tavily_carries_a_publication_date_when_it_has_one():
+    parsed = search_backends.parse_tavily_response({
+        "results": [
+            {"url": "https://a.com", "title": "A", "content": "x",
+             "published_date": "2026-03-11T00:00:00Z"},
+            {"url": "https://b.com", "title": "B", "content": "y"},
+        ]
+    })
+    assert [r["published"] for r in parsed] == ["2026-03-11", ""]
+
+
+def test_zhipu_carries_a_publication_date_when_it_has_one():
+    parsed = search_backends.parse_zhipu_response({
+        "search_result": [
+            {"link": "https://a.com", "title": "A", "content": "x",
+             "publish_date": "2026-03-11"},
+        ]
+    })
+    assert parsed[0]["published"] == "2026-03-11"
+
+
+def test_firecrawl_reads_the_date_off_the_scraped_page_metadata():
+    parsed = search_backends.parse_firecrawl_response({
+        "data": {"web": [
+            {"url": "https://a.com", "title": "A", "description": "x",
+             "metadata": {"publishedTime": "2026-03-11T08:00:00+00:00"}},
+        ]}
+    })
+    assert parsed[0]["published"] == "2026-03-11"
+
+
+def test_firecrawl_without_metadata_claims_no_date():
+    parsed = search_backends.parse_firecrawl_response({
+        "data": {"web": [{"url": "https://a.com", "title": "A", "description": "x"}]}
+    })
+    assert parsed[0]["published"] == ""
