@@ -32,6 +32,7 @@ from app.observability.logging import get_logger
 logger = get_logger(__name__)
 
 CHART_TYPES = ["bar", "line", "pie", "scatter", "area"]
+LABEL_MODES = ["auto", "none", "all", "terminal", "end"]
 VALUE_FORMATS = ["number", "percent", "currency"]
 
 MAX_CATEGORIES = 30
@@ -128,6 +129,28 @@ class BuildChartTool:
                                     "numbers - those belong in the series name."
                                 ),
                             },
+                            "forecastFrom": {
+                                "type": "integer",
+                                "description": (
+                                    "0-based index from which the values are PROJECTED "
+                                    "rather than measured. Those points render dashed "
+                                    "and outlined so a reader can see which part of the "
+                                    "chart is evidence. The slide must carry a footnote "
+                                    "saying what the projection is based on, and a [^n] "
+                                    "marker on the affected category or series name."
+                                ),
+                            },
+                            "measured": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "description": (
+                                    "Optional: the MEASURED portion of each value, where "
+                                    "part of a figure is real and part is extrapolated "
+                                    "(e.g. a full-year figure projected from a half-year "
+                                    "actual). The bar is drawn solid to this and "
+                                    "outlined to the full value."
+                                ),
+                            },
                         },
                         "required": ["name", "values"],
                     },
@@ -158,6 +181,24 @@ class BuildChartTool:
                         "says the same thing - a repeated heading reads as a stutter."
                     ),
                 ),
+                ToolParameter(
+                    name="unit_line", type="string", required=False,
+                    description=(
+                        "The unit, as a second line under the title - \"thousands\", "
+                        "\"$ billion\". Use this rather than repeating the unit up the "
+                        "side of the plot; it is what a reader looks for first and it "
+                        "does not have to be read sideways."
+                    ),
+                ),
+                ToolParameter(
+                    name="label_mode", type="string", enum=LABEL_MODES, required=False,
+                    description=(
+                        "Where the numbers go: 'end' labels every bar at its end (which "
+                        "is what lets a chart drop its axis entirely), 'terminal' labels "
+                        "only the last point of a line, 'all' labels everything, 'none' "
+                        "relies on the axis. Defaults to the deck's own convention."
+                    ),
+                ),
             ],
         )
 
@@ -172,6 +213,8 @@ class BuildChartTool:
         x_axis_title: str = "",
         value_format: str = "number",
         title: str = "",
+        unit_line: str = "",
+        label_mode: str = "",
     ) -> ToolResult:
         start = time.time()
         categories = [str(c) for c in _as_list(categories)]
@@ -252,7 +295,42 @@ class BuildChartTool:
                 return cls._error(
                     "A pie cannot show negative values. Use a bar chart.", start
                 )
-            clean_series.append({"name": name, "values": values})
+            entry_out = {"name": name, "values": values}
+            forecast_from = entry.get("forecastFrom")
+            if forecast_from is not None:
+                try:
+                    index = int(forecast_from)
+                except (TypeError, ValueError):
+                    return cls._error(
+                        f"series {name!r} has a forecastFrom that is not an "
+                        f"index: {forecast_from!r}.",
+                        start,
+                    )
+                if not 0 <= index < len(values):
+                    return cls._error(
+                        f"series {name!r} has forecastFrom={index} but only "
+                        f"{len(values)} values. It is the 0-based index of the "
+                        "first PROJECTED point.",
+                        start,
+                    )
+                entry_out["forecastFrom"] = index
+            measured = _as_list(entry.get("measured"))
+            if measured:
+                cleaned_measured = [_as_number(v) for v in measured]
+                if any(v is None for v in cleaned_measured):
+                    return cls._error(
+                        f"series {name!r} has a measured value that is not a "
+                        "plain number.",
+                        start,
+                    )
+                if len(cleaned_measured) != len(values):
+                    return cls._error(
+                        f"series {name!r} has {len(cleaned_measured)} measured "
+                        f"values but {len(values)} values - give one per point.",
+                        start,
+                    )
+                entry_out["measured"] = cleaned_measured
+            clean_series.append(entry_out)
 
         if chart_type == "pie" and sum(clean_series[0]["values"]) <= 0:
             return cls._error(
@@ -272,6 +350,14 @@ class BuildChartTool:
             chart["valueFormat"] = value_format.lower()
         if title.strip():
             chart["title"] = title.strip()
+        if unit_line.strip():
+            chart["unitLine"] = unit_line.strip()
+        if (label_mode or "").lower() in LABEL_MODES:
+            chart["labelMode"] = label_mode.lower()
+
+        if any(s.get("forecastFrom") is not None or s.get("measured")
+               for s in clean_series):
+            chart["marksAProjection"] = True
 
         logger.info(
             "chart_built",

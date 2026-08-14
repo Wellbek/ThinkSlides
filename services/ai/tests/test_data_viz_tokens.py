@@ -68,39 +68,43 @@ def _thin_runs(indices, max_thickness=3):
     return lines
 
 
-def _gridlines(pixels, design_system, span=0.35):
+def _rules_of_colour(pixels, hex_value, axis, span=0.35):
     """
-    How many gridlines the chart drew, found by their **colour**.
+    How many thin rules of a given colour span most of the image.
 
-    Geometry alone does not work here. Four bars across a 1200px image make
-    most rows through the plot "mostly inked", and the top edge of a bar is a
-    thin wide run indistinguishable from a rule. The gridline colour is a
-    design-system token, so matching it says exactly what is being counted.
+    Colour rather than geometry, and for a specific reason: with the axis and
+    gridlines gone, matplotlib's constrained layout grows the bars to fill the
+    plot, so most rows *and* columns through them read as "mostly inked" and
+    the anti-aliased edge of a bar is a thin full-length run indistinguishable
+    from a rule. Both the gridline and axis colours are design-system tokens,
+    so matching them says exactly what is being counted.
     """
     from app import colors as color_utils
-    from app.renderer.table_style import resolve_chart_style
 
-    target = color_utils.parse_hex(resolve_chart_style(design_system).grid_color)
+    target = color_utils.parse_hex(hex_value)
     if target is None:
         return 0
     rgb = pixels[:, :, :3].astype(int)
     close = (np.abs(rgb - np.array(target)).sum(axis=2) < 60) & _ink(pixels)
-    rows = np.nonzero(close.sum(axis=1) >= close.shape[1] * span)[0]
-    return _thin_runs(list(rows), max_thickness=4)
+    extent = close.shape[1] if axis == 1 else close.shape[0]
+    runs = np.nonzero(close.sum(axis=axis) >= extent * span)[0]
+    return _thin_runs(list(runs), max_thickness=4)
 
 
-def _axis_rules(pixels, span=0.55):
-    """
-    How many thin rules span most of the height - i.e. is there a value axis.
+def _gridlines(pixels, design_system, span=0.35):
+    """Horizontal rules drawn in the deck's gridline colour."""
+    from app.renderer.table_style import resolve_chart_style
 
-    Measured rather than inferred from the left margin: with the axis gone,
-    matplotlib expands the plot leftwards, so "is there ink at the left edge"
-    stops meaning anything. Bars are far thicker than the thickness cutoff, so
-    they are not counted.
-    """
-    ink = _ink(pixels)
-    tall = np.nonzero(ink.sum(axis=0) >= ink.shape[0] * span)[0]
-    return _thin_runs(tall)
+    return _rules_of_colour(pixels, resolve_chart_style(design_system).grid_color,
+                            axis=1, span=span)
+
+
+def _axis_rules(pixels, design_system, span=0.5):
+    """Vertical rules drawn in the deck's axis colour - i.e. a value axis."""
+    from app.renderer.table_style import resolve_chart_style
+
+    return _rules_of_colour(pixels, resolve_chart_style(design_system).axis_color,
+                            axis=0, span=span)
 
 
 def _left_band_ink(pixels, fraction=0.05):
@@ -183,13 +187,11 @@ class TestTokensAreReadRatherThanHardcoded:
         Reference page 22 drops it entirely. This is the single biggest
         visual difference between our charts and that deck's.
         """
-        with_axis = _axis_rules(_render(_system(chartValueAxis=True)))
-        without = _axis_rules(
-            _render(_system(chartValueAxis=False, chartValueGridlines=False))
-        )
+        on = _system(chartValueAxis=True)
+        off = _system(chartValueAxis=False, chartValueGridlines=False)
 
-        assert with_axis >= 1
-        assert without == 0
+        assert _axis_rules(_render(on), on) >= 1
+        assert _axis_rules(_render(off), off) == 0
 
     def test_bar_thickness_changes_the_bars(self):
         # Gridlines off, so the only ink across the middle of the plot is the
@@ -289,7 +291,7 @@ class TestTheReferenceDecksTokensProduceADifferentChart:
         system = _system(**self.REFERENCE_TOKENS)
         reference = _render(system)
 
-        assert _axis_rules(reference) == 0
+        assert _axis_rules(reference, system) == 0
         assert _gridlines(reference, system) == 0
 
 
