@@ -549,9 +549,16 @@ class TestRenderingIntoRegions:
         assert emu_to_inches(picture.left) == pytest.approx(expected.left, abs=0.05)
         assert emu_to_inches(picture.top) == pytest.approx(expected.top, abs=0.05)
 
-    def test_a_composed_slide_still_carries_the_deck_chrome(self, work_dir):
+    def test_a_composed_slide_carries_the_footer_but_not_the_catalog_rule(self, work_dir):
+        """
+        The accent rule is placed at a fixed point under a catalog layout's
+        title. A composed slide has no title there - on a split canvas the bar
+        landed across the lead paragraph - and its composition is already the
+        design language the rule stands in for. Chrome that understands
+        compositions is #126.
+        """
         from pptx import Presentation
-        from app.renderer.pptx_renderer import CHROME_ACCENT_RULE
+        from app.renderer.pptx_renderer import CHROME_ACCENT_RULE, CHROME_FOOTER
 
         slides = [
             {"slideIndex": 0, "layoutId": "title",
@@ -559,8 +566,14 @@ class TestRenderingIntoRegions:
             {"slideIndex": 1, "layoutId": "content", "regions": PAGE_40,
              "contents": [{"type": "text", "regionId": "title",
                            "runs": [{"text": "Composed", "bullet": False}]}]},
+            {"slideIndex": 2, "layoutId": "content",
+             "contents": [{"type": "text", "runs": [{"text": "Plain"}]},
+                          {"type": "text", "runs": [{"text": "A point", "bullet": True}]}]},
         ]
         path = _render(slides, work_dir, "chrome")
+        deck = Presentation(path)
 
-        slide = Presentation(path).slides[1]
-        assert any((s.name or "") == CHROME_ACCENT_RULE for s in slide.shapes)
+        composed, plain = deck.slides[1], deck.slides[2]
+        assert not any((s.name or "") == CHROME_ACCENT_RULE for s in composed.shapes)
+        assert any((s.name or "") == CHROME_FOOTER for s in composed.shapes)
+        assert any((s.name or "") == CHROME_ACCENT_RULE for s in plain.shapes)

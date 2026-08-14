@@ -117,6 +117,11 @@ _STOCK_LAYOUT_FOR_CATALOG_ID = {
 CHROME_NAME_PREFIX = "ThinkSlides Chrome:"
 CHROME_ACCENT_RULE = f"{CHROME_NAME_PREFIX} Accent Rule"
 CHROME_FOOTER = f"{CHROME_NAME_PREFIX} Footer"
+# A region's own background fill. Chrome rather than content: it is the paper
+# a block is printed on, and measuring a half-slide fill as if it were an
+# element would tell every dead-space and density check that the slide is
+# full when nothing has been written on it yet.
+CHROME_REGION_GROUND = f"{CHROME_NAME_PREFIX} Region Ground"
 
 
 def is_chrome_shape(shape) -> bool:
@@ -625,6 +630,9 @@ class PPTXRenderer:
 
             self._style = plan.style
             self._apply_background(slide, plan.style)
+            # Before any content: shapes stack in document order, so a ground
+            # added after a block would cover it.
+            self._paint_region_grounds(slide, plan)
             self._render_content_on_slide(slide, slide_data, plan)
             self._decorate_slide(slide, plan, catalog, index, total, metadata)
         self._style = None
@@ -751,7 +759,14 @@ class PPTXRenderer:
         language across a deck; without it, seven slides of the same white
         page read as seven unrelated documents.
         """
-        if plan.accent_rule is not None:
+        # The accent rule is positioned by the layout catalog, at a fixed point
+        # under where a catalog layout puts its title. A composed slide does
+        # not have that title there - the rule landed across the lead
+        # paragraph of a split canvas - and its composition is already the
+        # design language the rule stands in for on a plain slide. Chrome that
+        # knows about compositions is #126; until then a composed slide is
+        # left to its own structure rather than having a bar drawn through it.
+        if plan.accent_rule is not None and plan.regions is None:
             self._add_accent_rule(slide, plan.accent_rule, plan.style.accent_color)
 
         if not plan.show_footer:
@@ -1010,6 +1025,68 @@ class PPTXRenderer:
                 ).strip()
         return ""
 
+    def _paint_region_grounds(self, slide, plan: SlidePlan) -> None:
+        """
+        Fill each region that declared a ground of its own.
+
+        A slide used to have exactly one background, and text was coloured
+        from it. The moment a slide has two grounds that arrangement fails in
+        the worst possible way - half the text is correct and half is
+        invisible - which is the same defect ``_apply_text_color`` was written
+        to fix, returning at a larger scale.
+
+        Painted outermost first, so a rail inside a panel sits on top of it
+        rather than under it.
+        """
+        if plan.regions is None:
+            return
+        for resolved in plan.regions.grounded():
+            self._add_ground(slide, resolved.rect, resolved.region.ground or "")
+
+    @staticmethod
+    def _add_ground(slide, region: PositionConfig, color_hex: str) -> None:
+        """A filled rectangle standing in for a region's own paper."""
+        if region.width <= 0 or region.height <= 0:
+            return
+        try:
+            rgb = _hex_to_rgbcolor(color_hex)
+        except ValueError:
+            return
+        shape = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            Inches(region.left), Inches(region.top),
+            Inches(region.width), Inches(region.height),
+        )
+        shape.name = CHROME_REGION_GROUND
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = rgb
+        shape.line.fill.background()
+        # Same reason as the accent rule: an autoshape's <p:style> points at
+        # the theme's shadow, and LibreOffice draws it even when the effect
+        # list is cleared. A ground with a drop shadow reads as a floating
+        # card, not as the page.
+        style = shape._element.find(qn("p:style"))
+        if style is not None:
+            shape._element.remove(style)
+
+    def _style_on_ground(self, plan: SlidePlan, ground: Optional[str]) -> SlideStyle:
+        """The slide's style, re-resolved for a region's own ground."""
+        if not ground or self._theme is None:
+            return plan.style
+        if ground.upper() == (plan.style.background or "").upper():
+            return plan.style
+        return self._theme.style_on(ground, plan.style.role)
+
+    @contextmanager
+    def _styled(self, style: SlideStyle):
+        """Colour everything drawn inside the block for ``style``'s ground."""
+        previous = self._style
+        self._style = style
+        try:
+            yield
+        finally:
+            self._style = previous
+
     def _render_regions(
         self,
         slide,
@@ -1052,9 +1129,15 @@ class PPTXRenderer:
                 [rect] if len(entries) == 1
                 else self._split_region_vertically(rect, entries)
             )
-            for (kind, item), target in zip(entries, rects):
-                is_title = kind == "text" and id(item) == first_text_id
-                self._draw_block(slide, kind, item, target, slide_title, is_title)
+            # Text, bullets, rules and chart axes inside this region are
+            # coloured for the ground the region actually sits on, which is
+            # not necessarily the slide's.
+            ground = tree.ground(region_id)
+            with self._styled(self._style_on_ground(plan, ground)):
+                for (kind, item), target in zip(entries, rects):
+                    is_title = kind == "text" and id(item) == first_text_id
+                    self._draw_block(slide, kind, item, target, slide_title,
+                                     is_title, ground)
 
     def _draw_block(
         self,
@@ -1064,6 +1147,7 @@ class PPTXRenderer:
         rect: PositionConfig,
         slide_title: str,
         is_title: bool = False,
+        ground: Optional[str] = None,
     ) -> None:
         """Draw one content block into an explicit rectangle."""
         if kind == "text":
@@ -1075,7 +1159,7 @@ class PPTXRenderer:
         elif kind == "metrics":
             self._add_key_metrics(slide, item.get("metrics", {}), rect)
         elif kind == "chart":
-            self._add_chart(slide, item.get("chart", {}), rect, slide_title)
+            self._add_chart(slide, item.get("chart", {}), rect, slide_title, ground)
 
     @staticmethod
     def _placeholder_region(shape) -> PositionConfig:
@@ -1385,15 +1469,22 @@ class PPTXRenderer:
             pass
 
     def _apply_text_color(self, run, is_title: bool) -> None:
-        """Colour a run for the background the current slide is actually on.
+        """Colour a run for the ground it is actually landing on.
 
         Body text was previously left at the master's default (black) whatever
         was behind it, so the moment a slide gained a dark background its
-        subtitle became black-on-brand-dark.
+        subtitle became black-on-brand-dark. ``self._style`` now tracks the
+        *region's* ground while a region-bound block is being drawn, so the
+        same reasoning holds when one slide carries two canvases.
+
+        The contrast check is applied here rather than trusted from upstream:
+        it is one comparison, it is the last point before the colour reaches
+        the file, and an unreadable run is a defect no later pass can see.
         """
         if self._style is None:
             return
-        color_hex = self._style.title_color if is_title else self._style.body_color
+        preferred = self._style.title_color if is_title else self._style.body_color
+        color_hex = colors.readable_on(self._style.background, preferred)
         try:
             run.font.color.rgb = _hex_to_rgbcolor(color_hex)
         except ValueError:
@@ -1409,11 +1500,18 @@ class PPTXRenderer:
         chart_data: dict,
         pos: PositionConfig,
         slide_title: str = "",
+        ground: Optional[str] = None,
     ) -> None:
         """Render chart_data to a design-system-styled PNG and place it on the slide."""
         chart_bytes = chart_renderer.render_chart_to_png(
             chart_data, self.design_system, pos.width, pos.height,
             slide_title=slide_title,
+            # A chart PNG is transparent, so what it is drawn *on* decides
+            # whether its axes and labels are legible. A chart bound to a
+            # navy half rendered its axis in the deck's dark tone and came
+            # out invisible - the same failure as dark text on a dark
+            # ground, in the one element that had no way to know.
+            ground=ground or (self._style.background if self._style else None),
         )
         if not chart_bytes:
             return
