@@ -9,13 +9,18 @@ from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
 from app.renderer import regions as region_model
+from app.renderer import primitives as primitive_model
+from app.renderer.blocks import BLOCK_PAYLOAD_KEY
 import time
 
 logger = get_logger(__name__)
 
 REQUIRED_SLIDE_FIELDS = ["slideIndex", "layoutId", "layoutName", "contents"]
 REQUIRED_CONTENT_FIELDS = ["type"]
-VALID_CONTENT_TYPES = {"text", "image", "table", "chart"}
+# "metrics" has always rendered; it was simply never in the validator's list,
+# so a slide carrying one validated with a spurious error.
+CORE_CONTENT_TYPES = {"text", "image", "table", "chart", "metrics"}
+VALID_CONTENT_TYPES = CORE_CONTENT_TYPES | set(BLOCK_PAYLOAD_KEY)
 
 
 class ValidateSlideJsonTool:
@@ -175,6 +180,17 @@ class ValidateSlideJsonTool:
                     if "chart" not in item:
                         errors.append(f"Content item {i}: chart type requires 'chart' object")
 
+                elif ctype in BLOCK_PAYLOAD_KEY:
+                    key = BLOCK_PAYLOAD_KEY[ctype]
+                    if key not in item:
+                        errors.append(
+                            f"Content item {i}: {ctype} requires a {key!r} payload - "
+                            f"build it with the matching build_* tool rather than "
+                            f"writing the JSON by hand"
+                        )
+                    elif not item[key]:
+                        errors.append(f"Content item {i}: {ctype}'s {key!r} is empty")
+
                 # Validate placeholder index against layout
                 ph_idx = item.get("placeholderIdx")
                 if ph_idx is not None and layout_placeholders:
@@ -192,12 +208,23 @@ class ValidateSlideJsonTool:
         # it was composed into, and a block bound to a region that does not
         # exist is content silently dropped. All three produce a file that
         # opens and is wrong, which is the worst kind of defect to ship.
+        declared_regions = region_model.declared_region_ids(slide.get("regions"))
         region_errors, region_warnings = region_model.validate_regions(
             slide.get("regions"),
             region_model.content_region_ids(contents),
         )
         errors.extend(region_errors)
         warnings.extend(region_warnings)
+
+        # The open primitive layer is only safe because it is checked as
+        # closely as the closed one: a mark outside its frame, bound to a
+        # region that does not exist, or drawn over another label all produce
+        # a file that opens and is wrong.
+        primitive_errors, primitive_warnings = primitive_model.validate_primitives(
+            slide.get("primitives"), declared_regions,
+        )
+        errors.extend(primitive_errors)
+        warnings.extend(primitive_warnings)
 
         # Validate slide index
         if not isinstance(slide.get("slideIndex"), int):

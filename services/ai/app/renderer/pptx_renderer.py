@@ -27,6 +27,8 @@ from pptx.oxml.xmlchemy import OxmlElement
 from app.observability.logging import get_logger
 from app.renderer.layout import LayoutEngine, PositionConfig
 from app.renderer.regions import RegionTree
+from app.renderer.blocks import BLOCK_TYPES, BlockCompiler
+from app.renderer import primitives as prim
 from app.renderer.typography import TypeScale
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
 from app.renderer import text_fit
@@ -36,7 +38,9 @@ from app.renderer import chart_renderer
 from app.renderer import composition
 from app.renderer import deck_theme
 from app.renderer.deck_theme import DeckTheme, SlideStyle
-from app.renderer.xml_utils import get_shape_position, emu_to_inches, inches_to_emu
+from app.renderer.xml_utils import (
+    describe_picture, get_shape_position, emu_to_inches, inches_to_emu,
+)
 from app import colors
 from app.design_system import get_default_design_system
 
@@ -123,6 +127,9 @@ CHROME_FOOTER = f"{CHROME_NAME_PREFIX} Footer"
 # full when nothing has been written on it yet.
 CHROME_REGION_GROUND = f"{CHROME_NAME_PREFIX} Region Ground"
 
+# Content that is placed as an object rather than written into a placeholder.
+OBJECT_CONTENT_TYPES = frozenset({"image", "table", "chart", "metrics"})
+
 
 def is_chrome_shape(shape) -> bool:
     """True for shapes the renderer added as deck chrome, not slide content."""
@@ -142,6 +149,14 @@ class SlidePlan:
     # that binds by placeholder index, which is every slide written before
     # regions existed and most written after.
     regions: Optional[RegionTree] = None
+    # The canvas, so a mark bound to no region is still positioned
+    # fractionally against something real rather than against a guess.
+    canvas: PositionConfig = field(
+        default_factory=lambda: PositionConfig(
+            left=0.0, top=0.0,
+            width=LayoutEngine.SLIDE_WIDTH, height=LayoutEngine.SLIDE_HEIGHT,
+        )
+    )
 
     @property
     def content_region(self) -> PositionConfig:
@@ -395,34 +410,6 @@ def _resolve_image_bytes(img_data: dict) -> Optional[bytes]:
     return None
 
 
-def _describe_picture(picture, description: str) -> None:
-    """
-    Give a placed picture its own description, replacing python-pptx's.
-
-    ``add_picture`` takes a path, and python-pptx writes that path into the
-    shape's ``descr`` attribute. Every chart and every image this renderer
-    places comes from a ``NamedTemporaryFile``, so each shipped deck carried
-    strings like ``descr="tmp3nuj3me1.png"`` - a local temp filename, in the
-    file the user downloads, and different on every render of the same deck.
-    That made the renderer's own output non-deterministic, which is why this
-    surfaced: the region work needs "the same slide JSON renders the same
-    file" to be true before it can claim to have changed nothing.
-
-    The attribute is also the accessibility description a screen reader
-    reads, so it is set to the content's alt text where there is one and
-    removed where there is not.
-    """
-    try:
-        cNvPr = picture._element.nvPicPr.cNvPr
-    except AttributeError:                                # pragma: no cover
-        return
-    text = (description or "").strip()
-    if text:
-        cNvPr.set("descr", text)
-    else:
-        cNvPr.attrib.pop("descr", None)
-
-
 def _sniff_image_ext(img_bytes: bytes) -> str:
     """Determine a file extension from image content, not from a claimed source string."""
     try:
@@ -517,6 +504,10 @@ class PPTXRenderer:
         # Slide-master placeholder geometry per layout file, parsed on first
         # use. Every slide of a deck typically reuses a handful of layouts.
         self._master_box_cache: dict[str, dict[int, dict]] = {}
+        # The 1-based number of the slide being written, so every primitive
+        # this renderer emits gets an id that is stable across renders and
+        # unique across the deck.
+        self._slide_number: int = 0
 
     def render(
         self,
@@ -628,6 +619,7 @@ class PPTXRenderer:
             layout = self._find_layout_for_catalog_id(prs, plan.layout_id)
             slide = prs.slides.add_slide(layout)
 
+            self._slide_number = index + 1
             self._style = plan.style
             self._apply_background(slide, plan.style)
             # Before any content: shapes stack in document order, so a ground
@@ -732,6 +724,8 @@ class PPTXRenderer:
             # is noise, and no real deck numbers its cover.
             show_footer=role != deck_theme.ROLE_COVER,
             regions=RegionTree.from_slide(slide_data, canvas_width, canvas_height),
+            canvas=PositionConfig(left=0.0, top=0.0,
+                                  width=canvas_width, height=canvas_height),
         )
 
     @staticmethod
@@ -873,6 +867,11 @@ class PPTXRenderer:
         planned and what renders are the same rectangle.
         """
         contents = slide_data.get("contents", [])
+        # Authored marks are drawn first, so a tinted panel or a rule the slide
+        # asked for sits behind the content it frames rather than over it. A
+        # slide that wants a mark on top says so by ordering, which is the one
+        # thing z-order in a flat list can express.
+        self._draw_authored_primitives(slide, slide_data, plan)
         if not contents:
             self._strip_empty_placeholders(slide)
             return
@@ -892,7 +891,7 @@ class PPTXRenderer:
         text_items = [c for c in contents if c.get("type") == "text"]
         object_items = [
             c for c in contents
-            if c.get("type") in ("image", "table", "chart", "metrics")
+            if c.get("type") in OBJECT_CONTENT_TYPES or c.get("type") in BLOCK_TYPES
         ]
 
         # The content designer emits the title first, then body items (see
@@ -970,14 +969,7 @@ class PPTXRenderer:
             if ph is not None:
                 self._remove_shape(ph)
 
-            if kind == "image":
-                self._add_image(slide, item.get("image", {}), region)
-            elif kind == "table":
-                self._add_table(slide, item.get("table", {}), region)
-            elif kind == "metrics":
-                self._add_key_metrics(slide, item.get("metrics", {}), region)
-            else:
-                self._add_chart(slide, item.get("chart", {}), region, slide_title)
+            self._draw_block(slide, kind, item, region, slide_title)
 
         self._strip_empty_placeholders(slide)
 
@@ -1040,18 +1032,23 @@ class PPTXRenderer:
         """
         if plan.regions is None:
             return
-        for resolved in plan.regions.grounded():
+        painted = [
             self._add_ground(slide, resolved.rect, resolved.region.ground or "")
+            for resolved in plan.regions.grounded()
+        ]
+        # add_slide clones the layout's placeholders onto the slide before any
+        # of this runs, so a ground painted "first" is still above them.
+        prim.send_to_back([shape for shape in painted if shape is not None])
 
     @staticmethod
-    def _add_ground(slide, region: PositionConfig, color_hex: str) -> None:
+    def _add_ground(slide, region: PositionConfig, color_hex: str):
         """A filled rectangle standing in for a region's own paper."""
         if region.width <= 0 or region.height <= 0:
-            return
+            return None
         try:
             rgb = _hex_to_rgbcolor(color_hex)
         except ValueError:
-            return
+            return None
         shape = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE,
             Inches(region.left), Inches(region.top),
@@ -1068,6 +1065,7 @@ class PPTXRenderer:
         style = shape._element.find(qn("p:style"))
         if style is not None:
             shape._element.remove(style)
+        return shape
 
     def _style_on_ground(self, plan: SlidePlan, ground: Optional[str]) -> SlideStyle:
         """The slide's style, re-resolved for a region's own ground."""
@@ -1160,6 +1158,90 @@ class PPTXRenderer:
             self._add_key_metrics(slide, item.get("metrics", {}), rect)
         elif kind == "chart":
             self._add_chart(slide, item.get("chart", {}), rect, slide_title, ground)
+        elif kind in BLOCK_TYPES:
+            self._draw_typed_block(slide, kind, item, rect)
+
+    def _draw_authored_primitives(self, slide, slide_data: dict,
+                                  plan: SlidePlan) -> None:
+        """
+        Draw the marks a slide placed itself.
+
+        This is the escape hatch, and it is deliberately the same layer the
+        blocks compile to: a slide reaching for it to draw a rule no block
+        covers is still inside the region model, still contrast-enforced and
+        still measured. Nothing is given up by using it except the semantics a
+        typed block would have carried.
+        """
+        specs = slide_data.get("primitives")
+        if not isinstance(specs, list) or not specs:
+            return
+
+        canvas = plan.canvas
+        tree = plan.regions
+        compiled = prim.resolve(
+            specs,
+            frame_for=(lambda region_id: tree.rect(region_id)) if tree else None,
+            canvas=canvas,
+            id_prefix=f"s{self._slide_number}-mark",
+        )
+        painted = []
+        for primitive in compiled:
+            # A mark bound to a region is coloured for that region's ground,
+            # exactly as a block bound there would be.
+            ground = tree.ground(primitive.region_id) if tree else None
+            with self._styled(self._style_on_ground(plan, ground)):
+                painted.append(prim.paint(slide, primitive, self._paint_context()))
+        prim.send_to_back([shape for shape in painted if shape is not None])
+
+    def _draw_typed_block(self, slide, kind: str, item: dict,
+                          rect: PositionConfig) -> None:
+        """Compile a block to marks and paint them."""
+        compiled = self._compiler().fit(
+            kind, item, rect, id_prefix=f"s{self._slide_number}-{kind}"
+        )
+        extent = prim.bounds(compiled)
+        if extent is not None and extent.height > rect.height + 0.02:
+            # The block shrank to its legibility floor and still does not fit.
+            # That is a planning problem, not a rendering one, and it should
+            # be visible without diffing a PDF.
+            logger.warning(
+                "block_does_not_fit_its_region",
+                slide=self._slide_number, block=kind,
+                needed_in=round(extent.height, 2),
+                available_in=round(rect.height, 2),
+            )
+        prim.paint_all(slide, compiled, self._paint_context())
+
+    def _compiler(self) -> BlockCompiler:
+        """A block compiler for the ground currently being written on."""
+        return BlockCompiler(
+            style=self._current_style,
+            type_scale=self._type_scale,
+            design_system=self.design_system,
+        )
+
+    def _paint_context(self) -> prim.PaintContext:
+        style = self._current_style
+        return prim.PaintContext(
+            ground=style.background,
+            default_color=style.body_color,
+            type_scale=self._type_scale,
+            default_size_pt=self._type_scale.body_style(0).font_size_pt,
+            default_font=self._type_scale.body_font,
+        )
+
+    @property
+    def _current_style(self) -> SlideStyle:
+        """The style of the ground being written on, whatever set it."""
+        if self._style is not None:
+            return self._style
+        theme = self._theme or deck_theme.DeckTheme.from_design_system(
+            self.design_system)
+        return theme.style_for(deck_theme.ROLE_CONTENT)
+
+    def _measure_block(self, kind: str, item: dict, width_in: float) -> float:
+        """How much height a typed block needs, before anything is drawn."""
+        return self._compiler().measure(kind, item, width_in)
 
     @staticmethod
     def _placeholder_region(shape) -> PositionConfig:
@@ -1203,6 +1285,14 @@ class PPTXRenderer:
 
         desired: list[Optional[float]] = []
         for kind, item in entries:
+            if kind in BLOCK_TYPES:
+                # A typed block knows its own height: a stat callout is a
+                # figure over a caption, a set of row bands is the sum of its
+                # rows. Treating one as an "object" and handing it an equal
+                # share is how a two-line banner ended up claiming as much of
+                # the slide as a chart.
+                desired.append(self._measure_block(kind, item, base.width))
+                continue
             if kind != "text":
                 desired.append(None)
                 continue
@@ -1523,7 +1613,7 @@ class PPTXRenderer:
                 img_stream.name,
                 Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
             )
-            _describe_picture(picture, str(chart_data.get("title") or slide_title))
+            describe_picture(picture, str(chart_data.get("title") or slide_title))
         finally:
             os.unlink(img_stream.name)
 
@@ -1749,7 +1839,7 @@ class PPTXRenderer:
                 img_stream.name,
                 Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
             )
-            _describe_picture(picture, str(img_data.get("altText") or ""))
+            describe_picture(picture, str(img_data.get("altText") or ""))
         finally:
             os.unlink(img_stream.name)
 
