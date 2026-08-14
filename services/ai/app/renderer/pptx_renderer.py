@@ -26,6 +26,7 @@ from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
 from app.observability.logging import get_logger
 from app.renderer.layout import LayoutEngine, PositionConfig
+from app.renderer.regions import RegionTree
 from app.renderer.typography import TypeScale
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
 from app.renderer import text_fit
@@ -132,6 +133,10 @@ class SlidePlan:
     body_regions: list[PositionConfig] = field(default_factory=list)
     accent_rule: Optional[PositionConfig] = None
     show_footer: bool = True
+    # The slide's own composition, when it declared one. None for every slide
+    # that binds by placeholder index, which is every slide written before
+    # regions existed and most written after.
+    regions: Optional[RegionTree] = None
 
     @property
     def content_region(self) -> PositionConfig:
@@ -383,6 +388,34 @@ def _resolve_image_bytes(img_data: dict) -> Optional[bytes]:
             return None
 
     return None
+
+
+def _describe_picture(picture, description: str) -> None:
+    """
+    Give a placed picture its own description, replacing python-pptx's.
+
+    ``add_picture`` takes a path, and python-pptx writes that path into the
+    shape's ``descr`` attribute. Every chart and every image this renderer
+    places comes from a ``NamedTemporaryFile``, so each shipped deck carried
+    strings like ``descr="tmp3nuj3me1.png"`` - a local temp filename, in the
+    file the user downloads, and different on every render of the same deck.
+    That made the renderer's own output non-deterministic, which is why this
+    surfaced: the region work needs "the same slide JSON renders the same
+    file" to be true before it can claim to have changed nothing.
+
+    The attribute is also the accessibility description a screen reader
+    reads, so it is set to the content's alt text where there is one and
+    removed where there is not.
+    """
+    try:
+        cNvPr = picture._element.nvPicPr.cNvPr
+    except AttributeError:                                # pragma: no cover
+        return
+    text = (description or "").strip()
+    if text:
+        cNvPr.set("descr", text)
+    else:
+        cNvPr.attrib.pop("descr", None)
 
 
 def _sniff_image_ext(img_bytes: bytes) -> str:
@@ -677,6 +710,10 @@ class PPTXRenderer:
         )
         accent_rule = _region_from_placeholder_spec(rule_spec) if rule_spec else None
 
+        dimensions = catalog.get("slideDimensions") or {}
+        canvas_width = emu_to_inches(dimensions.get("widthEmu", 0)) or LayoutEngine.SLIDE_WIDTH
+        canvas_height = emu_to_inches(dimensions.get("heightEmu", 0)) or LayoutEngine.SLIDE_HEIGHT
+
         return SlidePlan(
             layout_id=layout_id or "content",
             style=style,
@@ -686,6 +723,7 @@ class PPTXRenderer:
             # The cover carries the deck's title already; a footer under it
             # is noise, and no real deck numbers its cover.
             show_footer=role != deck_theme.ROLE_COVER,
+            regions=RegionTree.from_slide(slide_data, canvas_width, canvas_height),
         )
 
     @staticmethod
@@ -824,6 +862,18 @@ class PPTXRenderer:
             self._strip_empty_placeholders(slide)
             return
 
+        # A slide may compose itself into named regions instead of, or as well
+        # as, binding to placeholder slots. Blocks that name a region it
+        # actually declares are drawn there; everything else goes down the
+        # path it always went down, untouched. A slide with no region tree
+        # never reaches the branch at all.
+        bound, contents = self._partition_by_region(contents, plan.regions)
+        if bound:
+            self._render_regions(slide, bound, plan, self._slide_title(contents, bound))
+        if not contents:
+            self._strip_empty_placeholders(slide)
+            return
+
         text_items = [c for c in contents if c.get("type") == "text"]
         object_items = [
             c for c in contents
@@ -915,6 +965,117 @@ class PPTXRenderer:
                 self._add_chart(slide, item.get("chart", {}), region, slide_title)
 
         self._strip_empty_placeholders(slide)
+
+    @staticmethod
+    def _partition_by_region(
+        contents: list[dict],
+        tree: Optional[RegionTree],
+    ) -> tuple[list[tuple[str, dict]], list[dict]]:
+        """
+        Split a slide's blocks into ``(region-bound, everything else)``.
+
+        A block naming a region the slide does not declare is *not* treated as
+        region-bound - it falls through to the placeholder path rather than
+        being dropped. Validation reports the dangling id; the renderer's job
+        at that point is to still put the content on the slide.
+        """
+        if not tree:
+            return [], list(contents)
+
+        bound: list[tuple[str, dict]] = []
+        rest: list[dict] = []
+        for item in contents:
+            if not isinstance(item, dict):
+                rest.append(item)
+                continue
+            resolved = tree.get(item.get("regionId"))
+            if resolved is None:
+                rest.append(item)
+            else:
+                bound.append((resolved.id, item))
+        return bound, rest
+
+    @staticmethod
+    def _slide_title(unbound: list[dict], bound: list[tuple[str, dict]]) -> str:
+        """The slide's headline, wherever it was bound - charts read it for context."""
+        for item in unbound:
+            if isinstance(item, dict) and item.get("type") == "text":
+                return " ".join(
+                    str(run.get("text", "")) for run in item.get("runs", [])
+                ).strip()
+        for _, item in bound:
+            if item.get("type") == "text":
+                return " ".join(
+                    str(run.get("text", "")) for run in item.get("runs", [])
+                ).strip()
+        return ""
+
+    def _render_regions(
+        self,
+        slide,
+        bound: list[tuple[str, dict]],
+        plan: SlidePlan,
+        slide_title: str,
+    ) -> None:
+        """
+        Draw the blocks that named a region, inside that region.
+
+        Region-bound blocks are drawn as explicitly positioned shapes rather
+        than into the stock layout's placeholders. A composed slide's regions
+        are its own geometry; borrowing a placeholder would mean inheriting a
+        box the composition did not ask for, and there is no reason to expect
+        the layout to have one per region anyway.
+
+        Two or more blocks in the same region stack inside it, through the
+        same allocation that divides a body band - so a region behaves like a
+        smaller slide, and autofit and composition measure against the region
+        the block is actually in rather than the whole content area.
+        """
+        tree = plan.regions
+        if tree is None:
+            return
+
+        grouped: dict[str, list[dict]] = {}
+        for region_id, item in bound:
+            grouped.setdefault(region_id, []).append(item)
+
+        first_text_id = id(next(
+            (item for _, item in bound if item.get("type") == "text"), None
+        ))
+
+        for region_id, items in grouped.items():
+            rect = tree.rect(region_id)
+            if rect is None or rect.width <= 0 or rect.height <= 0:
+                continue
+            entries = [(item.get("type", "text"), item) for item in items]
+            rects = (
+                [rect] if len(entries) == 1
+                else self._split_region_vertically(rect, entries)
+            )
+            for (kind, item), target in zip(entries, rects):
+                is_title = kind == "text" and id(item) == first_text_id
+                self._draw_block(slide, kind, item, target, slide_title, is_title)
+
+    def _draw_block(
+        self,
+        slide,
+        kind: str,
+        item: dict,
+        rect: PositionConfig,
+        slide_title: str,
+        is_title: bool = False,
+    ) -> None:
+        """Draw one content block into an explicit rectangle."""
+        if kind == "text":
+            self._add_text_box(slide, item.get("runs", []), rect, is_title=is_title)
+        elif kind == "image":
+            self._add_image(slide, item.get("image", {}), rect)
+        elif kind == "table":
+            self._add_table(slide, item.get("table", {}), rect)
+        elif kind == "metrics":
+            self._add_key_metrics(slide, item.get("metrics", {}), rect)
+        elif kind == "chart":
+            self._add_chart(slide, item.get("chart", {}), rect, slide_title)
 
     @staticmethod
     def _placeholder_region(shape) -> PositionConfig:
@@ -1260,10 +1421,11 @@ class PPTXRenderer:
         try:
             img_stream.write(chart_bytes)
             img_stream.close()
-            slide.shapes.add_picture(
+            picture = slide.shapes.add_picture(
                 img_stream.name,
                 Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
             )
+            _describe_picture(picture, str(chart_data.get("title") or slide_title))
         finally:
             os.unlink(img_stream.name)
 
@@ -1485,10 +1647,11 @@ class PPTXRenderer:
         try:
             img_stream.write(img_bytes)
             img_stream.close()
-            slide.shapes.add_picture(
+            picture = slide.shapes.add_picture(
                 img_stream.name,
                 Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
             )
+            _describe_picture(picture, str(img_data.get("altText") or ""))
         finally:
             os.unlink(img_stream.name)
 
