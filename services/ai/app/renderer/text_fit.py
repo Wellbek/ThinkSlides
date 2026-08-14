@@ -18,6 +18,7 @@ output and is the final source of truth.
 """
 
 from __future__ import annotations
+import math
 from dataclasses import dataclass
 
 # Average glyph advance width as a fraction of font size, for a typical
@@ -66,6 +67,16 @@ def estimate_wrapped_lines(text: str, font_size_pt: float, box_width_pt: float) 
         line_count = 1
         for word in words:
             add_len = len(word) + 1
+            if add_len > chars_per_line:
+                # A word wider than the whole line breaks inside itself. The
+                # estimator used to keep it on one line, so "$0.8T-$1.3T" in a
+                # narrow rail measured as one line, rendered as two, and the
+                # second landed on whatever had been placed underneath it.
+                if cur_len > 0:
+                    line_count += 1
+                line_count += math.ceil(add_len / chars_per_line) - 1
+                cur_len = add_len % chars_per_line
+                continue
             if cur_len + add_len > chars_per_line and cur_len > 0:
                 line_count += 1
                 cur_len = add_len
@@ -92,6 +103,8 @@ def compute_autofit_scale(
     blocks: list[TextBlock],
     box_width_pt: float,
     box_height_pt: float,
+    inset_h_pt: float = DEFAULT_INSET_H_PT,
+    inset_v_pt: float = DEFAULT_INSET_V_PT,
 ) -> tuple[float, int]:
     """
     Returns (font_scale, ln_spc_reduction): font_scale is the 0-1 multiplier
@@ -100,12 +113,19 @@ def compute_autofit_scale(
     OOXML <a:normAutofit lnSpcReduction> value. Returns (1.0, 0) if the text
     already fits at its declared size, or if there isn't enough geometry
     information to judge (zero-sized box).
+
+    The insets default to OOXML's, which is right for a placeholder or a
+    plain text box. A caller that zeroes its frame's margins - every mark the
+    primitive layer draws does - must say so, or every box comes out 7.2pt
+    short and its type shrinks by a step. That is not a rounding difference:
+    it shrinks by a *different* step depending on how near the text sits to a
+    line boundary, so a set of row bands rendered at four different sizes.
     """
     if box_height_pt <= 0 or box_width_pt <= 0 or not blocks:
         return 1.0, 0
 
-    usable_width = max(1.0, box_width_pt - DEFAULT_INSET_H_PT)
-    usable_height = max(1.0, box_height_pt - DEFAULT_INSET_V_PT)
+    usable_width = max(1.0, box_width_pt - inset_h_pt)
+    usable_height = max(1.0, box_height_pt - inset_v_pt)
 
     for scale, ln_reduction in zip(_FONT_SCALE_STEPS, _LN_SPC_REDUCTION_STEPS):
         effective_spacing = LINE_HEIGHT_RATIO * (1 - ln_reduction / 100000)

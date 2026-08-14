@@ -20,6 +20,7 @@ from app.agent.registry import get_registry, ToolResult
 from app.agent.summaries import summarize_tool_result
 from app.agent.tools._json_extract import extract_json_object
 from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
+from app.agent.tools.build_blocks import BLOCK_BUILDER_TOOLS
 from app.llm.provider import _is_rate_limit_error, build_chat_provider, get_llm_provider
 from app.llm.retry_notices import (
     REASON_TRANSIENT,
@@ -62,6 +63,7 @@ DRAFTING_TOOLS = frozenset({
     "finalize_and_render_pptx",
     "validate_rendered_output",
     *BUILD_VISUAL_TOOLS,
+    *BLOCK_BUILDER_TOOLS,
 })
 
 
@@ -322,6 +324,10 @@ class WorkingState:
         # numbers through a second LLM response is how a chart ends up
         # disagreeing with the bullets beside it.
         self.prepared_visuals: dict[int, list[dict]] = {}
+        # Marks a slide placed itself through draw_primitives. Kept apart from
+        # prepared_visuals because they are not content blocks - they attach to
+        # the slide's ``primitives`` list, not to its ``contents``.
+        self.prepared_primitives: dict[int, list[dict]] = {}
         self.current_step_index: int = 0
         self.pending_question: dict | None = None
         self.is_paused_for_user: bool = False
@@ -472,12 +478,23 @@ class WorkingState:
         # carrying the same figures twice.
         prepared = self.prepared_visuals.get(slide_index)
         if prepared:
-            prepared_types = {block.get("type") for block in prepared}
+            # Keyed by (type, region), not by type alone: a composed slide
+            # legitimately carries three stat-callout blocks bound to three
+            # different regions, and keying on type would collapse them into
+            # one and silently drop the other two.
+            prepared_slots = {
+                (block.get("type"), block.get("regionId")) for block in prepared
+            }
             kept = [
                 item for item in slide_data.get("contents", [])
-                if not (isinstance(item, dict) and item.get("type") in prepared_types)
+                if not (isinstance(item, dict)
+                        and (item.get("type"), item.get("regionId")) in prepared_slots)
             ]
             slide_data = {**slide_data, "contents": [*kept, *prepared]}
+
+        marks = self.prepared_primitives.get(slide_index)
+        if marks:
+            slide_data = {**slide_data, "primitives": list(marks)}
 
         self.add_slide(slide_data)
 
@@ -1612,16 +1629,30 @@ class AgentLoop:
 
                     # Charts/tables/metric rows are attached to their slide
                     # here rather than handed back for the model to re-state.
-                    if fn_name in BUILD_VISUAL_TOOLS and tool_result.data:
+                    if (fn_name in BUILD_VISUAL_TOOLS
+                            or fn_name in BLOCK_BUILDER_TOOLS) and tool_result.data:
                         target = tool_result.data.get("slideIndex")
                         block = tool_result.data.get("content")
                         if target is not None and block:
                             slots = self.working_state.prepared_visuals.setdefault(target, [])
+                            # One block per type *per region*: rebuilding the
+                            # stat callouts in the right rail must not discard
+                            # the ones in the left.
+                            slot_key = (block.get("type"), block.get("regionId"))
                             slots[:] = [
                                 existing for existing in slots
-                                if existing.get("type") != block.get("type")
+                                if (existing.get("type"),
+                                    existing.get("regionId")) != slot_key
                             ]
                             slots.append(block)
+
+                    # draw_primitives places marks rather than content blocks,
+                    # so they attach to the slide's own primitives list.
+                    if fn_name == "draw_primitives" and tool_result.data:
+                        target = tool_result.data.get("slideIndex")
+                        marks = tool_result.data.get("primitives")
+                        if target is not None and marks:
+                            self.working_state.prepared_primitives[target] = list(marks)
 
                     # Resolve select_source_image's chosen id back to the
                     # real image data (the LLM only ever saw lightweight
@@ -1924,7 +1955,8 @@ class AgentLoop:
             )
 
         if (
-            fn_name in ("select_layout", "design_slide_content", *BUILD_VISUAL_TOOLS)
+            fn_name in ("select_layout", "design_slide_content",
+                        *BUILD_VISUAL_TOOLS, *BLOCK_BUILDER_TOOLS)
             and ws.presentation_structure
             and not ws.reviewed_outline_with_user
             and not self.questions_declined
@@ -2496,9 +2528,19 @@ class AgentLoop:
             "tabular data, build_key_metrics for a few standout figures. Each is "
             "validated and attached to that slide automatically, so the numbers are "
             "checked once where you state them",
+            "Where a slide's content has a SHAPE, build that shape rather than "
+            "flattening it into bullets: build_stat_callouts when the point is a "
+            "figure, build_row_bands for many parallel points (an implication per "
+            "industry, per capability), build_icon_cards for a set of parallel "
+            "things, build_accent_cards plus build_legend when two kinds of thing "
+            "are set against each other, build_banner for a one-line summary, "
+            "build_image_card_row for things better shown than described. These "
+            "attach to the slide like the visuals above. draw_primitives exists for "
+            "the marks none of them covers, and is a last resort - a block carries "
+            "meaning and sizes itself, a mark does neither",
             "Generate content for each slide with design_slide_content - it writes the "
-            "title and copy; a visual already built for that slide is attached for you "
-            "and must not be restated as bullets",
+            "title and copy; any visual or block already built for that slide is "
+            "attached for you and must not be restated as bullets",
             "Validate all slides with validate_slide_json",
             "Render with finalize_and_render_pptx - THIS IS MANDATORY",
             "Then call validate_rendered_output to check the ACTUAL rendered file - THIS IS ALSO MANDATORY, and comes after finalize, not before",

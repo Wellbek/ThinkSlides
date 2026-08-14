@@ -16,6 +16,34 @@ NS = {
 }
 
 
+def describe_picture(picture, description: str) -> None:
+    """
+    Give a placed picture its own description, replacing python-pptx's.
+
+    ``add_picture`` takes a path, and python-pptx writes that path into the
+    shape's ``descr`` attribute. Every chart and every image this renderer
+    places comes from a ``NamedTemporaryFile``, so each shipped deck carried
+    strings like ``descr="tmp3nuj3me1.png"`` - a local temp filename, in the
+    file the user downloads, and different on every render of the same deck.
+    That made the renderer's own output non-deterministic, which is why this
+    surfaced: the region work needs "the same slide JSON renders the same
+    file" to be true before it can claim to have changed nothing.
+
+    The attribute is also the accessibility description a screen reader
+    reads, so it is set to the content's alt text where there is one and
+    removed where there is not.
+    """
+    try:
+        cNvPr = picture._element.nvPicPr.cNvPr
+    except AttributeError:                                # pragma: no cover
+        return
+    text = (description or "").strip()
+    if text:
+        cNvPr.set("descr", text)
+    else:
+        cNvPr.attrib.pop("descr", None)
+
+
 def find_placeholder_by_idx(
     root: ET.Element,
     idx: int,

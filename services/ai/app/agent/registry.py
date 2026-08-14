@@ -165,6 +165,16 @@ def _register_default_tools(registry: ToolRegistry) -> None:
         BuildKeyMetricsTool,
         BuildTableTool,
     )
+    from app.agent.tools.build_blocks import (
+        BuildAccentCardsTool,
+        BuildBannerTool,
+        BuildIconCardsTool,
+        BuildImageCardRowTool,
+        BuildLegendTool,
+        BuildRowBandsTool,
+        BuildStatCalloutsTool,
+        DrawPrimitivesTool,
+    )
     from app.agent.tools.design_slide_content import DesignSlideContentTool
     from app.agent.tools.validate_slide_json import ValidateSlideJsonTool
     from app.agent.tools.select_source_image import SelectSourceImageTool
@@ -181,6 +191,14 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     BuildChartTool.register(registry)
     BuildTableTool.register(registry)
     BuildKeyMetricsTool.register(registry)
+    BuildStatCalloutsTool.register(registry)
+    BuildIconCardsTool.register(registry)
+    BuildAccentCardsTool.register(registry)
+    BuildRowBandsTool.register(registry)
+    BuildBannerTool.register(registry)
+    BuildLegendTool.register(registry)
+    BuildImageCardRowTool.register(registry)
+    DrawPrimitivesTool.register(registry)
     DesignSlideContentTool.register(registry)
     ValidateSlideJsonTool.register(registry)
     SelectSourceImageTool.register(registry)
