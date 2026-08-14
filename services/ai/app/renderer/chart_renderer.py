@@ -119,6 +119,13 @@ def _group_pie_tail(labels: list[str], values: list[float]) -> tuple[list[str], 
     return kept_labels, kept_values
 
 
+def _superscript(text: str) -> str:
+    """Footnote markers as Unicode superscripts, for text drawn into a raster."""
+    from app.renderer.apparatus import to_superscript
+
+    return to_superscript(text)
+
+
 def _adapt_to_ground(style, ground: str | None):
     """
     Re-colour a chart's furniture for the ground it will be drawn on.
@@ -175,7 +182,14 @@ def render_chart_to_png(
     if chart_type not in SUPPORTED_CHART_TYPES:
         chart_type = "bar"
 
-    categories = [str(c) for c in (chart_data.get("categories") or [])]
+    # Footnote markers are written inline (see renderer/apparatus). A chart
+    # label is drawn into a PNG, where no run-level superscript exists, so the
+    # marker becomes a Unicode superscript digit instead of being left as
+    # literal "[^1]" in the middle of an axis.
+    categories = [_superscript(str(c)) for c in (chart_data.get("categories") or [])]
+    for entry in series:
+        entry["name"] = _superscript(str(entry.get("name") or ""))
+
     style = _adapt_to_ground(resolve_chart_style(design_system), ground)
     font = _resolve_font(style.font_name)
 
@@ -224,7 +238,7 @@ def render_chart_to_png(
 
 def _apply_title(fig, ax, chart_data, slide_title, style, font, base_pt) -> None:
     """Draw the chart's own title, unless the slide heading already says it."""
-    title = str(chart_data.get("title") or "").strip()
+    title = _superscript(str(chart_data.get("title") or "").strip())
     if not title:
         return
     if slide_title and _normalise(title) == _normalise(slide_title):

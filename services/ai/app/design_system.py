@@ -196,6 +196,13 @@ def _default_chrome() -> dict:
     return chrome.default_chrome_declaration()
 
 
+def _default_apparatus() -> dict:
+    """How the built-in design system sets footnotes and the source line."""
+    from app.renderer import apparatus
+
+    return apparatus.default_apparatus_tokens()
+
+
 def get_default_design_system(color_theme: str | None = None) -> dict:
     """Return the fully-parsed built-in default design system.
 
@@ -396,6 +403,10 @@ def get_default_design_system(color_theme: str | None = None) -> dict:
         # design direction can move it or drop it. The defaults reproduce the
         # footer band this renderer drew before chrome was declarable.
         "chrome": _default_chrome(),
+        # How a slide sets its own footnotes and source line. Separate from
+        # the footer band: a footnote resolving a marker in a chart label is
+        # not the same instrument as a deck-wide reference list.
+        "apparatus": _default_apparatus(),
         "sourceType": "default",
         "colorTheme": theme_label,
         "dataViz": derive_data_viz_config(palette_colors, body_font="Arial"),

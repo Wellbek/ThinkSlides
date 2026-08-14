@@ -9,6 +9,7 @@ from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
 from app.renderer import regions as region_model
+from app.renderer import apparatus as apparatus_model
 from app.renderer import primitives as primitive_model
 from app.renderer.blocks import BLOCK_PAYLOAD_KEY
 import time
@@ -225,6 +226,13 @@ class ValidateSlideJsonTool:
         )
         errors.extend(primitive_errors)
         warnings.extend(primitive_warnings)
+
+        # A marker pointing at no footnote is a reference to nothing, and a
+        # footnote nothing points at is a note in a vacuum. Both render, and
+        # both are only noticed by a reader.
+        apparatus_errors, apparatus_warnings = apparatus_model.validate_apparatus(slide)
+        errors.extend(apparatus_errors)
+        warnings.extend(apparatus_warnings)
 
         # Validate slide index
         if not isinstance(slide.get("slideIndex"), int):

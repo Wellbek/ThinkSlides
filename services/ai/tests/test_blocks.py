@@ -598,3 +598,41 @@ class TestExistingContentIsUntouched:
                 assert not [s for s in slide.shapes if prim.is_content_shape(s)]
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
+
+
+class TestAnUnfittableBlockIsReported:
+    """
+    The fit pass is bounded at a legibility floor, so a block can still not
+    fit. That is a planning problem, and an operator should be able to see it
+    without diffing a PDF.
+    """
+
+    def test_the_renderer_says_so(self, monkeypatch):
+        from app.renderer import pptx_renderer
+
+        reported = []
+        monkeypatch.setattr(
+            pptx_renderer.logger, "warning",
+            lambda event, **kwargs: reported.append(event),
+        )
+        slides = [{
+            "slideIndex": 0, "layoutId": "content",
+            "regions": [{"id": "sliver", "kind": "panel",
+                         "x": 0.05, "y": 0.1, "w": 0.9, "h": 0.12}],
+            "contents": [{"type": "rowBand", "regionId": "sliver", "rowBands": [
+                {"icon": "growth", "label": f"Row {n}",
+                 "prose": "An implication long enough to wrap several times "
+                          "over in a column of this width."}
+                for n in range(9)
+            ]}],
+        }]
+        work_dir = tempfile.mkdtemp(prefix="ts_blocks_warn_")
+        try:
+            PPTXRenderer(template_path=None, color_theme="professional").render(
+                slides=slides, metadata={"title": "Crowded"},
+                output_path=os.path.join(work_dir, "crowded.pptx"),
+            )
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+        assert "block_does_not_fit_its_region" in reported

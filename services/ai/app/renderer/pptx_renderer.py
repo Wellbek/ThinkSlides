@@ -29,6 +29,10 @@ from app.renderer.layout import LayoutEngine, PositionConfig
 from app.renderer.regions import RegionTree
 from app.renderer.blocks import BLOCK_TYPES, BlockCompiler
 from app.renderer.chrome import ChromeSpec, compile_chrome
+from app.renderer import apparatus as apparatus_markers
+from app.renderer.apparatus import (
+    ApparatusTokens, SlideApparatus, compile_apparatus, content_ceiling,
+)
 from app.renderer import primitives as prim
 from app.renderer.typography import TypeScale
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
@@ -145,6 +149,10 @@ class SlidePlan:
     # Which part of the deck this slide belongs to. The eyebrow displays it,
     # which is what turns a page number into a position in a document.
     section: str = ""
+    # The slide's footnotes and source line. Held on the plan because their
+    # height is taken out of the body region before any content is laid out -
+    # an apparatus measured afterwards is one with autofitted text on top.
+    apparatus: SlideApparatus = field(default_factory=SlideApparatus)
     # The slide's own composition, when it declared one. None for every slide
     # that binds by placeholder index, which is every slide written before
     # regions existed and most written after.
@@ -168,6 +176,14 @@ class SlidePlan:
         right = max(r.left + r.width for r in self.body_regions)
         bottom = max(r.top + r.height for r in self.body_regions)
         return PositionConfig(left=left, top=top, width=right - left, height=bottom - top)
+
+
+def _shortened(region: PositionConfig, by_in: float) -> PositionConfig:
+    """A region with room taken off its bottom edge, never below a usable floor."""
+    return PositionConfig(
+        left=region.left, top=region.top, width=region.width,
+        height=max(MIN_TEXT_BAND_IN, region.height - max(0.0, by_in)),
+    )
 
 
 def _region_from_placeholder_spec(spec: dict) -> PositionConfig:
@@ -714,6 +730,17 @@ class PPTXRenderer:
         canvas_width = emu_to_inches(dimensions.get("widthEmu", 0)) or LayoutEngine.SLIDE_WIDTH
         canvas_height = emu_to_inches(dimensions.get("heightEmu", 0)) or LayoutEngine.SLIDE_HEIGHT
 
+        # The apparatus takes its height off the bottom of the body band
+        # before anything is written into it. Doing this after the fact is how
+        # a footnote block ends up underneath the last bullet.
+        apparatus = SlideApparatus.from_slide(slide_data)
+        if apparatus:
+            reserved = apparatus.height(
+                ApparatusTokens.from_design_system(catalog),
+                canvas_width * (1.0 - 2 * 0.033),
+            )
+            body_regions = [_shortened(region, reserved) for region in body_regions]
+
         return SlidePlan(
             layout_id=layout_id or "content",
             style=style,
@@ -721,6 +748,7 @@ class PPTXRenderer:
             body_regions=body_regions,
             accent_rule=accent_rule,
             section=str(slide_data.get("section") or "").strip(),
+            apparatus=apparatus,
             regions=RegionTree.from_slide(slide_data, canvas_width, canvas_height),
             canvas=PositionConfig(left=0.0, top=0.0,
                                   width=canvas_width, height=canvas_height),
@@ -775,7 +803,16 @@ class PPTXRenderer:
             total_slides=total,
             deck_title=str(metadata.get("title") or ""),
             section_name=str(plan.section or ""),
+            has_source_line=bool(plan.apparatus.source_line),
         )
+        self._warn_if_composition_reaches_the_apparatus(plan, catalog)
+        marks.extend(compile_apparatus(
+            apparatus=plan.apparatus,
+            tokens=ApparatusTokens.from_design_system(catalog),
+            style=plan.style,
+            type_scale=self._type_scale,
+            canvas=plan.canvas,
+        ))
         prim.paint_all(slide, marks, self._paint_context())
 
     @staticmethod
@@ -804,6 +841,32 @@ class PPTXRenderer:
         style = shape._element.find(qn("p:style"))
         if style is not None:
             shape._element.remove(style)
+
+    def _warn_if_composition_reaches_the_apparatus(self, plan: SlidePlan,
+                                                   catalog: dict) -> None:
+        """
+        A composed slide can over-commit its page.
+
+        Placeholder-bound content has the apparatus's height taken out of its
+        band before anything is written. A region tree is authored, and
+        shrinking it after the fact would distort a composition somebody wrote
+        deliberately - so the collision is reported rather than silently
+        resolved, and the rendered-output check remains the ground truth.
+        """
+        if plan.regions is None or not plan.apparatus:
+            return
+        ceiling = content_ceiling(
+            plan.apparatus, ApparatusTokens.from_design_system(catalog), plan.canvas
+        )
+        for region_id in plan.regions.ids():
+            rect = plan.regions.rect(region_id)
+            if rect is not None and rect.top + rect.height > ceiling + 0.02:
+                logger.warning(
+                    "region_reaches_the_apparatus_band",
+                    slide=self._slide_number, region=region_id,
+                    region_bottom_in=round(rect.top + rect.height, 2),
+                    ceiling_in=round(ceiling, 2),
+                )
 
     def _render_content_on_slide(
         self,
@@ -1440,7 +1503,7 @@ class PPTXRenderer:
                 p.space_before = Pt(balance.paragraph_gap_pt)
 
             run = p.add_run()
-            run.text = run_data.get("text", "")
+            run.text = apparatus_markers.strip_markers(run_data.get("text", ""))
 
             # A run may carry a URL (citation markers and the reference list -
             # see renderer/citations.py). Set before the colour below, because
@@ -1476,6 +1539,15 @@ class PPTXRenderer:
                 self._apply_text_color(marker, is_title)
                 _clear_text_transform(marker)
 
+            # A footnote marker is written inline (see renderer/apparatus)
+            # and becomes a real superscript run rather than a Unicode glyph,
+            # so it scales with the copy around it.
+            if apparatus_markers.has_marker(run_data.get("text", "")):
+                self._rewrite_with_markers(
+                    p, run, run_data.get("text", ""), style.font_name,
+                    font_size, is_title,
+                )
+
             level = int(run_data.get("level", 0) or 0)
             bulleted = (
                 bool(run_data.get("bullet", False))
@@ -1487,6 +1559,34 @@ class PPTXRenderer:
             _apply_bullet_formatting(p, bulleted, level, self._bullet_hex())
 
         return balance
+
+    def _rewrite_with_markers(self, paragraph, run, text: str, font_name: str,
+                              font_size, is_title: bool) -> None:
+        """
+        Re-emit a run that carries footnote markers, as alternating body and
+        superscript runs.
+
+        The run is already on the paragraph carrying the marker-stripped text,
+        so the first part reuses it and the rest are appended - which keeps the
+        typography that was already applied rather than rebuilding it.
+        """
+        parts = apparatus_markers.split_markers(text)
+        if not parts:
+            return
+        first_text, first_marker = parts[0]
+        run.text = first_text
+        if first_marker is not None:
+            apparatus_markers.apply_superscript(run)
+
+        for part_text, marker in parts[1:]:
+            extra = paragraph.add_run()
+            extra.text = part_text
+            extra.font.name = font_name
+            extra.font.size = font_size
+            self._apply_text_color(extra, is_title)
+            _clear_text_transform(extra)
+            if marker is not None:
+                apparatus_markers.apply_superscript(extra)
 
     @property
     def _is_cover(self) -> bool:
@@ -1711,7 +1811,8 @@ class PPTXRenderer:
             is_total = r_idx == layout.total_row_index
             for c_idx in range(n_cols):
                 cell = table.cell(r_idx, c_idx)
-                cell.text = str(row[c_idx]) if c_idx < len(row) else ""
+                raw_cell = str(row[c_idx]) if c_idx < len(row) else ""
+                cell.text = apparatus_markers.strip_markers(raw_cell)
                 cell.vertical_anchor = MSO_ANCHOR.MIDDLE
                 cell.fill.solid()
                 if is_header:
@@ -1742,6 +1843,33 @@ class PPTXRenderer:
                         run.font.bold = is_header or is_total
                         run.font.name = style.font_name
                         run.font.color.rgb = header_fg_rgb if is_header else body_fg_rgb
+                    if apparatus_markers.has_marker(raw_cell) and paragraph.runs:
+                        self._mark_cell(paragraph, raw_cell, style.font_name,
+                                        Pt(layout.header_pt if is_header
+                                           else layout.body_pt),
+                                        header_fg_rgb if is_header else body_fg_rgb,
+                                        is_header or is_total)
+
+    @staticmethod
+    def _mark_cell(paragraph, text: str, font_name: str, size, color_rgb,
+                   bold: bool) -> None:
+        """Set a table cell's footnote markers as real superscripts."""
+        parts = apparatus_markers.split_markers(text)
+        if not parts:
+            return
+        first = paragraph.runs[0]
+        first.text = parts[0][0]
+        if parts[0][1] is not None:
+            apparatus_markers.apply_superscript(first)
+        for part_text, marker in parts[1:]:
+            run = paragraph.add_run()
+            run.text = part_text
+            run.font.name = font_name
+            run.font.size = size
+            run.font.bold = bold
+            run.font.color.rgb = color_rgb
+            if marker is not None:
+                apparatus_markers.apply_superscript(run)
 
     def _add_text_box(
         self,
