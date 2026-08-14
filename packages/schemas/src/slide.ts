@@ -135,17 +135,60 @@ export interface ChartContent {
   placeholderIdx?: number;
 }
 
+// ──────────────────────────────────────────────
+// Region tree - a slide's own composition
+// ──────────────────────────────────────────────
+
+/**
+ * What a region *is*, rather than where it happens to sit. Kinds carry no
+ * geometry: they let the template extractor and the block renderers reason
+ * about a composition without re-deriving intent from coordinates.
+ */
+export type RegionKind =
+  | "root"      // the whole canvas, when a tree wants an explicit parent
+  | "rail"      // a narrow full-height band with its own ground
+  | "panel"     // a major area, usually beside a rail or across a split
+  | "column"    // one column of a grid
+  | "bandRow"   // the container of a set of row bands
+  | "band"      // one row band
+  | "banner"    // a full-width strip, usually ruled above and below
+  | "grid";     // the container of a set of columns or cards
+
+/**
+ * One declared area of a slide.
+ *
+ * Geometry is **fractional against the parent**, never absolute EMU, so a
+ * composition written for one canvas survives a change of canvas. A region
+ * with no `ground` inherits its parent's.
+ */
+export interface Region {
+  id: string;
+  kind: RegionKind;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  ground?: string;
+  children?: Region[];
+}
+
 export type SlideContentItem =
-  | { type: "text"; placeholderIdx: number; runs: TextRun[] }
-  | { type: "image"; placeholderIdx?: number; image: ImageContent }
-  | { type: "table"; placeholderIdx?: number; table: TableContent }
-  | { type: "chart"; placeholderIdx?: number; chart: ChartContent };
+  | { type: "text"; placeholderIdx?: number; regionId?: string; runs: TextRun[] }
+  | { type: "image"; placeholderIdx?: number; regionId?: string; image: ImageContent }
+  | { type: "table"; placeholderIdx?: number; regionId?: string; table: TableContent }
+  | { type: "chart"; placeholderIdx?: number; regionId?: string; chart: ChartContent };
 
 export interface Slide {
   slideIndex: number;
   layoutId: string;
   layoutName: string;
   contents: SlideContentItem[];
+  /**
+   * The slide's composition, when it has one. Absent on every slide that
+   * binds by placeholder index - which is the degenerate case, and renders
+   * through exactly the code it always did.
+   */
+  regions?: Region[];
   notes?: string;
   speakerNotes?: string;
 }

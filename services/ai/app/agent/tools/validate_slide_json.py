@@ -8,6 +8,7 @@ from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
+from app.renderer import regions as region_model
 import time
 
 logger = get_logger(__name__)
@@ -184,6 +185,19 @@ class ValidateSlideJsonTool:
                             warnings.append(
                                 f"Content item {i}: placeholderIdx {ph_idx} not in layout placeholders {valid_indices}"
                             )
+
+        # A composed slide's regions have to be checked before render, not
+        # discovered in the PPTX: overlapping siblings draw content over
+        # content, a region escaping its parent puts content outside the area
+        # it was composed into, and a block bound to a region that does not
+        # exist is content silently dropped. All three produce a file that
+        # opens and is wrong, which is the worst kind of defect to ship.
+        region_errors, region_warnings = region_model.validate_regions(
+            slide.get("regions"),
+            region_model.content_region_ids(contents),
+        )
+        errors.extend(region_errors)
+        warnings.extend(region_warnings)
 
         # Validate slide index
         if not isinstance(slide.get("slideIndex"), int):
