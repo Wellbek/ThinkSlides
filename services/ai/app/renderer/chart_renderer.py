@@ -253,6 +253,55 @@ def _normalise(text: str) -> str:
     return "".join(ch for ch in text.lower() if ch.isalnum())
 
 
+def _set_grid(axis, visible: bool, style) -> None:
+    """Turn one axis's gridlines on (styled) or off (silently)."""
+    if visible:
+        axis.grid(True, color=style.grid_color, linewidth=style.gridline_weight_pt)
+    else:
+        axis.grid(False)
+
+
+def _bar_geometry(style, n_series: int, index: int, x: list) -> tuple[float, list]:
+    """
+    Bar width and per-series offsets, from the deck's own bar thickness.
+
+    A template whose bars are thin and widely spaced and one whose bars nearly
+    touch are visibly different charts of the same data, and the difference is
+    two numbers.
+    """
+    n_series = max(1, n_series)
+    span = max(0.05, min(1.0, style.bar_thickness))
+    gap = max(0.0, min(0.5, style.bar_group_gap))
+    bar_width = span / n_series * (1.0 - gap)
+    start = -span / 2 + bar_width / 2 + index * (span / n_series)
+    return bar_width, [xi + start for xi in x]
+
+
+def _legend_wanted(style, n_series: int) -> bool:
+    """Whether this chart draws a legend at all."""
+    if style.legend_style == "none":
+        return False
+    if style.legend_style in ("swatches", "inline"):
+        return n_series > 1
+    return n_series > 1
+
+
+def _points_to_label(style, chart_type: str, x: list) -> set:
+    """
+    Which points carry a data label.
+
+    ``terminal`` is reference page 110's line chart: one label, on the final
+    point, saying where the series ended up. ``end`` is page 22's bar chart:
+    a label at the end of every bar, which is what lets the chart drop its
+    axis entirely.
+    """
+    if not x:
+        return set()
+    if style.label_mode == "terminal":
+        return {len(x) - 1}
+    return set(range(len(x)))
+
+
 def _draw_pie(ax, series, categories, style, font, base_pt) -> None:
     """A donut with a side legend carrying each slice's share.
 
@@ -318,9 +367,7 @@ def _draw_cartesian(
         elif chart_type == "scatter":
             ax.scatter(x, values, label=name, color=color, s=base_pt * 6)
         else:  # bar
-            n_series = len(series)
-            bar_width = 0.78 / max(1, n_series)
-            offsets = [xi + i * bar_width - 0.39 + bar_width / 2 for xi in x]
+            bar_width, offsets = _bar_geometry(style, len(series), i, x)
             ax.bar(offsets, values, width=bar_width, label=name, color=color)
 
     if categories:
@@ -330,11 +377,33 @@ def _draw_cartesian(
     ax.tick_params(colors=style.axis_color, labelsize=base_pt)
     for label in ax.get_yticklabels():
         label.set_fontname(font)
+
+    # Axis and gridline behaviour come from the deck's tokens rather than
+    # being drawn unconditionally. Reference page 22's bar chart has no value
+    # axis and no gridlines - every bar carries its own label instead - and
+    # rendering that template's charts with a gridded axis in its brand
+    # colours is the single most visible way a generated chart fails to
+    # belong to the deck it is in.
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
+    ax.spines["left"].set_visible(
+        style.show_value_axis or (style.baseline_rule and chart_type == "barh")
+    )
+    ax.spines["bottom"].set_visible(style.show_category_axis or style.baseline_rule)
     for side in ("left", "bottom"):
         ax.spines[side].set_color(style.axis_color)
-    ax.yaxis.grid(True, color=style.grid_color, linewidth=0.7)
+
+    if not style.show_value_axis:
+        ax.tick_params(axis="y", left=False, labelleft=False)
+    if not style.show_category_axis:
+        ax.tick_params(axis="x", bottom=False, labelbottom=False)
+
+    # Passing line properties alongside a False first argument makes
+    # matplotlib warn and turn the grid *on* anyway - so a chart whose tokens
+    # said "no gridlines" got them. Enable and style, or disable and say
+    # nothing else.
+    _set_grid(ax.yaxis, style.show_value_gridlines, style)
+    _set_grid(ax.xaxis, style.show_category_gridlines, style)
     ax.set_axisbelow(True)
     ax.yaxis.set_major_formatter(_axis_formatter(unit_suffix))
 
@@ -344,8 +413,11 @@ def _draw_cartesian(
     if chart_type in ("bar", "area"):
         ax.set_ylim(bottom=min(0.0, ax.get_ylim()[0]))
 
+    # Where the unit is stated is a deck convention, not a chart decision.
+    # The reference puts it on a second subtitle line ("thousands", "$ billion")
+    # rather than rotated up the side of the plot.
     value_label = _value_axis_label(chart_data, series)
-    if value_label:
+    if value_label and style.unit_convention == "axis" and style.show_value_axis:
         ax.set_ylabel(value_label, color=style.axis_color, fontname=font,
                       fontsize=base_pt, labelpad=base_pt * 0.6)
 
@@ -357,7 +429,7 @@ def _draw_cartesian(
                       fontsize=base_pt, labelpad=base_pt * 0.5)
 
     # A legend for one series would only repeat the value-axis label.
-    if len(series) > 1:
+    if _legend_wanted(style, len(series)):
         legend = ax.legend(frameon=False, fontsize=base_pt, labelcolor=style.axis_color,
                            loc="best")
         for text in legend.get_texts():
@@ -371,21 +443,28 @@ def _draw_data_labels(
     ax, chart_type, series, x, style, font, base_pt, unit_suffix, chart_data,
 ) -> None:
     """Print each point's value next to it, where that stays readable."""
-    if chart_data.get("showDataLabels") is False:
+    if chart_data.get("showDataLabels") is False or style.label_mode == "none":
         return
     if chart_type == "scatter":
         return
+
     total_points = sum(len(s["values"]) for s in series)
-    if total_points > MAX_LABELLED_POINTS * 2 or len(x) > MAX_LABELLED_POINTS:
+    crowded = (total_points > MAX_LABELLED_POINTS * 2
+               or len(x) > MAX_LABELLED_POINTS)
+    # "auto" is what the renderer always did: label everything, unless there
+    # is so much of it that the labels smear into each other. A declared mode
+    # overrides that, because a deck whose convention is "label the end of
+    # every bar" means it however many bars there are.
+    if style.label_mode == "auto" and crowded:
         return
 
-    n_series = len(series)
-    bar_width = 0.78 / max(1, n_series)
+    labelled = _points_to_label(style, chart_type, x)
     for i, s in enumerate(series):
-        for xi, value in zip(x, s["values"]):
-            if value != value:
+        bar_width, offsets = _bar_geometry(style, len(series), i, x)
+        for position, (xi, value) in enumerate(zip(x, s["values"])):
+            if value != value or position not in labelled:
                 continue
-            px = xi + i * bar_width - 0.39 + bar_width / 2 if chart_type == "bar" else xi
+            px = offsets[position] if chart_type == "bar" else xi
             ax.annotate(
                 f"{_format_number(value)}{unit_suffix}",
                 xy=(px, value),

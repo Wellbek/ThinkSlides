@@ -113,6 +113,55 @@ export interface ChromeTokens {
   marginY?: number;
 }
 
+/**
+ * How a deck DRAWS its charts and tables, not only what colour they are.
+ *
+ * Colours are the smallest part of why a chart looks like it belongs to a
+ * deck. The reference deck's charts are recognisable because they have no
+ * value axis and no gridlines, label every bar at its end, and state their
+ * unit on a second subtitle line - none of which was recordable before.
+ *
+ * Every token defaults to what the renderer already drew, so a deck that
+ * declares none of them is unchanged.
+ */
+export interface DataVizTokens {
+  chartColorSequence?: string[];
+  chartAxisColor?: string;
+  chartGridColor?: string;
+  fontFamily?: string;
+
+  chartValueAxis?: boolean;
+  chartCategoryAxis?: boolean;
+  chartValueGridlines?: boolean;
+  chartCategoryGridlines?: boolean;
+  chartGridlineWeightPt?: number;
+  chartBaselineRule?: boolean;
+
+  /** none | all | terminal (last point only) | end (bar ends) | auto */
+  chartLabelMode?: "auto" | "none" | "all" | "terminal" | "end";
+  chartLabelFormat?: string;
+  chartUnitSuffix?: string;
+
+  chartLegend?: "auto" | "none" | "swatches" | "inline";
+  /** Where the unit is stated: up the axis, on a second subtitle line, or in the title. */
+  chartUnitConvention?: "axis" | "subtitle" | "title";
+
+  /** Fraction of a category slot the bars fill, and the gap between grouped bars. */
+  chartBarThickness?: number;
+  chartBarGroupGap?: number;
+
+  tableHeaderBg?: string;
+  tableHeaderFg?: string;
+  tableBandBg?: string;
+  tableRowBg?: string;
+  tableBorder?: string;
+  /** Banded blocks of colour, or rows separated by hairlines on the slide's ground. */
+  tableTreatment?: "filled" | "hairline";
+  tableRuleWeightPt?: number;
+  tableHeaderRuleWeightPt?: number;
+  tableHeaderFilled?: boolean;
+}
+
 /** How a deck sets its per-slide footnotes and source line. */
 export interface ApparatusTokens {
   footnoteSizePt?: number;
@@ -126,6 +175,7 @@ export interface DesignSystemBundle {
   spacing: SpacingTokens;
   chrome?: ChromeTokens;
   apparatus?: ApparatusTokens;
+  dataViz?: DataVizTokens;
   layouts: LayoutDef[];
   slideDimensions: SlideDimensions;
   masterElements: MasterElement[];
