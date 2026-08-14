@@ -1,0 +1,180 @@
+{
+  "deck": "metrics",
+  "reference": "reference-validation",
+  "style": {
+    "apparatus": {
+      "generated": [
+        0.0,
+        0.0
+      ],
+      "name": "apparatus",
+      "note": "",
+      "reference": [
+        0.4,
+        1.0
+      ],
+      "score": 0.0
+    },
+    "archetype_match": {
+      "generated": 0.3844,
+      "name": "archetype_match",
+      "note": "",
+      "reference": 0.0,
+      "score": 0.6156
+    },
+    "blocks_per_slide": {
+      "generated": 6,
+      "name": "blocks_per_slide",
+      "note": "",
+      "reference": 11.5,
+      "score": 0.5217
+    },
+    "chart_style": {
+      "generated": {
+        "gridlines": 0.0,
+        "verticalAxis": 0.0
+      },
+      "name": "chart_style",
+      "note": "",
+      "reference": {
+        "gridlines": 0.1667,
+        "verticalAxis": 0.5
+      },
+      "score": 0.6666
+    },
+    "chrome": {
+      "generated": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "name": "chrome",
+      "note": "",
+      "reference": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "score": 0.3333
+    },
+    "ground_split": {
+      "generated": 0.0,
+      "name": "ground_split",
+      "note": "",
+      "reference": 0.3,
+      "score": 0.0
+    },
+    "ink_coverage": {
+      "generated": 0.1472,
+      "name": "ink_coverage",
+      "note": "",
+      "reference": 0.5915,
+      "score": 0.2489
+    },
+    "palette": {
+      "generated": [
+        "#1F2328",
+        "#1428A0",
+        "#EFF0F8",
+        "#7B7E8E",
+        "#0B1340",
+        "#FFFFFF"
+      ],
+      "name": "palette",
+      "note": "",
+      "reference": [
+        "#000000",
+        "#00A9F4",
+        "#051C2C",
+        "#2251FF",
+        "#309CE7",
+        "#FFFFFF"
+      ],
+      "score": 0.769
+    },
+    "type_pairing": {
+      "generated": {
+        "ratio": 3.273,
+        "serif": 0.0
+      },
+      "name": "type_pairing",
+      "note": "",
+      "reference": {
+        "ratio": 1.923,
+        "serif": 1.0
+      },
+      "score": 0.2938
+    },
+    "type_scale": {
+      "generated": [
+        "11.0",
+        "17.0",
+        "23.0",
+        "32.2",
+        "36.0",
+        "41.0"
+      ],
+      "name": "type_scale",
+      "note": "",
+      "reference": [
+        "10.0",
+        "10.6",
+        "10.7",
+        "11.0",
+        "12.0",
+        "14.0",
+        "14.1",
+        "16.0",
+        "18.0",
+        "20.0",
+        "20.1",
+        "25.0",
+        "28.0",
+        "5.3",
+        "8.0",
+        "8.1",
+        "9.0"
+      ],
+      "score": 0.4266
+    },
+    "words_per_slide": {
+      "generated": 27,
+      "name": "words_per_slide",
+      "note": "",
+      "reference": 195.0,
+      "score": 0.1385
+    }
+  },
+  "styleScore": 0.3649,
+  "substance": {
+    "distinct_content": {
+      "generated": 1.0,
+      "name": "distinct_content",
+      "note": "",
+      "reference": 0.9393,
+      "score": 1.0
+    },
+    "informative_titles": {
+      "generated": 0.0,
+      "name": "informative_titles",
+      "note": "",
+      "reference": 0.8,
+      "score": 0.0
+    },
+    "lexical_variety": {
+      "generated": 0.9412,
+      "name": "lexical_variety",
+      "note": "",
+      "reference": 0.587,
+      "score": 1.0
+    },
+    "sourced_figures": {
+      "generated": 0.0,
+      "name": "sourced_figures",
+      "note": "",
+      "reference": 1.0,
+      "score": 0.0
+    }
+  },
+  "substanceScore": 0.5
+}
