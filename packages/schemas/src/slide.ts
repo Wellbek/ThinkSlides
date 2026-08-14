@@ -113,11 +113,19 @@ export interface ChromeTokens {
   marginY?: number;
 }
 
+/** How a deck sets its per-slide footnotes and source line. */
+export interface ApparatusTokens {
+  footnoteSizePt?: number;
+  sourceSizePt?: number;
+  color?: string;
+}
+
 export interface DesignSystemBundle {
   palette: Palette;
   typography: Typography;
   spacing: SpacingTokens;
   chrome?: ChromeTokens;
+  apparatus?: ApparatusTokens;
   layouts: LayoutDef[];
   slideDimensions: SlideDimensions;
   masterElements: MasterElement[];
@@ -359,6 +367,18 @@ export interface Slide {
    * reader where they are in a long document.
    */
   section?: string;
+  /**
+   * Footnotes for this slide, numbered per slide and rendered in a block
+   * above the source line. A marker is written inline as `[^1]` in any run,
+   * table cell or chart label and indexes into this list.
+   *
+   * Distinct from the deck-wide `sourceRef` trail, which renders as a
+   * bracketed "[3]" and resolves on a Sources slide. Both can appear on one
+   * slide: the notations differ, so a reader can tell them apart.
+   */
+  footnotes?: string[];
+  /** "Source: McKinsey analysis" - its own element, not the footer band. */
+  sourceLine?: string;
   /**
    * Marks the slide places itself, for what no block covers. Drawn behind the
    * slide's blocks, so a tinted panel or a rule frames the content rather

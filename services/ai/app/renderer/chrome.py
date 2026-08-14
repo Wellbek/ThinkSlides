@@ -166,6 +166,7 @@ def compile_chrome(
     total_slides: int,
     deck_title: str = "",
     section_name: str = "",
+    has_source_line: bool = False,
 ) -> list[Primitive]:
     """
     The marks that draw this slide's chrome.
@@ -174,6 +175,11 @@ def compile_chrome(
     measured (the density checks have to know it is furniture), positioned
     against the canvas fractionally, and contrast-corrected against whatever
     ground it lands on.
+
+    ``has_source_line`` yields the bottom-left slot. A slide's source line and
+    the deck's footer label want the same corner, and the source line is the
+    one carrying information - which is also what the reference deck does: its
+    pages have a source bottom left and no repeated deck title anywhere.
     """
     if role in spec.suppressed_roles:
         return []
@@ -188,7 +194,8 @@ def compile_chrome(
             type_scale, spec.eyebrow.color or colour,
         ))
 
-    if spec.footer_label.shows_on(role) and deck_title.strip():
+    if spec.footer_label.shows_on(role) and deck_title.strip() and not (
+            has_source_line and spec.footer_label.position.startswith("bottom")):
         marks.append(_line_mark(
             "chrome-footer", deck_title.strip(), spec.footer_label, spec, canvas,
             type_scale, spec.footer_label.color or colour,
