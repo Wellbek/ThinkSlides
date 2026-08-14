@@ -20,6 +20,7 @@ import statistics
 from dataclasses import dataclass, field, asdict
 from typing import Any, Iterable, Optional, Sequence
 
+from app import titles
 from app.eval.page_metrics import PageMetrics, measure_pdf
 
 # A page carrying less than this much ink is a cover, a divider or a blank -
@@ -28,25 +29,6 @@ CONTENT_PAGE_MIN_INK = 0.12
 # ...and one carrying fewer words than this is a section break.
 CONTENT_PAGE_MIN_WORDS = 25
 
-# Words that turn a topic label into a claim. Kept small and boring on
-# purpose: the check has to be reproducible and explainable, and a large
-# hand-tuned lexicon is neither.
-_CLAIM_VERBS = frozenset("""
-is are was were has have had will would can could should must does do did
-grew grows growing rose rises rising fell falls falling drove drives driving
-led leads leading gained gains lost loses cut cuts doubled tripled halved
-increased increases decreased decreases outpaced outperformed shifted shifts
-recorded reached reaches remains remained stayed accounts accounted expands
-expanded contracted delivers delivered enables enabled requires required
-depends depended exceeds exceeded lags lagged trails trailed adds added
-""".split())
-_COMPARATIVES = frozenset("""
-more less higher lower faster slower bigger smaller greater fewer better worse
-most least highest lowest fastest slowest largest smallest best worst than
-versus vs while whereas despite although but
-""".split())
-_QUANTITY_RE = re.compile(r"(\d|\bhalf\b|\bthird\b|\bquarter\b|\bdouble\b|\btriple\b)",
-                          re.IGNORECASE)
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’\-]+")
 _NUMBER_RE = re.compile(r"(?<![\w.])[$€£]?\d[\d,.]*\s?(%|bn|billion|million|m\b|k\b|x\b)?")
 
@@ -269,19 +251,16 @@ def title_states_a_claim(title: str) -> bool:
     """
     True when a headline states a finding rather than naming a topic.
 
-    A claim needs a verb, and it needs something to compare or to count -
-    "Revenue" is a topic, "Revenue grew 12% on price" is a claim. A question
-    is neither: the reference deck's chapter grammar uses interrogatives
-    deliberately, so they are not counted as claims and not counted against
-    the deck either (see ``_measure_substance``).
+    Delegates to ``app.titles``, which is also what the validator rejects
+    against and what the content designer writes against. That makes this
+    metric a **conformance check** rather than an independent judgement, and
+    it is worth being explicit about: it answers "did the deck hold to the
+    standard end to end", not "is the standard any good". The other three
+    substance metrics - distinct content, lexical variety, sourced figures -
+    are independent of anything the generator was told, which is why the
+    guard against filler does not rest on this one.
     """
-    words = [w.lower() for w in _WORD_RE.findall(title or "")]
-    if len(words) < 3:
-        return False
-    has_verb = any(w in _CLAIM_VERBS for w in words)
-    has_comparison = any(w in _COMPARATIVES for w in words)
-    has_quantity = bool(_QUANTITY_RE.search(title or ""))
-    return has_verb and (has_comparison or has_quantity)
+    return titles.states_a_claim(title)
 
 
 def headline_register(title: str) -> str:
@@ -296,12 +275,7 @@ def headline_register(title: str) -> str:
     padding a slide with filler cannot turn "Revenue" into a headline that
     states something.
     """
-    text = (title or "").strip()
-    if not text:
-        return "label"
-    if text.rstrip().endswith("?"):
-        return "question"
-    return "claim" if title_states_a_claim(text) else "label"
+    return titles.classify(title)
 
 
 def _measure_substance(profile: DeckProfile, pages: Sequence[PageMetrics],

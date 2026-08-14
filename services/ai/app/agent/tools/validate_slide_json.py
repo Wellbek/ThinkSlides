@@ -9,6 +9,7 @@ from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
 from app.renderer import regions as region_model
+from app import titles as title_model
 from app.renderer import apparatus as apparatus_model
 from app.renderer import primitives as primitive_model
 from app.renderer.blocks import BLOCK_PAYLOAD_KEY
@@ -233,6 +234,13 @@ class ValidateSlideJsonTool:
         apparatus_errors, apparatus_warnings = apparatus_model.validate_apparatus(slide)
         errors.extend(apparatus_errors)
         warnings.extend(apparatus_warnings)
+
+        # A headline declared as a finding has to be one. A deck whose titles
+        # claim to state its argument and actually name its topics is worse
+        # than one that never claimed to.
+        title_errors, title_warnings = title_model.validate_title(slide)
+        errors.extend(title_errors)
+        warnings.extend(title_warnings)
 
         # Validate slide index
         if not isinstance(slide.get("slideIndex"), int):

@@ -368,6 +368,21 @@ export interface Slide {
    */
   section?: string;
   /**
+   * What this slide's headline is for.
+   *
+   * - `claim` - the slide carries a finding and the headline states it. A
+   *   reader who reads only a deck's claim headlines has read its argument.
+   * - `question` - the headline asks what the slide answers, repeated in the
+   *   same form across comparable slides (the reference deck's chapter
+   *   grammar). Rendered exactly as the pattern specifies.
+   * - `label` - the headline names the topic. Correct for covers, section
+   *   breaks, and any slide with no finding to state.
+   *
+   * A `claim` is rejected in validation unless the slide carries something to
+   * state a finding from - a chart, a table, figures or a comparison.
+   */
+  titleRegister?: "claim" | "question" | "label";
+  /**
    * Footnotes for this slide, numbered per slide and rendered in a block
    * above the source line. A marker is written inline as `[^1]` in any run,
    * table cell or chart label and indexes into this list.
