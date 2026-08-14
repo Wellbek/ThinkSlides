@@ -309,6 +309,35 @@ def _all_text(slide_data: dict) -> Iterable[str]:
             yield str(banner.get("text") or "")
 
 
+def charts_marking_a_forecast(slide_data: dict) -> list[dict]:
+    """Every chart on a slide that marks part of its data as projected."""
+    found = []
+    for item in (slide_data or {}).get("contents") or []:
+        if not isinstance(item, dict) or item.get("type") != "chart":
+            continue
+        chart = item.get("chart")
+        if not isinstance(chart, dict):
+            continue
+        for series in chart.get("series") or []:
+            if not isinstance(series, dict):
+                continue
+            if series.get("forecastFrom") is not None or series.get("measured"):
+                found.append(chart)
+                break
+    return found
+
+
+def chart_text(chart: dict) -> list[str]:
+    """Every string a chart puts on the page, where a marker could be."""
+    out = [str(chart.get("title") or ""), str(chart.get("unitLine") or "")]
+    out += [str(c or "") for c in chart.get("categories") or []]
+    out += [str(s.get("name") or "") for s in chart.get("series") or []
+            if isinstance(s, dict)]
+    out += [str(p.get("label") or "") for p in chart.get("points") or []
+            if isinstance(p, dict)]
+    return out
+
+
 def validate_apparatus(slide_data: dict) -> tuple[list[str], list[str]]:
     """
     Check a slide's footnotes against its markers.
@@ -339,6 +368,26 @@ def validate_apparatus(slide_data: dict) -> tuple[list[str], list[str]]:
                 f"footnote {index} is never referenced - nothing on the slide "
                 f"points at it"
             )
+    # A projection drawn but not explained is a chart claiming a measured
+    # figure it does not have. Reference page 110's dashed final bar is
+    # readable *because* a footnote says it is extrapolated; without the words
+    # the marking is just an unusual bar.
+    for chart in charts_marking_a_forecast(slide_data):
+        if not footnotes:
+            errors.append(
+                "a chart marks part of its data as projected, but the slide "
+                "declares no footnotes - a projection has to say what it is "
+                "extrapolated from"
+            )
+            break
+        if not any(has_marker(text) for text in chart_text(chart)):
+            errors.append(
+                "a chart marks part of its data as projected but carries no "
+                "footnote marker - put a [^n] on the category, series name or "
+                "title the projection applies to"
+            )
+            break
+
     if len(footnotes) > MAX_FOOTNOTES_PER_SLIDE:
         warnings.append(
             f"{len(footnotes)} footnotes is more than a slide can carry "

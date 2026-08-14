@@ -218,11 +218,61 @@ export interface TableContent {
   placeholderIdx?: number;
 }
 
+/** One series, with the part of it that is projected rather than measured. */
+export interface ChartSeries {
+  name: string;
+  values: number[];
+  /**
+   * 0-based index from which values are PROJECTED. Those points render dashed
+   * and outlined so a reader can see which part of the chart is evidence.
+   * A chart marking a projection is rejected in validation unless the slide
+   * carries a footnote saying what it is extrapolated from.
+   */
+  forecastFrom?: number;
+  /**
+   * The measured portion of each value, where part of a figure is real and
+   * part extrapolated - reference page 110's final bar is 18.3 measured and
+   * 36.6 projected. The bar is solid to this and outlined to the full value.
+   */
+  measured?: number[];
+}
+
+/** A point in a bubble chart, carrying two encoded values at once. */
+export interface BubblePoint {
+  label: string;
+  x: number;
+  y: number;
+  /** Encoded as AREA, not radius - so it does not overstate by the square. */
+  size: number;
+  /** Indexes the deck's own series colours, keeping the encoding on-palette. */
+  colorValue?: number;
+}
+
 export interface ChartContent {
-  chartType: "bar" | "line" | "pie" | "scatter";
+  chartType: "bar" | "line" | "pie" | "scatter" | "area" | "bubble";
   title?: string;
+  /** The unit, as a second line under the title: "thousands", "$ billion". */
+  unitLine?: string;
   categories: string[];
-  series: { name: string; values: number[] }[];
+  series: ChartSeries[];
+
+  /** Bubble charts state their data as points rather than as series. */
+  points?: BubblePoint[];
+  /** Explains what colour encodes, as a swatch row. */
+  colorLegend?: { title: string; labels: string[] };
+  /** Explains what area encodes, as nested arcs sharing a baseline. */
+  sizeLegend?: { title: string; values: number[] };
+
+  xAxisTitle?: string;
+  yAxisTitle?: string;
+  valueFormat?: "number" | "percent" | "currency";
+
+  /** Per-chart overrides of the deck's own dataViz tokens. */
+  labelMode?: "auto" | "none" | "all" | "terminal" | "end";
+  legendStyle?: "auto" | "none" | "swatches" | "inline";
+  showValueAxis?: boolean;
+  showGridlines?: boolean;
+
   placeholderIdx?: number;
 }
 
