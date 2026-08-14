@@ -85,10 +85,26 @@ class DeckTheme:
 
     def style_for(self, role: str) -> SlideStyle:
         """The concrete colours for a slide in ``role``."""
-        if role in DARK_ROLES:
-            background = self.dark
+        background = self.dark if role in DARK_ROLES else self.white
+        return self.style_on(background, role)
+
+    def style_on(self, background: str, role: str = ROLE_CONTENT) -> SlideStyle:
+        """
+        The concrete colours for text sitting on ``background``.
+
+        The ground decides the treatment, not the role. That distinction only
+        started to matter once a slide could carry more than one ground: a
+        content slide split white/navy needs both treatments *on the same
+        slide*, and picking either one from the slide's role would leave half
+        the text invisible - which is the exact bug ``_apply_text_color``
+        exists to prevent, returning the moment a slide has two canvases.
+        """
+        if not colors.parse_hex(background):
+            background = self.white
+
+        if colors.is_dark(background):
             return SlideStyle(
-                role=role,
+                role=role if role in DARK_ROLES else ROLE_CONTENT,
                 background=background,
                 # White, not the brand colour: a brand hex deep enough to serve
                 # as a dark background is by definition too close to it to read
@@ -104,12 +120,11 @@ class DeckTheme:
                 footer_color=colors.mix(background, self.light, 0.55),
             )
 
-        background = self.white
         return SlideStyle(
-            role=ROLE_CONTENT,
+            role=role if role == ROLE_CONTENT else ROLE_CONTENT,
             background=background,
             title_color=colors.readable_on(background, self.primary, (self.dark,)),
-            body_color=BODY_ON_LIGHT,
+            body_color=colors.readable_on(background, BODY_ON_LIGHT, (self.dark, self.white)),
             bullet_color=colors.readable_on(background, self.primary, (self.dark,),
                                             minimum=3.0),
             accent_color=colors.readable_on(background, self.accent, (self.primary, self.dark),
