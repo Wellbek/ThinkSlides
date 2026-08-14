@@ -149,6 +149,7 @@ Return a JSON object with this structure:
     {{
       "slideIndex": 0,
       "title": "Slide Title",
+      "section": "Which part of the deck this slide belongs to",
       "keyPoints": ["point1", "point2"],
       "suggestedLayout": "Title Slide",
       "contentType": "title|content|twoColumn|image|table|chart|conclusion",
@@ -161,6 +162,7 @@ Rules:
 - First slide should be a title slide (contentType "title") - it carries only a title and an optional subtitle, no body bullets, so give it 0-1 key points.
 - Last slide should be a conclusion/summary slide. If it recaps points (3-5 key points), give it contentType "content" so the points render in a body placeholder - only use contentType "conclusion" (title-only) for a slide with no body content.
 - Every slide that has key points MUST use a contentType whose layout has a body placeholder: "content" (one body), "twoColumn" (two bodies), "chart", "table", or "image". Never assign 3-5 key points to a "title" or "conclusion" slide - those layouts have no body placeholder and the points would be dropped.
+- Give every slide a "section": the part of the deck it belongs to, named in two or three words and REPEATED verbatim across every slide in that part. Sections are what let a reader tell where they are in the deck, and they are printed as a small eyebrow on each slide - so "Market context" on four consecutive slides is right, and four differently-worded variations of it is not. A deck short enough to have no parts can use one section for all of them.
 - Distribute content evenly across slides
 - Judge every slide against the data behind it, not just its word count. If a slide's key points are carried by numbers - a trend over time, a comparison across categories, a breakdown of a whole - give it contentType "chart". If they are carried by structured rows and columns, give it contentType "table". A deck that states figures only as prose bullets when a chart would show them is a worse deck at every level of detail.
 - KPIs, metrics, financial results, growth rates, targets vs actuals and year-on-year figures are chart material by default. If the user asked for KPIs or metrics, or the key data is a set of numbers, at least one slide MUST have contentType "chart" - returning a deck of prose bullets for a numbers request is a failure, not a stylistic choice. A "chart" slide still keeps its keyPoints: they become the short interpretation alongside the visual.

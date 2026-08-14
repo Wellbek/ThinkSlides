@@ -558,7 +558,8 @@ class TestRenderingIntoRegions:
         compositions is #126.
         """
         from pptx import Presentation
-        from app.renderer.pptx_renderer import CHROME_ACCENT_RULE, CHROME_FOOTER
+        from app.renderer.pptx_renderer import CHROME_ACCENT_RULE
+        from app.renderer.primitives import shape_primitive_id
 
         slides = [
             {"slideIndex": 0, "layoutId": "title",
@@ -575,5 +576,6 @@ class TestRenderingIntoRegions:
 
         composed, plain = deck.slides[1], deck.slides[2]
         assert not any((s.name or "") == CHROME_ACCENT_RULE for s in composed.shapes)
-        assert any((s.name or "") == CHROME_FOOTER for s in composed.shapes)
+        assert any(shape_primitive_id(s) == "chrome-page-number"
+                   for s in composed.shapes)
         assert any((s.name or "") == CHROME_ACCENT_RULE for s in plain.shapes)

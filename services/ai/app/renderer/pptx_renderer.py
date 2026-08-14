@@ -28,6 +28,7 @@ from app.observability.logging import get_logger
 from app.renderer.layout import LayoutEngine, PositionConfig
 from app.renderer.regions import RegionTree
 from app.renderer.blocks import BLOCK_TYPES, BlockCompiler
+from app.renderer.chrome import ChromeSpec, compile_chrome
 from app.renderer import primitives as prim
 from app.renderer.typography import TypeScale
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
@@ -118,9 +119,11 @@ _STOCK_LAYOUT_FOR_CATALOG_ID = {
 # geometry validation, dead-space checks, tests - can tell "the deck's own
 # furniture" from "the slide's content" instead of measuring a 4pt rule as
 # if it were a body element.
-CHROME_NAME_PREFIX = "ThinkSlides Chrome:"
+# Defined in the primitive layer, which is what names shapes; re-exported
+# here because this is where every caller has always imported them from.
+CHROME_NAME_PREFIX = prim.CHROME_NAME_PREFIX
+is_chrome_shape = prim.is_chrome_shape
 CHROME_ACCENT_RULE = f"{CHROME_NAME_PREFIX} Accent Rule"
-CHROME_FOOTER = f"{CHROME_NAME_PREFIX} Footer"
 # A region's own background fill. Chrome rather than content: it is the paper
 # a block is printed on, and measuring a half-slide fill as if it were an
 # element would tell every dead-space and density check that the slide is
@@ -131,11 +134,6 @@ CHROME_REGION_GROUND = f"{CHROME_NAME_PREFIX} Region Ground"
 OBJECT_CONTENT_TYPES = frozenset({"image", "table", "chart", "metrics"})
 
 
-def is_chrome_shape(shape) -> bool:
-    """True for shapes the renderer added as deck chrome, not slide content."""
-    return str(getattr(shape, "name", "") or "").startswith(CHROME_NAME_PREFIX)
-
-
 @dataclass
 class SlidePlan:
     """How one slide is laid out and coloured, resolved before anything is drawn."""
@@ -144,7 +142,9 @@ class SlidePlan:
     title_region: PositionConfig
     body_regions: list[PositionConfig] = field(default_factory=list)
     accent_rule: Optional[PositionConfig] = None
-    show_footer: bool = True
+    # Which part of the deck this slide belongs to. The eyebrow displays it,
+    # which is what turns a page number into a position in a document.
+    section: str = ""
     # The slide's own composition, when it declared one. None for every slide
     # that binds by placeholder index, which is every slide written before
     # regions existed and most written after.
@@ -720,9 +720,7 @@ class PPTXRenderer:
             title_region=title_region,
             body_regions=body_regions,
             accent_rule=accent_rule,
-            # The cover carries the deck's title already; a footer under it
-            # is noise, and no real deck numbers its cover.
-            show_footer=role != deck_theme.ROLE_COVER,
+            section=str(slide_data.get("section") or "").strip(),
             regions=RegionTree.from_slide(slide_data, canvas_width, canvas_height),
             canvas=PositionConfig(left=0.0, top=0.0,
                                   width=canvas_width, height=canvas_height),
@@ -763,26 +761,22 @@ class PPTXRenderer:
         if plan.accent_rule is not None and plan.regions is None:
             self._add_accent_rule(slide, plan.accent_rule, plan.style.accent_color)
 
-        if not plan.show_footer:
-            return
-
-        footer = (catalog.get("spacing") or {}).get("footer") or {}
-        region = _region_from_placeholder_spec(footer) if footer else None
-        if region is None or region.width <= 0:
-            return
-        size_pt = int(footer.get("sizePt", 10) or 10)
-
-        font_name = self._type_scale.body_font
-        label = str(metadata.get("title") or "").strip()
-        if label:
-            self._add_chrome_text(
-                slide, label, region, size_pt, plan.style.footer_color,
-                PP_ALIGN.LEFT, font_name,
-            )
-        self._add_chrome_text(
-            slide, str(index + 1), region, size_pt, plan.style.footer_color,
-            PP_ALIGN.RIGHT, font_name,
+        # Chrome is declared by the design system rather than hardcoded here,
+        # so a design direction can move it, drop it, or vary it by slide
+        # role - which is one of the things that distinguishes one look from
+        # another, and was previously not expressible at all.
+        marks = compile_chrome(
+            spec=ChromeSpec.from_design_system(catalog),
+            style=plan.style,
+            type_scale=self._type_scale,
+            canvas=plan.canvas,
+            role=plan.style.role,
+            slide_number=index + 1,
+            total_slides=total,
+            deck_title=str(metadata.get("title") or ""),
+            section_name=str(plan.section or ""),
         )
+        prim.paint_all(slide, marks, self._paint_context())
 
     @staticmethod
     def _add_accent_rule(slide, region: PositionConfig, color_hex: str) -> None:
@@ -810,37 +804,6 @@ class PPTXRenderer:
         style = shape._element.find(qn("p:style"))
         if style is not None:
             shape._element.remove(style)
-
-    @staticmethod
-    def _add_chrome_text(
-        slide,
-        text: str,
-        region: PositionConfig,
-        size_pt: int,
-        color_hex: str,
-        alignment,
-        font_name: str,
-    ) -> None:
-        """A single small line of deck chrome (footer label or slide number)."""
-        box = slide.shapes.add_textbox(
-            Inches(region.left), Inches(region.top),
-            Inches(region.width), Inches(region.height),
-        )
-        box.name = CHROME_FOOTER
-        frame = box.text_frame
-        frame.word_wrap = False
-        frame.margin_left = frame.margin_right = 0
-        frame.margin_top = frame.margin_bottom = 0
-        paragraph = frame.paragraphs[0]
-        paragraph.alignment = alignment
-        run = paragraph.add_run()
-        run.text = text
-        run.font.size = Pt(size_pt)
-        run.font.name = font_name
-        try:
-            run.font.color.rgb = _hex_to_rgbcolor(color_hex)
-        except ValueError:
-            pass
 
     def _render_content_on_slide(
         self,

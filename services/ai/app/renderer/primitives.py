@@ -76,9 +76,16 @@ ANCHORS = {
 }
 
 # Shapes this layer puts on a slide are named with their primitive id, so an
-# element can be found again. Distinct from CHROME_NAME_PREFIX: these are
-# content and must keep being measured as content.
+# element can be found again.
+#
+# Two prefixes, because the distinction is load-bearing: geometry validation,
+# dead-space checks and the density metrics all need to tell the deck's own
+# furniture from the slide's content, and measuring a footer rule as if it
+# were a body element is how a blank slide reads as full. Both prefixes live
+# here rather than in the renderer because this is the layer that names
+# shapes, and one place has to decide.
 CONTENT_NAME_PREFIX = "ThinkSlides:"
+CHROME_NAME_PREFIX = "ThinkSlides Chrome:"
 
 # A mark thinner than this in either direction is a rule, not a box, and is
 # drawn without being collapsed away by rounding.
@@ -96,14 +103,27 @@ def content_shape_name(primitive_id: str) -> str:
     return f"{CONTENT_NAME_PREFIX}{primitive_id}"
 
 
+def chrome_shape_name(primitive_id: str) -> str:
+    return f"{CHROME_NAME_PREFIX}{primitive_id}"
+
+
+def is_chrome_shape(shape) -> bool:
+    """True for shapes the renderer added as deck chrome, not slide content."""
+    return str(getattr(shape, "name", "") or "").startswith(CHROME_NAME_PREFIX)
+
+
 def is_content_shape(shape) -> bool:
-    """True for shapes this layer placed, which carry their primitive's id."""
+    """True for shapes this layer placed as content, carrying a primitive id."""
     return str(getattr(shape, "name", "") or "").startswith(CONTENT_NAME_PREFIX)
 
 
 def shape_primitive_id(shape) -> Optional[str]:
+    """The primitive id a shape carries, whether it is content or chrome."""
     name = str(getattr(shape, "name", "") or "")
-    return name[len(CONTENT_NAME_PREFIX):] if name.startswith(CONTENT_NAME_PREFIX) else None
+    for prefix in (CHROME_NAME_PREFIX, CONTENT_NAME_PREFIX):
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return None
 
 
 @dataclass(frozen=True)
@@ -159,6 +179,9 @@ class Primitive:
     image: Optional[dict] = None
     end: Optional[tuple[float, float]] = None    # line end, absolute inches
     alt_text: str = ""
+    # Deck furniture rather than slide content: named with the chrome prefix
+    # so every downstream measurement keeps ignoring it.
+    chrome: bool = False
     # The region this mark was positioned against, when it named one. Kept on
     # the resolved primitive because the ground it is coloured for follows
     # from it, and because an addressable element should say where it lives.
@@ -297,7 +320,8 @@ def paint(slide, primitive: Primitive, context: PaintContext):
     shape = painter(slide, primitive, context)
     if shape is not None:
         try:
-            shape.name = content_shape_name(primitive.id)
+            shape.name = (chrome_shape_name(primitive.id) if primitive.chrome
+                          else content_shape_name(primitive.id))
         except (AttributeError, ValueError):
             pass
     return shape
