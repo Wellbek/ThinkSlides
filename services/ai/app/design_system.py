@@ -183,6 +183,19 @@ def derive_data_viz_config(palette_colors: list[dict], body_font: str = "Arial")
     }
 
 
+def _default_chrome() -> dict:
+    """
+    The deck furniture the built-in design system publishes.
+
+    Imported at call time rather than at module scope: ``renderer.chrome``
+    reaches ``renderer.layout``, which reads this module's canvas back out of
+    ``get_default_design_system``. A top-level import would close that loop.
+    """
+    from app.renderer import chrome
+
+    return chrome.default_chrome_declaration()
+
+
 def get_default_design_system(color_theme: str | None = None) -> dict:
     """Return the fully-parsed built-in default design system.
 
@@ -379,6 +392,10 @@ def get_default_design_system(color_theme: str | None = None) -> dict:
         },
         "masterElements": [],
         "embeddedMedia": [],
+        # Deck furniture, declared rather than hardcoded in the renderer, so a
+        # design direction can move it or drop it. The defaults reproduce the
+        # footer band this renderer drew before chrome was declarable.
+        "chrome": _default_chrome(),
         "sourceType": "default",
         "colorTheme": theme_label,
         "dataViz": derive_data_viz_config(palette_colors, body_font="Arial"),

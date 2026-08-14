@@ -81,10 +81,43 @@ export interface EmbeddedMedia {
   fileSizeBytes?: number;
 }
 
+/** Where a piece of deck furniture sits. */
+export type ChromePosition = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+
+export interface ChromeElement {
+  enabled?: boolean;
+  position?: ChromePosition;
+  sizePt?: number;
+  color?: string;
+  /** Slide roles this element appears on; absent means every role. */
+  roles?: string[];
+}
+
+/**
+ * The deck's furniture, declared rather than hardcoded in the renderer.
+ *
+ * A design direction distinguishes itself partly by where chrome sits and
+ * whether it is there at all, so it has to be a token rather than a constant.
+ * A deck declaring none renders the footer band that was always there.
+ */
+export interface ChromeTokens {
+  eyebrow?: ChromeElement & { source?: "sectionName" | "deckTitle" | "none" };
+  brandMark?: ChromeElement & { kind?: "text" | "image"; value?: string };
+  pageNumber?: ChromeElement;
+  pageNumberFormat?: string;
+  footer?: ChromeElement;
+  footerRule?: ChromeElement;
+  /** Roles that carry no chrome at all. Defaults to the cover. */
+  suppressedRoles?: string[];
+  marginX?: number;
+  marginY?: number;
+}
+
 export interface DesignSystemBundle {
   palette: Palette;
   typography: Typography;
   spacing: SpacingTokens;
+  chrome?: ChromeTokens;
   layouts: LayoutDef[];
   slideDimensions: SlideDimensions;
   masterElements: MasterElement[];
@@ -320,6 +353,12 @@ export interface Slide {
    * through exactly the code it always did.
    */
   regions?: Region[];
+  /**
+   * Which part of the deck this slide belongs to, repeated verbatim across
+   * every slide in that part. Printed as the eyebrow, which is what tells a
+   * reader where they are in a long document.
+   */
+  section?: string;
   /**
    * Marks the slide places itself, for what no block covers. Drawn behind the
    * slide's blocks, so a tinted panel or a rule frames the content rather

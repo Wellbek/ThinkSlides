@@ -8,7 +8,6 @@ already measured text for the shared-region case; the same measurement was
 never used to balance a slide that was simply short.
 """
 
-import pytest
 
 from app.renderer import composition
 from app.renderer.composition import balance_body

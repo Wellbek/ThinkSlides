@@ -19,7 +19,6 @@ from app import colors
 from app.design_system import get_default_design_system
 from app.renderer.pptx_renderer import (
     CHROME_ACCENT_RULE,
-    CHROME_FOOTER,
     PPTXRenderer,
     is_chrome_shape,
 )
@@ -68,8 +67,20 @@ def _chrome(slide, name):
     return [s for s in slide.shapes if (s.name or "") == name]
 
 
-def _text_of(slide, name):
-    return " ".join(s.text_frame.text for s in _chrome(slide, name) if s.has_text_frame)
+def _chrome_by_id(slide, *primitive_ids):
+    """Chrome is addressed by its primitive id now that each piece is its own
+    element rather than one footer shape carrying everything."""
+    from app.renderer.primitives import shape_primitive_id
+
+    wanted = set(primitive_ids)
+    return [s for s in slide.shapes if shape_primitive_id(s) in wanted]
+
+
+def _text_of(slide, *primitive_ids):
+    return " ".join(
+        s.text_frame.text for s in _chrome_by_id(slide, *primitive_ids)
+        if s.has_text_frame
+    )
 
 
 class TestLightDarkRhythm:
@@ -126,14 +137,21 @@ class TestRepeatedMotif:
 
 class TestFooter:
     def test_content_slides_carry_the_deck_title_and_a_slide_number(self, deck):
-        text = _text_of(deck.slides[1], CHROME_FOOTER)
+        text = _text_of(deck.slides[1], "chrome-footer", "chrome-page-number")
 
         assert "Deck Title" in text
         assert "2" in text
 
     def test_the_cover_carries_no_footer(self, deck):
         """No real deck numbers its cover or repeats its own title under it."""
-        assert _chrome(deck.slides[0], CHROME_FOOTER) == []
+        assert _chrome_by_id(deck.slides[0], "chrome-footer",
+                             "chrome-page-number") == []
+
+    def test_each_piece_of_chrome_is_its_own_element(self, deck):
+        """The deck title and the page number are separate marks, so a design
+        direction can move or drop either one without the other."""
+        assert len(_chrome_by_id(deck.slides[1], "chrome-footer")) == 1
+        assert len(_chrome_by_id(deck.slides[1], "chrome-page-number")) == 1
 
 
 class TestCatalogGeometryIsApplied:
