@@ -1800,6 +1800,12 @@ class PPTXRenderer:
         table.first_row = header_row
         table.horz_banding = False
 
+        if style.treatment == "hairline":
+            self._rule_table_rows(slide, layout, style, header_row,
+                                  PositionConfig(left=pos.left, top=top,
+                                                 width=pos.width,
+                                                 height=layout.height_in))
+
         header_rgb = _hex_to_rgbcolor(style.header_bg)
         header_fg_rgb = _hex_to_rgbcolor(style.header_fg)
         band_rgb = _hex_to_rgbcolor(style.band_bg)
@@ -1814,20 +1820,31 @@ class PPTXRenderer:
                 raw_cell = str(row[c_idx]) if c_idx < len(row) else ""
                 cell.text = apparatus_markers.strip_markers(raw_cell)
                 cell.vertical_anchor = MSO_ANCHOR.MIDDLE
-                cell.fill.solid()
-                if is_header:
-                    cell.fill.fore_color.rgb = header_rgb
-                elif is_total:
-                    # A summary row reads as part of the data unless it is
-                    # set apart; a tint of the header does that without
-                    # introducing another colour.
-                    cell.fill.fore_color.rgb = _hex_to_rgbcolor(
-                        colors.mix(style.band_bg, style.header_bg, 0.22)
-                    )
-                elif r_idx % 2 == 1:
-                    cell.fill.fore_color.rgb = band_rgb
+                if style.treatment == "hairline":
+                    # Rows separated by rules on the slide's own ground rather
+                    # than banded blocks of colour. Reference pages 12 and 40
+                    # are hairline tables, and rendering them as filled bands
+                    # is most of why a generated table does not look like the
+                    # template it came from.
+                    cell.fill.background()
+                    if is_header and style.header_filled:
+                        cell.fill.solid()
+                        cell.fill.fore_color.rgb = header_rgb
                 else:
-                    cell.fill.fore_color.rgb = row_rgb
+                    cell.fill.solid()
+                    if is_header:
+                        cell.fill.fore_color.rgb = header_rgb
+                    elif is_total:
+                        # A summary row reads as part of the data unless it is
+                        # set apart; a tint of the header does that without
+                        # introducing another colour.
+                        cell.fill.fore_color.rgb = _hex_to_rgbcolor(
+                            colors.mix(style.band_bg, style.header_bg, 0.22)
+                        )
+                    elif r_idx % 2 == 1:
+                        cell.fill.fore_color.rgb = band_rgb
+                    else:
+                        cell.fill.fore_color.rgb = row_rgb
 
                 # Figures right-align so their digits line up and can be
                 # compared down the column; prose stays left.
@@ -1842,7 +1859,11 @@ class PPTXRenderer:
                         )
                         run.font.bold = is_header or is_total
                         run.font.name = style.font_name
-                        run.font.color.rgb = header_fg_rgb if is_header else body_fg_rgb
+                        run.font.color.rgb = (
+                            header_fg_rgb
+                            if is_header and style.header_filled
+                            else body_fg_rgb
+                        )
                     if apparatus_markers.has_marker(raw_cell) and paragraph.runs:
                         self._mark_cell(paragraph, raw_cell, style.font_name,
                                         Pt(layout.header_pt if is_header
@@ -1870,6 +1891,33 @@ class PPTXRenderer:
             run.font.color.rgb = color_rgb
             if marker is not None:
                 apparatus_markers.apply_superscript(run)
+
+    def _rule_table_rows(self, slide, layout, style, header_row: bool,
+                         pos: PositionConfig) -> None:
+        """
+        Draw a hairline table's own rules.
+
+        python-pptx has no cell-border API, so the rules are marks: a heavier
+        one under the header, a light one under every other row. Drawn through
+        the primitive layer like everything else, which is also what keeps
+        them measured and addressable.
+        """
+        rule_hex = style.border
+        top = pos.top
+        marks = []
+        for index, height in enumerate(layout.row_heights_in):
+            top += height
+            if index == len(layout.row_heights_in) - 1:
+                break
+            weight = (style.header_rule_weight_pt
+                      if header_row and index == 0 else style.rule_weight_pt)
+            marks.append(prim.Primitive(
+                id=f"s{self._slide_number}-table-rule-{index}", kind="rect",
+                box=PositionConfig(left=pos.left, top=top, width=pos.width,
+                                   height=max(0.008, weight / 72.0)),
+                fill=rule_hex,
+            ))
+        prim.paint_all(slide, marks, self._paint_context())
 
     def _add_text_box(
         self,
