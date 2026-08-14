@@ -8,6 +8,7 @@ from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent import run_context
 from app.agent.run_context import get_chat_provider
+from app import titles
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
@@ -259,6 +260,24 @@ Design System Context:
             # the eyebrow only means anything if every slide in a part names
             # that part identically.
             section = str(outline.get("section") or "").replace('"', "'").strip()
+            # Which register this slide's headline is in, and whether the
+            # slide can actually back it. A claim over a slide with no chart,
+            # no table and no figures is the deck lying about its own
+            # evidence, so it is demoted here rather than written and then
+            # rejected at validation.
+            title_register, register_guidance, register_note = (
+                _resolve_title_register(outline, attached, key_points)
+            )
+            if register_note:
+                # The model sees the demotion in the returned titleRegister;
+                # an operator needs the reason, because "this deck's headlines
+                # are all topic labels" is a planning failure that looks like a
+                # writing failure.
+                logger.info(
+                    "title_register_demoted",
+                    slide_index=slide_index, planned=titles.CLAIM,
+                    rendered=title_register, reason=register_note,
+                )
 
             prompt = f"""Generate content for a single presentation slide.
 
@@ -282,6 +301,7 @@ Return a JSON object with this exact structure:
   "layoutId": "{layout.get('layoutId', '1')}",
   "layoutName": "{layout_name}",
   "section": "{section}",
+  "titleRegister": "{title_register}",
   "contents": [
     {{
       "type": "text",
@@ -304,6 +324,7 @@ Return a JSON object with this exact structure:
 }}
 
 Rules:
+{register_guidance}
 - Put the slide title in the title placeholder (placeholderIdx={title_idx}).
 - Put EVERY key point listed above into the body placeholder (placeholderIdx={body_idx}) as its OWN bullet run - one run per key point, with bullet: true and level: 0. Never collapse multiple key points into a single bullet or drop points to save space.
 - {detail_guidance}
@@ -339,6 +360,10 @@ Rules:
                 )
 
             # Ensure required fields
+            # The register is resolved here, not by the model: it is the one
+            # field whose correctness depends on what was built for this
+            # slide rather than on what the model decided to write.
+            slide_data["titleRegister"] = title_register
             slide_data.setdefault("slideIndex", slide_index)
             slide_data.setdefault("layoutId", layout.get("layoutId", "1"))
             slide_data.setdefault("layoutName", layout_name)
@@ -360,6 +385,7 @@ Rules:
                 "slide_content_designed",
                 slide_index=slide_index,
                 content_count=len(slide_data.get("contents", [])),
+                title_register=title_register,
                 duration_ms=duration_ms,
             )
 
@@ -393,6 +419,65 @@ def _describe_visual(block: dict) -> str:
         figures = "; ".join(f"{i.get('value')} {i.get('label')}" for i in items)
         return f"a row of headline figures: {figures}"
     return str(kind)
+
+
+def _resolve_title_register(outline: dict, attached: list[dict],
+                            key_points: list) -> tuple[str, str, str]:
+    """
+    The register this slide's headline is in, and what to tell the model.
+
+    The planner decides the register; this decides whether the slide can keep
+    it. A claim needs something to state a finding *from*, and at this point
+    that is knowable: the visuals for this slide have already been built (the
+    ordering #60 established), so "is there a chart, a table, a metric row or
+    a figure in the key points" has a real answer rather than a hopeful one.
+
+    Demoting is the safe direction. A topic label on a slide that had a
+    finding is a missed opportunity; a fabricated finding is a defect, and
+    the one #78 recorded.
+    """
+    declared = titles.normalize_register(outline.get("titleRegister"),
+                                         default=titles.LABEL)
+
+    if declared == titles.QUESTION:
+        return titles.QUESTION, (
+            "- This slide's headline is a QUESTION, and it is part of a repeating "
+            "series across the deck. Use the outline's title EXACTLY as written - "
+            "rewording it breaks the pattern that makes the deck read as one "
+            "document."
+        ), ""
+
+    has_evidence = bool(attached) or any(
+        titles.has_quantity(str(point)) for point in key_points or []
+    )
+    if declared == titles.CLAIM and has_evidence:
+        return titles.CLAIM, (
+            "- This slide's headline must state its FINDING, not name its topic. "
+            "Write it from the data on this slide - the visual described above and "
+            "the key points - so that a reader who read only the headlines of this "
+            "deck would have read its argument. It needs a verb and either a figure "
+            "or a comparison: \"Segment performance\" is a topic, \"International "
+            "margin fell to 11.2% as openings outpaced traffic\" is a finding. "
+            "Only state what this slide's own data supports."
+        ), ""
+
+    if declared == titles.CLAIM:
+        return titles.LABEL, (
+            "- This slide was planned to state a finding, but nothing has been built "
+            "for it and its key points carry no figures, so there is nothing to state "
+            "one from. Write a plain, accurate topic title instead. Do NOT invent a "
+            "finding to fill the headline."
+        ), (
+            "This slide was planned to state a finding but has no chart, table or "
+            "figures behind it, so its headline was written as a topic label. If it "
+            "does have data, call build_chart/build_table/build_key_metrics for this "
+            "slide and design its content again."
+        )
+
+    return titles.LABEL, (
+        "- This slide's headline names its topic. Keep it short and accurate; do not "
+        "assert a finding the slide does not evidence."
+    ), ""
 
 
 def _prepared_visual_guidance(attached: list[dict]) -> str:
