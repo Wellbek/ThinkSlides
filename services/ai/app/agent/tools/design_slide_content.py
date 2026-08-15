@@ -10,6 +10,7 @@ from app.agent import run_context
 from app.agent.run_context import get_chat_provider
 from app import budget as budget_model
 from app import titles
+from app.measure import grammar as grammar_model
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
@@ -23,6 +24,11 @@ logger = get_logger(__name__)
 # could be built from - which is most of what separates a slide that can
 # honestly be dense from one that cannot.
 _DIGIT_RE = re.compile(r"\d")
+
+# How many of a template's compositions to offer a slide. Enough to cover the
+# shapes a deck actually repeats, few enough that the prompt stays about this
+# slide rather than about the template's catalogue.
+MAX_LAYOUTS = 6
 
 def _distinct_by_url(findings: list[dict]) -> list[dict]:
     """The reference list, numbered exactly as renderer/citations.py will."""
@@ -242,6 +248,11 @@ Design System Context:
             # one deciding how thin the material was.
             density_info = _density_guidance(ds, outline, key_points, attached,
                                              slide_index)
+            # The compositions this template actually uses, read off its own
+            # pages. Offered as region trees the slide can adopt wholesale,
+            # because a rail described in prose is a rail the model has to
+            # re-derive coordinates for.
+            grammar_info = _grammar_guidance(ds)
 
             # Only ask for source tags when the deck is actually going to show
             # them and there is research to point at. Asking unconditionally
@@ -300,7 +311,7 @@ Slide Outline:
 
 Key points to cover on this slide:
 {kp_list}
-{density_info}
+{density_info}{grammar_info}
 Selected Layout: {layout_name}
 Available Placeholders:
 {ph_text}
@@ -542,6 +553,39 @@ def _density_guidance(design_system: dict, outline: dict, key_points: list,
                 "carry the supporting detail behind them - the figure, the "
                 "comparison, the so-what - rather than repeating the point."
             )
+    return "\n".join(lines) + "\n"
+
+
+def _grammar_guidance(design_system: dict) -> str:
+    """
+    The compositions this template actually uses, as region trees to adopt.
+
+    Offered rather than described: the geometry is fractional and already in
+    the shape a slide's ``regions`` field takes, so a model that recognises
+    the right composition copies it instead of estimating coordinates for a
+    rail it was told about in prose.
+    """
+    grammar = grammar_model.TemplateGrammar.from_dict(
+        (design_system or {}).get("layoutGrammar")
+    )
+    layouts = [layout for layout in grammar.layouts if layout.regions][:MAX_LAYOUTS]
+    if not layouts:
+        return ""
+
+    lines = [
+        "\nCompositions this template uses, measured from its own pages. If "
+        "this slide's content suits one, copy its regions verbatim into a "
+        '"regions" field and bind each content item to a region with '
+        '"regionId". Geometry is fractional against the parent, so it needs '
+        "no adjustment. If none of them suits, leave regions out and the "
+        "slide renders in its placeholders as before."
+    ]
+    for layout in layouts:
+        described = ", ".join(layout.features) or "panels"
+        lines.append(
+            f"- {layout.label or 'layout'} ({described}): "
+            f"{json.dumps(layout.regions, separators=(',', ':'))}"
+        )
     return "\n".join(lines) + "\n"
 
 

@@ -108,6 +108,12 @@ class PageStructure:
     # would otherwise re-run the exhibit finder to learn it, and this already
     # had to find them to keep their labels from being counted as blocks.
     exhibits: int = 0
+    # The rows of cells this count was made from, each cell as a fractional
+    # box on the page. Kept because reading a page's *grammar* - four columns
+    # here, seven bands there - needs the geometry the count was derived from,
+    # and re-deriving it would be a second implementation of these rules.
+    cell_rows: tuple[tuple[tuple[float, float, float, float], ...], ...] = ()
+    exhibit_boxes: tuple[tuple[float, float, float, float], ...] = ()
 
 
 def count_blocks(page) -> PageStructure:
@@ -141,7 +147,9 @@ def count_blocks(page) -> PageStructure:
     rows = _rows(cells)
     rows, first_grid = _drop_lead(rows, content, excluded)
     rows = _drop_label_column(rows, excluded)
-    return _count(rows, content, excluded, exhibits=len(exhibits))
+    return _count(rows, content, excluded, exhibits=len(exhibits),
+                  page_size=(width, height),
+                  exhibit_boxes=[e.bbox for e in exhibits])
 
 
 def _body_lines(page, content) -> list[Cell]:
@@ -308,7 +316,8 @@ def _rows(cells: Sequence[Cell]) -> list[list[Cell]]:
 
 
 def _count(rows: list[list[Cell]], content, excluded: list[str],
-           exhibits: int = 0) -> PageStructure:
+           exhibits: int = 0, page_size: tuple[float, float] = (1.0, 1.0),
+           exhibit_boxes: Sequence = ()) -> PageStructure:
     """Turn rows of cells into a block count, plus one per exhibit."""
     content_width = max(1.0, content[2] - content[0])
     blocks = exhibits
@@ -321,10 +330,27 @@ def _count(rows: list[list[Cell]], content, excluded: list[str],
             band_rows += 1
         else:
             blocks += len(row)
+    width, height = page_size
     return PageStructure(
         block_count=blocks, rows=len(rows), columns=widest,
         band_rows=band_rows, excluded=tuple(excluded), exhibits=exhibits,
+        cell_rows=tuple(
+            tuple(_fractional(cell.box, width, height) for cell in row)
+            for row in rows
+        ),
+        exhibit_boxes=tuple(
+            _fractional(box, width, height) for box in exhibit_boxes
+        ),
     )
+
+
+def _fractional(box: Sequence[float], width: float,
+                height: float) -> tuple[float, float, float, float]:
+    """A box in points as fractions of the page, so it survives a canvas."""
+    w = max(1e-6, width)
+    h = max(1e-6, height)
+    return (round(box[0] / w, 4), round(box[1] / h, 4),
+            round(box[2] / w, 4), round(box[3] / h, 4))
 
 
 def _is_band(row: Sequence[Cell], content_width: float) -> bool:

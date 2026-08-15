@@ -2166,6 +2166,7 @@ class AgentLoop:
                     # nothing rather than to a number it invented.
                     "density": bundle.density,
                     "pageSurvey": bundle.page_survey,
+                    "layoutGrammar": bundle.layout_grammar,
                 }
 
         return context
