@@ -258,6 +258,67 @@ def measure_page(page, page_number: Optional[int] = None) -> PageMetrics:
     return metrics
 
 
+@dataclass
+class PageShape:
+    """
+    The little about a page that clustering needs, and nothing else.
+
+    ``measure_page`` reads a page thoroughly - chart styles, type ramps,
+    every exhibit classified by rasterising a crop of it - which is the right
+    cost for the dozen pages a profile is built from and the wrong one for the
+    two hundred a template survey walks. This is the subset that tells one
+    page's *layout* from another's: the signature, the grid it is set on, and
+    a few counts.
+    """
+    page_number: int
+    signature: list[float] = field(default_factory=list)
+    word_count: int = 0
+    image_count: int = 0
+    has_ground_split: bool = False
+    dark_ground: bool = False
+    # The page's grid, from ``measure.structure``. The ink map alone cannot
+    # tell seven row bands from a row of four cards - both are ink spread
+    # evenly down the page - and those are different archetypes.
+    blocks: int = 0
+    rows: int = 0
+    columns: int = 0
+    exhibits: int = 0
+
+
+def page_shape(page, page_number: Optional[int] = None) -> PageShape:
+    """Read only what tells one page's layout from another's."""
+    from app import colors
+    from app.measure.structure import count_blocks
+
+    width, height = float(page.rect.width), float(page.rect.height)
+    spans = _collect_spans(page)
+    drawings = _collect_drawings(page, width, height)
+    images = _collect_images(page, width, height)
+    # The signature downsamples the ground map to its own grid, so reading it
+    # at that grid is the same answer for a third of the work.
+    ground_cells = _ground_cells(page, SIGNATURE_ROWS, SIGNATURE_COLS)
+
+    shape = PageShape(page_number=page_number if page_number is not None else 0)
+    shape.signature = _signature(spans, drawings, images, ground_cells, width, height)
+    shape.word_count = sum(len(span["text"].split()) for span in spans)
+    shape.image_count = len(images)
+
+    # Grounds through the same reading measure_page uses, so "this page is
+    # split" means one thing across the codebase rather than two.
+    grounds = PageMetrics(page_number=shape.page_number, width_pt=width,
+                          height_pt=height)
+    _measure_grounds(grounds, ground_cells)
+    shape.has_ground_split = grounds.has_ground_split
+    shape.dark_ground = bool(grounds.grounds) and colors.is_dark(grounds.grounds[0][0])
+
+    structure = count_blocks(page)
+    shape.blocks = structure.block_count
+    shape.rows = structure.rows
+    shape.columns = structure.columns
+    shape.exhibits = structure.exhibits
+    return shape
+
+
 def measure_pdf(pdf_path: str, pages: Optional[Iterable[int]] = None) -> list[PageMetrics]:
     """Measure a whole PDF, or the given 1-based pages of it."""
     import fitz
@@ -342,11 +403,19 @@ def _collect_images(page, width: float, height: float) -> list[dict]:
 # Grounds
 # --------------------------------------------------------------------------
 
-def _ground_cells(page) -> list[list[str]]:
+def _ground_cells(page, grid_rows: int = GROUND_GRID_ROWS,
+                  grid_cols: int = GROUND_GRID_COLS) -> list[list[str]]:
     """
     The page's ground colour per cell of a coarse grid, read off the rendered
     pixels. Each cell reports its own modal colour, so a cell carrying a line
     of text still reports the paper behind the text rather than the ink.
+
+    The grid is a parameter because the two callers want different precision
+    for the same answer. Reporting a deck's grounds wants the fine grid, so a
+    narrow rail is not averaged into the panel beside it. Clustering pages
+    (``page_signature``) downsamples the result to the signature's own 12 x 8
+    anyway, and reading 336 cells to produce 96 of them is most of the cost of
+    surveying a 184-page template.
     """
     try:
         import numpy as np
@@ -364,13 +433,13 @@ def _ground_cells(page) -> list[list[str]]:
 
     height_px, width_px = array.shape[:2]
     rows: list[list[str]] = []
-    for row in range(GROUND_GRID_ROWS):
-        y0 = int(row * height_px / GROUND_GRID_ROWS)
-        y1 = max(y0 + 1, int((row + 1) * height_px / GROUND_GRID_ROWS))
+    for row in range(grid_rows):
+        y0 = int(row * height_px / grid_rows)
+        y1 = max(y0 + 1, int((row + 1) * height_px / grid_rows))
         row_colors: list[str] = []
-        for col in range(GROUND_GRID_COLS):
-            x0 = int(col * width_px / GROUND_GRID_COLS)
-            x1 = max(x0 + 1, int((col + 1) * width_px / GROUND_GRID_COLS))
+        for col in range(grid_cols):
+            x0 = int(col * width_px / grid_cols)
+            x1 = max(x0 + 1, int((col + 1) * width_px / grid_cols))
             patch = array[y0:y1, x0:x1].reshape(-1, 3)
             # Quantise before taking the mode, so anti-aliased edges do not
             # each count as their own colour, then average the winning

@@ -14,8 +14,11 @@ as a versioned DesignSystemBundle in the database.
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.measure import clusters
+from app.measure import density as density_model
 from app.observability.logging import get_logger
 from app.llm import get_vision_llm_provider
+from typing import Sequence
 import os
 import json
 import re
@@ -41,6 +44,17 @@ NS = {
 # whose name contains "default") resolve to the built-in parsed design system
 # below instead of failing.
 DEFAULT_SENTINELS = {"", "default", "none", "null", "builtin", "built-in"}
+
+# How many pages of a template the vision model is shown. Unchanged from the
+# even sampler this replaced: the point is spending the budget better, not
+# spending more of it.
+VISION_PAGE_BUDGET = 15
+
+
+def _pdf_page_count(pdf_path: str) -> int:
+    from app.measure.rendered import page_count
+
+    return page_count(pdf_path)
 
 
 # The built-in default design system lives in ``app.design_system`` so it can
@@ -80,6 +94,18 @@ class ExtractTemplateDesignSystemTool:
                     required=False,
                 ),
                 ToolParameter(
+                    name="page_range",
+                    type="string",
+                    description=(
+                        "Which pages of the template to treat as the template, e.g. "
+                        "'20-35' or '1,4,9-12'. Omit for the whole document. Use it "
+                        "when the user says only part of a deck is the style to "
+                        "follow - those pages then have to stand on their own as a "
+                        "complete template."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
                     name="color_theme",
                     type="string",
                     description=(
@@ -96,7 +122,8 @@ class ExtractTemplateDesignSystemTool:
         )
 
     @classmethod
-    async def run(cls, template_path: str = "", color_theme: str = "") -> ToolResult:
+    async def run(cls, template_path: str = "", color_theme: str = "",
+                  page_range: str = "") -> ToolResult:
         start = time.time()
         try:
             normalized = (template_path or "").strip()
@@ -133,9 +160,9 @@ class ExtractTemplateDesignSystemTool:
             ext = os.path.splitext(template_path)[1].lower()
 
             if ext == ".pdf":
-                design_system = await cls._extract_from_pdf(template_path)
+                design_system = await cls._extract_from_pdf(template_path, page_range)
             elif ext in (".pptx", ".potx"):
-                design_system = await cls._extract_from_pptx(template_path)
+                design_system = await cls._extract_from_pptx(template_path, page_range)
             else:
                 return ToolResult(
                     success=False,
@@ -183,29 +210,39 @@ class ExtractTemplateDesignSystemTool:
     # ── Measured tokens (density, type scale) ───────────────────────────
 
     @classmethod
-    def _apply_measured_profile(cls, design_system: dict, template_path: str) -> None:
+    def _measure_template(cls, design_system: dict, template_path: str,
+                          page_range: str = "", survey: bool = False) -> None:
         """
-        Read the template's density and type scale off its rendered pages.
+        Read a template's rendered pages once, and learn everything from them.
 
-        No LLM is involved, and none should be: how many words a page carries
-        and what point size they are set in are counts, and a model asked to
-        estimate them from a picture will guess. This runs on both extraction
-        paths - the XML one because a theme declares typefaces but not the
-        sizes a deck actually uses, and the vision one because a model reading
-        a JPEG cannot measure anything.
+        Density, the type ramp and - where the caller has not already surveyed
+        the pages itself - the layout clusters. One conversion for all of it:
+        a PPTX has to go through LibreOffice to be read at all, and doing that
+        twice for one upload is a minute of a user's time spent on nothing.
 
-        Measurement is additive. A template that renders to nothing keeps
-        whatever the path already extracted.
+        No LLM is involved in any of it, and none should be. How many words a
+        page carries, what point size they are set in and which pages look
+        alike are counts, and a model asked to estimate them from a picture
+        will guess.
         """
-        from app.measure.density import profile_template
+        from app.measure.rendered import as_pdf
 
         try:
-            profile = profile_template(template_path)
+            with as_pdf(template_path) as pdf_path:
+                if not pdf_path:
+                    logger.info("template_profile_skipped",
+                                template_path=template_path)
+                    return
+                pages = clusters.parse_page_range(
+                    page_range or None, _pdf_page_count(pdf_path)
+                )
+                if survey:
+                    surveyed = clusters.survey_pdf(pdf_path, pages,
+                                                   budget=VISION_PAGE_BUDGET)
+                    design_system["pageSurvey"] = surveyed.to_dict()
+                profile = density_model.profile_pdf(pdf_path, pages)
         except Exception as e:  # pragma: no cover - a broken template
             logger.warning("template_profile_failed", error=str(e))
-            return
-        if profile is None:
-            logger.info("template_profile_skipped", template_path=template_path)
             return
 
         density, types = profile
@@ -275,7 +312,8 @@ class ExtractTemplateDesignSystemTool:
     # ── PPTX / POTX extraction (XML-based) ──────────────────────────────
 
     @classmethod
-    async def _extract_from_pptx(cls, template_path: str) -> dict:
+    async def _extract_from_pptx(cls, template_path: str,
+                                 page_range: str = "") -> dict:
         """Extract design system from a PPTX/POTX template via XML parsing."""
         with zipfile.ZipFile(template_path, "r") as zf:
             design_system = {}
@@ -295,31 +333,40 @@ class ExtractTemplateDesignSystemTool:
             design_system["palette"]["colors"],
             body_font=design_system.get("typography", {}).get("bodyFont", {}).get("typeface", "Arial"),
         )
-        cls._apply_measured_profile(design_system, template_path)
+        # A PPTX carrying real slides is surveyed like a PDF: its layouts are
+        # what the deck actually looks like, and the XML catalog says only
+        # which placeholder boxes exist.
+        cls._measure_template(design_system, template_path, page_range, survey=True)
         return design_system
 
     # ── PDF extraction (vision LLM-based) ───────────────────────────────
 
     @classmethod
-    async def _extract_from_pdf(cls, template_path: str) -> dict:
+    async def _extract_from_pdf(cls, template_path: str,
+                                page_range: str = "") -> dict:
         """Extract design system from a PDF template using a vision LLM.
 
-        The PDF pages are rendered to PNG images and sent to a vision-capable
-        model (e.g. GLM-4.6V, GPT-4o) which analyses the visual design and
-        returns a structured JSON design-system bundle matching the same
-        schema produced by the XML path.
+        Which pages the model sees is decided first, and not by the model:
+        every page is read cheaply, pages that look alike are grouped, and the
+        budget is spent one page per group before a second from any. See
+        ``measure.clusters`` for why even sampling was the wrong spend.
         """
-        images = cls._convert_pdf_pages_to_images(template_path)
+        survey = clusters.survey_pdf(template_path, page_range or None,
+                                     budget=VISION_PAGE_BUDGET)
+        images = cls._render_pages(template_path, survey.sample)
         if not images:
             raise ValueError("No pages could be rendered from the PDF")
 
-        prompt = cls._build_vision_prompt(page_count=len(images))
+        prompt = cls._build_vision_prompt(page_count=len(images), survey=survey)
         vision_provider = get_vision_llm_provider()
 
         logger.info(
             "pdf_vision_analysis_starting",
             template_path=template_path,
             sampled_pages=len(images),
+            considered_pages=len(survey.considered),
+            clusters=len(survey.clusters),
+            layouts_seen=list(survey.sampled_labels()),
         )
 
         response_text = await vision_provider.chat_with_images(
@@ -331,7 +378,11 @@ class ExtractTemplateDesignSystemTool:
 
         design_system = cls._parse_vision_response(response_text)
         design_system["sourceType"] = "pdf"
-        cls._apply_measured_profile(design_system, template_path)
+        # The survey travels with the design system: #121 names the archetypes
+        # from it and #130 scores whether the sample covered the deck, and
+        # neither should have to re-read the PDF to find out what was seen.
+        design_system["pageSurvey"] = survey.to_dict()
+        cls._measure_template(design_system, template_path, page_range)
 
         logger.info(
             "pdf_vision_analysis_completed",
@@ -342,78 +393,61 @@ class ExtractTemplateDesignSystemTool:
         return design_system
 
     @staticmethod
-    def _convert_pdf_pages_to_images(
+    def _render_pages(
         pdf_path: str,
-        max_pages: int = 15,
+        pages: Sequence[int],
         dpi_scale: float = 1.5,
     ) -> list[str]:
-        """Render PDF pages to base64-encoded JPEG data URIs.
+        """Render the chosen 1-based pages as base64 JPEG data URIs.
 
-        For PDFs with more pages than *max_pages*, pages are sampled evenly
-        across the document (always including the first and last page) so
-        that the vision LLM sees representative layouts throughout.
-
-        Args:
-            pdf_path: Path to the PDF file.
-            max_pages: Maximum number of pages to render (default 15).
-            dpi_scale: Scaling factor — 1.5 balances quality and token count.
-                JPEG compression keeps each page ~50–150 KB instead of
-                ~500 KB–1 MB for PNG.
-            Returns:
-            List of data URI strings (``data:image/jpeg;base64,...``).
+        ``dpi_scale`` 1.5 balances quality against token count, and JPEG keeps
+        each page ~50-150 KB instead of the ~500 KB-1 MB a PNG would.
         """
         import fitz  # PyMuPDF
 
         images: list[str] = []
         doc = fitz.open(pdf_path)
-
         try:
-            total_pages = len(doc)
-            if total_pages == 0:
-                return images
-
-            # Smart sampling: evenly distribute sampled pages, always include
-            # first and last page so the vision model sees the full range.
-            if total_pages <= max_pages:
-                page_indices = list(range(total_pages))
-            else:
-                step = (total_pages - 1) / (max_pages - 1)
-                page_indices = sorted(
-                    set(round(i * step) for i in range(max_pages))
+            for page_number in pages:
+                if not 1 <= page_number <= len(doc):
+                    continue
+                pix = doc[page_number - 1].get_pixmap(
+                    matrix=fitz.Matrix(dpi_scale, dpi_scale), alpha=False
                 )
-
-            logger.info(
-                "pdf_pages_rendering",
-                total_pages=total_pages,
-                sampled_pages=len(page_indices),
-            )
-
-            for page_num in page_indices:
-                page = doc[page_num]
-                mat = fitz.Matrix(dpi_scale, dpi_scale)
-                # alpha=False required for JPEG output (no transparency)
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                img_bytes = pix.tobytes("jpeg")
-                b64 = base64.b64encode(img_bytes).decode("utf-8")
+                b64 = base64.b64encode(pix.tobytes("jpeg")).decode("utf-8")
                 images.append(f"data:image/jpeg;base64,{b64}")
         finally:
             doc.close()
 
+        logger.info("pdf_pages_rendering", sampled_pages=len(images))
         return images
 
     @staticmethod
-    def _build_vision_prompt(page_count: int = 1) -> str:
+    def _build_vision_prompt(page_count: int = 1, survey=None) -> str:
         """Build the prompt instructing the vision LLM to extract design-system info.
 
         The prompt asks for JSON matching the same schema that the XML
         extraction path produces, so downstream consumers (renderer, agent)
         don't need to know the source format.
+
+        It also says *why* these pages: the model is looking at one page per
+        distinct layout rather than a slice of a document, which is the
+        difference between "here are pages 1, 14 and 27" and "here is one of
+        each kind of page this deck has".
         """
         page_note = (
             f"I am showing you {page_count} pages from this template."
             if page_count > 1
             else "I am showing you one page from this template."
         )
+        if survey is not None and survey.clusters:
+            page_note += (
+                f" They were chosen by grouping all {len(survey.considered)} "
+                f"pages by visual structure and taking one from each of the "
+                f"{len(survey.clusters)} groups found, largest first - so these "
+                "are one of each distinct layout rather than an even slice of "
+                "the document, and each one may stand for many more pages."
+            )
         return f"""Analyze the visual design system of this presentation template. {page_note}
 
 Return a JSON object with these EXACT keys (no extra keys, no missing keys):

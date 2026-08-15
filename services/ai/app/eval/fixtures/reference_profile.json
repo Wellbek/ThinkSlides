@@ -138,6 +138,662 @@
     960.0,
     540.0
   ],
+  "pageSurvey": {
+    "clusters": [
+      {
+        "id": 0,
+        "label": "row bands",
+        "pages": [
+          14,
+          16,
+          19,
+          27,
+          28,
+          32,
+          40,
+          41,
+          44,
+          50,
+          51,
+          55,
+          58,
+          68,
+          77,
+          80,
+          84,
+          88,
+          89,
+          93,
+          95,
+          102,
+          106,
+          124,
+          127,
+          148,
+          153,
+          156,
+          160,
+          161,
+          170,
+          173,
+          179,
+          180,
+          182,
+          183
+        ],
+        "representative": 160,
+        "size": 36
+      },
+      {
+        "id": 1,
+        "label": "card row",
+        "pages": [
+          7,
+          11,
+          12,
+          13,
+          29,
+          35,
+          38,
+          48,
+          53,
+          62,
+          65,
+          73,
+          96,
+          99,
+          100,
+          101,
+          109,
+          125,
+          126,
+          128,
+          129,
+          130,
+          131,
+          138,
+          139,
+          147,
+          151,
+          155,
+          157,
+          158,
+          175,
+          177,
+          178
+        ],
+        "representative": 96,
+        "size": 33
+      },
+      {
+        "id": 2,
+        "label": "divider",
+        "pages": [
+          9,
+          18,
+          20,
+          21,
+          33,
+          43,
+          45,
+          57,
+          59,
+          69,
+          71,
+          78,
+          79,
+          81,
+          94,
+          105,
+          107,
+          119,
+          121,
+          122,
+          123,
+          133,
+          135,
+          149,
+          162,
+          171,
+          172,
+          174
+        ],
+        "representative": 162,
+        "size": 28
+      },
+      {
+        "id": 3,
+        "label": "exhibit",
+        "pages": [
+          10,
+          37,
+          85,
+          90,
+          98,
+          112,
+          117,
+          136,
+          137,
+          141,
+          167
+        ],
+        "representative": 112,
+        "size": 11
+      },
+      {
+        "id": 4,
+        "label": "text page",
+        "pages": [
+          4,
+          17,
+          42,
+          86,
+          104,
+          116,
+          118,
+          120,
+          145
+        ],
+        "representative": 104,
+        "size": 9
+      },
+      {
+        "id": 5,
+        "label": "card row",
+        "pages": [
+          34,
+          46,
+          61,
+          64,
+          67,
+          164,
+          176
+        ],
+        "representative": 34,
+        "size": 7
+      },
+      {
+        "id": 6,
+        "label": "exhibit",
+        "pages": [
+          25,
+          31,
+          63,
+          72,
+          92,
+          144
+        ],
+        "representative": 63,
+        "size": 6
+      },
+      {
+        "id": 7,
+        "label": "split canvas",
+        "pages": [
+          30,
+          66,
+          91,
+          142,
+          143,
+          159
+        ],
+        "representative": 142,
+        "size": 6
+      },
+      {
+        "id": 8,
+        "label": "card row",
+        "pages": [
+          36,
+          47,
+          54,
+          87,
+          146,
+          168
+        ],
+        "representative": 36,
+        "size": 6
+      },
+      {
+        "id": 9,
+        "label": "exhibit",
+        "pages": [
+          2,
+          5,
+          110,
+          111,
+          154
+        ],
+        "representative": 111,
+        "size": 5
+      },
+      {
+        "id": 10,
+        "label": "split canvas",
+        "pages": [
+          49,
+          97,
+          103,
+          163
+        ],
+        "representative": 163,
+        "size": 4
+      },
+      {
+        "id": 11,
+        "label": "split canvas",
+        "pages": [
+          108,
+          113,
+          114,
+          115
+        ],
+        "representative": 115,
+        "size": 4
+      },
+      {
+        "id": 12,
+        "label": "split canvas",
+        "pages": [
+          15,
+          56,
+          181
+        ],
+        "representative": 56,
+        "size": 3
+      },
+      {
+        "id": 13,
+        "label": "split canvas",
+        "pages": [
+          82,
+          150,
+          169
+        ],
+        "representative": 82,
+        "size": 3
+      },
+      {
+        "id": 14,
+        "label": "cover",
+        "pages": [
+          1,
+          184
+        ],
+        "representative": 1,
+        "size": 2
+      },
+      {
+        "id": 15,
+        "label": "split canvas",
+        "pages": [
+          39,
+          132
+        ],
+        "representative": 39,
+        "size": 2
+      },
+      {
+        "id": 16,
+        "label": "split canvas",
+        "pages": [
+          70,
+          134
+        ],
+        "representative": 70,
+        "size": 2
+      },
+      {
+        "id": 17,
+        "label": "card row",
+        "pages": [
+          165,
+          166
+        ],
+        "representative": 165,
+        "size": 2
+      },
+      {
+        "id": 18,
+        "label": "split canvas",
+        "pages": [
+          3
+        ],
+        "representative": 3,
+        "size": 1
+      },
+      {
+        "id": 19,
+        "label": "split canvas",
+        "pages": [
+          6
+        ],
+        "representative": 6,
+        "size": 1
+      },
+      {
+        "id": 20,
+        "label": "divider",
+        "pages": [
+          8
+        ],
+        "representative": 8,
+        "size": 1
+      },
+      {
+        "id": 21,
+        "label": "split canvas",
+        "pages": [
+          22
+        ],
+        "representative": 22,
+        "size": 1
+      },
+      {
+        "id": 22,
+        "label": "split canvas",
+        "pages": [
+          23
+        ],
+        "representative": 23,
+        "size": 1
+      },
+      {
+        "id": 23,
+        "label": "split canvas",
+        "pages": [
+          24
+        ],
+        "representative": 24,
+        "size": 1
+      },
+      {
+        "id": 24,
+        "label": "split canvas",
+        "pages": [
+          26
+        ],
+        "representative": 26,
+        "size": 1
+      },
+      {
+        "id": 25,
+        "label": "exhibit",
+        "pages": [
+          52
+        ],
+        "representative": 52,
+        "size": 1
+      },
+      {
+        "id": 26,
+        "label": "split canvas",
+        "pages": [
+          60
+        ],
+        "representative": 60,
+        "size": 1
+      },
+      {
+        "id": 27,
+        "label": "split canvas",
+        "pages": [
+          74
+        ],
+        "representative": 74,
+        "size": 1
+      },
+      {
+        "id": 28,
+        "label": "split canvas",
+        "pages": [
+          75
+        ],
+        "representative": 75,
+        "size": 1
+      },
+      {
+        "id": 29,
+        "label": "split canvas",
+        "pages": [
+          76
+        ],
+        "representative": 76,
+        "size": 1
+      },
+      {
+        "id": 30,
+        "label": "split canvas",
+        "pages": [
+          83
+        ],
+        "representative": 83,
+        "size": 1
+      },
+      {
+        "id": 31,
+        "label": "exhibit",
+        "pages": [
+          140
+        ],
+        "representative": 140,
+        "size": 1
+      },
+      {
+        "id": 32,
+        "label": "card row",
+        "pages": [
+          152
+        ],
+        "representative": 152,
+        "size": 1
+      }
+    ],
+    "pageCount": 184,
+    "pagesConsidered": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99,
+      100,
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108,
+      109,
+      110,
+      111,
+      112,
+      113,
+      114,
+      115,
+      116,
+      117,
+      118,
+      119,
+      120,
+      121,
+      122,
+      123,
+      124,
+      125,
+      126,
+      127,
+      128,
+      129,
+      130,
+      131,
+      132,
+      133,
+      134,
+      135,
+      136,
+      137,
+      138,
+      139,
+      140,
+      141,
+      142,
+      143,
+      144,
+      145,
+      146,
+      147,
+      148,
+      149,
+      150,
+      151,
+      152,
+      153,
+      154,
+      155,
+      156,
+      157,
+      158,
+      159,
+      160,
+      161,
+      162,
+      163,
+      164,
+      165,
+      166,
+      167,
+      168,
+      169,
+      170,
+      171,
+      172,
+      173,
+      174,
+      175,
+      176,
+      177,
+      178,
+      179,
+      180,
+      181,
+      182,
+      183,
+      184
+    ],
+    "sampledPages": [
+      1,
+      34,
+      36,
+      56,
+      63,
+      82,
+      96,
+      104,
+      111,
+      112,
+      115,
+      142,
+      160,
+      162,
+      163
+    ]
+  },
   "profiles": {
     "design": {
       "blocks_mean": 17.417,

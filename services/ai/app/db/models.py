@@ -126,6 +126,10 @@ class DesignSystemBundle(Base):
     # rendered pages. Without it the measurement is taken at upload time,
     # published to the model for one run, and then lost.
     density = Column(JSONB, nullable=False, default=dict)
+    # Which of this template's pages look alike, and which of them were
+    # actually looked at. Kept so naming its archetypes and scoring how much
+    # of it was seen do not have to re-read the file.
+    page_survey = Column(JSONB, nullable=False, default=dict)
     raw_xml_snapshot = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 

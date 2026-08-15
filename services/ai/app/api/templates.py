@@ -17,7 +17,8 @@ from app.config import settings
 
 router = APIRouter()
 
-async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSession):
+async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSession,
+                          page_range: str = ""):
     """SSE generator with database persistence."""
     yield f"event: start\ndata: {json.dumps({'status': 'processing', 'message': 'Starting template analysis...'})}\n\n"
     await asyncio.sleep(0.1)
@@ -27,7 +28,9 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
     # Run extraction with periodic heartbeat SSE events to prevent proxy
     # timeouts during long vision-LLM calls (PDF analysis can take 30+ s).
     tool = ExtractTemplateDesignSystemTool()
-    extract_task = asyncio.create_task(tool.run(file_path))
+    extract_task = asyncio.create_task(
+        tool.run(file_path, page_range=page_range or "")
+    )
 
     try:
         while not extract_task.done():
@@ -110,6 +113,7 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
         embedded_media=design_system.get("embeddedMedia", []),
         data_viz=design_system.get("dataViz", {}),
         density=design_system.get("density", {}),
+        page_survey=design_system.get("pageSurvey", {}),
         raw_xml_snapshot=json.dumps(design_system),
     )
     db.add(bundle)
@@ -123,6 +127,11 @@ async def upload_template_stream(
     file: UploadFile = File(...),
     name: Optional[str] = Form(None),
     org_id: Optional[str] = Form(None),
+    # Which pages of the upload are the template - "20-35", "1,4,9-12".
+    # Omitted means the whole document. A user continuing the style of one
+    # chapter of a deck should not have to hand us the other 150 pages and
+    # hope the sampler agrees with them about which part mattered.
+    pages: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -157,7 +166,7 @@ async def upload_template_stream(
         raise
 
     return StreamingResponse(
-        stream_analysis(temp_path, name, resolved_org_id, db),
+        stream_analysis(temp_path, name, resolved_org_id, db, pages or ""),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -174,7 +183,7 @@ async def extract_design_system(data: dict):
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(400, "Invalid file path")
     tool = ExtractTemplateDesignSystemTool()
-    result = await tool.run(file_path)
+    result = await tool.run(file_path, page_range=str(data.get("pages") or ""))
     if not result.success:
         raise HTTPException(500, result.error)
     return result.data

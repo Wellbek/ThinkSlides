@@ -24,11 +24,8 @@ something to hold a planner to rather than an impression to argue with.
 
 from __future__ import annotations
 
-import os
 import re
-import shutil
 import statistics
-import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
@@ -310,20 +307,12 @@ def profile_template(template_path: str) -> Optional[tuple[DensityProfile,
     no slides renders to a blank page or to nothing at all, and inventing a
     density for it would be worse than falling back to the default.
     """
-    extension = os.path.splitext(template_path)[1].lower()
-    if extension == ".pdf":
-        return _learned(profile_pdf(template_path))
+    from app.measure.rendered import as_pdf
 
-    from app.renderer.preview_generator import PreviewGenerator
-
-    work_dir = tempfile.mkdtemp(prefix="ts_profile_")
-    try:
-        pdf_path = PreviewGenerator.convert_to_pdf(template_path, work_dir)
-        if not pdf_path or not _page_count(pdf_path):
+    with as_pdf(template_path) as pdf_path:
+        if not pdf_path:
             return None
         return _learned(profile_pdf(pdf_path))
-    finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def _learned(profile: tuple[DensityProfile, TypeProfile]):
@@ -351,13 +340,9 @@ def sample_pages(total: int, limit: int = MAX_PROFILE_PAGES) -> list[int]:
 
 
 def _page_count(pdf_path: str) -> int:
-    import fitz
+    from app.measure.rendered import page_count
 
-    doc = fitz.open(pdf_path)
-    try:
-        return len(doc)
-    finally:
-        doc.close()
+    return page_count(pdf_path)
 
 
 def build_profiles(pages: Sequence[PageMetrics],
