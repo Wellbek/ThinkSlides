@@ -539,6 +539,20 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-setup-banner-cta { flex-shrink: 0; padding: 4px 10px; font-family: var(--ws-font-ui); font-size: 11px; font-weight: 500; line-height: 1; color: var(--ws-orange-text); background: transparent; border: 1px solid var(--ws-orange-border); border-radius: var(--ws-radius-sm); cursor: pointer; transition: background 120ms ease, border-color 120ms ease; }
 .ws-setup-banner-cta:hover { background: rgba(249, 115, 22, 0.16); border-color: var(--ws-orange-text); }
 
+/* Setup notice - the same warning as the banner, said where the user is
+   actually being stopped: above the composer they cannot type into. Rounded
+   rather than full-bleed, because it belongs to the input below it. */
+.ws-setup-notice { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; padding: 8px 12px; background: var(--ws-orange-bg); border: 1px solid var(--ws-orange-border); border-radius: var(--ws-radius-sm); }
+.ws-setup-notice-text { flex: 1; min-width: 0; font-family: var(--ws-font-ui); font-size: 12px; line-height: 1.4; color: #E8C9A8; }
+.ws-setup-notice-cta { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; font-family: var(--ws-font-ui); font-size: 11px; font-weight: 500; line-height: 1; color: var(--ws-orange-text); background: transparent; border: 1px solid var(--ws-orange-border); border-radius: var(--ws-radius-sm); cursor: pointer; white-space: nowrap; transition: background 120ms ease, border-color 120ms ease; }
+.ws-setup-notice-cta:hover { background: rgba(249, 115, 22, 0.16); border-color: var(--ws-orange-text); }
+
+/* A composer that cannot be used says so by looking unusable, not only by
+   refusing the keystroke. */
+.ws-composer-box textarea:disabled,
+.ws-home-card textarea:disabled { color: var(--ws-text-muted); cursor: not-allowed; }
+.ws-sugg:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* Effort selector (Simple / Deep Thinking) - a segmented control that reads
    as one unit, so the two levels are compared rather than scanned. */
 .ws-effort { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--ws-border-sub); border-radius: var(--ws-radius-sm); background: var(--ws-surface-2); }

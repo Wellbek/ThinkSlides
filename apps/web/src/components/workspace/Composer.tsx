@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
+import { useAiReadiness } from "@/hooks/useAiReadiness";
 import { EffortSelector } from "./EffortSelector";
 import { DetailLevelSelector } from "./DetailLevelSelector";
 import { SourcesToggle } from "./SourcesToggle";
@@ -12,6 +13,10 @@ export function Composer() {
   const sendMessage = useChatStore((s) => s.sendMessage);
   const isSending = useChatStore((s) => s.isSending);
   const activeMessages = useChatStore((s) => s.activeMessages);
+  const setSettingsOpen = useChatStore((s) => s.setSettingsOpen);
+  // Settings can be cleared mid-session, so the composer checks rather than
+  // assuming the session it belongs to is still runnable.
+  const { ready, reason } = useAiReadiness();
 
   const [content, setContent] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -28,7 +33,7 @@ export function Composer() {
 
   const send = async () => {
     const trimmed = content.trim();
-    if (!trimmed || isSending || !activeSessionId) return;
+    if (!trimmed || isSending || !activeSessionId || !ready) return;
     const text = trimmed;
     setContent("");
     const toUpload = files;
@@ -38,6 +43,14 @@ export function Composer() {
 
   return (
     <div className="ws-composer">
+      {!ready && (
+        <div className="ws-setup-notice" role="status">
+          <span className="ws-setup-notice-text">{reason}</span>
+          <button className="ws-setup-notice-cta" onClick={() => setSettingsOpen(true)}>
+            Set up now
+          </button>
+        </div>
+      )}
       <div className="ws-composer-ctx">
         {files.map((f, i) => (
           <span className="ws-ctx-chip" key={i}>
@@ -54,8 +67,13 @@ export function Composer() {
       </div>
       <div className="ws-composer-box">
         <textarea
-          placeholder="Ask the agent to edit, regenerate, or explain a slide... (mark a region in the preview to target an edit)"
+          placeholder={
+            ready
+              ? "Ask the agent to edit, regenerate, or explain a slide... (mark a region in the preview to target an edit)"
+              : "Set up an AI model to continue this session."
+          }
           value={content}
+          disabled={!ready}
           onChange={(e) => setContent(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
@@ -70,7 +88,12 @@ export function Composer() {
           <SourcesToggle />
           <span className="ws-hint ws-hint-collapsible">Enter to send</span>
           <div className="ws-spacer" />
-          <button className="ws-send" disabled={!content.trim() || isSending} onClick={send}>
+          <button
+            className="ws-send"
+            disabled={!content.trim() || isSending || !ready}
+            title={ready ? undefined : reason}
+            onClick={send}
+          >
             <ArrowUp size={13} /> Send
           </button>
         </div>
