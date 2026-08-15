@@ -122,6 +122,10 @@ class DesignSystemBundle(Base):
     master_elements = Column(JSONB, nullable=False, default=list)
     embedded_media = Column(JSONB, nullable=False, default=list)
     data_viz = Column(JSONB, nullable=False, default=dict)
+    # How much this template puts on a content page, measured from its own
+    # rendered pages. Without it the measurement is taken at upload time,
+    # published to the model for one run, and then lost.
+    density = Column(JSONB, nullable=False, default=dict)
     raw_xml_snapshot = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 

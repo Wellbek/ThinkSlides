@@ -716,6 +716,12 @@ class AgentLoop:
         self._search_token = None
         self._provider_token = None
         self._citation_tokens: list = []
+        # The density budget's two channels: the design system the budget is
+        # read from, and how much material stood behind each slide when it was
+        # written. Both are published on the run context because the validator
+        # cannot be handed them as tool arguments - see run_context.
+        self._design_system_token = None
+        self._material_token = None
         # Set from the conversation in _run: the consultation checkpoints are
         # enforced, so the user's "just build it" has to be able to lift them.
         self.questions_declined: bool = False
@@ -940,6 +946,12 @@ class AgentLoop:
             if self._provider_token is not None:
                 run_context.reset_chat_provider(self._provider_token)
                 self._provider_token = None
+            if self._design_system_token is not None:
+                run_context.reset_design_system(self._design_system_token)
+                self._design_system_token = None
+            if self._material_token is not None:
+                run_context.reset_slide_material(self._material_token)
+                self._material_token = None
             # Reset in reverse, so nested sets unwind to what was there before.
             while self._citation_tokens:
                 token = self._citation_tokens.pop()
@@ -1084,6 +1096,17 @@ class AgentLoop:
         self._citation_tokens.append(
             run_context.set_research_findings(context.get("research"))
         )
+
+        # The density budget's channels, opened for the whole run. The design
+        # system is republished when extraction returns a real one; the
+        # material map starts empty and is filled a slide at a time as each
+        # one is designed.
+        if self._design_system_token is None:
+            self._design_system_token = run_context.set_design_system(
+                context.get("design_system")
+            )
+        if self._material_token is None:
+            self._material_token = run_context.set_slide_material({})
 
         # ── Phase 3: ReAct loop ──────────────────────
         tool_schemas = self._tool_schemas_for_mode()
@@ -1570,6 +1593,9 @@ class AgentLoop:
                     # system, and applies to the built-in default too.
                     if fn_name == "extract_template_design_system" and tool_result.data:
                         context["design_system"] = tool_result.data
+                        # And onto the run context, where the content designer
+                        # and the validator read the density budget from it.
+                        run_context.set_design_system(tool_result.data)
 
                     # Accumulate web_search results into context so they persist
                     # across rebuilds - the LLM can ground all slides on them
@@ -2135,6 +2161,10 @@ class AgentLoop:
                     # {} here - table_style.py's resolvers already fall back
                     # to deriving from palette when dataViz is empty.
                     "dataViz": bundle.data_viz,
+                    # Likewise: an empty density means "this template was
+                    # never measured", and the budget holds such a slide to
+                    # nothing rather than to a number it invented.
+                    "density": bundle.density,
                 }
 
         return context

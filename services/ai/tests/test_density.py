@@ -483,7 +483,10 @@ class TestTheBuiltInDesignSystemCarriesBoth:
         assert (scale.title_size_pt, scale.body_size_pt) == (36, 20)
 
 
-class TestThePlannerAndDesignerReadTheBudget:
+class TestThePlannerReadsTheBudget:
+    """What the planner does *with* the figure is #129's; that it reads the
+    measured one at all is this issue's."""
+
     def test_the_planner_states_the_budget_as_a_target(self):
         from app.agent.tools.plan_presentation_structure import _density_guidance
 
@@ -492,23 +495,10 @@ class TestThePlannerAndDesignerReadTheBudget:
         assert "Density target" in guidance
         assert den.density_brief(get_default_design_system()) in guidance
 
-    def test_the_designer_states_the_same_budget(self):
-        from app.agent.tools.design_slide_content import (
-            _density_guidance as designer_guidance,
-        )
-
-        guidance = designer_guidance(get_default_design_system())
-
-        assert den.density_brief(get_default_design_system()) in guidance
-
-    def test_neither_invents_a_budget_when_none_was_recorded(self):
-        from app.agent.tools.design_slide_content import (
-            _density_guidance as designer_guidance,
-        )
+    def test_it_invents_no_budget_when_none_was_recorded(self):
         from app.agent.tools.plan_presentation_structure import _density_guidance
 
         assert _density_guidance({}) == ""
-        assert designer_guidance({}) == ""
 
     def test_a_measured_template_is_what_the_planner_is_held_to(self):
         pages = [_page(i, w) for i, w in enumerate([180, 208, 235], start=1)]
