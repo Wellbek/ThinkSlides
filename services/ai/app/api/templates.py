@@ -115,6 +115,7 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
         density=design_system.get("density", {}),
         page_survey=design_system.get("pageSurvey", {}),
         layout_grammar=design_system.get("layoutGrammar", {}),
+        archetypes=design_system.get("archetypes", {}),
         raw_xml_snapshot=json.dumps(design_system),
     )
     db.add(bundle)

@@ -1,4 +1,1889 @@
 {
+  "archetypes": {
+    "archetypes": [
+      {
+        "blocksMedian": 6.0,
+        "features": [
+          "band row"
+        ],
+        "label": "row bands",
+        "name": "row bands",
+        "pages": [
+          14,
+          16,
+          19,
+          27,
+          28,
+          32,
+          40,
+          41,
+          44,
+          50,
+          51,
+          55,
+          58,
+          68,
+          77,
+          80,
+          84,
+          88,
+          89,
+          93,
+          95,
+          102,
+          106,
+          124,
+          127,
+          148,
+          153,
+          156,
+          160,
+          161,
+          170,
+          173,
+          179,
+          180,
+          182,
+          183
+        ],
+        "regions": [
+          {
+            "children": [
+              {
+                "h": 0.2927,
+                "id": "band-0",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 0.3506,
+                "id": "band-1",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.2927
+              },
+              {
+                "h": 0.3567,
+                "id": "band-2",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.6433
+              }
+            ],
+            "h": 0.4373,
+            "id": "bands",
+            "kind": "bandRow",
+            "w": 0.9066,
+            "x": 0.0449,
+            "y": 0.3607
+          }
+        ],
+        "representative": 160,
+        "titleRegister": "question",
+        "wordsMedian": 336.0
+      },
+      {
+        "blocksMedian": 14.0,
+        "features": [],
+        "label": "card row",
+        "name": "card row",
+        "pages": [
+          7,
+          11,
+          12,
+          13,
+          29,
+          35,
+          38,
+          48,
+          53,
+          62,
+          65,
+          73,
+          96,
+          99,
+          100,
+          101,
+          109,
+          125,
+          126,
+          128,
+          129,
+          130,
+          131,
+          138,
+          139,
+          147,
+          151,
+          155,
+          157,
+          158,
+          175,
+          177,
+          178
+        ],
+        "regions": [],
+        "representative": 96,
+        "titleRegister": "question",
+        "wordsMedian": 212.0
+      },
+      {
+        "blocksMedian": 1.0,
+        "features": [
+          "rail",
+          "exhibit panel"
+        ],
+        "label": "divider",
+        "name": "divider",
+        "pages": [
+          9,
+          18,
+          20,
+          21,
+          33,
+          43,
+          45,
+          57,
+          59,
+          69,
+          71,
+          78,
+          79,
+          81,
+          94,
+          105,
+          107,
+          119,
+          121,
+          122,
+          123,
+          133,
+          135,
+          149,
+          162,
+          171,
+          172,
+          174
+        ],
+        "regions": [
+          {
+            "ground": "#051A2B",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.7917,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#343452",
+            "h": 1.0,
+            "id": "rail-1",
+            "kind": "rail",
+            "w": 0.1667,
+            "x": 0.8333,
+            "y": 0.0
+          },
+          {
+            "h": 1.0,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 1.0,
+            "x": 0.0,
+            "y": -0.0
+          }
+        ],
+        "representative": 162,
+        "titleRegister": "label",
+        "wordsMedian": 11.0
+      },
+      {
+        "blocksMedian": 7.0,
+        "features": [
+          "exhibit panel"
+        ],
+        "label": "exhibit",
+        "name": "exhibit",
+        "pages": [
+          10,
+          37,
+          85,
+          90,
+          98,
+          112,
+          117,
+          136,
+          137,
+          141,
+          167
+        ],
+        "regions": [
+          {
+            "h": 0.3007,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.2015,
+            "x": 0.7523,
+            "y": 0.5863
+          }
+        ],
+        "representative": 112,
+        "titleRegister": "question",
+        "wordsMedian": 316.0
+      },
+      {
+        "blocksMedian": 3.0,
+        "features": [],
+        "label": "text page",
+        "name": "text page",
+        "pages": [
+          4,
+          17,
+          42,
+          86,
+          104,
+          116,
+          118,
+          120,
+          145
+        ],
+        "regions": [],
+        "representative": 104,
+        "titleRegister": "question",
+        "wordsMedian": 171.0
+      },
+      {
+        "blocksMedian": 26.0,
+        "features": [
+          "banner",
+          "exhibit panel"
+        ],
+        "label": "card row",
+        "name": "card row 2",
+        "pages": [
+          34,
+          46,
+          61,
+          64,
+          67,
+          164,
+          176
+        ],
+        "regions": [
+          {
+            "h": 0.1682,
+            "id": "banner",
+            "kind": "banner",
+            "w": 0.909,
+            "x": 0.0455,
+            "y": 0.7318
+          },
+          {
+            "h": 0.178,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.8376,
+            "x": 0.1175,
+            "y": 0.3753
+          }
+        ],
+        "representative": 34,
+        "titleRegister": "question",
+        "wordsMedian": 192.0
+      },
+      {
+        "blocksMedian": 6.0,
+        "features": [
+          "exhibit panel"
+        ],
+        "label": "exhibit",
+        "name": "exhibit 2",
+        "pages": [
+          25,
+          31,
+          63,
+          72,
+          92,
+          144
+        ],
+        "regions": [
+          {
+            "h": 0.6025,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.1581,
+            "x": 0.0455,
+            "y": 0.2784
+          }
+        ],
+        "representative": 63,
+        "titleRegister": "question",
+        "wordsMedian": 225.0
+      },
+      {
+        "blocksMedian": 10.0,
+        "features": [
+          "ground split",
+          "card row"
+        ],
+        "label": "split canvas",
+        "name": "split canvas",
+        "pages": [
+          30,
+          66,
+          91,
+          142,
+          143,
+          159
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.5,
+            "y": 0.0
+          },
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.3473,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.4772,
+                "x": 0.5228,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.4481,
+                "x": 0.5228,
+                "y": 0.0
+              }
+            ],
+            "h": 0.1973,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.7317,
+            "x": 0.2064,
+            "y": 0.7308
+          }
+        ],
+        "representative": 142,
+        "titleRegister": "label",
+        "wordsMedian": 229.0
+      },
+      {
+        "blocksMedian": 12.0,
+        "features": [
+          "card row",
+          "exhibit panel"
+        ],
+        "label": "card row",
+        "name": "card row 3",
+        "pages": [
+          36,
+          47,
+          54,
+          87,
+          146,
+          168
+        ],
+        "regions": [
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.1522,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.1602,
+                "x": 0.1814,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.1819,
+                "x": 0.3726,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-3",
+                "kind": "column",
+                "w": 0.2112,
+                "x": 0.5692,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-4",
+                "kind": "column",
+                "w": 0.1773,
+                "x": 0.8227,
+                "y": 0.0
+              }
+            ],
+            "h": 0.2469,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.8902,
+            "x": 0.064,
+            "y": 0.4227
+          },
+          {
+            "h": 0.2015,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.3188,
+            "x": 0.239,
+            "y": 0.2636
+          }
+        ],
+        "representative": 36,
+        "titleRegister": "label",
+        "wordsMedian": 176.0
+      },
+      {
+        "blocksMedian": 5.0,
+        "features": [
+          "exhibit panel"
+        ],
+        "label": "exhibit",
+        "name": "exhibit 3",
+        "pages": [
+          2,
+          5,
+          110,
+          111,
+          154
+        ],
+        "regions": [
+          {
+            "h": 0.3816,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.3523,
+            "x": 0.1517,
+            "y": 0.5213
+          }
+        ],
+        "representative": 111,
+        "titleRegister": "label",
+        "wordsMedian": 176.0
+      },
+      {
+        "blocksMedian": 9.0,
+        "features": [
+          "rail"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 2",
+        "pages": [
+          49,
+          97,
+          103,
+          163
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.625,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "rail-1",
+            "kind": "rail",
+            "w": 0.375,
+            "x": 0.625,
+            "y": 0.0
+          }
+        ],
+        "representative": 163,
+        "titleRegister": "question",
+        "wordsMedian": 245.0
+      },
+      {
+        "blocksMedian": 12.0,
+        "features": [
+          "ground split",
+          "card row"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 3",
+        "pages": [
+          108,
+          113,
+          114,
+          115
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.5,
+            "y": 0.0
+          },
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.4498,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.4541,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.4535,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-3",
+                "kind": "column",
+                "w": 0.4386,
+                "x": 0.544,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-4",
+                "kind": "column",
+                "w": 0.456,
+                "x": 0.544,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-5",
+                "kind": "column",
+                "w": 0.4457,
+                "x": 0.544,
+                "y": 0.0
+              }
+            ],
+            "h": 0.2144,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.9077,
+            "x": 0.0455,
+            "y": 0.4868
+          }
+        ],
+        "representative": 115,
+        "titleRegister": "claim",
+        "wordsMedian": 259.0
+      },
+      {
+        "blocksMedian": 14.0,
+        "features": [
+          "ground split",
+          "card row",
+          "exhibit panel"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 4",
+        "pages": [
+          15,
+          56,
+          181
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.5,
+            "y": 0.0
+          },
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.4611,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.4635,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.4433,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-3",
+                "kind": "column",
+                "w": 0.4576,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-4",
+                "kind": "column",
+                "w": 0.3965,
+                "x": 0.5374,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-5",
+                "kind": "column",
+                "w": 0.4395,
+                "x": 0.5374,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-6",
+                "kind": "column",
+                "w": 0.4459,
+                "x": 0.5374,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-7",
+                "kind": "column",
+                "w": 0.4626,
+                "x": 0.5374,
+                "y": 0.0
+              }
+            ],
+            "h": 0.348,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.9185,
+            "x": 0.0455,
+            "y": 0.4603
+          },
+          {
+            "h": 0.1696,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.155,
+            "x": 0.3061,
+            "y": 0.1764
+          }
+        ],
+        "representative": 56,
+        "titleRegister": "question",
+        "wordsMedian": 259.0
+      },
+      {
+        "blocksMedian": 10.0,
+        "features": [
+          "rail",
+          "card row"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 5",
+        "pages": [
+          82,
+          150,
+          169
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "rail-0",
+            "kind": "rail",
+            "w": 0.375,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.625,
+            "x": 0.375,
+            "y": 0.0
+          },
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.1478,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.1505,
+                "x": 0.1639,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.2076,
+                "x": 0.3734,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-3",
+                "kind": "column",
+                "w": 0.2183,
+                "x": 0.3734,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-4",
+                "kind": "column",
+                "w": 0.1904,
+                "x": 0.6131,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-5",
+                "kind": "column",
+                "w": 0.1885,
+                "x": 0.6131,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-6",
+                "kind": "column",
+                "w": 0.1719,
+                "x": 0.8281,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-7",
+                "kind": "column",
+                "w": 0.1675,
+                "x": 0.8281,
+                "y": 0.0
+              }
+            ],
+            "h": 0.4408,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.905,
+            "x": 0.0455,
+            "y": 0.4892
+          }
+        ],
+        "representative": 82,
+        "titleRegister": "question",
+        "wordsMedian": 174.0
+      },
+      {
+        "blocksMedian": 1.0,
+        "features": [
+          "exhibit panel"
+        ],
+        "label": "cover",
+        "name": "cover",
+        "pages": [
+          1,
+          184
+        ],
+        "regions": [
+          {
+            "h": 0.9996,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 1.0,
+            "x": 0.0,
+            "y": 0.0002
+          }
+        ],
+        "representative": 1,
+        "titleRegister": "label",
+        "wordsMedian": 8.0
+      },
+      {
+        "blocksMedian": 7.0,
+        "features": [
+          "ground split",
+          "card row"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 6",
+        "pages": [
+          39,
+          132
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.5,
+            "y": 0.0
+          },
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.4566,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.4537,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.453,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-3",
+                "kind": "column",
+                "w": 0.4368,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-4",
+                "kind": "column",
+                "w": 0.4557,
+                "x": 0.5443,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-5",
+                "kind": "column",
+                "w": 0.4265,
+                "x": 0.5443,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-6",
+                "kind": "column",
+                "w": 0.4545,
+                "x": 0.5443,
+                "y": 0.0
+              }
+            ],
+            "h": 0.5286,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.9072,
+            "x": 0.0455,
+            "y": 0.3594
+          }
+        ],
+        "representative": 39,
+        "titleRegister": "question",
+        "wordsMedian": 200.0
+      },
+      {
+        "blocksMedian": 7.0,
+        "features": [
+          "rail"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 7",
+        "pages": [
+          70,
+          134
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "rail-0",
+            "kind": "rail",
+            "w": 0.2917,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.7083,
+            "x": 0.2917,
+            "y": 0.0
+          }
+        ],
+        "representative": 70,
+        "titleRegister": "label",
+        "wordsMedian": 43.0
+      },
+      {
+        "blocksMedian": 12.0,
+        "features": [
+          "exhibit panel"
+        ],
+        "label": "card row",
+        "name": "card row 4",
+        "pages": [
+          165,
+          166
+        ],
+        "regions": [
+          {
+            "h": 0.7636,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.4295,
+            "x": 0.6023,
+            "y": -0.3818
+          }
+        ],
+        "representative": 165,
+        "titleRegister": "claim",
+        "wordsMedian": 336.0
+      },
+      {
+        "blocksMedian": 13.0,
+        "features": [
+          "rail",
+          "exhibit panel"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 8",
+        "pages": [
+          3
+        ],
+        "regions": [
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "rail-0",
+            "kind": "rail",
+            "w": 0.375,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.625,
+            "x": 0.375,
+            "y": 0.0
+          },
+          {
+            "h": 0.5131,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.3414,
+            "x": 0.4111,
+            "y": 0.3622
+          }
+        ],
+        "representative": 3,
+        "titleRegister": "label",
+        "wordsMedian": 269.0
+      },
+      {
+        "blocksMedian": 1.0,
+        "features": [],
+        "label": "split canvas",
+        "name": "split canvas 9",
+        "pages": [
+          6
+        ],
+        "regions": [],
+        "representative": 6,
+        "titleRegister": "label",
+        "wordsMedian": 410.0
+      },
+      {
+        "blocksMedian": 1.0,
+        "features": [
+          "exhibit panel"
+        ],
+        "label": "divider",
+        "name": "divider 2",
+        "pages": [
+          8
+        ],
+        "regions": [
+          {
+            "h": 1.0,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 1.0004,
+            "x": -0.0002,
+            "y": -0.0
+          }
+        ],
+        "representative": 8,
+        "titleRegister": "label",
+        "wordsMedian": 8.0
+      },
+      {
+        "blocksMedian": 17.0,
+        "features": [
+          "ground split",
+          "exhibit panel"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 10",
+        "pages": [
+          22
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.5,
+            "y": 0.0
+          },
+          {
+            "h": 0.4663,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.2235,
+            "x": 0.2078,
+            "y": 0.3613
+          }
+        ],
+        "representative": 22,
+        "titleRegister": "question",
+        "wordsMedian": 209.0
+      },
+      {
+        "blocksMedian": 12.0,
+        "features": [
+          "ground split",
+          "exhibit panel"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 11",
+        "pages": [
+          23
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.5,
+            "y": 0.0
+          },
+          {
+            "h": 0.5604,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.3593,
+            "x": 0.0571,
+            "y": 0.3576
+          }
+        ],
+        "representative": 23,
+        "titleRegister": "label",
+        "wordsMedian": 181.0
+      },
+      {
+        "blocksMedian": 18.0,
+        "features": [
+          "ground split",
+          "band row",
+          "exhibit panel"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 12",
+        "pages": [
+          24
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.25,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#66CAF8",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.2083,
+            "x": 0.3333,
+            "y": 0.0
+          },
+          {
+            "ground": "#CCD1D3",
+            "h": 1.0,
+            "id": "panel-2",
+            "kind": "panel",
+            "w": 0.125,
+            "x": 0.5833,
+            "y": 0.0
+          },
+          {
+            "ground": "#051C2C",
+            "h": 1.0,
+            "id": "panel-3",
+            "kind": "panel",
+            "w": 0.2917,
+            "x": 0.7083,
+            "y": 0.0
+          },
+          {
+            "children": [
+              {
+                "h": 0.1418,
+                "id": "band-0",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 0.1225,
+                "id": "band-1",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.1418
+              },
+              {
+                "h": 0.1225,
+                "id": "band-2",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.2643
+              },
+              {
+                "h": 0.1231,
+                "id": "band-3",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.3868
+              },
+              {
+                "h": 0.1221,
+                "id": "band-4",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.51
+              },
+              {
+                "h": 0.1229,
+                "id": "band-5",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.632
+              },
+              {
+                "h": 0.1221,
+                "id": "band-6",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.755
+              },
+              {
+                "h": 0.1229,
+                "id": "band-7",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.8771
+              }
+            ],
+            "h": 0.4824,
+            "id": "bands",
+            "kind": "bandRow",
+            "w": 0.6495,
+            "x": 0.0455,
+            "y": 0.3627
+          },
+          {
+            "h": 1.0,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.2799,
+            "x": 0.7201,
+            "y": -0.0
+          }
+        ],
+        "representative": 24,
+        "titleRegister": "label",
+        "wordsMedian": 222.0
+      },
+      {
+        "blocksMedian": 9.0,
+        "features": [
+          "exhibit panel"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 13",
+        "pages": [
+          26
+        ],
+        "regions": [
+          {
+            "h": 0.482,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.5357,
+            "x": 0.1593,
+            "y": 0.3764
+          }
+        ],
+        "representative": 26,
+        "titleRegister": "question",
+        "wordsMedian": 171.0
+      },
+      {
+        "blocksMedian": 5.0,
+        "features": [
+          "rail",
+          "exhibit panel"
+        ],
+        "label": "exhibit",
+        "name": "exhibit 4",
+        "pages": [
+          52
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "rail-0",
+            "kind": "rail",
+            "w": 0.2917,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C38",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.7083,
+            "x": 0.2917,
+            "y": 0.0
+          },
+          {
+            "h": 1.0,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.72,
+            "x": 0.2779,
+            "y": -0.0009
+          }
+        ],
+        "representative": 52,
+        "titleRegister": "question",
+        "wordsMedian": 126.0
+      },
+      {
+        "blocksMedian": 25.0,
+        "features": [
+          "rail",
+          "exhibit panel"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 14",
+        "pages": [
+          60
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.7083,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "rail-1",
+            "kind": "rail",
+            "w": 0.2917,
+            "x": 0.7083,
+            "y": 0.0
+          },
+          {
+            "h": 0.15,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.4335,
+            "x": 0.2606,
+            "y": 0.4516
+          }
+        ],
+        "representative": 60,
+        "titleRegister": "question",
+        "wordsMedian": 195.0
+      },
+      {
+        "blocksMedian": 9.0,
+        "features": [
+          "ground split",
+          "exhibit panel"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 15",
+        "pages": [
+          74
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.5,
+            "y": 0.0
+          },
+          {
+            "h": 0.2422,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.2421,
+            "x": 0.3477,
+            "y": 0.4285
+          }
+        ],
+        "representative": 74,
+        "titleRegister": "question",
+        "wordsMedian": 201.0
+      },
+      {
+        "blocksMedian": 11.0,
+        "features": [
+          "card row",
+          "exhibit panel"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 16",
+        "pages": [
+          75
+        ],
+        "regions": [
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.1829,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.1576,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.1762,
+                "x": 0.2049,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-3",
+                "kind": "column",
+                "w": 0.1511,
+                "x": 0.2049,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-4",
+                "kind": "column",
+                "w": 0.1863,
+                "x": 0.4105,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-5",
+                "kind": "column",
+                "w": 0.1722,
+                "x": 0.4105,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-6",
+                "kind": "column",
+                "w": 0.1304,
+                "x": 0.6089,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-7",
+                "kind": "column",
+                "w": 0.1943,
+                "x": 0.6089,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-8",
+                "kind": "column",
+                "w": 0.186,
+                "x": 0.814,
+                "y": 0.0
+              }
+            ],
+            "h": 0.3029,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.7724,
+            "x": 0.1713,
+            "y": 0.3837
+          },
+          {
+            "h": 0.0678,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.9096,
+            "x": 0.0449,
+            "y": 0.2322
+          }
+        ],
+        "representative": 75,
+        "titleRegister": "question",
+        "wordsMedian": 263.0
+      },
+      {
+        "blocksMedian": 13.0,
+        "features": [
+          "rail",
+          "exhibit panel"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 17",
+        "pages": [
+          76
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "rail-0",
+            "kind": "rail",
+            "w": 0.2917,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.7083,
+            "x": 0.2917,
+            "y": 0.0
+          },
+          {
+            "h": 0.6405,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.2103,
+            "x": 0.7444,
+            "y": 0.2651
+          }
+        ],
+        "representative": 76,
+        "titleRegister": "question",
+        "wordsMedian": 218.0
+      },
+      {
+        "blocksMedian": 9.0,
+        "features": [
+          "rail",
+          "banner",
+          "card row"
+        ],
+        "label": "split canvas",
+        "name": "split canvas 18",
+        "pages": [
+          83
+        ],
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "rail-0",
+            "kind": "rail",
+            "w": 0.2917,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.7083,
+            "x": 0.2917,
+            "y": 0.0
+          },
+          {
+            "h": 0.0706,
+            "id": "banner",
+            "kind": "banner",
+            "w": 0.6473,
+            "x": 0.3072,
+            "y": 0.8294
+          },
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.2098,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.2132,
+                "x": 0.3953,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.202,
+                "x": 0.798,
+                "y": 0.0
+              }
+            ],
+            "h": 0.1581,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.6445,
+            "x": 0.3091,
+            "y": 0.6284
+          }
+        ],
+        "representative": 83,
+        "titleRegister": "question",
+        "wordsMedian": 182.0
+      },
+      {
+        "blocksMedian": 1.0,
+        "features": [
+          "exhibit panel"
+        ],
+        "label": "exhibit",
+        "name": "exhibit 5",
+        "pages": [
+          140
+        ],
+        "regions": [
+          {
+            "h": 0.6969,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.909,
+            "x": 0.0455,
+            "y": 0.1871
+          }
+        ],
+        "representative": 140,
+        "titleRegister": "question",
+        "wordsMedian": 368.0
+      },
+      {
+        "blocksMedian": 15.0,
+        "features": [
+          "exhibit panel"
+        ],
+        "label": "card row",
+        "name": "card row 5",
+        "pages": [
+          152
+        ],
+        "regions": [
+          {
+            "h": 0.4265,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.4763,
+            "x": 0.0,
+            "y": 0.5738
+          }
+        ],
+        "representative": 152,
+        "titleRegister": "question",
+        "wordsMedian": 96.0
+      }
+    ],
+    "chapter": {
+      "count": 14,
+      "length": 12,
+      "occurrences": [
+        9,
+        20,
+        33,
+        45,
+        59,
+        71,
+        81,
+        94,
+        107,
+        123,
+        135,
+        149,
+        162,
+        174
+      ],
+      "positions": [
+        {
+          "archetype": "divider",
+          "index": 0,
+          "support": 15,
+          "title": "McKinsey Technology Trends Outlook 2022"
+        },
+        {
+          "archetype": "card row 2",
+          "index": 1,
+          "support": 11,
+          "title": "What is the trend about?"
+        },
+        {
+          "archetype": "card row",
+          "index": 2,
+          "support": 8,
+          "title": "Why should leaders pay attention?"
+        },
+        {
+          "archetype": "card row",
+          "index": 3,
+          "support": 6,
+          "title": "Why should leaders pay attention?"
+        },
+        {
+          "archetype": "exhibit",
+          "index": 4,
+          "support": 6,
+          "title": "What are the most noteworthy technologies?"
+        },
+        {
+          "archetype": "row bands",
+          "index": 5,
+          "support": 5,
+          "title": "What are the most noteworthy technologies?"
+        },
+        {
+          "archetype": "card row",
+          "index": 6,
+          "support": 3,
+          "title": "What disruptions could the trend enable?"
+        },
+        {
+          "archetype": "row bands",
+          "index": 7,
+          "support": 7,
+          "title": "What industries are most affected by the trend?"
+        },
+        {
+          "archetype": "row bands",
+          "index": 8,
+          "support": 5,
+          "title": "What industries are most affected by the trend?"
+        },
+        {
+          "archetype": "row bands",
+          "index": 9,
+          "support": 3,
+          "title": "What should leaders consider when engaging with the trend?"
+        },
+        {
+          "archetype": "divider",
+          "index": 10,
+          "support": 4,
+          "title": "1 2 3"
+        },
+        {
+          "archetype": "row bands",
+          "index": 11,
+          "support": 4,
+          "title": "Additional resources"
+        }
+      ]
+    }
+  },
   "blocksByDesignPage": {
     "1": 1,
     "110": 7,
