@@ -32,6 +32,7 @@ def _loop(mode: str | None = None) -> AgentLoop:
     """
     loop = AgentLoop(db=None, mode=mode)
     loop.working_state.consulted_before_planning = True
+    loop.working_state.offered_directions = True
     loop.working_state.reviewed_outline_with_user = True
     return loop
 
