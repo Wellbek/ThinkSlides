@@ -20,7 +20,7 @@ Roles, and what each one means visually:
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app import colors
 
@@ -71,6 +71,12 @@ class DeckTheme:
     light: str
     white: str
     gray: str
+    # Where each kind of slide sits, when a design system says so explicitly.
+    # Without this every deck put its cover on the dark tone and its content on
+    # white, which meant three "different" design directions rendered three
+    # identical covers - the difference between them was a background colour on
+    # the content pages and nothing else.
+    role_grounds: dict = field(default_factory=dict)
 
     @classmethod
     def from_design_system(cls, design_system: dict | None) -> "DeckTheme":
@@ -81,11 +87,17 @@ class DeckTheme:
             if isinstance(entry, dict) and colors.parse_hex(entry.get("value"))
         }
         resolved = {name: by_name.get(name) or default for name, default in _FALLBACK.items()}
-        return cls(**resolved)
+        declared = (design_system or {}).get("grounds")
+        grounds = {
+            role: value for role, value in (declared or {}).items()
+            if isinstance(value, str) and colors.parse_hex(value)
+        } if isinstance(declared, dict) else {}
+        return cls(**resolved, role_grounds=grounds)
 
     def style_for(self, role: str) -> SlideStyle:
         """The concrete colours for a slide in ``role``."""
-        background = self.dark if role in DARK_ROLES else self.white
+        declared = self.role_grounds.get(role)
+        background = declared or (self.dark if role in DARK_ROLES else self.white)
         return self.style_on(background, role)
 
     def style_on(self, background: str, role: str = ROLE_CONTENT) -> SlideStyle:
