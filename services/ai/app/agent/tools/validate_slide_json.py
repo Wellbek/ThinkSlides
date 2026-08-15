@@ -8,7 +8,9 @@ from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
+from app.agent import run_context
 from app.renderer import regions as region_model
+from app import budget as budget_model
 from app import titles as title_model
 from app.renderer import apparatus as apparatus_model
 from app.renderer import primitives as primitive_model
@@ -241,6 +243,19 @@ class ValidateSlideJsonTool:
         title_errors, title_warnings = title_model.validate_title(slide)
         errors.extend(title_errors)
         warnings.extend(title_warnings)
+
+        # Whether the slide carries what its template's own pages carry. This
+        # rejects rather than repairs: the alternative was the renderer growing
+        # four bullets by 1.15x to fill the page, which makes a sparse slide a
+        # large sparse slide. Only fires where the material supports it - see
+        # app.budget for why that condition is the whole point.
+        density_errors, density_warnings = budget_model.validate_density(
+            slide,
+            run_context.get_design_system(),
+            material=run_context.get_slide_material(slide.get("slideIndex")),
+        )
+        errors.extend(density_errors)
+        warnings.extend(density_warnings)
 
         # Validate slide index
         if not isinstance(slide.get("slideIndex"), int):

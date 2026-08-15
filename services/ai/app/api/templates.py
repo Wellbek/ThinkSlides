@@ -109,6 +109,7 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
         master_elements=design_system.get("masterElements", []),
         embedded_media=design_system.get("embeddedMedia", []),
         data_viz=design_system.get("dataViz", {}),
+        density=design_system.get("density", {}),
         raw_xml_snapshot=json.dumps(design_system),
     )
     db.add(bundle)

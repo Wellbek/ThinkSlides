@@ -8,14 +8,21 @@ from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent import run_context
 from app.agent.run_context import get_chat_provider
+from app import budget as budget_model
 from app import titles
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
 import json
+import re
 import time
 
 logger = get_logger(__name__)
+
+# A key point carrying a number is a point a chart, a table or a metric row
+# could be built from - which is most of what separates a slide that can
+# honestly be dense from one that cannot.
+_DIGIT_RE = re.compile(r"\d")
 
 def _distinct_by_url(findings: list[dict]) -> list[dict]:
     """The reference list, numbered exactly as renderer/citations.py will."""
@@ -214,7 +221,7 @@ Design System Context:
 - Title font: {json.dumps(ds.get('typography', {}).get('titleFont', {}))}
 - Body font: {json.dumps(ds.get('typography', {}).get('bodyFont', {}))}
 - Palette: {json.dumps(ds.get('palette', {}).get('colors', [])[:5])}
-{_density_guidance(ds)}"""
+"""
 
             image_info = (
                 "\nA pre-vetted source image IS available for this slide "
@@ -228,6 +235,13 @@ Design System Context:
             kp_list = "\n".join(f"  - {kp}" for kp in key_points) if key_points else "  (none)"
 
             detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
+            # How much this slide should carry, from what the template's own
+            # pages carry and what this slide actually has to say. Recorded on
+            # the run context as it is computed, because the validator checks
+            # the written slide against the same budget and must not be the
+            # one deciding how thin the material was.
+            density_info = _density_guidance(ds, outline, key_points, attached,
+                                             slide_index)
 
             # Only ask for source tags when the deck is actually going to show
             # them and there is research to point at. Asking unconditionally
@@ -286,7 +300,7 @@ Slide Outline:
 
 Key points to cover on this slide:
 {kp_list}
-
+{density_info}
 Selected Layout: {layout_name}
 Available Placeholders:
 {ph_text}
@@ -480,24 +494,72 @@ def _resolve_title_register(outline: dict, attached: list[dict],
     ), ""
 
 
-def _density_guidance(design_system: dict) -> str:
+def _density_guidance(design_system: dict, outline: dict, key_points: list,
+                      attached: list, slide_index: int) -> str:
     """
-    How much this slide should carry, measured off the template's own pages.
+    How much this slide should carry, and why that number and not another.
 
     The planner works in key points; this works in what actually lands on the
-    page. Both read the same measured figure so a slide is not written to one
+    page. Both read the same measured figure, so a slide is not written to one
     budget and planned to another.
-    """
-    from app.measure.density import density_brief
 
-    brief = density_brief(design_system)
-    if not brief:
-        return ""
-    return (
-        f"- Density: {brief}. Write this slide to carry about that much. "
-        "Sentences that say something, not three-word fragments - the words "
-        "per block figure is what a filled block reads like here.\n"
+    The budget is conditioned on the material this slide actually has, and the
+    score is recorded on the run context as it is computed. That ordering is
+    the point: the validator later checks the written slide against the same
+    number, and if it asked the model how thin its material was it would be
+    asking the author to mark their own work.
+    """
+    material = budget_model.material_score(
+        key_points,
+        has_exhibit=bool(attached),
+        figures=_figures_in(key_points),
+        research_findings=len(run_context.get_research_findings() or []),
+        source_words=_words_in(outline),
     )
+    run_context.record_slide_material(slide_index, material)
+
+    archetype = budget_model.archetype_for(outline)
+    budget = budget_model.budget_for(design_system, archetype, material)
+    if not budget_model.density_brief_available(design_system):
+        return ""
+
+    lines = [f"\nHow much this slide should carry: {budget.describe()}."]
+    if archetype not in (budget_model.COVER, budget_model.DIVIDER):
+        if material < 0.5:
+            lines.append(
+                "The material behind this slide is thin, and the budget above "
+                "is already scaled down for it. Do not pad it out to look "
+                "fuller - a sparse slide that says something true is better "
+                "than a full one that does not."
+            )
+        else:
+            lines.append(
+                "A block is one countable thing on the page: a bullet, a card, "
+                "a row of a table, a labelled figure, a chart. Write sentences "
+                "that say something rather than three-word fragments; the "
+                "words-per-block figure is what a filled block reads like in "
+                "this template. If the points as given do not go that far, "
+                "carry the supporting detail behind them - the figure, the "
+                "comparison, the so-what - rather than repeating the point."
+            )
+    return "\n".join(lines) + "\n"
+
+
+def _figures_in(key_points: list) -> int:
+    """How many of a slide's points carry a number to build a visual from."""
+    return sum(1 for point in (key_points or [])
+               if _DIGIT_RE.search(str(point or "")))
+
+
+def _words_in(outline: dict) -> int:
+    """The words the plan handed this slide, notes included."""
+    if not isinstance(outline, dict):
+        return 0
+    text = " ".join([
+        str(outline.get("notes") or ""),
+        " ".join(str(p) for p in (outline.get("keyPoints") or [])),
+    ])
+    return len(text.split())
 
 
 def _prepared_visual_guidance(attached: list[dict]) -> str:
