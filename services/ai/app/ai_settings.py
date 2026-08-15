@@ -8,13 +8,16 @@ Three concerns live here so the API layer stays thin:
    Plaintext keys never leave this module except as provider credentials.
 2. **Redaction** - the read payload the API returns carries a last-four hint
    and a boolean, never the key.
-3. **Resolution** - turning the stored rows (or, when an organisation has not
-   configured anything, the process environment) into the concrete credentials
-   the agent loop and the ``web_search`` tool need.
+3. **Resolution** - turning the stored rows into the concrete credentials the
+   agent loop and the ``web_search`` tool need.
 
-The environment fallback is deliberate: deployments that configured providers
-through ``.env`` before this feature existed keep working untouched, and only
-organisations that opt in through the Settings UI get per-tenant behaviour.
+Resolution reads the stored rows and nothing else. There was an environment
+fallback, and it made "not configured" indistinguishable from "configured":
+every workspace resolved to whatever ``.env`` held, so the setup banner never
+appeared, generations silently ran on a key nobody had chosen in the UI, and
+that key's billing errors surfaced as the run's own failure. An organisation
+with nothing saved now resolves to None, which is a state the API reports and
+the interface acts on.
 """
 
 from __future__ import annotations
@@ -25,7 +28,6 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings as env_settings
 from app.db.models import OrganisationAISettings
 from app.llm.catalog import PROVIDERS_BY_ID, SEARCH_BACKENDS_BY_ID
 from app.llm.provider import ProviderCredentials
@@ -208,17 +210,6 @@ def redacted_payload(row: OrganisationAISettings | None) -> dict:
 # ── Resolution ─────────────────────────────────────────────────────────
 
 
-def _env_chat_credentials() -> ProviderCredentials | None:
-    """Fall back to the process environment for un-configured organisations."""
-    if env_settings.llm_provider == "zhipu" and env_settings.zhipu_api_key:
-        return ProviderCredentials(
-            provider="zhipu",
-            model=env_settings.zhipu_model,
-            api_key=env_settings.zhipu_api_key,
-        )
-    return None
-
-
 def _credentials_from_row(
     row: OrganisationAISettings, prefix: str, key_field: str
 ) -> ProviderCredentials | None:
@@ -239,12 +230,17 @@ def _credentials_from_row(
 
 
 def resolve_chat_credentials(row: OrganisationAISettings | None) -> ProviderCredentials | None:
-    """Credentials for the generic chat model, or None if nothing is usable."""
-    if row is not None:
-        stored = _credentials_from_row(row, "chat_", CHAT_KEY_FIELD)
-        if stored:
-            return stored
-    return _env_chat_credentials()
+    """Credentials for the generic chat model, or None if nothing is usable.
+
+    Settings is the only source. There was an environment fallback here, and
+    what it produced was a workspace that looked configured without ever having
+    been: the setup banner never appeared because ``chatConfigured`` was always
+    true, generations ran on whatever key ``.env`` held, and when that key was
+    exhausted the failure named a provider the user had never chosen.
+    """
+    if row is None:
+        return None
+    return _credentials_from_row(row, "chat_", CHAT_KEY_FIELD)
 
 
 def resolve_deep_search_model(
@@ -297,9 +293,9 @@ def resolve_search_config(
     backend = row.search_backend if row is not None else None
 
     if backend is None:
-        # Nothing saved - honour the pre-existing env configuration.
-        if env_settings.web_search_provider == "tavily" and env_settings.tavily_api_key:
-            return SearchConfig(backend="tavily", api_key=env_settings.tavily_api_key), ""
+        # Nothing saved. The provider's own search is the only thing left to
+        # try - there is deliberately no environment fallback, for the same
+        # reason resolve_chat_credentials has none.
         ok, reason = _native_search_supported(model)
         if ok:
             return SearchConfig(backend="native", model=model), ""

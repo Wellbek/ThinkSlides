@@ -7,12 +7,11 @@ The renderer will consume this to clone layout XML and fill placeholders.
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent import run_context
-from app.agent.run_context import get_chat_provider
+from app.agent.run_context import require_chat_provider
 from app import budget as budget_model
 from app import titles
 from app.measure import grammar as grammar_model
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
-from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
 import json
 import re
@@ -161,11 +160,10 @@ class DesignSlideContentTool:
     ) -> ToolResult:
         start = time.time()
         try:
-            # The organisation's configured model when a run published one,
-            # otherwise the process-wide provider from the environment. This
-            # tool writes the actual slide copy, so it is the call that most
-            # needs to honour the model chosen in Settings.
-            llm = get_chat_provider() or get_llm_provider()
+            # The workspace's configured model, published by the loop for
+            # the whole run. This tool writes the actual slide copy, so it is
+            # the call that most needs to honour the model chosen in Settings.
+            llm = require_chat_provider()
 
             # coerce_json_arg (not a bare json.loads) because tool-calling
             # models frequently send a native JSON object here despite the

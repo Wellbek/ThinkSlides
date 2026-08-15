@@ -5,10 +5,9 @@ Pulls specific data points (metrics, dates, names, figures) from analyzed docume
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
-from app.agent.run_context import get_chat_provider
-from app.llm.provider import get_tools_llm_provider as get_llm_provider
+from app.agent.run_context import require_chat_provider
+from app.agent.tools._json_extract import extract_json_object
 from app.observability.logging import get_logger
-import json
 import time
 
 logger = get_logger(__name__)
@@ -88,10 +87,11 @@ class ExtractKeyDataTool:
     ) -> ToolResult:
         start = time.time()
         try:
-            # An organisation that configured its own provider gets it here
-            # too: its explicit choice outranks the environment's cheaper
-            # tools-tier model, which only exists for the default provider.
-            llm = get_chat_provider() or get_llm_provider()
+            # The workspace's configured model. There is no environment
+            # fallback: a run reaches a tool only after the loop resolved
+            # Settings into a provider, and its absence is an error, not a
+            # cue to quietly use somebody else's key.
+            llm = require_chat_provider()
 
             detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
             max_chars = _DETAIL_MAX_CHARS.get(detail_level, _DETAIL_MAX_CHARS["detailed"])
@@ -101,7 +101,7 @@ Focus on: {data_types}
 
 {detail_guidance}
 
-Return a JSON object with these keys:
+Return a JSON object and nothing else, with these keys:
 - "metrics": list of {{name, value, unit}} objects
 - "key_points": list of important statements
 - "dates": list of {{date, context}} objects
@@ -117,11 +117,23 @@ Content:
                 tools=None,
             )
 
-            result_text = response.get("message", {}).get("content", "{}")
-            try:
-                data = json.loads(result_text)
-            except json.JSONDecodeError:
-                data = {"raw_extraction": result_text}
+            result_text = response.get("message", {}).get("content", "") or ""
+            # Models fence their JSON, or introduce it with a sentence. A bare
+            # json.loads survives neither, and the fallback here used to be an
+            # object with none of the expected keys - which the activity feed
+            # then reported as "found no structured data points", indefinitely
+            # re-triable and indistinguishable from an empty document.
+            data = extract_json_object(result_text)
+            if data is None:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "The extraction did not come back as JSON. Retry with a "
+                        "smaller slice of the content, or work from what "
+                        "analyze_document already returned."
+                    ),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
 
             duration_ms = int((time.time() - start) * 1000)
             return ToolResult(success=True, data=data, duration_ms=duration_ms)

@@ -1,0 +1,259 @@
+"""
+The order a deck gets built in.
+
+The loop used to enforce its sequence by *withholding tool schemas* and
+refusing out-of-order calls, then leaving the model to work out what to do with
+whatever remained. That is a fence, not a route, and a model that cannot see
+the route guesses: one observed run put three question pauses to a user in a
+row, re-extracted the design system it already had three times, ran ten
+searches and mined six documents that did not exist - none of which was
+forbidden, and one of which had to be right.
+
+So the sequence lives here, as data. Each phase declares what it needs to be
+true before it starts, what makes it finished, and exactly which tools exist
+while it runs. The loop walks to the first unfinished phase whose conditions
+hold and runs that one. The model is never asked what happens next; it is asked
+to do the work of the phase it is in - understand the request, word the
+questions, author the designs, choose a layout, write the copy.
+
+Two shapes of phase:
+
+* ``driver="loop"`` - the loop makes the call itself. Every phase with a fixed
+  shape is one of these: there is exactly one thing to do, so letting a model
+  decide whether to do it only creates a way for it not to happen.
+* ``driver="model"`` - the work genuinely varies (which queries this topic
+  needs, which layout this slide wants), so the model chooses, from a toolset
+  scoped to that phase alone.
+
+Going backwards is normal and needs no special case: validation flagging a
+slide makes ``draft`` unfinished again, so the walker returns to it, then to
+``render``, then to ``validate``. The revision loop is the walk, not a
+sub-loop.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Callable
+
+from app.agent.tools.build_blocks import BLOCK_BUILDER_TOOLS
+from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.agent.loop import AgentLoop
+
+LOOP_DRIVEN = "loop"
+MODEL_DRIVEN = "model"
+
+# Everything a single slide can be built from. Offered only while that slide is
+# the one being drafted.
+SLIDE_TOOLS = frozenset({
+    "select_layout",
+    "select_source_image",
+    "design_slide_content",
+    "validate_slide_json",
+    *BUILD_VISUAL_TOOLS,
+    *BLOCK_BUILDER_TOOLS,
+})
+
+
+@dataclass(frozen=True)
+class Phase:
+    """One step of a run, and the conditions that move it along."""
+
+    name: str
+    # The phase label carried on every SSE event, which the interface groups
+    # the activity feed by. Several phases share one: the user does not need
+    # to know that scouting and researching are separately bookkept.
+    label: str
+    driver: str
+    # What the model may call here. Empty for loop-driven phases - the loop
+    # makes those calls itself, so there is nothing to offer.
+    tools: frozenset[str] = frozenset()
+    # Whether this phase happens at all on this run.
+    applies: Callable[["AgentLoop"], bool] = lambda loop: True
+    # Whether it is finished. Checked before the phase runs (to skip it) and
+    # after (to move on), so a phase that is already satisfied costs nothing.
+    done: Callable[["AgentLoop"], bool] = lambda loop: True
+    # What the model is told to do, when the model is doing it.
+    directive: Callable[["AgentLoop"], str] = lambda loop: ""
+    # How many model turns this phase gets before the run gives up on it.
+    max_turns: int = 0
+    pauses: bool = False
+
+
+# ── Conditions, named so the table below reads as prose ──────────────────
+
+
+def _wants_research(loop: "AgentLoop") -> bool:
+    """Whether this run can and should look things up."""
+    return loop.mode_is_deep and loop.search_config is not None
+
+
+def _asks_questions(loop: "AgentLoop") -> bool:
+    """Whether this user is being consulted at all.
+
+    "Just build it" said once holds for the whole run - see
+    ``user_declined_questions``.
+    """
+    return not loop.questions_declined
+
+
+def _slides_outstanding(loop: "AgentLoop") -> list[int]:
+    """Slide indices still to be written, in the order they will be written.
+
+    Both the first pass and a revision pass: after validation flags a slide,
+    that slide is outstanding again, which is what walks the run back to
+    drafting.
+    """
+    ws = loop.working_state
+    if not ws.presentation_structure:
+        return []
+    total = int(ws.presentation_structure.get("totalSlides") or 0)
+    designed = {s.get("slideIndex") for s in ws.accumulated_slides}
+    missing = [i for i in range(total) if i not in designed]
+    if missing:
+        return missing
+
+    # Nothing has been rewritten since validation complained, so its findings
+    # still stand. An empty slides_needing_revision means the opposite of
+    # nothing: it is compute_slides_needing_revision saying the defect is
+    # spread widely enough that the whole deck is in scope.
+    if ws.validation_issues and ws.validated_serial == ws.design_serial:
+        return ws.slides_needing_revision or list(range(total))
+    return []
+
+
+def _validation_settled(loop: "AgentLoop") -> bool:
+    ws = loop.working_state
+    return ws.validation_clean or ws.at_validation_cap
+
+
+PIPELINE: tuple[Phase, ...] = (
+    Phase(
+        name="intake",
+        label="content_analysis",
+        driver=LOOP_DRIVEN,
+        done=lambda loop: loop.working_state.brief is not None,
+        directive=lambda loop: "Read the request and say what it is asking for.",
+    ),
+    Phase(
+        name="scout",
+        label="content_analysis",
+        driver=LOOP_DRIVEN,
+        # Two queries, before the questions, so the options the user is offered
+        # come from the actual material rather than from adjectives. Not the
+        # deck's research: that happens after the answers narrow the topic.
+        applies=lambda loop: _wants_research(loop) and loop.brief_needs_research,
+        done=lambda loop: loop.working_state.scouted,
+        directive=lambda loop: "Look up enough to make the questions concrete.",
+    ),
+    Phase(
+        name="consult",
+        label="user_input",
+        driver=LOOP_DRIVEN,
+        applies=_asks_questions,
+        done=lambda loop: loop.working_state.consulted_before_planning,
+        pauses=True,
+        directive=lambda loop: "Put the outstanding questions to the user, in one pause.",
+    ),
+    Phase(
+        name="design",
+        label="user_input",
+        driver=LOOP_DRIVEN,
+        applies=lambda loop: (
+            _asks_questions(loop) and not loop.working_state.autonomy_confirmed
+        ),
+        done=lambda loop: loop.working_state.offered_directions,
+        directive=lambda loop: (
+            "Offer the user three rendered design directions to choose between."
+        ),
+        pauses=True,
+    ),
+    Phase(
+        name="research",
+        label="content_analysis",
+        driver=MODEL_DRIVEN,
+        tools=frozenset({"web_search"}),
+        # The substantial round, now that the audience, angle and depth are
+        # settled. Searching before that spends the budget on facets the user
+        # was about to rule out.
+        applies=_wants_research,
+        # Enough sources, the search budget spent, or the model has stopped
+        # asking - a topic with little written about it must not strand a run.
+        done=lambda loop: (
+            not loop._research_is_thin()
+            or loop.working_state.phase_turns.get("research", 0) >= 6
+        ),
+        directive=lambda loop: (
+            f"Research the topic. {loop.working_state.web_search_calls} search(es) so far "
+            f"returning {len(loop.working_state.researched_urls)} distinct source(s); this "
+            f"phase ends at {loop._min_web_searches()} searches and "
+            f"{loop.research_min_sources} sources. Ask a genuinely different question each "
+            "time - the subject itself, the figures the deck needs, what has happened "
+            "recently, the counterpoint a sceptic would raise. A rephrasing of the last "
+            "query returns the last query's pages."
+        ),
+        max_turns=10,
+    ),
+    Phase(
+        name="plan",
+        label="structure_planning",
+        driver=LOOP_DRIVEN,
+        done=lambda loop: bool(loop.working_state.presentation_structure),
+        directive=lambda loop: "Lay the deck out with plan_presentation_structure.",
+    ),
+    Phase(
+        name="review",
+        label="user_input",
+        driver=LOOP_DRIVEN,
+        applies=_asks_questions,
+        done=lambda loop: loop.working_state.reviewed_outline_with_user,
+        pauses=True,
+        directive=lambda loop: "Show the user the outline and ask whether to build it.",
+    ),
+    Phase(
+        name="draft",
+        label="content_generation",
+        driver=MODEL_DRIVEN,
+        tools=SLIDE_TOOLS,
+        done=lambda loop: not _slides_outstanding(loop),
+        directive=lambda loop: loop.slide_directive(),
+        # Per slide, not for the whole phase: the loop re-enters this phase
+        # once per outstanding slide.
+        max_turns=6,
+    ),
+    Phase(
+        name="render",
+        label="rendering",
+        driver=LOOP_DRIVEN,
+        done=lambda loop: loop.working_state.render_is_current,
+        directive=lambda loop: "Render the deck with finalize_and_render_pptx.",
+    ),
+    Phase(
+        name="validate",
+        label="validation",
+        driver=LOOP_DRIVEN,
+        done=_validation_settled,
+        directive=lambda loop: "Check the rendered file with validate_rendered_output.",
+    ),
+)
+
+PHASES_BY_NAME = {phase.name: phase for phase in PIPELINE}
+
+
+def next_phase(loop: "AgentLoop") -> Phase | None:
+    """The first phase that applies to this run and is not finished."""
+    for phase in PIPELINE:
+        if phase.applies(loop) and not phase.done(loop):
+            return phase
+    return None
+
+
+def phase_after(name: str) -> Phase | None:
+    """The phase following ``name`` in the pipeline, for progress reporting."""
+    names = [phase.name for phase in PIPELINE]
+    if name not in names:
+        return None
+    position = names.index(name) + 1
+    return PIPELINE[position] if position < len(PIPELINE) else None

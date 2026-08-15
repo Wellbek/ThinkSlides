@@ -25,35 +25,62 @@ def _loop():
     loop = AgentLoop.__new__(AgentLoop)
     loop.questions_declined = False
     loop.working_state = WorkingState()
+    loop.mode = "simple"
+    loop.search_config = None
     return loop
 
 class TestARunPausesTwice:
     def test_directions_are_out_of_reach_before_the_questions(self):
-        withheld = _loop()._tools_withheld_by_checkpoint()
+        """Every answer from the consultation constrains all three directions,
+        so proposing them first would be proposing them uninformed."""
+        from app.agent import pipeline
 
-        assert "propose_design_directions" in withheld
-
-    def test_they_open_up_once_the_questions_are_answered(self):
         loop = _loop()
+        loop.working_state.brief = {"needsResearch": False}
+
+        assert pipeline.next_phase(loop).name == "consult"
+
+    def test_they_are_what_comes_next_once_the_questions_are_answered(self):
+        from app.agent import pipeline
+
+        loop = _loop()
+        loop.working_state.brief = {"needsResearch": False}
         loop.working_state.consulted_before_planning = True
 
-        assert "propose_design_directions" not in \
-            loop._tools_withheld_by_checkpoint()
+        assert pipeline.next_phase(loop).name == "design"
 
     def test_planning_waits_for_the_direction_pause(self):
-        from app.agent.loop import PLANNING_TOOLS
+        from app.agent import pipeline
 
         loop = _loop()
+        loop.working_state.brief = {"needsResearch": False}
         loop.working_state.consulted_before_planning = True
 
-        assert PLANNING_TOOLS <= loop._tools_withheld_by_checkpoint()
+        assert pipeline.next_phase(loop).name != "plan"
 
     def test_declining_the_consultation_skips_both_pauses(self):
-        """A user who said "just build it" said it about all of it."""
+        from app.agent import pipeline
+
         loop = _loop()
+        loop.working_state.brief = {"needsResearch": False}
         loop.questions_declined = True
 
-        assert loop._tools_withheld_by_checkpoint() == set()
+        assert pipeline.next_phase(loop).name == "plan"
+
+    def test_handing_over_the_decisions_skips_only_the_design_pause(self):
+        """The outline review survives it - seeing the slide titles is the
+        cheapest moment to redirect a deck."""
+        from app.agent import pipeline
+
+        loop = _loop()
+        loop.working_state.brief = {"needsResearch": False}
+        loop.working_state.consulted_before_planning = True
+        loop.working_state.autonomy_confirmed = True
+
+        assert pipeline.next_phase(loop).name == "plan"
+
+        loop.working_state.presentation_structure = {"totalSlides": 1, "slides": [{}]}
+        assert pipeline.next_phase(loop).name == "review"
 
     def test_the_direction_pause_is_not_recorded_as_a_question(self):
         """answered_questions is replayed as "do NOT ask these again"; the

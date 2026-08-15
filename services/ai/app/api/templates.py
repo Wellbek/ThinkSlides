@@ -8,12 +8,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 import asyncio
 
+from app import ai_settings
 from app.db.session import get_db
 from app.db.models import Template, DesignSystemBundle
 from app.agent.tools.extract_template_design_system import ExtractTemplateDesignSystemTool
-from app.llm import get_llm_provider
+from app.llm.provider import build_chat_provider
 from app.api.auth import get_current_user
 from app.config import settings
+from app.observability.logging import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -58,14 +62,31 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
     yield f"event: extracting\ndata: {json.dumps({'progress': 100, 'message': 'Design system extracted'})}\n\n"
     yield f"event: analyzing\ndata: {json.dumps({'progress': 0, 'message': 'LLM analyzing template...'})}\n\n"
 
-    # LLM analysis (streaming if your LLM supports it)
+    # LLM analysis, from the workspace's own configured model - the same one
+    # that will generate with this template. A workspace that has configured
+    # nothing still gets its template: the design system above is parsed from
+    # the file itself, and only this cosmetic summary needs a model.
     prompt = f"""Analyze this design system in 2-3 sentences:\n{json.dumps(design_system, indent=2)}"""
-    llm = get_llm_provider()
-    response = await llm.chat(
-        messages=[{"role": "user", "content": prompt}],
-        tools=None,
+    full_analysis = ""
+    credentials = ai_settings.resolve_chat_credentials(
+        await ai_settings.load_row(db, uuid.UUID(org_id))
     )
-    full_analysis = response.get("message", {}).get("content", "")
+    if credentials is None:
+        full_analysis = (
+            "Template parsed. Configure an AI model in Settings to have its "
+            "design system described."
+        )
+    else:
+        try:
+            llm = build_chat_provider(credentials)
+            response = await llm.chat(
+                messages=[{"role": "user", "content": prompt}],
+                tools=None,
+            )
+            full_analysis = response.get("message", {}).get("content", "")
+        except Exception as e:  # noqa: BLE001 - a summary must not fail an upload
+            logger.warning("template_analysis_failed", error=str(e))
+            full_analysis = "Template parsed. The design system summary could not be generated."
     # Simulate streaming chunks (modify as needed)
     words = full_analysis.split()
     for i in range(0, len(words), 2):

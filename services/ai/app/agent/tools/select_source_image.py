@@ -15,9 +15,8 @@ and folds it into the corresponding slide's content.
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
-from app.agent.run_context import get_chat_provider
+from app.agent.run_context import require_chat_provider
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
-from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
 import time
 
@@ -95,7 +94,7 @@ Decide whether ANY of these images is a clearly, specifically relevant match for
 Return ONLY a JSON object:
 {{"selected": true|false, "imageId": "<id from the list above, or null>", "reason": "one sentence explaining the decision"}}"""
 
-            llm = get_chat_provider() or get_llm_provider()
+            llm = require_chat_provider()
             response = await llm.chat(messages=[{"role": "user", "content": prompt}], tools=None)
             result_text = response.get("message", {}).get("content", "{}")
             parsed = extract_json_object(result_text)

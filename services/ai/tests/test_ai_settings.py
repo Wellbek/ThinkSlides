@@ -1,4 +1,8 @@
-"""Tests for per-organisation AI settings: redaction, resolution, gating."""
+"""Tests for per-organisation AI settings: redaction, resolution, gating.
+
+Resolution is what this module is about, so it opts out of the
+configured-workspace fixture in conftest and reads the real functions.
+"""
 
 import base64
 import os
@@ -11,6 +15,8 @@ from app.api.settings import ModelRoleInput, _to_section, describe_provider_erro
 from app.config import settings as env_settings
 from app.db.models import OrganisationAISettings
 from app.security.crypto import ACTIVE_KEY_ENV, get_cipher, reset_cipher_cache
+
+pytestmark = pytest.mark.unconfigured_workspace
 
 ORG_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
@@ -97,17 +103,21 @@ def test_stored_chat_config_resolves_to_provider_credentials():
     assert credentials.base_url == "https://proxy.internal"
 
 
-def test_unconfigured_org_falls_back_to_the_environment(monkeypatch):
-    """Deployments that pre-date the Settings UI keep working untouched."""
+def test_an_unconfigured_org_resolves_to_nothing_whatever_the_environment_holds(monkeypatch):
+    """Settings is the only source of a model.
+
+    There was a fallback to the process environment here, and it meant a
+    workspace that had never been configured still reported chatConfigured -
+    so the setup banner never appeared, and generations ran on a key nobody
+    had chosen in the UI until it failed for reasons nobody could act on.
+    """
     monkeypatch.setattr(env_settings, "zhipu_api_key", "id.secret")
     monkeypatch.setattr(env_settings, "zhipu_model", "glm-4.7")
 
-    credentials = ai_settings.resolve_chat_credentials(None)
-
-    assert (credentials.provider, credentials.model) == ("zhipu", "glm-4.7")
+    assert ai_settings.resolve_chat_credentials(None) is None
 
 
-def test_chat_is_unconfigured_when_neither_db_nor_env_has_a_key(no_env_provider):
+def test_chat_is_unconfigured_when_nothing_is_saved(no_env_provider):
     """This is what raises the setup banner in the UI."""
     assert ai_settings.resolve_chat_credentials(None) is None
     assert ai_settings.configuration_status(None)["chatConfigured"] is False
@@ -205,14 +215,19 @@ def test_unknown_backend_is_reported_rather_than_crashing():
     assert "bing" in reason
 
 
-def test_env_tavily_configuration_is_honoured_when_nothing_is_saved(monkeypatch):
-    """WEB_SEARCH_PROVIDER=tavily deployments keep working without re-configuring."""
+def test_a_search_backend_in_the_environment_is_ignored_too(monkeypatch):
+    """Same rule as the chat model: saved settings or nothing.
+
+    An env-configured backend made Deep Thinking look available on a workspace
+    that had configured nothing, which is the same lie in a smaller place.
+    """
     monkeypatch.setattr(env_settings, "web_search_provider", "tavily")
     monkeypatch.setattr(env_settings, "tavily_api_key", "tvly-env")
 
-    config, _ = ai_settings.resolve_search_config(None)
+    config, reason = ai_settings.resolve_search_config(None)
 
-    assert (config.backend, config.api_key) == ("tavily", "tvly-env")
+    assert config is None
+    assert reason
 
 
 def test_status_reports_why_deep_thinking_is_unavailable(no_env_provider):

@@ -157,100 +157,61 @@ def test_system_prompt_defaults_gracefully_when_built_before_configure():
 # ── The loop injects detail_level into tool args server-side ───────────
 
 
+async def _dispatch(loop, name, args):
+    """Run one tool call through the loop's dispatcher, which is where the
+    composer's chosen depth is attached to the calls that read it."""
+    from app.agent import pipeline
+
+    result = None
+    async for kind, payload in loop._dispatch_tool(
+        name, args, "call-1",
+        context={}, session_id=uuid.uuid4(),
+        current_phase=pipeline.PHASES_BY_NAME["draft"].label,
+    ):
+        if kind != "event":
+            result = payload
+    return result
+
+
 @pytest.mark.asyncio
 async def test_loop_injects_detail_level_into_plan_and_design_calls(monkeypatch):
-    session_id = uuid.uuid4()
+    from app.agent.registry import ToolResult
+
     loop = _loop(detail_level=DETAIL_LEVEL_COMPREHENSIVE)
-    loop.redis_client = _FakeRedis()
-
-    async def _no_context(*a, **k):
-        return {}
-
-    async def _no_messages(*a, **k):
-        return []
-
-    monkeypatch.setattr(loop, "_load_context", _no_context)
-    monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
-
-    script = [
-        [{"id": "1", "function": {"name": "plan_presentation_structure", "arguments": "{}"}}],
-        [],
-    ]
-    calls = {"n": 0}
-
-    async def _chat(*a, **k):
-        idx = calls["n"]
-        calls["n"] += 1
-        tool_calls = script[idx] if idx < len(script) else []
-        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
-
-    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
-    loop.MAX_ITERATIONS = 2
-
     captured: dict = {}
 
     async def _execute_tool(name, args):
-        from app.agent.registry import ToolResult
-        if name == "plan_presentation_structure":
-            captured.update(args)
-            return ToolResult(success=True, data={"title": "T", "totalSlides": 1, "slides": []})
-        raise AssertionError(f"unexpected tool {name}")
+        captured.update(args)
+        return ToolResult(success=True, data={"title": "T", "totalSlides": 1, "slides": []})
 
     monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
 
-    async for _ in loop.run(session_id):
-        pass
+    await _dispatch(loop, "plan_presentation_structure", {})
 
     assert captured["detail_level"] == DETAIL_LEVEL_COMPREHENSIVE
 
 
 @pytest.mark.asyncio
 async def test_loop_injects_detail_level_into_analyze_document_and_extract_key_data(monkeypatch):
-    session_id = uuid.uuid4()
+    from app.agent.registry import ToolResult
+
     loop = _loop(detail_level=DETAIL_LEVEL_COMPREHENSIVE)
-    loop.redis_client = _FakeRedis()
-
-    async def _no_context(*a, **k):
-        return {}
-
-    async def _no_messages(*a, **k):
-        return []
-
-    monkeypatch.setattr(loop, "_load_context", _no_context)
-    monkeypatch.setattr(loop, "_build_chat_messages", _no_messages)
-
-    script = [
-        [
-            {"id": "1", "function": {"name": "analyze_document", "arguments": json.dumps({"document_path": "x.pdf"})}},
-            {"id": "2", "function": {"name": "extract_key_data", "arguments": json.dumps({"content": "x"})}},
-        ],
-        [],
-    ]
-    calls = {"n": 0}
-
-    async def _chat(*a, **k):
-        idx = calls["n"]
-        calls["n"] += 1
-        tool_calls = script[idx] if idx < len(script) else []
-        return {"message": {"content": "" if tool_calls else "Done."}, "tool_calls": tool_calls}
-
-    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
-    loop.MAX_ITERATIONS = 2
-
-    captured: dict = {}
+    loop._session_has_documents = True   # or extract_key_data has nothing to mine
+    captured: list[dict] = []
 
     async def _execute_tool(name, args):
-        from app.agent.registry import ToolResult
-        captured[name] = args
+        captured.append(dict(args))
         return ToolResult(success=True, data={})
 
     monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
 
-    async for _ in loop.run(session_id):
-        pass
+    await _dispatch(loop, "analyze_document", {"document_path": "/x.pdf"})
+    await _dispatch(loop, "extract_key_data", {"content": "text"})
 
-    assert captured["analyze_document"]["detail_level"] == DETAIL_LEVEL_COMPREHENSIVE
-    assert captured["extract_key_data"]["detail_level"] == DETAIL_LEVEL_COMPREHENSIVE
+    assert [c["detail_level"] for c in captured] == [
+        DETAIL_LEVEL_COMPREHENSIVE, DETAIL_LEVEL_COMPREHENSIVE,
+    ]
+
 
 
 # ── Tool prompts vary by detail_level ───────────────────────────────────
