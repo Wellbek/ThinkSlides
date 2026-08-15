@@ -268,6 +268,50 @@ export interface TemplateGrammar {
   features: string[];
 }
 
+/** One kind of page a template has, with everything measured about it. */
+export interface Archetype {
+  name: string;
+  label: string;
+  pages: number[];
+  representative: number;
+  regions: Region[];
+  features: string[];
+  wordsMedian: number;
+  blocksMedian: number;
+  titleRegister: "claim" | "question" | "label";
+}
+
+/** One slide of the series a template repeats per subject. */
+export interface ChapterPosition {
+  index: number;
+  /** The question this position asks, reused verbatim in every chapter. */
+  title: string;
+  archetype: string;
+  /** How many chapters printed this exact question here. */
+  support: number;
+}
+
+/**
+ * The chapter a template repeats once per subject.
+ *
+ * An analyst report is not N individually designed pages; it is one series
+ * run once per trend, with the same questions in the same order. That
+ * repetition is most of what makes such a deck read as one document, and the
+ * planner had no way to express it.
+ */
+export interface Chapter {
+  positions: ChapterPosition[];
+  /** The first page of each instance found in the template. */
+  occurrences: number[];
+  count: number;
+  length: number;
+}
+
+export interface TemplateArchetypes {
+  archetypes: Archetype[];
+  chapter?: Chapter | null;
+}
+
 export interface DesignSystemBundle {
   palette: Palette;
   typography: Typography;
@@ -277,6 +321,7 @@ export interface DesignSystemBundle {
   density?: DensityTokens;
   pageSurvey?: PageSurvey;
   layoutGrammar?: TemplateGrammar;
+  archetypes?: TemplateArchetypes;
   dataViz?: DataVizTokens;
   layouts: LayoutDef[];
   slideDimensions: SlideDimensions;
