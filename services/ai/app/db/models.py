@@ -130,6 +130,10 @@ class DesignSystemBundle(Base):
     # actually looked at. Kept so naming its archetypes and scoring how much
     # of it was seen do not have to re-read the file.
     page_survey = Column(JSONB, nullable=False, default=dict)
+    # The region grammar of those pages - rails, ground splits, band rows,
+    # card rows - so a later deck composes into this template's layouts
+    # rather than into placeholder boxes.
+    layout_grammar = Column(JSONB, nullable=False, default=dict)
     raw_xml_snapshot = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 

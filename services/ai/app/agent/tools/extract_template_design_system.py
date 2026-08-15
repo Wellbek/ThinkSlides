@@ -16,6 +16,7 @@ from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.measure import clusters
 from app.measure import density as density_model
+from app.measure import grammar as grammar_model
 from app.observability.logging import get_logger
 from app.llm import get_vision_llm_provider
 from typing import Sequence
@@ -240,6 +241,7 @@ class ExtractTemplateDesignSystemTool:
                     surveyed = clusters.survey_pdf(pdf_path, pages,
                                                    budget=VISION_PAGE_BUDGET)
                     design_system["pageSurvey"] = surveyed.to_dict()
+                    cls._read_grammar(design_system, pdf_path, surveyed)
                 profile = density_model.profile_pdf(pdf_path, pages)
         except Exception as e:  # pragma: no cover - a broken template
             logger.warning("template_profile_failed", error=str(e))
@@ -265,6 +267,39 @@ class ExtractTemplateDesignSystemTool:
             display_pt=types.display_pt,
             body_pt=types.body_pt,
             display_is_serif=types.display_is_serif,
+        )
+
+    @staticmethod
+    def _read_grammar(design_system: dict, pdf_path: str, survey) -> None:
+        """
+        Read each distinct layout's region grammar, as its own step.
+
+        Its own step, and its own failure: the reason #118 asked for this to
+        be split out was that one malformed response used to lose the whole
+        bundle. A layout whose grammar cannot be read leaves the rest of the
+        design system exactly as it was, and the deck composes the way it did
+        before regions existed.
+
+        One page per cluster, not one per sampled page: the survey already
+        established that the pages of a cluster look alike, and reading eight
+        pages of the same layout would report the same grammar eight times.
+        """
+        pages = [cluster.representative for cluster in survey.clusters]
+        labels = {cluster.representative: cluster.label
+                  for cluster in survey.clusters}
+        if not pages:
+            return
+        try:
+            read = grammar_model.read_pdf(pdf_path, pages, labels)
+        except Exception as e:  # pragma: no cover - a page that will not read
+            logger.warning("layout_grammar_failed", error=str(e))
+            return
+
+        design_system["layoutGrammar"] = read.to_dict()
+        logger.info(
+            "layout_grammar_read",
+            layouts=len(read.layouts),
+            features=sorted(read.features),
         )
 
     @staticmethod
@@ -382,6 +417,7 @@ class ExtractTemplateDesignSystemTool:
         # from it and #130 scores whether the sample covered the deck, and
         # neither should have to re-read the PDF to find out what was seen.
         design_system["pageSurvey"] = survey.to_dict()
+        cls._read_grammar(design_system, template_path, survey)
         cls._measure_template(design_system, template_path, page_range)
 
         logger.info(

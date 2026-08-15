@@ -237,6 +237,37 @@ export interface PageSurvey {
   clusters: PageCluster[];
 }
 
+/**
+ * One of a template's layouts, described in the region vocabulary.
+ *
+ * The extractor used to describe every layout as a list of placeholder boxes
+ * typed title / body / subtitle / footer. That vocabulary has no words for a
+ * split canvas, a rail, seven ruled row bands or a four-column card row, so
+ * everything that made a template look like itself was discarded at that step.
+ *
+ * Geometry is fractional throughout - `regions` are ready to be attached to a
+ * slide as they are.
+ */
+export interface LayoutGrammar {
+  /** The page this layout was read from. */
+  page: number;
+  /** The kind of page it is, from the survey - "split canvas", "row bands". */
+  label: string;
+  regions: Region[];
+  /** What was found: "rail", "ground split", "band row", "card row", … */
+  features: string[];
+  columns: number;
+  bands: number;
+  ruleColor?: string | null;
+  grounds: string[];
+}
+
+export interface TemplateGrammar {
+  layouts: LayoutGrammar[];
+  /** The union of every layout's features, for a quick "does this deck …". */
+  features: string[];
+}
+
 export interface DesignSystemBundle {
   palette: Palette;
   typography: Typography;
@@ -245,6 +276,7 @@ export interface DesignSystemBundle {
   apparatus?: ApparatusTokens;
   density?: DensityTokens;
   pageSurvey?: PageSurvey;
+  layoutGrammar?: TemplateGrammar;
   dataViz?: DataVizTokens;
   layouts: LayoutDef[];
   slideDimensions: SlideDimensions;

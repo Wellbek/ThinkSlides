@@ -118,6 +118,549 @@
       }
     }
   },
+  "designGrammar": {
+    "features": [
+      "band row",
+      "banner",
+      "card row",
+      "exhibit panel",
+      "ground split",
+      "rail"
+    ],
+    "layouts": [
+      {
+        "bands": 0,
+        "columns": 0,
+        "features": [
+          "exhibit panel"
+        ],
+        "grounds": [],
+        "label": "",
+        "page": 1,
+        "regions": [
+          {
+            "h": 0.9996,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 1.0,
+            "x": 0.0,
+            "y": 0.0002
+          }
+        ],
+        "ruleColor": null
+      },
+      {
+        "bands": 0,
+        "columns": 0,
+        "features": [
+          "rail",
+          "exhibit panel"
+        ],
+        "grounds": [
+          "#041C2C",
+          "#FFFFFF"
+        ],
+        "label": "",
+        "page": 3,
+        "regions": [
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "rail-0",
+            "kind": "rail",
+            "w": 0.375,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.625,
+            "x": 0.375,
+            "y": 0.0
+          },
+          {
+            "h": 0.5131,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.3414,
+            "x": 0.4111,
+            "y": 0.3622
+          }
+        ],
+        "ruleColor": null
+      },
+      {
+        "bands": 0,
+        "columns": 0,
+        "features": [],
+        "grounds": [],
+        "label": "",
+        "page": 4,
+        "regions": [],
+        "ruleColor": null
+      },
+      {
+        "bands": 0,
+        "columns": 0,
+        "features": [],
+        "grounds": [],
+        "label": "",
+        "page": 7,
+        "regions": [],
+        "ruleColor": null
+      },
+      {
+        "bands": 4,
+        "columns": 0,
+        "features": [
+          "band row"
+        ],
+        "grounds": [],
+        "label": "",
+        "page": 12,
+        "regions": [
+          {
+            "children": [
+              {
+                "h": 0.2044,
+                "id": "band-0",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 0.2652,
+                "id": "band-1",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.2044
+              },
+              {
+                "h": 0.2652,
+                "id": "band-2",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.4696
+              },
+              {
+                "h": 0.2652,
+                "id": "band-3",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.7348
+              }
+            ],
+            "h": 0.5162,
+            "id": "bands",
+            "kind": "bandRow",
+            "w": 0.9088,
+            "x": 0.0455,
+            "y": 0.2578
+          }
+        ],
+        "ruleColor": null
+      },
+      {
+        "bands": 0,
+        "columns": 0,
+        "features": [
+          "ground split",
+          "exhibit panel"
+        ],
+        "grounds": [
+          "#FFFFFF",
+          "#041C2C"
+        ],
+        "label": "",
+        "page": 22,
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.5,
+            "y": 0.0
+          },
+          {
+            "h": 0.4663,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.2235,
+            "x": 0.2078,
+            "y": 0.3613
+          }
+        ],
+        "ruleColor": null
+      },
+      {
+        "bands": 0,
+        "columns": 0,
+        "features": [
+          "ground split"
+        ],
+        "grounds": [
+          "#FFFFFF",
+          "#041C2C"
+        ],
+        "label": "",
+        "page": 30,
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.5,
+            "y": 0.0
+          }
+        ],
+        "ruleColor": null
+      },
+      {
+        "bands": 7,
+        "columns": 0,
+        "features": [
+          "band row"
+        ],
+        "grounds": [],
+        "label": "",
+        "page": 40,
+        "regions": [
+          {
+            "children": [
+              {
+                "h": 0.1061,
+                "id": "band-0",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 0.1488,
+                "id": "band-1",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.1061
+              },
+              {
+                "h": 0.1647,
+                "id": "band-2",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.255
+              },
+              {
+                "h": 0.1647,
+                "id": "band-3",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.4197
+              },
+              {
+                "h": 0.1483,
+                "id": "band-4",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.5844
+              },
+              {
+                "h": 0.1338,
+                "id": "band-5",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.7327
+              },
+              {
+                "h": 0.1335,
+                "id": "band-6",
+                "kind": "band",
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.8665
+              }
+            ],
+            "h": 0.5342,
+            "id": "bands",
+            "kind": "bandRow",
+            "w": 0.909,
+            "x": 0.0455,
+            "y": 0.2962
+          }
+        ],
+        "ruleColor": null
+      },
+      {
+        "bands": 0,
+        "columns": 3,
+        "features": [
+          "ground split",
+          "card row"
+        ],
+        "grounds": [
+          "#FFFFFF",
+          "#041C2C"
+        ],
+        "label": "",
+        "page": 66,
+        "regions": [
+          {
+            "ground": "#FFFFFF",
+            "h": 1.0,
+            "id": "panel-0",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "ground": "#041C2C",
+            "h": 1.0,
+            "id": "panel-1",
+            "kind": "panel",
+            "w": 0.5,
+            "x": 0.5,
+            "y": 0.0
+          },
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.4724,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.4643,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.4363,
+                "x": 0.5637,
+                "y": 0.0
+              }
+            ],
+            "h": 0.1373,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.8761,
+            "x": 0.0457,
+            "y": 0.4165
+          }
+        ],
+        "ruleColor": null
+      },
+      {
+        "bands": 0,
+        "columns": 4,
+        "features": [
+          "banner",
+          "card row"
+        ],
+        "grounds": [],
+        "label": "",
+        "page": 95,
+        "regions": [
+          {
+            "h": 0.0599,
+            "id": "banner",
+            "kind": "banner",
+            "w": 0.909,
+            "x": 0.0456,
+            "y": 0.8401
+          },
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.2425,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.2287,
+                "x": 0.2695,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.233,
+                "x": 0.5264,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-3",
+                "kind": "column",
+                "w": 0.2169,
+                "x": 0.7831,
+                "y": 0.0
+              }
+            ],
+            "h": 0.3362,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.8969,
+            "x": 0.0455,
+            "y": 0.465
+          }
+        ],
+        "ruleColor": null
+      },
+      {
+        "bands": 0,
+        "columns": 0,
+        "features": [
+          "exhibit panel"
+        ],
+        "grounds": [],
+        "label": "",
+        "page": 110,
+        "regions": [
+          {
+            "h": 0.1349,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.3906,
+            "x": 0.0758,
+            "y": 0.5661
+          }
+        ],
+        "ruleColor": null
+      },
+      {
+        "bands": 0,
+        "columns": 0,
+        "features": [],
+        "grounds": [],
+        "label": "",
+        "page": 130,
+        "regions": [],
+        "ruleColor": null
+      },
+      {
+        "bands": 0,
+        "columns": 5,
+        "features": [
+          "card row",
+          "exhibit panel"
+        ],
+        "grounds": [],
+        "label": "",
+        "page": 168,
+        "regions": [
+          {
+            "children": [
+              {
+                "h": 1.0,
+                "id": "column-0",
+                "kind": "column",
+                "w": 0.1866,
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-1",
+                "kind": "column",
+                "w": 0.1865,
+                "x": 0.2021,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-2",
+                "kind": "column",
+                "w": 0.1839,
+                "x": 0.4041,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-3",
+                "kind": "column",
+                "w": 0.1858,
+                "x": 0.6061,
+                "y": 0.0
+              },
+              {
+                "h": 1.0,
+                "id": "column-4",
+                "kind": "column",
+                "w": 0.1918,
+                "x": 0.8082,
+                "y": 0.0
+              }
+            ],
+            "h": 0.1535,
+            "id": "grid",
+            "kind": "grid",
+            "w": 0.911,
+            "x": 0.0455,
+            "y": 0.7502
+          },
+          {
+            "h": 0.24,
+            "id": "exhibit",
+            "kind": "panel",
+            "w": 0.1728,
+            "x": 0.7817,
+            "y": 0.4067
+          }
+        ],
+        "ruleColor": null
+      }
+    ]
+  },
   "designPages": [
     1,
     3,

@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from typing import Optional
 from xml.sax.saxutils import escape
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import MSO_AUTO_SIZE, MSO_ANCHOR, PP_ALIGN
@@ -136,6 +136,11 @@ CHROME_REGION_GROUND = f"{CHROME_NAME_PREFIX} Region Ground"
 
 # Content that is placed as an object rather than written into a placeholder.
 OBJECT_CONTENT_TYPES = frozenset({"image", "table", "chart", "metrics"})
+
+# A title box taller than this is not a title band - it is a region a
+# composition put the title inside, and the band's bottom-anchoring rule does
+# not apply to it. The stock title band is 1.1in on a 7.5in canvas.
+TITLE_BAND_MAX_IN = 2.4
 
 
 @dataclass
@@ -813,7 +818,64 @@ class PPTXRenderer:
             type_scale=self._type_scale,
             canvas=plan.canvas,
         ))
-        prim.paint_all(slide, marks, self._paint_context())
+        self._paint_chrome(slide, marks, plan)
+
+    def _paint_chrome(self, slide, marks: list, plan: SlidePlan) -> None:
+        """
+        Paint each chrome mark against the ground it actually lands on.
+
+        Chrome is compiled once for the slide's own background, which is right
+        until a composition puts a dark rail under the corner the footer sits
+        in - and then the deck's name is dark ink on a dark panel, legible
+        only if you know it is there. #124 made region-bound *content* colour
+        itself against its region's ground; this is the same rule applied to
+        the furniture that lands on top of one.
+
+        Recolouring the mark is not enough on its own: the painter enforces
+        contrast against the context's ground at the last write, so a mark
+        told to be near-white while the context still says "white paper" is
+        turned straight back into dark ink. The ground has to travel with it.
+        """
+        tree = plan.regions
+        grounded = tree.grounded() if tree is not None else []
+        if not marks:
+            return
+        if not grounded:
+            prim.paint_all(slide, marks, self._paint_context())
+            return
+
+        by_ground: dict[Optional[str], list] = {}
+        for mark in marks:
+            by_ground.setdefault(self._ground_under(mark, grounded), []).append(mark)
+
+        for ground, group in by_ground.items():
+            style = self._style_on_ground(plan, ground)
+            with self._styled(style):
+                if style is plan.style:
+                    prim.paint_all(slide, group, self._paint_context())
+                    continue
+                prim.paint_all(slide, [
+                    replace(mark, color=(style.footer_color if mark.kind == "text"
+                                         else style.accent_color))
+                    if mark.color else mark
+                    for mark in group
+                ], self._paint_context())
+
+    @staticmethod
+    def _ground_under(mark, grounded: list) -> Optional[str]:
+        """The innermost region ground beneath a mark's centre, if any."""
+        box = mark.box
+        if box is None:
+            return None
+        x = box.left + box.width / 2.0
+        y = box.top + box.height / 2.0
+        found = None
+        for region in grounded:
+            rect = region.rect
+            if (rect.left <= x <= rect.left + rect.width
+                    and rect.top <= y <= rect.top + rect.height):
+                found = region.ground
+        return found
 
     @staticmethod
     def _add_accent_rule(slide, region: PositionConfig, color_hex: str) -> None:
@@ -1459,7 +1521,13 @@ class PPTXRenderer:
         # baseline and the motif never floats away from the text. Stock Office
         # layouts centre their titles vertically, which made the gap between
         # title and rule depend on how long the title happened to be.
-        tf.vertical_anchor = MSO_ANCHOR.BOTTOM if is_title else MSO_ANCHOR.TOP
+        #
+        # That reasoning is about a *band*. A title bound to a full-height
+        # region - the rail on reference page 3 - has no rule under it to hang
+        # from, and bottom-anchoring one drops it past the foot of the page
+        # and into the footer.
+        title_in_a_band = is_title and box_height_in <= TITLE_BAND_MAX_IN
+        tf.vertical_anchor = MSO_ANCHOR.BOTTOM if title_in_a_band else MSO_ANCHOR.TOP
 
         styles = [self._style_for_run(run_data, is_title) for run_data in runs]
         # A citation marker is a second, hyperlinked run on the same paragraph
