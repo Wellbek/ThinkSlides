@@ -181,6 +181,9 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     from app.agent.tools.finalize_and_render_pptx import FinalizeAndRenderPptxTool
     from app.agent.tools.validate_rendered_output import ValidateRenderedOutputTool
     from app.agent.tools.ask_user_question import AskUserQuestionTool
+    from app.agent.tools.propose_design_directions import (
+        ProposeDesignDirectionsTool,
+    )
 
     AnalyzeDocumentTool.register(registry)
     ExtractKeyDataTool.register(registry)
@@ -205,3 +208,4 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     FinalizeAndRenderPptxTool.register(registry)
     ValidateRenderedOutputTool.register(registry)
     AskUserQuestionTool.register(registry)
+    ProposeDesignDirectionsTool.register(registry)
