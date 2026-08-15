@@ -2165,6 +2165,7 @@ class AgentLoop:
                     # never measured", and the budget holds such a slide to
                     # nothing rather than to a number it invented.
                     "density": bundle.density,
+                    "pageSurvey": bundle.page_survey,
                 }
 
         return context

@@ -104,6 +104,10 @@ class PageStructure:
     columns: int
     band_rows: int
     excluded: tuple[str, ...] = ()
+    # Charts and figures found on the page. Counted here because the caller
+    # would otherwise re-run the exhibit finder to learn it, and this already
+    # had to find them to keep their labels from being counted as blocks.
+    exhibits: int = 0
 
 
 def count_blocks(page) -> PageStructure:
@@ -127,7 +131,8 @@ def count_blocks(page) -> PageStructure:
     lines = [line for line in _body_lines(page, content)
              if not any(_intersects(line.box, e.bbox, pad, pad) for e in exhibits)]
     if not lines and not exhibits:
-        return PageStructure(block_count=0, rows=0, columns=0, band_rows=0)
+        return PageStructure(block_count=0, rows=0, columns=0, band_rows=0,
+                             exhibits=0)
 
     excluded: list[str] = []
     lines, largest = _drop_title(lines, excluded)
@@ -318,7 +323,7 @@ def _count(rows: list[list[Cell]], content, excluded: list[str],
             blocks += len(row)
     return PageStructure(
         block_count=blocks, rows=len(rows), columns=widest,
-        band_rows=band_rows, excluded=tuple(excluded),
+        band_rows=band_rows, excluded=tuple(excluded), exhibits=exhibits,
     )
 
 

@@ -209,6 +209,34 @@ export interface ApparatusTokens {
   color?: string;
 }
 
+/** One group of a template's pages that share a layout. */
+export interface PageCluster {
+  id: number;
+  /** A provisional name for the kind of page - "split canvas", "row bands". */
+  label: string;
+  pages: number[];
+  /** The page of the group that looks most like the group. */
+  representative: number;
+  size: number;
+}
+
+/**
+ * Which of a template's pages look alike, and which were actually looked at.
+ *
+ * Sampling a long template evenly is representative of position in the
+ * document, not of layout: an archetype appearing a handful of times is
+ * missed entirely. Pages are grouped first, then the budget is spent one page
+ * per group before a second from any.
+ */
+export interface PageSurvey {
+  pageCount: number;
+  /** The pages in scope - the whole document, or the range the user named. */
+  pagesConsidered: number[];
+  /** The pages shown to the vision model. */
+  sampledPages: number[];
+  clusters: PageCluster[];
+}
+
 export interface DesignSystemBundle {
   palette: Palette;
   typography: Typography;
@@ -216,6 +244,7 @@ export interface DesignSystemBundle {
   chrome?: ChromeTokens;
   apparatus?: ApparatusTokens;
   density?: DensityTokens;
+  pageSurvey?: PageSurvey;
   dataViz?: DataVizTokens;
   layouts: LayoutDef[];
   slideDimensions: SlideDimensions;
