@@ -3,13 +3,14 @@ Previewing a design system that has no deck behind it.
 
 Preview PNGs exist as a by-product of a finished deck. To show a user three
 candidate design systems *before* anything is generated, there has to be a way
-to render a design system on its own - so: three fixed lorem-ipsum slides,
-through the real renderer, one LibreOffice conversion per direction.
+to render a design system on its own - so: three specimen slides, through the
+real renderer, one LibreOffice conversion per direction.
 
-The copy is identical in every direction on purpose. Holding it constant is
-what makes three previews a comparison of design rather than a comparison of
-writing, and the tests below check that property directly rather than trusting
-it.
+The copy is identical in every direction and the *shape* is not. Holding the
+words constant is what makes three previews a comparison of design rather than
+of writing; holding the shape constant too is what made it a comparison of
+colour, which is the defect #151 opened on. Both halves of that are tested
+below rather than trusted.
 """
 
 import asyncio
@@ -19,6 +20,7 @@ import tempfile
 
 import pytest
 
+from app import directions
 from app.design_system import get_default_design_system
 from app.renderer import specimen
 from app.renderer.preview_generator import PreviewGenerator
@@ -56,37 +58,179 @@ def _missing_typeface() -> dict:
     return design_system
 
 
+def _kinds(slide: dict) -> set[str]:
+    return {content["type"] for content in slide["contents"]}
+
+
+def _words(slides: list[dict]) -> str:
+    """Every string the specimen deck puts on a page, whatever shape it took."""
+    found: list[str] = []
+
+    def walk(value):
+        if isinstance(value, str):
+            found.append(value.lower())
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+
+    walk(slides)
+    return " | ".join(found)
+
+
 class TestTheSpecimenDeck:
     def test_it_is_three_slides(self):
         """Decided at plan review: three specimens per direction."""
         assert len(specimen.specimen_slides()) == 3
 
-    def test_they_are_a_cover_a_dense_page_and_a_chart(self):
+    def test_they_are_a_cover_an_argument_and_the_evidence(self):
         slides = specimen.specimen_slides()
-        kinds = [
-            {content["type"] for content in slide["contents"]}
-            for slide in slides
-        ]
 
         assert slides[0]["layoutId"] == "title"
-        assert len(slides[1]["contents"][1]["runs"]) >= 5
-        assert "chart" in kinds[2]
+        assert len(slides[1]["contents"][1]["runs"]) == 3
+        assert "chart" in _kinds(slides[2])
 
-    def test_the_copy_is_fixed_so_the_comparison_is_of_design(self):
+    def test_every_content_slide_is_sectioned_as_a_sample(self):
+        """The copy is about the user's real topic and the figures in it were
+        invented to fill a layout, so it says so wherever the direction's own
+        chrome shows a section."""
+        for slide in specimen.specimen_slides()[1:]:
+            assert slide["section"] == specimen.SECTION_LABEL
+
+    def test_the_copy_is_fixed_for_one_content_set(self):
         assert specimen.specimen_slides() == specimen.specimen_slides()
 
-    def test_the_copy_is_filler_and_the_deck_checks_would_say_so(self):
-        """
-        Deliberate, and worth stating: ``output_qa`` rejects leftover lorem
-        ipsum, because in a generated deck it is a defect. A specimen is not a
-        deck - it never goes through that check - and holding the copy
-        constant is the whole point of it.
-        """
-        from app.agent.tools import output_qa
+    def test_it_never_declares_regions(self):
+        """A specimen has to render under any design system, including one
+        whose grammar declares none."""
+        for slide in specimen.specimen_slides("bands"):
+            assert "regions" not in slide
 
-        issues = output_qa.check_content(specimen.specimen_slides())
 
-        assert any("Lorem ipsum" in issue["detail"] for issue in issues)
+class TestTheSameContentInDifferentShapes:
+    """The point of #151: what three previews compare is what each direction
+    *does* with the same material."""
+
+    @pytest.mark.parametrize("structure", sorted(specimen.ARGUMENT_BUILDERS))
+    def test_every_structure_the_directions_offer_can_be_built(self, structure):
+        slides = specimen.specimen_slides(structure)
+
+        assert len(slides) == 3
+        assert slides[1]["contents"][1:]
+
+    def test_the_vocabulary_matches_the_axis_the_model_authors_on(self):
+        """A direction naming a shape nothing here builds would silently
+        preview as a bulleted list."""
+        assert set(directions.STRUCTURES) == set(specimen.ARGUMENT_BUILDERS)
+        assert set(directions.STRUCTURES) == set(specimen.EVIDENCE_BUILDERS)
+
+    def test_no_two_structures_shape_the_argument_the_same_way(self):
+        shapes = {
+            structure: sorted(_kinds(specimen.specimen_slides(structure)[1]))
+            for structure in specimen.ARGUMENT_BUILDERS
+        }
+
+        assert len({tuple(v) for v in shapes.values()}) == len(shapes)
+
+    def test_no_two_structures_shape_the_evidence_the_same_way(self):
+        shapes = {
+            structure: sorted(_kinds(specimen.specimen_slides(structure)[2]))
+            for structure in specimen.EVIDENCE_BUILDERS
+        }
+
+        assert len({tuple(v) for v in shapes.values()}) == len(shapes)
+
+    def test_the_words_and_the_figures_are_the_same_in_every_shape(self):
+        """Same content, different design - not a different specimen deck per
+        direction, which would be a comparison of writing."""
+        content = specimen.default_content()
+        for point in content.points:
+            for structure in specimen.ARGUMENT_BUILDERS:
+                words = _words(specimen.specimen_slides(structure))
+                assert point.figure.lower() in words, structure
+                assert point.label.lower() in words, structure
+
+    def test_every_structure_still_shows_the_data_viz_tokens(self):
+        """The chart is what a preview says about series colours and axes, so
+        no structure drops it."""
+        for structure in specimen.ARGUMENT_BUILDERS:
+            assert "chart" in _kinds(specimen.specimen_slides(structure)[2])
+
+    def test_a_shape_nobody_implements_previews_as_a_list(self):
+        assert specimen.specimen_slides("swirls") == specimen.specimen_slides("list")
+
+
+class TestTheCopyIsWrittenForTheBrief:
+    def test_the_model_can_author_it(self):
+        content = specimen.SpecimenContent.from_dict({
+            "title": "Cold chain in 2026",
+            "subtitle": "Where the margin comes from",
+            "headline": "Three shifts decide the year",
+            "points": [
+                {"label": "Adoption", "figure": "24%", "prose": "of depots"},
+                {"label": "Cost", "figure": "$1.8m", "prose": "released"},
+                {"label": "Speed", "figure": "6 weeks", "prose": "to live"},
+            ],
+            "evidenceHeadline": "Growth held",
+            "takeaway": "Both lines compounded",
+            "chart": {"title": "Depots live", "categories": ["2023", "2024"],
+                      "series": [{"name": "Core", "values": [18, 36]}]},
+        })
+
+        assert content.title == "Cold chain in 2026"
+        assert content.points[1].figure == "$1.8m"
+        assert content.series == (("Core", (18.0, 36.0)),)
+
+    def test_it_reaches_the_slides(self):
+        content = specimen.SpecimenContent.from_dict(
+            {"title": "Cold chain in 2026"}
+        )
+
+        slides = specimen.specimen_slides("list", content)
+
+        assert slides[0]["contents"][0]["runs"][0]["text"] == "Cold chain in 2026"
+
+    def test_a_field_the_model_left_out_falls_back_rather_than_failing(self):
+        content = specimen.SpecimenContent.from_dict({"title": "Only a title"})
+
+        assert content.title == "Only a title"
+        assert content.subtitle == specimen.default_content().subtitle
+        assert len(content.points) == 3
+
+    def test_nothing_authored_at_all_is_the_default_set(self):
+        assert specimen.SpecimenContent.from_dict(None) == specimen.default_content()
+        assert specimen.SpecimenContent.from_dict("nonsense") == \
+            specimen.default_content()
+
+    def test_two_points_instead_of_three_falls_back_to_three(self):
+        """Every shape is built for three; two would leave a card row with a
+        hole in it."""
+        content = specimen.SpecimenContent.from_dict({"points": [
+            {"label": "One", "figure": "1", "prose": "a"},
+            {"label": "Two", "figure": "2", "prose": "b"},
+        ]})
+
+        assert len(content.points) == 3
+
+    def test_a_series_that_does_not_line_up_with_its_categories_is_dropped(self):
+        """A chart with holes in it says the design system is broken rather
+        than that the model miscounted."""
+        content = specimen.SpecimenContent.from_dict({"chart": {
+            "categories": ["2023", "2024", "2025"],
+            "series": [{"name": "Short", "values": [1, 2]}],
+        }})
+
+        assert content.series == specimen.default_content().series
+
+    def test_values_that_are_not_numbers_are_dropped(self):
+        content = specimen.SpecimenContent.from_dict({"chart": {
+            "categories": ["2023", "2024"],
+            "series": [{"name": "Bad", "values": ["up", "down"]}],
+        }})
+
+        assert content.series == specimen.default_content().series
 
 
 class TestRenderingOneDirection:
@@ -118,9 +262,23 @@ class TestRenderingOneDirection:
 
         assert len(urls) == 3
 
-    def test_it_goes_through_the_real_renderer(self, previews):
+    @pytest.mark.parametrize("structure", sorted(specimen.ARGUMENT_BUILDERS))
+    def test_every_structure_renders_through_the_real_renderer(
+            self, previews, structure):
         """A preview that flatters a direction the deck will not honour is
-        worse than no preview."""
+        worse than no preview - and a structure that will not render is the
+        loudest version of that."""
+        system = directions.compile_direction(directions.DirectionSpec(
+            id=structure, name=structure, rationale="", structure=structure,
+        ))
+
+        urls = specimen.render_specimens(
+            system, "sess-shapes", structure, previews
+        )
+
+        assert len(urls) == 3
+
+    def test_it_goes_through_the_real_renderer(self, previews):
         from pptx import Presentation
 
         from app.renderer.pptx_renderer import PPTXRenderer
@@ -151,6 +309,23 @@ class TestRenderingOneDirection:
 
         assert read("light") != read("dark")
 
+    def test_two_structures_on_one_palette_still_differ(self, previews):
+        """The failure #151 reported: same palette, same everything, so the
+        only difference a user could see was the colour."""
+        for structure in ("list", "bands"):
+            system = get_default_design_system()
+            system["structure"] = structure
+            specimen.render_specimens(system, "sess-shape-cmp", structure,
+                                      previews)
+
+        def read(direction):
+            path = os.path.join(previews, "sess-shape-cmp", "direction",
+                                direction, "2.png")
+            with open(path, "rb") as handle:
+                return handle.read()
+
+        assert read("list") != read("bands")
+
     def test_a_broken_design_system_returns_nothing_rather_than_raising(
             self, previews):
         urls = specimen.render_specimens(
@@ -175,13 +350,13 @@ class TestRenderingThreeDirectionsAtOnce:
     @pytest.fixture(scope="class")
     @staticmethod
     def rendered(previews):
-        directions = [
+        directions_ = [
             {"id": "clean-minimal", "designSystem": get_default_design_system()},
             {"id": "dark-analyst", "designSystem": _dark_ground()},
             {"id": "editorial-serif", "designSystem": _missing_typeface()},
         ]
         return asyncio.run(
-            specimen.render_directions(directions, "sess-three", previews)
+            specimen.render_directions(directions_, "sess-three", previews)
         )
 
     def test_every_direction_gets_its_specimens(self, rendered):
@@ -198,14 +373,37 @@ class TestRenderingThreeDirectionsAtOnce:
             assert sorted(os.listdir(os.path.join(root, direction))) == \
                 ["1.png", "2.png", "3.png"]
 
+    def test_one_content_set_is_used_for_all_of_them(self, previews):
+        """What the user compares is the design, so the words cannot change
+        between one preview and the next."""
+        seen = []
+        original = specimen.specimen_slides
+
+        def spy(structure="list", content=None):
+            seen.append(content)
+            return original(structure, content)
+
+        content = specimen.SpecimenContent.from_dict({"title": "One brief"})
+        try:
+            specimen.specimen_slides = spy
+            asyncio.run(specimen.render_directions(
+                [{"id": f"d{n}", "designSystem": get_default_design_system()}
+                 for n in range(3)],
+                "sess-one-content", previews, content=content,
+            ))
+        finally:
+            specimen.specimen_slides = original
+
+        assert seen == [content] * 3
+
     def test_one_direction_failing_does_not_take_the_others(self, previews):
-        directions = [
+        directions_ = [
             {"id": "good", "designSystem": get_default_design_system()},
             {"id": "bad", "designSystem": {"palette": "not a palette"}},
         ]
 
         rendered = asyncio.run(
-            specimen.render_directions(directions, "sess-partial", previews)
+            specimen.render_directions(directions_, "sess-partial", previews)
         )
 
         assert len(rendered["good"]) == 3
@@ -221,11 +419,11 @@ class TestRenderingThreeDirectionsAtOnce:
 
 class TestDirectionPreviewsAreThrowaway:
     def test_choosing_one_removes_the_rest(self, previews):
-        directions = [
+        directions_ = [
             {"id": f"d{n}", "designSystem": get_default_design_system()}
             for n in range(3)
         ]
-        asyncio.run(specimen.render_directions(directions, "sess-clean", previews))
+        asyncio.run(specimen.render_directions(directions_, "sess-clean", previews))
 
         specimen.cleanup_directions("sess-clean", previews, keep="d1")
 
@@ -261,6 +459,15 @@ class TestDescribingADirection:
         assert described["displayFace"] == "Arial"
         assert described["displayIsSerif"] is False
         assert described["blocksMedian"]
+
+    def test_it_reports_the_shape_the_direction_leads_with(self):
+        described = specimen.describe(
+            directions.compile_direction(directions.DirectionSpec(
+                id="d", name="D", rationale="", structure="bands"
+            ))
+        )
+
+        assert described["structure"] == "bands"
 
     def test_an_empty_system_describes_as_empty_rather_than_raising(self):
         assert specimen.describe({})["displayFace"] is None

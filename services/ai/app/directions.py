@@ -18,11 +18,16 @@ things a reader would notice:
 * **the structural motif** - where the title sits and what sits under it.
 * **the density posture** - dense analyst against airy executive, which sets
   the planner's word and block targets as well as the look.
+* **the structure it leads with** - whether a set of parallel points comes out
+  as bullets, as a row of figures, as accent cards or as ruled bands. Colour
+  and type are what a thumbnail shows first; *shape* is what the reader
+  actually navigates by, and three directions that shape the same content
+  identically are three colourways.
 
-The model authors a **spec** on those four axes, and this module compiles it
+The model authors a **spec** on those five axes, and this module compiles it
 into a full bundle. That split is deliberate: a model asked to emit a whole
 DesignSystemBundle has to invent layout catalogues in EMU, and it will, badly.
-Asked for four decisions and a palette seed it can actually make them, and
+Asked for five decisions and a palette seed it can actually make them, and
 what comes back is guaranteed to render because the code built it.
 
 Two checks then run before a user is shown anything, because nothing else
@@ -52,6 +57,11 @@ GROUNDS = ("light", "dark", "rail", "split")
 DENSITIES = {"airy": 0.6, "balanced": 1.0, "dense": 1.7}
 # What sits under the title.
 MOTIFS = ("rule", "band", "none")
+# How a set of parallel points is shaped. The names are the renderer's own
+# block vocabulary, so a direction that previews row bands is a direction the
+# deck can actually build in - see ``specimen.ARGUMENT_BUILDERS``, which the
+# test suite holds to this same tuple.
+STRUCTURES = ("list", "stats", "cards", "bands")
 
 # WCAG AA for normal text. Enforced before a direction is rendered, not after
 # a user has chosen it.
@@ -67,7 +77,7 @@ _ID_RE = re.compile(r"[^a-z0-9]+")
 
 @dataclass(frozen=True)
 class DirectionSpec:
-    """The four decisions that make one direction, plus what to call it."""
+    """The five decisions that make one direction, plus what to call it."""
     id: str
     name: str
     rationale: str
@@ -78,6 +88,11 @@ class DirectionSpec:
     body_pt: float = 20.0
     density: str = "balanced"
     motif: str = "rule"
+    structure: str = "list"
+    # The hue this direction proposes for itself, when the run has not settled
+    # one. Before it existed every direction resolved to the house navy, so a
+    # deck about anything at all was previewed in the same blue three times.
+    palette_hex: str = ""
 
     @property
     def display_is_serif(self) -> bool:
@@ -93,8 +108,9 @@ class DirectionSpec:
         return f"{'serif' if _is_serif(self.display_face) else 'sans'}-over-" \
                f"{'serif' if _is_serif(self.body_face) else 'sans'}"
 
-    def axes(self) -> tuple[str, str, str, str]:
-        return (self.ground, self.pairing, self.motif, self.density)
+    def axes(self) -> tuple[str, str, str, str, str]:
+        return (self.ground, self.pairing, self.motif, self.density,
+                self.structure)
 
     @classmethod
     def from_dict(cls, data: dict, index: int = 0) -> "DirectionSpec":
@@ -111,7 +127,27 @@ class DirectionSpec:
             body_pt=_number(data.get("bodySizePt"), 20.0),
             density=_one_of(data.get("density"), tuple(DENSITIES), "balanced"),
             motif=_one_of(data.get("motif"), MOTIFS, "rule"),
+            structure=_one_of(data.get("structure"), STRUCTURES, "list"),
+            palette_hex=_hex_or_blank(data.get("paletteHex")),
         )
+
+    def to_dict(self) -> dict:
+        """
+        The spec as the model wrote it, so it can be recompiled later.
+
+        A direction carries this with it because the colour is answered in the
+        same pause the direction is chosen in: the answer lands after the
+        specimens were drawn, and recolouring the chosen direction means
+        compiling its axes again against a different seed.
+        """
+        return {
+            "id": self.id, "name": self.name, "rationale": self.rationale,
+            "ground": self.ground, "displayFace": self.display_face,
+            "bodyFace": self.body_face, "displaySizePt": self.display_pt,
+            "bodySizePt": self.body_pt, "density": self.density,
+            "motif": self.motif, "structure": self.structure,
+            "paletteHex": self.palette_hex,
+        }
 
 
 def compile_direction(spec: DirectionSpec, brand_hex: Optional[str] = None,
@@ -141,6 +177,11 @@ def compile_direction(spec: DirectionSpec, brand_hex: Optional[str] = None,
     system["colorTheme"] = spec.id
     system["name"] = spec.name
     system["ground"] = spec.ground
+    # Read by the specimen deck, which shapes the preview's points with it,
+    # and by the drafting phase, which tells the model which block this deck
+    # leads with. A preview showing ruled bands over a deck that then writes
+    # bullets is a preview that flattered a direction the deck did not honour.
+    system["structure"] = spec.structure
     return system
 
 
@@ -149,13 +190,16 @@ def _palette_for(spec: DirectionSpec, brand_hex: Optional[str],
     """
     The palette, with the direction's ground deployed into it.
 
-    The *hue* is settled before this tool runs - a user who answered "green"
-    gets three green directions, and a coral one here would be the tool
-    ignoring an answer it already has. What varies is which slot the renderer
-    ends up putting behind a content slide.
+    A hue the user has already settled wins outright: a run that answered
+    "green" gets three green directions, and a coral one here would be the
+    tool ignoring an answer it already has. Where nothing is settled the
+    direction's own proposed hue is used, because the alternative - which is
+    what this did - resolves every direction of every deck to the same house
+    navy.
     """
-    if brand_hex and colors.parse_hex(brand_hex):
-        palette = [dict(entry) for entry in derive_brand_palette(brand_hex)]
+    seed = brand_hex or spec.palette_hex
+    if seed and colors.parse_hex(seed):
+        palette = [dict(entry) for entry in derive_brand_palette(seed)]
     else:
         base_colors = (base.get("palette") or {}).get("colors")
         palette = [dict(entry) for entry in
@@ -290,25 +334,37 @@ def _spacing_for(spec: DirectionSpec, base: dict) -> dict:
         return spacing
     if spec.motif == "band":
         # A band rather than a rule: the full title measure, thick enough to
-        # read as a filled shape instead of a line.
+        # read as a filled shape instead of a line. Measured off the canvas
+        # and the rule's own left inset rather than guessed at as a multiple
+        # of the rule - four times a short rule lands at 45% of the page,
+        # which reads as an empty highlight box, not as a band.
+        canvas_emu = int((base.get("slideDimensions") or {}).get("widthEmu") or 0)
         for key, width_key in (("accentRule", "titleWidthEmu"),
                                ("heroAccentRule", "heroWidthEmu")):
             rule = dict(spacing.get(key) or {})
             if not rule:
                 continue
-            rule["cxEmu"] = int(spacing.get(width_key) or rule.get("cxEmu", 0) * 4)
+            measure = canvas_emu - 2 * int(rule.get("xEmu") or 0)
+            rule["cxEmu"] = int(spacing.get(width_key) or max(measure, 0)
+                                or rule.get("cxEmu", 0) * 4)
             rule["cyEmu"] = int(rule.get("cyEmu", 0) * 3) or rule.get("cyEmu", 0)
             spacing[key] = rule
     return spacing
 
 
 def _chrome_for(spec: DirectionSpec, base: dict) -> dict:
-    """Where the title sits and what sits under it."""
+    """Where the title sits and what sits under it.
+
+    ``enabled`` is the key ``ChromeSpec`` actually reads. This used to declare
+    ``{"show": "never"}``, which reads as an element declared with no opinion -
+    so it defaulted to *on*, and the one direction that asked for no rule was
+    the only one that drew one.
+    """
     chrome = dict(base.get("chrome") or {})
     if spec.motif == "none":
-        chrome["footerRule"] = {"show": "never"}
+        chrome["footerRule"] = {"enabled": False}
     elif spec.motif == "band":
-        chrome["footerRule"] = {"show": "always"}
+        chrome["footerRule"] = {"enabled": True}
     return chrome
 
 
@@ -351,7 +407,7 @@ def distinctness_problems(specs: Sequence[DirectionSpec]) -> list[str]:
 
     Three directions differing only in hue are a failed set - which is exactly
     what the five colour themes this replaces were. Two directions have to
-    differ on at least two of the four axes to be two directions.
+    differ on at least two of the five axes to be two directions.
     """
     problems: list[str] = []
     if len(specs) < 2:
@@ -374,11 +430,23 @@ def distinctness_problems(specs: Sequence[DirectionSpec]) -> list[str]:
             "direction a different one"
         )
 
+    # Ground, type and colour are what a thumbnail shows; structure is what
+    # the reader navigates by. A set that shapes its points identically
+    # everywhere is a set of colourways however different the covers look,
+    # which is the whole complaint in #151.
+    structures = {spec.structure for spec in specs}
+    if len(specs) >= DIRECTION_COUNT and len(structures) < 2:
+        problems.append(
+            f"all {len(specs)} directions shape their points as "
+            f"{next(iter(structures))!r}, so every preview shows the same "
+            "slide - give them different structures"
+        )
+
     for index, first in enumerate(specs):
         for second in specs[index + 1:]:
             differing = [
                 axis for axis, (a, b) in zip(
-                    ("ground", "type pairing", "motif", "density"),
+                    ("ground", "type pairing", "motif", "density", "structure"),
                     zip(first.axes(), second.axes()),
                 ) if a != b
             ]
@@ -413,6 +481,9 @@ def validate(specs: Sequence[DirectionSpec], brand_hex: Optional[str] = None,
             "name": spec.name,
             "rationale": spec.rationale,
             "designSystem": system,
+            # Carried so the direction can be compiled again against another
+            # hue when the colour answer arrives - see ``recolour``.
+            "spec": spec.to_dict(),
             "previewUrls": [],
         })
     if len(compiled) < DIRECTION_COUNT:
@@ -436,23 +507,26 @@ def default_specs() -> list[DirectionSpec]:
         DirectionSpec(
             id="clean-minimal", name="Clean minimal",
             rationale="White throughout, sans over sans, a rule under the "
-                      "title. Airy and executive.",
+                      "title. Points come out as big figures.",
             ground="light", display_face="Arial", body_face="Arial",
             display_pt=36.0, body_pt=20.0, density="airy", motif="rule",
+            structure="stats",
         ),
         DirectionSpec(
             id="dark-analyst", name="Dark analyst",
-            rationale="Dark ground with banded rows, sans over sans, no rule. "
-                      "Dense and data-forward.",
+            rationale="Dark ground, sans over sans, a filled band under the "
+                      "title. Points come out as ruled rows beside a table.",
             ground="dark", display_face="Arial", body_face="Arial",
             display_pt=30.0, body_pt=15.0, density="dense", motif="band",
+            structure="bands",
         ),
         DirectionSpec(
             id="editorial-serif", name="Editorial serif",
             rationale="A serif display over a sans body on a split canvas. "
-                      "Reads like a written report.",
+                      "Points come out as written prose.",
             ground="split", display_face="Georgia", body_face="Arial",
             display_pt=30.0, body_pt=15.0, density="balanced", motif="none",
+            structure="list",
         ),
     ]
 
@@ -462,6 +536,32 @@ def default_directions(brand_hex: Optional[str] = None,
     """The fallback set, compiled."""
     compiled, _ = validate(default_specs(), brand_hex, base)
     return compiled
+
+
+def recolour(direction: dict, brand_hex: str,
+             base: Optional[dict] = None) -> dict:
+    """
+    The same direction, compiled again in another hue.
+
+    The colour is answered in the same pause the direction is chosen in -
+    one card, two questions - so the answer necessarily lands after the
+    specimens were drawn. What the previews are honest about is ground, type,
+    motif and structure; the hue is applied here, afterwards, to the one
+    direction that was actually picked.
+
+    A recolour that cannot be read is not applied. A user who asked for a
+    yellow deck and got unreadable body copy has been given a worse deck than
+    the one they were looking at, and silently is the worst way to do it.
+    """
+    spec_data = (direction or {}).get("spec")
+    if not isinstance(spec_data, dict) or not colors.parse_hex(brand_hex):
+        # No spec means an uploaded template, whose palette is the user's own
+        # and is not ours to overwrite.
+        return direction
+    system = compile_direction(DirectionSpec.from_dict(spec_data), brand_hex, base)
+    if contrast_problems(system):
+        return direction
+    return {**direction, "designSystem": system}
 
 
 def template_direction(design_system: dict, name: str = "Your template") -> dict:
@@ -498,6 +598,13 @@ def _slug(value: Any) -> str:
 def _one_of(value: Any, allowed: Sequence[str], default: str) -> str:
     text = str(value or "").strip().lower()
     return text if text in allowed else default
+
+
+def _hex_or_blank(value: Any) -> str:
+    text = str(value or "").strip()
+    if text and not text.startswith("#"):
+        text = f"#{text}"
+    return text.upper() if colors.parse_hex(text) else ""
 
 
 def _number(value: Any, default: float) -> float:

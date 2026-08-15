@@ -177,15 +177,44 @@ change the deck: the angle when the topic has several, the audience when the \
 register depends on it, which parts of a broad subject to cover, how deep to \
 go. Even a well-specified request usually leaves one of those open; find the \
 one whose answer would change most. Never ask about visual style or colour - \
-the user is shown three rendered designs to choose from later - and never ask \
-something the request already answers. Each entry needs real options a user \
-could tap, drawn from this request and what you have read.
+the user is shown three rendered designs to choose from later, and the colour \
+is asked beside them - and never ask something the request already answers. \
+Each entry needs real options a user could tap, drawn from this request and \
+what you have read.
 """
 
 
 # Tools whose whole purpose is to stop and ask. A successful call ends the run
 # until the user answers, wherever it was made from.
 PAUSING_TOOLS = frozenset({"ask_user_question", "propose_design_directions"})
+
+# What the direction the user chose asks of every slide, keyed by its
+# structure axis (see app/directions.py). The user picked by looking at the
+# shape its points took, so the deck has to keep taking that shape - a
+# preview the deck does not honour is worse than no preview.
+_STRUCTURE_DIRECTIVE = {
+    "list": (
+        " This deck's direction sets its points as written prose, so reach for "
+        "a block only where the content genuinely has a shape a paragraph "
+        "cannot hold."
+    ),
+    "stats": (
+        " This deck's direction leads with oversized figures: where a slide's "
+        "points carry numbers, call build_stat_callouts rather than writing "
+        "them into bullets."
+    ),
+    "cards": (
+        " This deck's direction leads with accent-barred cards: where a slide "
+        "has a set of parallel points, call build_accent_cards rather than "
+        "writing them as a bulleted list."
+    ),
+    "bands": (
+        " This deck's direction leads with ruled row bands: where a slide has "
+        "a set of parallel points, call build_row_bands rather than writing "
+        "them as a bulleted list."
+    ),
+}
+
 
 def normalize_mode(mode: str | None) -> str:
     """Map any caller-supplied value onto a known mode, defaulting to simple."""
@@ -1264,6 +1293,11 @@ class AgentLoop:
         # any later would arrive after the decisions it was meant to make.
         chosen = self._resolve_direction_choice(chat_messages)
         if chosen is not None:
+            # The colour was the second question on the same card, so its
+            # answer arrives with the direction's. Applied here, to the one
+            # direction that was actually picked - the specimens were drawn
+            # before it existed.
+            chosen, recoloured = self._apply_colour_choice(chosen, chat_messages)
             self.working_state.chosen_direction = chosen
             context["design_system"] = chosen.get("designSystem") or {}
             run_context.set_design_system(context["design_system"])
@@ -1272,6 +1306,8 @@ class AgentLoop:
                 "content": (
                     f"Building in the {chosen.get('name') or 'chosen'} direction: "
                     f"{chosen.get('rationale') or ''}".strip()
+                    + (f" Recoloured to {recoloured}, as you asked."
+                       if recoloured else "")
                 ),
                 "timestamp": _iso_now(),
             })
@@ -2116,7 +2152,22 @@ class AgentLoop:
             + f"{index}, then any build_* tool its point needs (a chart, table or metric "
             "row for figures; a block for content with a shape), then "
             f"design_slide_content for slide_index={index}. This slide only."
+            + self._structure_directive()
         )
+
+    def _structure_directive(self) -> str:
+        """The block the chosen direction leads with, as an instruction.
+
+        The user picked a direction by looking at what its points *looked
+        like* - bullets, a row of figures, ruled bands. A deck that then
+        writes bullets whatever they chose makes the preview a lie, so the
+        shape they saw is named here, where the slide is actually built.
+        """
+        structure = str(
+            ((self.working_state.chosen_direction or {}).get("designSystem") or {})
+            .get("structure") or ""
+        )
+        return _STRUCTURE_DIRECTIVE.get(structure, "")
 
     def _research_budget(self) -> tuple[int, int]:
         """(floor, cap) on this run's number of web searches."""
@@ -3053,6 +3104,47 @@ class AgentLoop:
                 return direction
         return None
 
+    def _apply_colour_choice(
+        self, chosen: dict, chat_messages: list[dict]
+    ) -> tuple[dict, str | None]:
+        """
+        The colour the user picked, applied to the direction they picked.
+
+        Both answers come off one card, so the colour necessarily lands after
+        the specimens were drawn - the previews are honest about ground, type,
+        motif and structure, and this is where the hue catches up. Read from
+        the newest reply only: a hex from earlier in the conversation was
+        already settled before the directions were authored, and all three
+        were built from it.
+
+        "As proposed" carries no hex, so it resolves to no change - which is
+        the same path as a reply that answered the direction and ignored the
+        colour.
+        """
+        from app import directions as direction_model
+
+        latest = next(
+            (str(m.get("content") or "") for m in reversed(chat_messages)
+             if m.get("role") == "user"),
+            "",
+        )
+        found = _HEX_IN_TEXT.search(latest)
+        if not found:
+            return chosen, None
+        wanted = found.group(0).upper()
+
+        recoloured = direction_model.recolour(chosen, wanted)
+        if recoloured is chosen or recoloured == chosen:
+            # An uploaded template, an unreadable pairing, or the colour it was
+            # already in. Saying nothing beats claiming a change that did not
+            # happen.
+            logger.info("direction_recolour_skipped",
+                        direction=chosen.get("id"), wanted=wanted)
+            return chosen, None
+        logger.info("direction_recoloured", direction=chosen.get("id"),
+                    color=wanted)
+        return recoloured, wanted
+
     def _clean_up_direction_previews(self, session_id: uuid.UUID, keep: str | None) -> None:
         """
         Drop the specimens of the directions that were not chosen.
@@ -3203,19 +3295,15 @@ class AgentLoop:
             "the concrete alternatives for THAT data ('Line chart of revenue 2011-2025', "
             "'Table of year-by-year figures', 'Keep it as bullets') rather than asking "
             "abstractly whether the user likes charts.",
-            "6. THE LOOK IS SETTLED BY propose_design_directions, NOT BY ADJECTIVES. Never ask "
-            "the user to choose between 'professional', 'warm', 'bold' or a colour in words - "
-            "they cannot see what those mean, and it spends a pause on a question the specimen "
-            "slides answer better. The one thing worth asking about colour, and only inside the "
-            "consultation call, is a brand colour the topic implies: if the deck is about a "
-            "specific company, offer THAT company's own colour as an option, named with its real "
-            "hex (the pattern is \"<Company> <colour name> (#RRGGBB)\") and derived from the "
-            "company actually being presented - never carried over from another deck or from an "
-            "example in these instructions. If you are not confident of the real hex, do not "
-            "invent one; leave the colour to the directions. Whatever colour is settled that way "
-            "is passed on to propose_design_directions, and all three directions are built from "
-            "it. When the user uploaded a template, ask nothing about colour at all: its own "
-            "palette is used as-is, and it is offered back to them as the first direction.",
+            "6. THE LOOK AND THE COLOUR ARE BOTH SETTLED BY propose_design_directions. Never ask "
+            "the user to choose between 'professional', 'warm', 'bold' in words - they cannot see "
+            "what those mean, and it spends a pause on a question the specimen slides answer "
+            "better. Do not ask about colour in the consultation either: that call carries the "
+            "colour question itself, next to the rendered directions, with options drawn from the "
+            "subject. If the user names a colour of their own accord, pass it to "
+            "propose_design_directions as brand_color and all three directions are built from it. "
+            "When the user uploaded a template, colour is not asked at all: its own palette is "
+            "used as-is, and it is offered back to them as the first direction.",
             "7. EXCEPTION: if the user has explicitly said not to ask questions (e.g. 'don't ask me "
             "anything', 'just build it', 'use your best judgment', 'no more questions'), make the most "
             "reasonable assumption yourself and proceed without asking - briefly note any significant "

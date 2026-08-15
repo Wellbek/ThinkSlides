@@ -155,6 +155,20 @@ class TestEachPieceCanBeMovedOrDropped:
         assert rule.kind == "rect"
         assert rule.box.width > CANVAS.width * 0.8
 
+    def test_it_sits_above_the_footer_band_rather_than_through_it(self):
+        """It used to land inside the footer's own line box, so every deck
+        that declared a rule struck out its own footer text."""
+        marks = _by_id(_compile({"footerRule": {"enabled": True}}))
+
+        rule = marks["chrome-footer-rule"]
+        footer = marks["chrome-footer"]
+        assert rule.box.top + rule.box.height <= footer.box.top
+
+    def test_a_footer_rule_turned_off_is_not_drawn(self):
+        assert "chrome-footer-rule" not in _by_id(
+            _compile({"footerRule": {"enabled": False}})
+        )
+
     def test_suppressed_roles_are_configurable(self):
         declaration = {"suppressedRoles": [ROLE_COVER, ROLE_CLOSING]}
 

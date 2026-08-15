@@ -56,6 +56,21 @@ function keyFor(option: QuestionOption): string {
 }
 
 /**
+ * The colour an option is offering, when it is offering one.
+ *
+ * The design pause asks two questions - which direction, and which colour -
+ * and the second arrives as text ("Forest green (#1B4332)"). Picking a colour
+ * by reading its name is the thing the rendered directions exist to replace,
+ * so the hex in the label is drawn as the colour it names.
+ */
+const HEX_IN_LABEL = /#[0-9A-Fa-f]{6}\b/;
+
+function swatchOf(option: QuestionOption): string | null {
+  if (isPreview(option)) return null;
+  return option.match(HEX_IN_LABEL)?.[0] ?? null;
+}
+
+/**
  * The agent's consultation, as a form the user answers in one go.
  *
  * A pause can carry several questions - audience, focus, length, style - so
@@ -214,6 +229,7 @@ export function QuestionCard({ questions, context, answered = false, answerText 
                   {options.map((opt, oi) => {
                     const key = keyFor(opt);
                     const text = isPreview(opt) ? opt.label : opt;
+                    const swatch = swatchOf(opt);
                     return (
                       <div
                         key={oi}
@@ -231,6 +247,13 @@ export function QuestionCard({ questions, context, answered = false, answerText 
                         <span className={`radio ${selected[i] === key ? "checked" : ""}`}>
                           {selected[i] === key && <Check size={10} />}
                         </span>
+                        {swatch && (
+                          <span
+                            className="ws-q-swatch"
+                            style={{ background: swatch }}
+                            aria-hidden
+                          />
+                        )}
                         <span className="otxt">{text}</span>
                       </div>
                     );

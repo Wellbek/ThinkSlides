@@ -453,6 +453,9 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-q-option.selected .radio { border-color: var(--ws-ai-text); }
 .ws-q-option.selected .radio::after { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: var(--ws-ai-text); }
 .ws-q-option .otxt { flex: 1; min-width: 0; }
+/* An option naming a colour shows it. Picking a colour by reading its name is
+   what the rendered directions exist to replace. */
+.ws-q-swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.18); flex-shrink: 0; }
 /* Several questions in one pause: each is its own block, separated so the
    options underneath are unambiguously attached to the question above. */
 .ws-q-block + .ws-q-block { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--ws-border); }
@@ -492,8 +495,12 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-q-dir-missing { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 11px; color: #555; }
 .ws-q-dir-name { font-size: 12.5px; font-weight: 600; color: #C9C9E8; margin-top: 7px; }
 .ws-q-dir-why { font-size: 11px; color: #6E6E9A; line-height: 1.4; margin-top: 3px; }
+/* The remaining specimens, at a size their shape is legible at. A direction
+   differs from its neighbours in what its content slides DO with the same
+   points - as a row of figures, as ruled bands, as bullets - and at 34px
+   wide all three read as the same grey rectangle. */
 .ws-q-dir-thumbs { display: flex; gap: 4px; margin-top: 7px; }
-.ws-q-dir-thumb { width: 34px; height: 20px; object-fit: cover; border-radius: 2px; border: 1px solid var(--ws-border); cursor: zoom-in; }
+.ws-q-dir-thumb { flex: 1; min-width: 0; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 2px; border: 1px solid var(--ws-border); cursor: zoom-in; }
 .ws-q-dir-thumb:hover { border-color: var(--ws-ai-text); }
 
 /* Every specimen at full size: a user choosing a design system should be able
