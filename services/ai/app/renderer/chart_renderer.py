@@ -19,6 +19,7 @@ appearing nowhere on the slide, because the unit lived in the series name.
 from __future__ import annotations
 import io
 import math
+from typing import Sequence
 
 import matplotlib
 matplotlib.use("Agg")  # headless - this service has no display server
@@ -63,16 +64,23 @@ MAX_PIE_SLICES = 7
 _FONT_FALLBACKS = ("Arial", "Helvetica", "Liberation Sans", "DejaVu Sans")
 
 
-def _resolve_font(preferred: str | None) -> str:
+def _resolve_font(preferred: str | None,
+                  fallbacks: Sequence[str] | None = None) -> str:
     """The first requested font actually installed on this host.
 
     The design system names a typeface for the deck (often Arial, which no
     Linux container has). matplotlib silently falls back with a warning per
     text object; picking a real family up front keeps the chart's type
     consistent with itself.
+
+    The chain comes from the design system where one was recorded, so a deck
+    set in a serif falls back to another serif. Walking the hardcoded sans
+    stack instead turned every serif template's charts into sans ones - a
+    substitution that is obvious on the page.
     """
     available = {f.name for f in font_manager.fontManager.ttflist}
-    for candidate in (preferred, *_FONT_FALLBACKS):
+    chain = list(fallbacks) if fallbacks else list(_FONT_FALLBACKS)
+    for candidate in (preferred, *chain):
         if candidate and candidate in available:
             return candidate
     return "DejaVu Sans"
@@ -231,7 +239,7 @@ def render_chart_to_png(
         entry["name"] = _superscript(str(entry.get("name") or ""))
 
     style = _adapt_to_ground(resolve_chart_style(design_system), ground)
-    font = _resolve_font(style.font_name)
+    font = _resolve_font(style.font_name, style.font_fallbacks)
 
     unit_suffix = str(chart_data.get("valueSuffix") or "").strip()
     if not unit_suffix and str(chart_data.get("valueFormat") or "").lower() == "percent":

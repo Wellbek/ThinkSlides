@@ -265,7 +265,7 @@ class TestThePlannerAndTheHarnessShareOneDefinition:
         assert "lying about its own evidence" in source
 
     def test_the_eval_harness_reads_the_same_rule(self):
-        from app.eval.deck_metrics import headline_register, title_states_a_claim
+        from app.measure.deck_metrics import headline_register, title_states_a_claim
 
         assert headline_register("Revenue grew 12% on price") == titles.CLAIM
         assert title_states_a_claim("Revenue grew 12% on price")
@@ -280,7 +280,7 @@ class TestThePlannerAndTheHarnessShareOneDefinition:
         """
         import inspect
 
-        from app.eval import deck_metrics
+        from app.measure import deck_metrics
 
         source = inspect.getsource(deck_metrics.title_states_a_claim)
         assert "conformance check" in source

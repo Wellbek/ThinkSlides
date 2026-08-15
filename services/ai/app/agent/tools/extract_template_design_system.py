@@ -180,6 +180,98 @@ class ExtractTemplateDesignSystemTool:
             duration_ms=duration_ms,
         )
 
+    # ── Measured tokens (density, type scale) ───────────────────────────
+
+    @classmethod
+    def _apply_measured_profile(cls, design_system: dict, template_path: str) -> None:
+        """
+        Read the template's density and type scale off its rendered pages.
+
+        No LLM is involved, and none should be: how many words a page carries
+        and what point size they are set in are counts, and a model asked to
+        estimate them from a picture will guess. This runs on both extraction
+        paths - the XML one because a theme declares typefaces but not the
+        sizes a deck actually uses, and the vision one because a model reading
+        a JPEG cannot measure anything.
+
+        Measurement is additive. A template that renders to nothing keeps
+        whatever the path already extracted.
+        """
+        from app.measure.density import profile_template
+
+        try:
+            profile = profile_template(template_path)
+        except Exception as e:  # pragma: no cover - a broken template
+            logger.warning("template_profile_failed", error=str(e))
+            return
+        if profile is None:
+            logger.info("template_profile_skipped", template_path=template_path)
+            return
+
+        density, types = profile
+        if density.pages_measured:
+            design_system["density"] = density.to_dict()
+        design_system["typography"] = cls._merge_typography(
+            design_system.get("typography") or {}, types
+        )
+        # dataViz names the face charts are drawn in, and it was derived from
+        # the pre-measurement bodyFont. Leaving it stale is how a deck ends up
+        # with a measured serif body and sans chart labels.
+        body_face = design_system["typography"]["bodyFont"].get("typeface")
+        if body_face and isinstance(design_system.get("dataViz"), dict):
+            design_system["dataViz"]["fontFamily"] = body_face
+        logger.info(
+            "template_profile_measured",
+            pages=density.pages_measured,
+            words_median=density.words_median,
+            blocks_median=density.blocks_median,
+            display_pt=types.display_pt,
+            body_pt=types.body_pt,
+            display_is_serif=types.display_is_serif,
+        )
+
+    @staticmethod
+    def _merge_typography(declared: dict, types) -> dict:
+        """
+        Measured sizes, and whichever typeface name is the more trustworthy.
+
+        A point size is never substituted at render time, so the measured ramp
+        always wins over the sizes the XML path fills in (28/14/10, which are
+        a guess) and over a vision model's estimate. A typeface *name* is
+        substituted whenever the font is missing from this container, so it is
+        resolved case by case - see ``density.resolve_face``.
+        """
+        from app.measure.density import (
+            fallback_chain, preferred_face, resolve_face,
+        )
+        from app.measure.page_metrics import _is_serif
+
+        merged = dict(types.as_typography())
+        for role, measured_pt in (("titleFont", types.display_pt),
+                                  ("bodyFont", types.body_pt),
+                                  ("captionFont", types.caption_pt)):
+            was = dict(declared.get(role) or {})
+            now = dict(merged.get(role) or {})
+            face = resolve_face(was.get("typeface"), now.get("typeface"))
+            # The chain keeps the substitute this host rendered with, so a
+            # chart rasterised here still matches the deck; the deck itself is
+            # given the family's real head, which the reader's machine has.
+            chain = fallback_chain(face)
+            if face:
+                now["typeface"] = preferred_face(face)
+            if not measured_pt and was.get("sizePt"):
+                now["sizePt"] = was["sizePt"]
+            if "bold" in was:
+                now["bold"] = was["bold"]
+            if was.get("eastAsiaTypeface"):
+                now["eastAsiaTypeface"] = was["eastAsiaTypeface"]
+            now["fallbacks"] = chain
+            merged[role] = now
+        merged["displayIsSerif"] = _is_serif(
+            str(merged["titleFont"].get("typeface") or "")
+        )
+        return merged
+
     # ── PPTX / POTX extraction (XML-based) ──────────────────────────────
 
     @classmethod
@@ -203,6 +295,7 @@ class ExtractTemplateDesignSystemTool:
             design_system["palette"]["colors"],
             body_font=design_system.get("typography", {}).get("bodyFont", {}).get("typeface", "Arial"),
         )
+        cls._apply_measured_profile(design_system, template_path)
         return design_system
 
     # ── PDF extraction (vision LLM-based) ───────────────────────────────
@@ -238,6 +331,7 @@ class ExtractTemplateDesignSystemTool:
 
         design_system = cls._parse_vision_response(response_text)
         design_system["sourceType"] = "pdf"
+        cls._apply_measured_profile(design_system, template_path)
 
         logger.info(
             "pdf_vision_analysis_completed",

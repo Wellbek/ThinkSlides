@@ -29,6 +29,14 @@ export interface FontSpec {
   bold?: boolean;
   italic?: boolean;
   color?: string;
+  eastAsiaTypeface?: string;
+  /**
+   * Faces to try when `typeface` is not installed, most-preferred first and
+   * ending in a generic family. The PPTX writes `typeface` and leaves
+   * substitution to whichever machine opens it, but anything rendered
+   * server-side (a chart, a specimen) resolves this chain instead.
+   */
+  fallbacks?: string[];
 }
 
 export interface Typography {
@@ -36,6 +44,38 @@ export interface Typography {
   bodyFont: FontSpec;
   captionFont: FontSpec;
   customFonts?: Record<string, FontSpec>;
+  /**
+   * Every size that carries copy in the template, largest first - the real
+   * ramp, of which titleFont/bodyFont/captionFont are three rungs.
+   */
+  rampPt?: number[];
+  /** Whether the display face is a serif, i.e. a serif-over-sans pairing. */
+  displayIsSerif?: boolean;
+}
+
+/** A range, as a median with its interquartile bounds. */
+export interface DensityRange {
+  median: number;
+  p25: number;
+  p75: number;
+}
+
+/**
+ * How much a template puts on a content page, measured from rendered pages.
+ *
+ * A deck's density is as much a part of how it reads as its palette. Without
+ * this, a dense analyst deck uploaded as a template contributed its colours
+ * and its fonts and none of its substance.
+ */
+export interface DensityTokens {
+  /** 0 when these are house defaults rather than measured pages. */
+  pagesMeasured: number;
+  wordsPerSlide: DensityRange;
+  blocksPerSlide: DensityRange;
+  inkCoverageMedian: number;
+  gridRowsMedian: number;
+  gridColumnsMedian: number;
+  wordsPerBlockMedian: number;
 }
 
 export interface SpacingTokens {
@@ -175,6 +215,7 @@ export interface DesignSystemBundle {
   spacing: SpacingTokens;
   chrome?: ChromeTokens;
   apparatus?: ApparatusTokens;
+  density?: DensityTokens;
   dataViz?: DataVizTokens;
   layouts: LayoutDef[];
   slideDimensions: SlideDimensions;

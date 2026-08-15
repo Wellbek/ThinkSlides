@@ -28,8 +28,8 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
 from app import colors
-from app.eval.deck_metrics import DeckProfile
-from app.eval.page_metrics import signature_distance
+from app.measure.deck_metrics import DeckProfile
+from app.measure.page_metrics import signature_distance
 
 # Metrics grouped by what they measure. The style group answers "does this
 # look like the reference"; the substance group answers "is there anything in

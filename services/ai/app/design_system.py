@@ -224,6 +224,36 @@ def _default_apparatus() -> dict:
     return apparatus.default_apparatus_tokens()
 
 
+def _default_density() -> dict:
+    """How much the built-in design system expects on a content page."""
+    from app.measure.density import default_density
+
+    return default_density()
+
+
+def _default_typography() -> dict:
+    """
+    The built-in type scale, with the stacks to try for each face.
+
+    A chain rather than a name: Arial is not installed on every machine that
+    renders one of these decks, and a face that cannot be found silently
+    becomes whatever the renderer defaults to.
+    """
+    from app.measure.density import fallback_chain
+
+    sans = fallback_chain("Arial")
+    return {
+        "titleFont": {"typeface": "Arial", "sizePt": 36, "bold": True,
+                      "fallbacks": sans},
+        "bodyFont": {"typeface": "Arial", "sizePt": 20, "bold": False,
+                     "fallbacks": sans},
+        "captionFont": {"typeface": "Arial", "sizePt": 12, "bold": False,
+                        "fallbacks": sans},
+        "rampPt": [36.0, 20.0, 17.0, 15.0, 12.0],
+        "displayIsSerif": False,
+    }
+
+
 def get_default_design_system(color_theme: str | None = None) -> dict:
     """Return the fully-parsed built-in default design system.
 
@@ -389,11 +419,7 @@ def get_default_design_system(color_theme: str | None = None) -> dict:
 
     return {
         "palette": {"colors": palette_colors, "schemeName": "thinkslides-default"},
-        "typography": {
-            "titleFont": {"typeface": "Arial", "sizePt": 36, "bold": True},
-            "bodyFont": {"typeface": "Arial", "sizePt": 20, "bold": False},
-            "captionFont": {"typeface": "Arial", "sizePt": 12, "bold": False},
-        },
+        "typography": _default_typography(),
         "slideDimensions": slide_dimensions,
         "layouts": layouts,
         "spacing": {
@@ -428,6 +454,10 @@ def get_default_design_system(color_theme: str | None = None) -> dict:
         # the footer band: a footnote resolving a marker in a chart label is
         # not the same instrument as a deck-wide reference list.
         "apparatus": _default_apparatus(),
+        # How much goes on a page. Carried as a token like any other, because
+        # a deck's density is as much a part of how it reads as its palette,
+        # and without a field for it an uploaded dense template loses it.
+        "density": _default_density(),
         "sourceType": "default",
         "colorTheme": theme_label,
         "dataViz": derive_data_viz_config(palette_colors, body_font="Arial"),
