@@ -131,6 +131,7 @@ class _Loop:
         declined=False,
         offered=False,
         documents=False,
+        consulted=False,
         verdict='{"needs_research": true, "figures": ["Starbucks FY2025 revenue"]}',
         raises=None,
         search_backend=True,
@@ -143,6 +144,10 @@ class _Loop:
         self.loop.context = {"research": [{"url": "https://x"}]} if grounded else {}
         self.loop.questions_declined = declined
         self.loop.working_state = WorkingState()
+        # "Consulted" means the whole consultation is closed - both the
+        # text questions and the design-direction pause that follows them.
+        self.loop.working_state.consulted_before_planning = consulted
+        self.loop.working_state.offered_directions = consulted
         self.loop.working_state.offered_deep_research = offered
         self.loop._session_has_documents = documents
         self.loop._settings_row = None
@@ -323,6 +328,7 @@ class TestCheckpointsWithholdToolsInsteadOfRefusingThem:
         loop.questions_declined = declined
         loop.working_state = WorkingState()
         loop.working_state.consulted_before_planning = consulted
+        loop.working_state.offered_directions = consulted
         loop.working_state.reviewed_outline_with_user = reviewed
         return loop
 
@@ -336,9 +342,18 @@ class TestCheckpointsWithholdToolsInsteadOfRefusingThem:
         assert not (PLANNING_TOOLS & withheld)
         assert DRAFTING_TOOLS <= withheld
 
-    def test_everything_opens_up_once_the_outline_is_agreed(self):
+    def test_everything_that_writes_a_deck_opens_up_once_the_outline_is_agreed(self):
         withheld = self._loop(consulted=True, reviewed=True)._tools_withheld_by_checkpoint()
-        assert withheld == set()
+
+        assert not (PLANNING_TOOLS & withheld)
+        assert not (DRAFTING_TOOLS & withheld)
+
+    def test_the_direction_pause_is_not_offered_a_second_time(self):
+        """It fires once, as the last interruption before building. Leaving
+        it on the table afterwards is inviting a third pause."""
+        withheld = self._loop(consulted=True, reviewed=True)._tools_withheld_by_checkpoint()
+
+        assert "propose_design_directions" in withheld
 
     def test_just_build_it_lifts_both_checkpoints(self):
         assert self._loop(declined=True)._tools_withheld_by_checkpoint() == set()
@@ -410,6 +425,9 @@ class _Run:
         if consulted:
             self.loop.redis_client.store[f"working_state:{self.session_id}"] = json.dumps({
                 "consulted_before_planning": True,
+                # The consultation is closed when both its phases are: the
+                # text questions and the design-direction pause after them.
+                "offered_directions": True,
                 "reviewed_outline_with_user": True,
             })
 

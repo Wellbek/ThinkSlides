@@ -1526,9 +1526,22 @@ class TestConsultationCheckpoints:
         assert error is not None
         assert "ask_user_question" in error
 
-    def test_planning_is_allowed_once_the_question_has_been_asked(self):
+    def test_the_direction_pause_follows_the_text_consultation(self):
+        """A run pauses twice: the questions, then the three rendered
+        directions. Every answer from the first constrains all three of the
+        second, so proposing them first would be proposing them uninformed."""
         loop = _loop(consult_user=True)
         loop.working_state.consulted_before_planning = True
+
+        error = loop._check_precondition("plan_presentation_structure", {})
+
+        assert error is not None
+        assert "propose_design_directions" in error
+
+    def test_planning_is_allowed_once_both_pauses_have_happened(self):
+        loop = _loop(consult_user=True)
+        loop.working_state.consulted_before_planning = True
+        loop.working_state.offered_directions = True
 
         assert loop._check_precondition("plan_presentation_structure", {}) is None
 

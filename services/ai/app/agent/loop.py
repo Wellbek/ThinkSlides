@@ -395,6 +395,14 @@ class WorkingState:
         # pauses the run, and a resumed run that forgot it had asked would ask
         # again.
         self.offered_deep_research: bool = False
+        # The direction pause is its own phase rather than another entry
+        # in answered_questions: the loop's bookkeeping was written for a
+        # single consultation, and "do not ask these again" would suppress
+        # a second pause that has not happened yet.
+        self.offered_directions: bool = False
+        self.chosen_direction: dict | None = None
+        # What was offered, so the reply can be resolved back to a bundle.
+        self.proposed_directions: list[dict] = []
 
     # Above this share of the deck being flagged, redesigning everything is
     # simpler (and no more expensive) than steering slide-by-slide edits.
@@ -643,6 +651,9 @@ class WorkingState:
         self.consulted_before_planning = False
         self.reviewed_outline_with_user = False
         self.offered_deep_research = False
+        self.offered_directions = False
+        self.chosen_direction = None
+        self.proposed_directions = []
 
 
 class AgentLoop:
@@ -829,6 +840,9 @@ class AgentLoop:
             # Without these, the run that resumes after answering the planning
             # question would find the checkpoint unmet and ask all over again.
             "consulted_before_planning": self.working_state.consulted_before_planning,
+            "offered_directions": self.working_state.offered_directions,
+            "chosen_direction": self.working_state.chosen_direction,
+            "proposed_directions": self.working_state.proposed_directions,
             "reviewed_outline_with_user": self.working_state.reviewed_outline_with_user,
             "offered_deep_research": self.working_state.offered_deep_research,
             # Carried so a run paused on a question resumes at the same effort
@@ -890,6 +904,13 @@ class AgentLoop:
             self.working_state.researched_urls = set(state_dict.get("researched_urls", []))
             self.working_state.consulted_before_planning = state_dict.get(
                 "consulted_before_planning", False
+            )
+            self.working_state.offered_directions = state_dict.get(
+                "offered_directions", False
+            )
+            self.working_state.chosen_direction = state_dict.get("chosen_direction")
+            self.working_state.proposed_directions = state_dict.get(
+                "proposed_directions", []
             )
             self.working_state.offered_deep_research = state_dict.get(
                 "offered_deep_research", False
@@ -1015,6 +1036,25 @@ class AgentLoop:
         # Did the user answer the web-research offer? Reading it here, before
         # the tool schemas are chosen, is what lets a "yes" actually put
         # web_search on the table for the rest of this run.
+        # Did the user pick a design direction? Reading it here, before the
+        # first LLM call, is what makes the choice govern the run: the
+        # planner's density target, the layout selection, the copy and the
+        # renderer all read context["design_system"], and a choice resolved
+        # any later would arrive after the decisions it was meant to make.
+        chosen = self._resolve_direction_choice(chat_messages)
+        if chosen is not None:
+            self.working_state.chosen_direction = chosen
+            context["design_system"] = chosen.get("designSystem") or {}
+            run_context.set_design_system(context["design_system"])
+            self._clean_up_direction_previews(session_id, chosen.get("id"))
+            yield _event("thought", "content_analysis", {
+                "content": (
+                    f"Building in the {chosen.get('name') or 'chosen'} direction: "
+                    f"{chosen.get('rationale') or ''}".strip()
+                ),
+                "timestamp": _iso_now(),
+            })
+
         research_answer = user_answered_deep_research(chat_messages)
         if research_answer is not None:
             self.working_state.offered_deep_research = True
@@ -1275,7 +1315,24 @@ class AgentLoop:
                 # to pass these at all; whatever it sends is overridden. Also
                 # supplies the composer-chosen content depth the same way.
                 design_system = context.get("design_system") or {}
-                if fn_name == "select_layout":
+                if fn_name == "propose_design_directions":
+                    # The session the specimens belong to, and the uploaded
+                    # template if there is one - neither of which the model
+                    # knows, and the second of which is the first direction.
+                    fn_args["session_id"] = str(session_id)
+                    fn_args["design_system"] = design_system
+                    # Everything the user has already told us, so all three
+                    # directions respect it. Passed rather than trusted to the
+                    # model's own summary: the answers are on the working
+                    # state, and a paraphrase is where a settled colour goes
+                    # missing.
+                    answered = self.working_state.answered_questions
+                    if answered and not str(fn_args.get("answers") or "").strip():
+                        fn_args["answers"] = "\n".join(
+                            f"{a.get('question', '')} {a.get('answer', '')}".strip()
+                            for a in answered
+                        )
+                elif fn_name == "select_layout":
                     fn_args["available_layouts"] = json.dumps(design_system.get("layouts", []))
                 elif fn_name in ("analyze_document", "extract_key_data"):
                     fn_args["detail_level"] = self.detail_level
@@ -1505,6 +1562,32 @@ class AgentLoop:
                         await self._clear_working_state(session_id)
 
                 # If ask_user_question was called, emit question event and pause
+                if fn_name == "propose_design_directions" and tool_result.success:
+                    # A second pause, and deliberately its own phase. Recording
+                    # it in answered_questions would put it under "do NOT ask
+                    # these again" and suppress a pause that has not happened.
+                    self.working_state.is_paused_for_user = True
+                    self.working_state.pending_question = tool_result.data
+                    self.working_state.offered_directions = True
+                    self.working_state.proposed_directions = [
+                        d for d in (tool_result.data.get("directions") or [])
+                        if isinstance(d, dict)
+                    ]
+                    yield _event("question", "user_input", {
+                        "question": tool_result.data.get("question"),
+                        "options": tool_result.data.get("options", []),
+                        "questions": tool_result.data.get("questions", []),
+                        "context": tool_result.data.get("context", ""),
+                        "timestamp": _iso_now(),
+                    })
+                    await self._save_working_state(session_id)
+                    yield _event("done", "user_input", {
+                        "content": "Waiting for the user to choose a design direction",
+                        "paused": True,
+                        "timestamp": _iso_now(),
+                    })
+                    return
+
                 if fn_name == "ask_user_question" and tool_result.success:
                     self.working_state.is_paused_for_user = True
                     self.working_state.pending_question = tool_result.data
@@ -1974,10 +2057,31 @@ class AgentLoop:
                 "Consult the user before planning. Call ask_user_question ONCE with a "
                 "consolidated set of questions covering what you are actually unsure "
                 "about - typically the audience, the angle or sections to focus on, the "
-                "depth/slide count, and (when no template was uploaded) the visual style. "
+                "depth/slide count, and the brand or accent colour if one is implied. "
+                "Do NOT ask about visual style in words: the next step offers three "
+                "rendered design directions to look at, which is a better question than "
+                "any list of adjectives. "
                 "Give every question 2-5 concrete options drawn from THIS request and the "
                 "material you have read, not generic placeholders, so the user can answer "
                 "in one tap. Plan the deck once they have answered."
+            )
+
+        # The direction pause, after the text consultation and before anything
+        # is built. Last, because every answer from the consultation
+        # constrains all three directions - proposing them first would mean
+        # proposing them uninformed.
+        if (
+            fn_name == "plan_presentation_structure"
+            and ws.consulted_before_planning
+            and not ws.offered_directions
+            and not self.questions_declined
+        ):
+            return (
+                "Offer the user a design direction before planning. Call "
+                "propose_design_directions ONCE with the brief and everything the user "
+                "has already told you - especially any colour they named, which all "
+                "three directions must be built from. This is the last interruption "
+                "before building; plan the deck once they have chosen."
             )
 
         if (
@@ -2172,6 +2276,54 @@ class AgentLoop:
 
         return context
 
+    def _resolve_direction_choice(self, chat_messages: list[dict]) -> dict | None:
+        """
+        Which direction the user picked, out of the ones they were offered.
+
+        The card sends the direction's name *and* its id, so the id is what
+        this matches on and the name is only the fallback - two directions can
+        be named similarly, and a user typing a reply of their own will send
+        neither. A reply that matches nothing leaves the run on whatever
+        design system it already had, which is the safe direction: an
+        unrecognised answer must not silently pick one.
+        """
+        ws = self.working_state
+        if not ws.offered_directions or ws.chosen_direction is not None:
+            return None
+        offered = [d for d in (ws.proposed_directions or []) if isinstance(d, dict)]
+        if not offered:
+            return None
+
+        said = " ".join(
+            str(m.get("content") or "") for m in chat_messages
+            if m.get("role") == "user"
+        ).lower()
+        if not said.strip():
+            return None
+        for direction in offered:
+            if f"direction: {str(direction.get('id') or '').lower()}" in said:
+                return direction
+        for direction in offered:
+            name = str(direction.get("name") or "").strip().lower()
+            if name and name in said:
+                return direction
+        return None
+
+    def _clean_up_direction_previews(self, session_id: uuid.UUID, keep: str | None) -> None:
+        """
+        Drop the specimens of the directions that were not chosen.
+
+        They are throwaway by design and there are nine of them per run; the
+        chosen one is kept because the card that offered it stays in the
+        transcript and would otherwise show a broken image.
+        """
+        try:
+            from app.renderer import specimen
+
+            specimen.cleanup_directions(str(session_id), keep=keep)
+        except Exception as e:  # pragma: no cover - never fail a run over this
+            logger.warning("direction_preview_cleanup_failed", error=str(e))
+
     async def _chat_with_retry(self, messages: list[dict], tools: list[dict] | None):
         """Call the chat model, retrying transient provider failures.
 
@@ -2269,6 +2421,14 @@ class AgentLoop:
             withheld.update(DRAFTING_TOOLS)
         if not ws.consulted_before_planning:
             withheld.update(PLANNING_TOOLS)
+            # And the direction pause, until the text consultation is closed:
+            # every answer from it constrains all three directions, so
+            # proposing them first would be proposing them uninformed.
+            withheld.add("propose_design_directions")
+        elif not ws.offered_directions:
+            withheld.update(PLANNING_TOOLS)
+        else:
+            withheld.add("propose_design_directions")
         return withheld
 
     def _tool_schemas_for_mode(self) -> list[dict]:
