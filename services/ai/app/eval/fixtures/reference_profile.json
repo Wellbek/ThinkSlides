@@ -1,4 +1,123 @@
 {
+  "blocksByDesignPage": {
+    "1": 1,
+    "110": 7,
+    "12": 15,
+    "130": 10,
+    "168": 10,
+    "22": 17,
+    "3": 13,
+    "30": 2,
+    "4": 2,
+    "40": 7,
+    "66": 11,
+    "7": 14,
+    "95": 5
+  },
+  "density": {
+    "design": {
+      "density": {
+        "blocksPerSlide": {
+          "median": 10.0,
+          "p25": 6.5,
+          "p75": 13.2
+        },
+        "gridColumnsMedian": 3.0,
+        "gridRowsMedian": 3.5,
+        "inkCoverageMedian": 0.4971,
+        "pagesMeasured": 12,
+        "wordsPerBlockMedian": 20.1,
+        "wordsPerSlide": {
+          "median": 208.0,
+          "p25": 178.2,
+          "p75": 234.8
+        }
+      },
+      "type": {
+        "bodyFace": "Arial",
+        "bodyFallbacks": [
+          "Arial",
+          "Helvetica",
+          "Liberation Sans",
+          "DejaVu Sans",
+          "sans-serif"
+        ],
+        "bodyPt": 14.0,
+        "captionPt": 12.0,
+        "displayFace": "Georgia",
+        "displayFallbacks": [
+          "Georgia",
+          "Times New Roman",
+          "Liberation Serif",
+          "DejaVu Serif",
+          "serif"
+        ],
+        "displayIsSerif": true,
+        "displayPt": 25.0,
+        "rampPt": [
+          25.0,
+          18.0,
+          16.0,
+          14.0,
+          12.0,
+          9.5,
+          8.0,
+          7.0
+        ]
+      }
+    },
+    "validation": {
+      "density": {
+        "blocksPerSlide": {
+          "median": 6.5,
+          "p25": 4.2,
+          "p75": 9.0
+        },
+        "gridColumnsMedian": 4,
+        "gridRowsMedian": 4,
+        "inkCoverageMedian": 0.5331,
+        "pagesMeasured": 10,
+        "wordsPerBlockMedian": 24.6,
+        "wordsPerSlide": {
+          "median": 195.0,
+          "p25": 139.8,
+          "p75": 232.8
+        }
+      },
+      "type": {
+        "bodyFace": "Arial",
+        "bodyFallbacks": [
+          "Arial",
+          "Helvetica",
+          "Liberation Sans",
+          "DejaVu Sans",
+          "sans-serif"
+        ],
+        "bodyPt": 13.0,
+        "captionPt": 10.0,
+        "displayFace": "Georgia",
+        "displayFallbacks": [
+          "Georgia",
+          "Times New Roman",
+          "Liberation Serif",
+          "DejaVu Serif",
+          "serif"
+        ],
+        "displayIsSerif": true,
+        "displayPt": 25.0,
+        "rampPt": [
+          25.0,
+          18.0,
+          16.0,
+          14.0,
+          12.0,
+          10.0,
+          9.0,
+          8.0
+        ]
+      }
+    }
+  },
   "designPages": [
     1,
     3,

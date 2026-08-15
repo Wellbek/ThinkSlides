@@ -17,12 +17,12 @@ import tempfile
 import pytest
 
 from app.eval import corpus, reference, scorecard
-from app.eval.deck_metrics import (
+from app.measure.deck_metrics import (
     DeckProfile, build_profile, headline_register, profile_pdf,
     title_states_a_claim,
 )
 from app.eval.fixture_decks import DECKS
-from app.eval.page_metrics import PageMetrics, measure_pdf, signature_distance
+from app.measure.page_metrics import PageMetrics, measure_pdf, signature_distance
 from app.renderer.preview_generator import PreviewGenerator
 from app.renderer.pptx_renderer import PPTXRenderer
 
@@ -87,6 +87,79 @@ class TestTheReferenceProfileIsCommitted:
 
         assert profile.display_is_serif_fraction > 0.5
         assert profile.display_body_ratio > 1.3
+
+
+# The blocks a reader would count on these pages, counted by eye off the
+# design set. Page 12 is a 5 x 3 matrix of sentences, page 40 is seven row
+# bands, page 95 is a chart with four framing statements beside it.
+TRUE_BLOCK_COUNTS = {12: 15, 40: 7, 95: 5}
+
+
+class TestTheReferenceBudgetIsCommitted:
+    """
+    The density half of the fixture: what the reference puts on a page, and
+    what it is set in. Committed like the rest of the profile so the budget
+    the planner is held to survives without the third-party PDF.
+    """
+
+    def test_the_budget_is_a_range_of_words_and_blocks(self):
+        density, _ = reference.load_reference_density()
+
+        assert density.pages_measured > 0
+        assert density.words_p25 < density.words_median < density.words_p75
+        assert density.blocks_p25 < density.blocks_median < density.blocks_p75
+
+    def test_the_reference_is_several_times_denser_than_a_bulleted_deck(self):
+        """A four-bullet slide is roughly 40 words; this is the gap."""
+        density, _ = reference.load_reference_density()
+
+        assert density.words_median > 150
+        assert density.blocks_median >= 6
+        assert density.words_per_block_median > 12
+
+    def test_the_held_out_half_agrees_with_the_half_we_designed_against(self):
+        """If the two halves disagreed, the budget would be a fact about
+        thirteen pages rather than about the deck."""
+        design, _ = reference.load_reference_density(reference.DESIGN_SPLIT)
+        validation, _ = reference.load_reference_density(reference.VALIDATION_SPLIT)
+
+        assert abs(design.words_median - validation.words_median) < 60
+        assert abs(design.blocks_median - validation.blocks_median) < 5
+
+    def test_the_type_ramp_has_more_rungs_than_three_roles(self):
+        _, types = reference.load_reference_density()
+
+        assert len(types.ramp_pt) >= 5
+        assert types.ramp_pt == sorted(types.ramp_pt, reverse=True)
+
+    def test_the_reference_is_a_serif_display_over_a_sans_body(self):
+        _, types = reference.load_reference_density()
+
+        assert types.display_is_serif is True
+        assert types.display_pt > types.body_pt
+        assert types.display_fallbacks[-1] == "serif"
+        assert types.body_fallbacks[-1] == "sans-serif"
+
+    def test_the_caption_rung_is_copy_not_apparatus(self):
+        _, types = reference.load_reference_density()
+
+        assert types.caption_pt and types.caption_pt < types.body_pt
+        assert types.caption_pt > 9.5
+
+    @pytest.mark.parametrize("page,truth", sorted(TRUE_BLOCK_COUNTS.items()))
+    def test_the_block_count_is_within_one_of_what_a_reader_counts(self, page, truth):
+        """#119's acceptance criterion, checked without the PDF present."""
+        corpus.assert_design_page(page)
+        measured = reference.reference_block_counts()
+
+        assert abs(measured[page] - truth) <= 1, (
+            f"page {page}: counted {measured[page]}, a reader counts {truth}"
+        )
+
+    def test_every_design_page_has_a_committed_count(self):
+        counts = reference.reference_block_counts()
+
+        assert set(counts) == set(corpus.DESIGN_PAGES)
 
 
 class TestMeasuringARenderedDeck:

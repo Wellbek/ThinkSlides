@@ -214,7 +214,7 @@ Design System Context:
 - Title font: {json.dumps(ds.get('typography', {}).get('titleFont', {}))}
 - Body font: {json.dumps(ds.get('typography', {}).get('bodyFont', {}))}
 - Palette: {json.dumps(ds.get('palette', {}).get('colors', [])[:5])}
-"""
+{_density_guidance(ds)}"""
 
             image_info = (
                 "\nA pre-vetted source image IS available for this slide "
@@ -478,6 +478,26 @@ def _resolve_title_register(outline: dict, attached: list[dict],
         "- This slide's headline names its topic. Keep it short and accurate; do not "
         "assert a finding the slide does not evidence."
     ), ""
+
+
+def _density_guidance(design_system: dict) -> str:
+    """
+    How much this slide should carry, measured off the template's own pages.
+
+    The planner works in key points; this works in what actually lands on the
+    page. Both read the same measured figure so a slide is not written to one
+    budget and planned to another.
+    """
+    from app.measure.density import density_brief
+
+    brief = density_brief(design_system)
+    if not brief:
+        return ""
+    return (
+        f"- Density: {brief}. Write this slide to carry about that much. "
+        "Sentences that say something, not three-word fragments - the words "
+        "per block figure is what a filled block reads like here.\n"
+    )
 
 
 def _prepared_visual_guidance(attached: list[dict]) -> str:

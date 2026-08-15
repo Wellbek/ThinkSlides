@@ -53,3 +53,9 @@ services/orchestrator/bin/
 .lavish/
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Style-fidelity scorecards: `python -m app.eval baseline` writes its run here.
+# Only the committed reference points (baseline-main/) belong in the repo.
+services/ai/eval_scorecards/*.json
+services/ai/eval_scorecards/*.md
+!services/ai/eval_scorecards/README.md

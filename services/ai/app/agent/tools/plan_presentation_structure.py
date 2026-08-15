@@ -39,6 +39,30 @@ _DETAIL_GUIDANCE = {
 }
 
 
+def _density_guidance(design_system: dict) -> str:
+    """
+    The template's own density, stated to the planner as a target.
+
+    Without this the plan is written against a fixed "4-6 key points",
+    whatever the template does - so a user uploading a dense analyst deck got
+    its colours and its fonts and none of its substance. The figures are
+    measured off the template's rendered pages, so they are not a preference
+    to argue with.
+    """
+    from app.measure.density import density_brief
+
+    brief = density_brief(design_system)
+    if not brief:
+        return ""
+    return (
+        f"\n\nDensity target: {brief}. Plan a deck that carries that much. "
+        "A block is one countable thing on the page - a card, a row of a "
+        "table, a labelled statistic, a chart. If the target is well above "
+        "the key-point count below, that is the target speaking: give those "
+        "slides more points, or richer ones, rather than adding more slides."
+    )
+
+
 class PlanPresentationStructureTool:
     """Plan the slide structure and outline for a presentation."""
 
@@ -129,6 +153,7 @@ class PlanPresentationStructureTool:
                 layout_info = f"\nAvailable layout names in template: {', '.join(layout_names)}"
 
             detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
+            density_info = _density_guidance(parsed_ds)
 
             prompt = f"""Plan a presentation structure based on the following:
 
@@ -139,7 +164,7 @@ Key Data: {json.dumps(parsed_data, indent=2)[:2000]}
 
 Target Audience: {audience}
 Target Slide Count: {target_slide_count if target_slide_count > 0 else 'auto-determine'}
-{layout_info}
+{layout_info}{density_info}
 
 Return a JSON object with this structure:
 {{
