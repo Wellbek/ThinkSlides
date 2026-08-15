@@ -118,6 +118,18 @@ def user_confirmed_autonomy(chat_messages: list[dict]) -> bool:
     return False
 
 
+# Asked when intake could not think of anything to ask and the user has not
+# taken the skip. Deliberately about the deck rather than about the process:
+# a question worth a round trip even when nothing is ambiguous.
+FALLBACK_QUESTION = {
+    "question": "How should I pitch this?",
+    "options": [
+        "Keep it high-level - the argument, not the detail",
+        "Balanced - the argument with the evidence under it",
+        "Go deep - the detail matters more than the brevity",
+    ],
+}
+
 # What intake is asked to work out, before anything acts on the request.
 _INTAKE_PROMPT = """\
 You are reading a request for a slide deck, before any work starts on it.
@@ -145,10 +157,13 @@ actually contains", ...],
 }}
 
 "wantsAutonomy" is true only when the request already says, in one way or \
-another, that you should get on with it - "just make it", "you decide", "I \
-don't mind", "whatever looks good", "surprise me", or a brief so complete \
-that being asked anything would be an interruption rather than a help. It is \
-false by default: a short request is not the same as a hands-off one.
+another, that you should get on with it without being asked - "just make it", \
+"you decide", "don't ask me anything", "I don't mind", "whatever looks good", \
+"surprise me". It is false by default, and a short request is not a hands-off \
+one: somebody who typed two lines usually has plenty to say when asked. \
+Getting this wrong in either direction costs the user something, so only say \
+true when they have actually said so - it raises one question offering them \
+the skip, and nothing is skipped until they take it.
 
 "needsResearch" is true when the deck is about a real organisation, product, \
 market, place, person or event, or asks for figures, results, trends or \
@@ -156,12 +171,15 @@ anything time-anchored - a number recalled from memory reaches the reader as a \
 measurement. It is false for conceptual, instructional, creative or \
 process-shaped decks, and for decks built entirely from supplied material.
 
-"ambiguities" holds only what genuinely changes the deck: the angle when the \
-topic has several, the audience when the register depends on it, which parts \
-of a broad subject to cover. Leave it empty when the request already says \
-enough - do not manufacture questions. Never ask about visual style or colour: \
-the user is shown three rendered designs to choose from later. At most three \
-entries, each with real options a user could tap.
+"ambiguities" is what the user will actually be asked, and they are asked \
+unless they take the skip - so give one to three questions that genuinely \
+change the deck: the angle when the topic has several, the audience when the \
+register depends on it, which parts of a broad subject to cover, how deep to \
+go. Even a well-specified request usually leaves one of those open; find the \
+one whose answer would change most. Never ask about visual style or colour - \
+the user is shown three rendered designs to choose from later - and never ask \
+something the request already answers. Each entry needs real options a user \
+could tap, drawn from this request and what you have read.
 """
 
 
@@ -317,6 +335,9 @@ def _is_retryable(exc: Exception) -> bool:
 def _schema_name(schema: dict) -> str:
     """The tool name out of a function-calling schema, either shape."""
     return schema.get("function", {}).get("name", schema.get("name", ""))
+
+
+_HEX_IN_TEXT = re.compile(r"#[0-9A-Fa-f]{6}")
 
 
 def _normalize_query(query) -> str:
@@ -501,8 +522,10 @@ class WorkingState:
         # research budget because they answer a different question: not "what
         # goes in the deck" but "what should I be asking the user".
         self.scouted: bool = False
-        # The user's answer to the one question every run asks: shall the agent
-        # decide the rest itself? True skips the design pause.
+        # The offer to take over, and its answer. Asked only when the request
+        # implied it, answered by the user, and only "yes" turns the
+        # consultation off - see pipeline._asks_questions.
+        self.autonomy_asked: bool = False
         self.autonomy_confirmed: bool = False
         # Which phase the run is in, so a resume picks up where it stopped
         # rather than re-deriving it from a handful of flags.
@@ -786,6 +809,15 @@ class WorkingState:
         self.offered_directions = False
         self.chosen_direction = None
         self.proposed_directions = []
+        self.brief = None
+        self.scouted = False
+        self.autonomy_asked = False
+        self.autonomy_confirmed = False
+        self.phase = None
+        self.design_serial = 0
+        self.rendered_serial = -1
+        self.validated_serial = -1
+        self.phase_turns = {}
 
 
 class AgentLoop:
@@ -989,6 +1021,7 @@ class AgentLoop:
             # scouted, whether the user handed it the wheel, and where it was.
             "brief": self.working_state.brief,
             "scouted": self.working_state.scouted,
+            "autonomy_asked": self.working_state.autonomy_asked,
             "autonomy_confirmed": self.working_state.autonomy_confirmed,
             "phase": self.working_state.phase,
             "design_serial": self.working_state.design_serial,
@@ -1069,6 +1102,7 @@ class AgentLoop:
             )
             self.working_state.brief = state_dict.get("brief")
             self.working_state.scouted = state_dict.get("scouted", False)
+            self.working_state.autonomy_asked = state_dict.get("autonomy_asked", False)
             self.working_state.autonomy_confirmed = state_dict.get(
                 "autonomy_confirmed", False
             )
@@ -1210,11 +1244,15 @@ class AgentLoop:
 
         # ── Phase 2: Build messages ──────────────────
         chat_messages = await self._build_chat_messages(session_id)
-        # Never un-declined: "just build it" said once holds for the run (and
-        # lets a caller driving the loop directly switch the checkpoints off).
-        self.questions_declined = self.questions_declined or user_declined_questions(
-            chat_messages
-        )
+        # Deliberately NOT read from the user's words any more. "Don't ask me
+        # anything" is a request to be offered the skip, and the offer is one
+        # question the user answers - a phrase alone cannot switch off the
+        # consultation, because a model reading the phrase wrongly would take
+        # a decision the user never made. It feeds intake's wantsAutonomy
+        # instead (see _phase_intake), which is what raises the confirmation.
+        #
+        # The flag survives for callers that genuinely cannot answer anything:
+        # the offline harness and the tests set it directly.
 
         # Did the user answer the web-research offer? Reading it here, before
         # the tool schemas are chosen, is what lets a "yes" actually put
@@ -1415,6 +1453,11 @@ class AgentLoop:
             return
 
         brief = extract_json_object(content) or {}
+        # A user who typed "just build it" has implied it in as many words, so
+        # the judgement does not get to disagree - it only gets to notice the
+        # cases the phrase list never thought of.
+        if user_declined_questions(chat_messages):
+            brief["wantsAutonomy"] = True
         # A brief that did not parse still has to leave the phase finished, or
         # the run stalls on it. An empty one degrades to "ask the user about
         # everything", which is the safe direction to fail in.
@@ -1473,15 +1516,28 @@ class AgentLoop:
         own, which is a round trip spent on a question that fits here.
         """
         brief = self.working_state.brief or {}
-        questions: list[dict] = []
+        ws = self.working_state
 
-        # The handover question is not asked of everybody. It is a confirmation
-        # of something the user has already implied - "just build it", "you
-        # decide", a brief with nothing left open - so it goes to the people
-        # who implied it. Asking everyone whether they would like to be asked
-        # is itself an interruption, and the run has a better one to spend.
-        if brief.get("wantsAutonomy"):
-            questions.append(dict(AUTONOMY_QUESTION))
+        # A user who asked to be left alone is offered exactly that, once, and
+        # on its own: mixing it with the questions it would cancel asks them to
+        # answer both sides of the same decision. Their answer is read on the
+        # way back in (see user_confirmed_autonomy) - "yes" ends the
+        # consultation and settles the design without another round trip,
+        # "no" falls through to the questions below.
+        if brief.get("wantsAutonomy") and not ws.autonomy_asked:
+            ws.autonomy_asked = True
+            async for item in self._ask_and_pause(
+                [dict(AUTONOMY_QUESTION)],
+                context="",
+                phase=pipeline.PHASES_BY_NAME["consult"],
+                run_context_=context,
+                session_id=session_id,
+                records_consultation=False,
+            ):
+                yield item
+            return
+
+        questions: list[dict] = []
 
         if self._can_offer_research():
             figures = [
@@ -1500,11 +1556,11 @@ class AgentLoop:
                 break
 
         if not questions:
-            # Nothing is unclear and nothing was implied, so there is nothing
-            # to stop for. The run goes to the design choice, which is a
-            # question worth its round trip.
-            self.working_state.consulted_before_planning = True
-            return
+            # Intake found nothing to ask, and the run is still going to ask:
+            # the consultation is not skipped because a model could not think
+            # of a question, only because the user said to skip it. This is
+            # the floor, not the expected case.
+            questions.append(dict(FALLBACK_QUESTION))
 
         async for item in self._ask_and_pause(
             questions,
@@ -1520,10 +1576,20 @@ class AgentLoop:
     async def _phase_design(
         self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
     ) -> AsyncIterator[tuple[str, object]]:
-        """Three rendered designs to choose between - the style question, asked
-        as designs rather than as adjectives."""
+        """Settle the deck's design - by asking, or by deciding.
+
+        A user who handed the run over is not asked, but the deck still needs a
+        design, and "not asked" used to mean "rendered on whatever the default
+        happened to be". It takes the first direction instead: the light one,
+        which is the same thing they would have been offered first.
+        """
         async for event in self._ensure_design_system(context, session_id):
             yield "event", event
+
+        if not pipeline._asks_questions(self):
+            async for event in self._settle_design_unasked(context):
+                yield "event", event
+            return
 
         brief = self.working_state.brief or {}
         tool_result = None
@@ -1545,6 +1611,39 @@ class AgentLoop:
             ):
                 yield "event", event
             yield "paused", True
+
+    async def _settle_design_unasked(self, context: dict) -> AsyncIterator[dict]:
+        """Take the first direction, for a run that is not stopping to ask.
+
+        An uploaded template is left exactly as it is: the user already chose a
+        design by attaching one, and replacing it would be the run overruling
+        the clearest instruction it has.
+        """
+        from app import directions as direction_model
+
+        current = context.get("design_system") or {}
+        if str(current.get("sourceType") or "default") != "default":
+            self.working_state.offered_directions = True
+            return
+
+        brand = _HEX_IN_TEXT.search(self._settled_answers())
+        chosen = direction_model.default_directions(
+            brand.group(0).upper() if brand else None
+        )[0]
+
+        self.working_state.offered_directions = True
+        self.working_state.chosen_direction = chosen
+        context["design_system"] = chosen.get("designSystem") or {}
+        self._citation_tokens.append(
+            run_context.set_design_system(context["design_system"])
+        )
+        yield _event("thought", "user_input", {
+            "content": (
+                f"Building in the {chosen.get('name')} direction: "
+                f"{chosen.get('rationale')}"
+            ),
+            "timestamp": _iso_now(),
+        })
 
     async def _phase_plan(
         self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
@@ -1664,6 +1763,7 @@ class AgentLoop:
         phase: pipeline.Phase,
         run_context_: dict,
         session_id: uuid.UUID,
+        records_consultation: bool = True,
     ) -> AsyncIterator[tuple[str, object]]:
         """Put a set of questions to the user through the real tool, and stop.
 
@@ -1685,7 +1785,8 @@ class AgentLoop:
 
         if tool_result is not None and tool_result.success:
             async for event in self._pause_for_user(
-                "ask_user_question", tool_result, session_id
+                "ask_user_question", tool_result, session_id,
+                records_consultation=records_consultation,
             ):
                 yield "event", event
             yield "paused", True
@@ -2780,7 +2881,11 @@ class AgentLoop:
         yield "result", tool_result
 
     async def _pause_for_user(
-        self, fn_name: str, tool_result: ToolResult, session_id: uuid.UUID
+        self,
+        fn_name: str,
+        tool_result: ToolResult,
+        session_id: uuid.UUID,
+        records_consultation: bool = True,
     ) -> AsyncIterator[dict]:
         """Put a question to the user and stop the run until they answer.
 
@@ -2810,7 +2915,9 @@ class AgentLoop:
             # question is the consultation, after it the outline review.
             if ws.presentation_structure:
                 ws.reviewed_outline_with_user = True
-            else:
+            elif records_consultation:
+                # The offer to take over is not the consultation: answering
+                # "no" to it leaves every real question still unasked.
                 ws.consulted_before_planning = True
             waiting = f"Waiting for user input: {data.get('question')}"
 

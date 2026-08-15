@@ -58,18 +58,24 @@ class TestARunPausesTwice:
 
         assert pipeline.next_phase(loop).name != "plan"
 
-    def test_declining_the_consultation_skips_both_pauses(self):
+    def test_a_caller_that_cannot_answer_is_not_asked(self):
+        """The offline harness and the tests, not a user: a user who wants the
+        pauses off confirms it (see test_pipeline). The design still gets
+        settled - it is just settled without them."""
         from app.agent import pipeline
 
         loop = _loop()
         loop.working_state.brief = {"needsResearch": False}
         loop.questions_declined = True
 
+        assert pipeline.next_phase(loop).name == "design"
+
+        loop.working_state.offered_directions = True
         assert pipeline.next_phase(loop).name == "plan"
 
-    def test_handing_over_the_decisions_skips_only_the_design_pause(self):
-        """The outline review survives it - seeing the slide titles is the
-        cheapest moment to redirect a deck."""
+    def test_a_confirmed_handover_ends_the_pauses_but_not_the_design(self):
+        """It is the one thing that turns the consultation off - including the
+        outline review. The design is still settled, just not by asking."""
         from app.agent import pipeline
 
         loop = _loop()
@@ -77,10 +83,11 @@ class TestARunPausesTwice:
         loop.working_state.consulted_before_planning = True
         loop.working_state.autonomy_confirmed = True
 
-        assert pipeline.next_phase(loop).name == "plan"
+        assert pipeline.next_phase(loop).name == "design"
 
+        loop.working_state.offered_directions = True
         loop.working_state.presentation_structure = {"totalSlides": 1, "slides": [{}]}
-        assert pipeline.next_phase(loop).name == "review"
+        assert pipeline.next_phase(loop).name == "draft"
 
     def test_the_direction_pause_is_not_recorded_as_a_question(self):
         """answered_questions is replayed as "do NOT ask these again"; the

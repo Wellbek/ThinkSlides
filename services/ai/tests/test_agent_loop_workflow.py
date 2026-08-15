@@ -248,6 +248,7 @@ def test_prompt_tells_the_model_what_this_run_does_next():
     loop = _loop(MODE_SIMPLE)
     loop.questions_declined = True
     loop.working_state.brief = {"needsResearch": False}
+    loop.working_state.offered_directions = True
 
     prompt = loop._build_system_prompt({})
 
@@ -518,6 +519,10 @@ async def test_load_working_state_stashes_design_system_and_research_for_run_to_
         "completed_tools": {},
         "design_system": {"palette": {"colors": ["#000"]}},
         "research": [{"title": "B", "url": "https://example.org", "snippet": "s2"}],
+        # Already settled, so the design phase has nothing to do and cannot be
+        # what puts a design system into context here.
+        "offered_directions": True,
+        "brief": {"needsResearch": False, "ambiguities": []},
     })
     loop = _loop(None)
     loop.redis_client = _FakeRedis({f"working_state:{session_id}": state})
@@ -537,6 +542,10 @@ async def test_run_merges_resumed_design_system_and_research_into_context(monkey
         "completed_tools": {},
         "design_system": {"palette": {"colors": ["#000"]}},
         "research": [{"title": "B", "url": "https://example.org", "snippet": "s2"}],
+        # Already settled, so the design phase has nothing to do here and
+        # cannot be what puts a design system into context.
+        "offered_directions": True,
+        "brief": {"needsResearch": False, "ambiguities": []},
     })
     loop = _loop(None)
     loop.redis_client = _FakeRedis({f"working_state:{session_id}": state})

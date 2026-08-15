@@ -158,9 +158,10 @@ class TestTheOrderIsFixed:
         assert events[-1]["paused"] is True
 
     @pytest.mark.asyncio
-    async def test_the_consultation_always_asks_who_decides(self, monkeypatch):
-        """One question every run asks, in the same words, so a user who wants
-        to be left alone can say so rather than have it inferred."""
+    async def test_a_hands_off_request_is_offered_the_skip_on_its_own(self, monkeypatch):
+        """The offer and the questions it would cancel are not asked together:
+        that asks the user to answer both sides of one decision. The offer goes
+        first, alone, and the questions wait to see whether it is taken."""
         loop, session_id, _ = _loop(
             [_text(INTAKE)], messages=[{"role": "user", "content": "x"}],
             monkeypatch=monkeypatch,
@@ -170,14 +171,17 @@ class TestTheOrderIsFixed:
 
         question = next(e for e in events if e["type"] == "question")
         asked = [q["question"] for q in question["questions"]]
-        assert asked[0] == "Shall I decide the details myself and build it?"
-        assert "Which breeds should it cover?" in asked
+        assert asked == ["Shall I decide the details myself and build it?"]
+        # Not the consultation itself - declining it leaves every real question
+        # still to ask.
+        assert loop.working_state.consulted_before_planning is False
+        assert loop.working_state.autonomy_asked is True
 
     @pytest.mark.asyncio
-    async def test_a_request_with_nothing_open_is_not_stopped_at_all(self, monkeypatch):
-        """Nothing ambiguous, nothing implied about handing over: there is
-        nothing to ask, so the run does not spend a pause asking whether it
-        should ask. The design choice is the next thing it stops for."""
+    async def test_a_request_with_nothing_open_is_still_consulted(self, monkeypatch):
+        """Consultation is the default and stays the default. It is not
+        skipped because a model could not think of a question - only because
+        the user said to skip it."""
         intake = json.loads(INTAKE)
         intake["ambiguities"] = []
         intake["needsResearch"] = False
@@ -189,9 +193,10 @@ class TestTheOrderIsFixed:
 
         events = [e async for e in loop.run(session_id)]
 
-        assert "ask_user_question" not in seen
+        assert "ask_user_question" in seen
         question = next(e for e in events if e["type"] == "question")
-        assert question["question"] == "Which design direction should the deck follow?"
+        assert question["question"] == "How should I pitch this?"
+        assert loop.working_state.consulted_before_planning is True
 
     @pytest.mark.asyncio
     async def test_but_a_genuine_ambiguity_still_stops_it(self, monkeypatch):
@@ -241,12 +246,26 @@ class TestTheRunResumesWhereItStopped:
         assert question["question"] == "Which design direction should the deck follow?"
 
     @pytest.mark.asyncio
-    async def test_handing_over_the_decisions_skips_the_design_pause(self, monkeypatch):
-        """The answer to the autonomy question is the whole difference: the
-        run researches and plans rather than asking about the look."""
+    async def test_taking_the_skip_ends_every_pause_and_settles_the_design(
+        self, monkeypatch
+    ):
+        """A confirmed handover is the one thing that turns the consultation
+        off - all of it, including the outline review. The deck still gets a
+        design: the first direction, which is what the user would have been
+        offered first anyway, rather than whatever the default happened to be.
+        """
         loop, session_id, seen = _loop(
-            [_calls(("web_search", {"query": "german breeds registry"}))],
-            state=self._after_consult(),
+            [_calls(("web_search", {"query": "german breeds registry"})),
+             _calls(("select_layout", {"slide_index": 0}),
+                    ("design_slide_content", {"slide_index": 0})),
+             _calls(("select_layout", {"slide_index": 1}),
+                    ("design_slide_content", {"slide_index": 1})),
+             _text("Built you a deck on German dog breeds.")],
+            state=self._after_consult(
+                autonomy_asked=True,
+                web_search_calls=9,
+                researched_urls=[f"https://s/{i}" for i in range(8)],
+            ),
             messages=[{"role": "user",
                        "content": "Yes - decide audience, focus and design, and go ahead"}],
             monkeypatch=monkeypatch,
@@ -254,11 +273,16 @@ class TestTheRunResumesWhereItStopped:
 
         events = [e async for e in loop.run(session_id)]
 
+        assert loop.working_state.autonomy_confirmed is True
         assert "propose_design_directions" not in seen
-        assert "plan_presentation_structure" in seen
-        # It still stops to show the outline - the floor no answer removes.
-        question = next(e for e in events if e["type"] == "question")
-        assert question["question"] == "Shall I build this outline?"
+        # Nothing was put to the user at all - not the design, not the outline.
+        assert not [e for e in events if e["type"] == "question"]
+        assert "finalize_and_render_pptx" in seen
+
+        # And it is building in a real direction, not on the bare default.
+        chosen = loop.working_state.chosen_direction
+        assert chosen and chosen["id"] == "clean-minimal"
+        assert loop.context["design_system"]["grounds"]["cover"]
 
     @pytest.mark.asyncio
     async def test_approving_the_outline_builds_renders_and_validates(self, monkeypatch):
@@ -292,17 +316,20 @@ class TestTheRunResumesWhereItStopped:
         assert "German dog breeds" in events[-1]["content"]
 
     @pytest.mark.asyncio
-    async def test_the_outline_is_shown_even_to_a_user_who_handed_over(self, monkeypatch):
+    async def test_the_outline_is_shown_to_everyone_who_did_not_take_the_skip(
+        self, monkeypatch
+    ):
         """Seeing the slide titles before they are written is the cheapest
-        moment to redirect a deck, so it survives the autonomy answer."""
+        moment to redirect a deck, so it survives everything short of the user
+        saying they do not want to be asked."""
         loop, session_id, seen = _loop(
             [_calls(("web_search", {"query": "q"}))],
             state=self._after_consult(
-                autonomy_confirmed=True,
+                offered_directions=True,
                 web_search_calls=9,
                 researched_urls=[f"https://s/{i}" for i in range(8)],
             ),
-            messages=[{"role": "user", "content": "go ahead"}],
+            messages=[{"role": "user", "content": "All 32 recognised"}],
             monkeypatch=monkeypatch,
         )
 
@@ -319,6 +346,7 @@ class TestRevisionWalksBackwards:
         loop.questions_declined = True
         ws = loop.working_state
         ws.brief = {"needsResearch": False}
+        ws.offered_directions = True
         ws.presentation_structure = {"totalSlides": 2, "slides": [{}, {}]}
         ws.accumulated_slides = [{"slideIndex": 0}, {"slideIndex": 1}]
         ws.has_called_finalize = True
@@ -346,6 +374,7 @@ class TestRevisionWalksBackwards:
         loop.questions_declined = True
         ws = loop.working_state
         ws.brief = {"needsResearch": False}
+        ws.offered_directions = True
         ws.presentation_structure = {"totalSlides": 1, "slides": [{}]}
         ws.add_slide({"slideIndex": 0})
         ws.has_called_finalize = True

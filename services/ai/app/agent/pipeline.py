@@ -91,12 +91,16 @@ def _wants_research(loop: "AgentLoop") -> bool:
 
 
 def _asks_questions(loop: "AgentLoop") -> bool:
-    """Whether this user is being consulted at all.
+    """Whether this run still stops to ask the user things.
 
-    "Just build it" said once holds for the whole run - see
-    ``user_declined_questions``.
+    Consultation is the default and stays the default. The only thing that
+    turns it off is the user *confirming* they want it off: a prompt that says
+    "don't ask me anything" is a request to be offered the skip, not the skip
+    itself, so it earns one confirmation question and nothing more until it is
+    answered. ``questions_declined`` is the separate case of a caller that
+    cannot answer at all - the offline harness and the tests.
     """
-    return not loop.questions_declined
+    return not loop.questions_declined and not loop.working_state.autonomy_confirmed
 
 
 def _slides_outstanding(loop: "AgentLoop") -> list[int]:
@@ -161,9 +165,10 @@ PIPELINE: tuple[Phase, ...] = (
         name="design",
         label="user_input",
         driver=LOOP_DRIVEN,
-        applies=lambda loop: (
-            _asks_questions(loop) and not loop.working_state.autonomy_confirmed
-        ),
+        # Always: every deck needs a design settled. What varies is whether the
+        # user is the one settling it - a run they have handed over takes the
+        # first direction rather than skipping the question and rendering on
+        # whatever the default happened to be.
         done=lambda loop: loop.working_state.offered_directions,
         directive=lambda loop: (
             "Offer the user three rendered design directions to choose between."
