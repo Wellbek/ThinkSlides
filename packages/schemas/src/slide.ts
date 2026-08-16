@@ -209,6 +209,65 @@ export interface ApparatusTokens {
   color?: string;
 }
 
+/** One group of a template's pages that share a layout. */
+export interface PageCluster {
+  id: number;
+  /** A provisional name for the kind of page - "split canvas", "row bands". */
+  label: string;
+  pages: number[];
+  /** The page of the group that looks most like the group. */
+  representative: number;
+  size: number;
+}
+
+/**
+ * Which of a template's pages look alike, and which were actually looked at.
+ *
+ * Sampling a long template evenly is representative of position in the
+ * document, not of layout: an archetype appearing a handful of times is
+ * missed entirely. Pages are grouped first, then the budget is spent one page
+ * per group before a second from any.
+ */
+export interface PageSurvey {
+  pageCount: number;
+  /** The pages in scope - the whole document, or the range the user named. */
+  pagesConsidered: number[];
+  /** The pages shown to the vision model. */
+  sampledPages: number[];
+  clusters: PageCluster[];
+}
+
+/**
+ * One of a template's layouts, described in the region vocabulary.
+ *
+ * The extractor used to describe every layout as a list of placeholder boxes
+ * typed title / body / subtitle / footer. That vocabulary has no words for a
+ * split canvas, a rail, seven ruled row bands or a four-column card row, so
+ * everything that made a template look like itself was discarded at that step.
+ *
+ * Geometry is fractional throughout - `regions` are ready to be attached to a
+ * slide as they are.
+ */
+export interface LayoutGrammar {
+  /** The page this layout was read from. */
+  page: number;
+  /** The kind of page it is, from the survey - "split canvas", "row bands". */
+  label: string;
+  regions: Region[];
+  /** What was found: "rail", "ground split", "band row", "card row", … */
+  features: string[];
+  columns: number;
+  bands: number;
+  ruleColor?: string | null;
+  grounds: string[];
+}
+
+export interface TemplateGrammar {
+  layouts: LayoutGrammar[];
+  /** The union of every layout's features, for a quick "does this deck …". */
+  features: string[];
+}
+
 export interface DesignSystemBundle {
   palette: Palette;
   typography: Typography;
@@ -216,6 +275,8 @@ export interface DesignSystemBundle {
   chrome?: ChromeTokens;
   apparatus?: ApparatusTokens;
   density?: DensityTokens;
+  pageSurvey?: PageSurvey;
+  layoutGrammar?: TemplateGrammar;
   dataViz?: DataVizTokens;
   layouts: LayoutDef[];
   slideDimensions: SlideDimensions;

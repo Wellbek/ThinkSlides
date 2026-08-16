@@ -23,6 +23,7 @@ import os
 from typing import Optional
 
 from app.eval import corpus
+from app.measure import clusters, grammar
 from app.measure.deck_metrics import DeckProfile, profile_pdf
 from app.measure.density import DensityProfile, TypeProfile
 from app.measure.density import profile_pdf as profile_density
@@ -73,11 +74,40 @@ def reference_block_counts() -> dict[int, int]:
             for page, count in (data.get("blocksByDesignPage") or {}).items()}
 
 
+def load_reference_survey() -> clusters.TemplateSurvey:
+    """The reference deck's layout survey, as committed."""
+    with open(REFERENCE_PROFILE_PATH, encoding="utf-8") as handle:
+        data = json.load(handle)
+    survey = data.get("pageSurvey") or {}
+    return clusters.TemplateSurvey(
+        page_count=int(survey.get("pageCount") or 0),
+        considered=tuple(survey.get("pagesConsidered") or ()),
+        sample=tuple(survey.get("sampledPages") or ()),
+        clusters=tuple(
+            clusters.PageCluster(
+                id=int(entry.get("id", index)),
+                label=str(entry.get("label") or "unknown"),
+                pages=tuple(entry.get("pages") or ()),
+                representative=int(entry.get("representative") or 0),
+            )
+            for index, entry in enumerate(survey.get("clusters") or [])
+        ),
+    )
+
+
+def load_design_grammar() -> grammar.TemplateGrammar:
+    """The region grammar read from the reference's design pages, as committed."""
+    with open(REFERENCE_PROFILE_PATH, encoding="utf-8") as handle:
+        data = json.load(handle)
+    return grammar.TemplateGrammar.from_dict(data.get("designGrammar"))
+
+
 def reference_metadata() -> dict:
     with open(REFERENCE_PROFILE_PATH, encoding="utf-8") as handle:
         data = json.load(handle)
     return {k: v for k, v in data.items()
-            if k not in ("profiles", "density", "blocksByDesignPage")}
+            if k not in ("profiles", "density", "blocksByDesignPage",
+                         "pageSurvey", "designGrammar")}
 
 
 def build_reference_profile(pdf_path: Optional[str] = None) -> str:
@@ -108,6 +138,16 @@ def build_reference_profile(pdf_path: Optional[str] = None) -> str:
         str(page): structure.block_count
         for page, structure in zip(corpus.DESIGN_PAGES, structures)
     }
+    # The layout survey of the whole deck. Every page is read, which is the
+    # point - the survey exists to find archetypes that even sampling misses,
+    # and holding out pages from it would defeat that. Nothing here reveals a
+    # validation page's *content*: what is committed is which pages group
+    # together and what kind of page each group is.
+    survey = clusters.survey_pdf(path)
+    # The region grammar of the design pages. Design pages only: this is the
+    # half of the corpus the extractor is *tuned* against, and committing the
+    # grammar of a held-out page would be reading it.
+    design_grammar = grammar.read_pdf(path, corpus.DESIGN_PAGES)
     payload = {
         "source": os.path.basename(path),
         "pageCount": corpus.REFERENCE_PAGE_COUNT,
@@ -120,6 +160,8 @@ def build_reference_profile(pdf_path: Optional[str] = None) -> str:
             for name, (measured, typed) in density.items()
         },
         "blocksByDesignPage": blocks_by_page,
+        "pageSurvey": survey.to_dict(),
+        "designGrammar": design_grammar.to_dict(),
     }
     os.makedirs(FIXTURE_DIR, exist_ok=True)
     with open(REFERENCE_PROFILE_PATH, "w", encoding="utf-8") as handle:

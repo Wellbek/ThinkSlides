@@ -579,3 +579,100 @@ class TestRenderingIntoRegions:
         assert any(shape_primitive_id(s) == "chrome-page-number"
                    for s in composed.shapes)
         assert any((s.name or "") == CHROME_ACCENT_RULE for s in plain.shapes)
+
+
+class TestFurnitureRespectsTheGroundItLandsOn:
+    """
+    Two defects a composed slide surfaced, both invisible until a region put
+    a dark ground under something the slide drew for a white one.
+    """
+
+    @pytest.fixture(scope="class")
+    @staticmethod
+    def work_dir():
+        directory = tempfile.mkdtemp(prefix="ts_regions_ground_")
+        try:
+            yield directory
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+
+    RAIL = [
+        {"id": "rail", "kind": "rail", "x": 0.0, "y": 0.0, "w": 0.375, "h": 1.0,
+         "ground": "#041C2C"},
+        {"id": "panel", "kind": "panel", "x": 0.375, "y": 0.0, "w": 0.625,
+         "h": 1.0, "ground": "#FFFFFF"},
+    ]
+
+    @staticmethod
+    def _slides():
+        return [{
+            "slideIndex": 0, "layoutId": "content", "layoutName": "Content",
+            "regions": TestFurnitureRespectsTheGroundItLandsOn.RAIL,
+            "contents": [
+                {"type": "text", "placeholderIdx": 0, "regionId": "rail",
+                 "runs": [{"text": "Adoption rose 21 percent across every "
+                                   "surveyed sector", "bold": True}]},
+                {"type": "text", "placeholderIdx": 1, "regionId": "panel",
+                 "runs": [{"text": "A point", "bullet": True}]},
+            ],
+        }]
+
+    def test_a_title_in_a_full_height_region_starts_at_its_top(self, work_dir):
+        """
+        A title is bottom-anchored so it sits directly above the accent rule,
+        which is right for a title *band*. Bound to a rail there is no rule to
+        hang from, and bottom-anchoring drops it past the foot of the page.
+        """
+        from pptx import Presentation
+        from pptx.enum.text import MSO_ANCHOR
+
+        path = _render(self._slides(), work_dir, "rail-title")
+
+        titles = [
+            s for s in Presentation(path).slides[0].shapes
+            if s.has_text_frame and "Adoption rose" in s.text_frame.text
+        ]
+        assert titles
+        assert titles[0].text_frame.vertical_anchor != MSO_ANCHOR.BOTTOM
+
+    def test_the_footer_is_legible_on_the_rail_it_lands_on(self, work_dir):
+        """
+        Chrome is compiled for the slide's own background. A rail under the
+        corner the footer sits in made the deck's name dark ink on a dark
+        panel - and the contrast enforcement at the last write could not save
+        it, because the context still said the ground was white.
+        """
+        from pptx import Presentation
+
+        from app import colors
+        from app.renderer.primitives import shape_primitive_id
+
+        path = _render(self._slides(), work_dir, "rail-footer")
+
+        footer = next(
+            s for s in Presentation(path).slides[0].shapes
+            if shape_primitive_id(s) == "chrome-footer"
+        )
+        run = footer.text_frame.paragraphs[0].runs[0]
+        assert colors.contrast_ratio(
+            colors.to_hex(tuple(run.font.color.rgb)), "#041C2C"
+        ) >= 3.0
+
+    def test_furniture_on_the_light_panel_is_unchanged(self, work_dir):
+        """Only what lands on another ground moves; the rest of the chrome
+        is the chrome every other slide in the deck carries."""
+        from pptx import Presentation
+
+        from app import colors
+        from app.renderer.primitives import shape_primitive_id
+
+        path = _render(self._slides(), work_dir, "rail-number")
+
+        number = next(
+            s for s in Presentation(path).slides[0].shapes
+            if shape_primitive_id(s) == "chrome-page-number"
+        )
+        run = number.text_frame.paragraphs[0].runs[0]
+        assert colors.contrast_ratio(
+            colors.to_hex(tuple(run.font.color.rgb)), "#FFFFFF"
+        ) >= 3.0
