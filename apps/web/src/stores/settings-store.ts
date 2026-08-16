@@ -1,12 +1,21 @@
 /**
- * Organisation AI settings: which models answer chat, which model and backend
- * power Deep Thinking, and whether either is configured yet.
+ * Organisation AI settings: the reasoning model, the web search behind Deep
+ * Thinking, and whether either is configured yet.
  *
  * API keys are write-only. The server never returns key material, only a
  * last-four hint and a boolean, so this store deliberately holds the saved
  * settings and the in-progress draft separately: the draft's `apiKey` is empty
  * unless the user is typing a new one, and an empty draft key means "keep what
  * is stored" rather than "clear it".
+ *
+ * **Deep Thinking is web search, and it is one decision.** Storage keeps a
+ * search model and a search backend as separate rows, which is right - a
+ * provider searching with its own index and Tavily searching with its own are
+ * genuinely different things to call. Asking the user to fill in both was
+ * not: "backend: the model provider's own search" and "model: optional, leave
+ * blank to use the chat model" are two halves of one sentence, and either half
+ * alone configures nothing. `searchSource` is that single decision, and
+ * `setSearchSource` is what keeps the two stored halves agreeing with it.
  */
 
 import { create } from 'zustand';
@@ -112,6 +121,51 @@ export interface TestResult {
 
 export type TestTarget = 'chat' | 'deepSearch' | 'search';
 
+/**
+ * Where Deep Thinking's web results come from, as one value.
+ *
+ * - `''` - the reasoning model's own provider searches, with its credentials.
+ * - `provider:<id>` - a different model provider searches, with its own.
+ * - `backend:<id>` - an external search API (Tavily, Firecrawl) searches.
+ */
+export type SearchSource = string;
+
+export const SEARCH_SOURCE_SAME_AS_CHAT = '';
+const PROVIDER_PREFIX = 'provider:';
+const BACKEND_PREFIX = 'backend:';
+
+/** The stored `native` backend is not a source the user picks - it is what a
+ *  model provider searching with its own index is called underneath. */
+export const NATIVE_BACKEND = 'native';
+
+export function providerSource(id: string): SearchSource {
+  return `${PROVIDER_PREFIX}${id}`;
+}
+
+export function backendSource(id: string): SearchSource {
+  return `${BACKEND_PREFIX}${id}`;
+}
+
+export function parseSearchSource(
+  source: SearchSource
+): { kind: 'chat' } | { kind: 'provider'; id: string } | { kind: 'backend'; id: string } {
+  if (source.startsWith(PROVIDER_PREFIX)) {
+    return { kind: 'provider', id: source.slice(PROVIDER_PREFIX.length) };
+  }
+  if (source.startsWith(BACKEND_PREFIX)) {
+    return { kind: 'backend', id: source.slice(BACKEND_PREFIX.length) };
+  }
+  return { kind: 'chat' };
+}
+
+/** Read the single choice back out of the two halves it is stored as. */
+function sourceOf(deepSearch: { provider: string }, backend: { backend: string }): SearchSource {
+  if (backend.backend && backend.backend !== NATIVE_BACKEND) {
+    return backendSource(backend.backend);
+  }
+  return deepSearch.provider ? providerSource(deepSearch.provider) : SEARCH_SOURCE_SAME_AS_CHAT;
+}
+
 const EMPTY_ROLE: ModelRoleDraft = { provider: '', model: '', baseUrl: '', apiKey: '' };
 
 /** What to assume before the settings have loaded: nothing is configured. */
@@ -188,6 +242,10 @@ interface SettingsState {
   updateChat: (patch: Partial<ModelRoleDraft>) => void;
   updateDeepSearch: (patch: Partial<ModelRoleDraft>) => void;
   updateSearchBackend: (patch: Partial<SearchBackendDraft>) => void;
+  /** Where Deep Thinking searches, as the one value the UI asks for. */
+  searchSource: () => SearchSource;
+  /** Set it, keeping the search model and the search backend consistent. */
+  setSearchSource: (source: SearchSource, catalog?: Catalog | null) => void;
   resetDraft: () => void;
   save: () => Promise<boolean>;
   test: (target: TestTarget) => Promise<void>;
@@ -249,6 +307,52 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set((s) => ({ draft: { ...s.draft, deepSearch: { ...s.draft.deepSearch, ...patch } } })),
   updateSearchBackend: (patch) =>
     set((s) => ({ draft: { ...s.draft, searchBackend: { ...s.draft.searchBackend, ...patch } } })),
+
+  searchSource: () => {
+    const { draft } = get();
+    return sourceOf(draft.deepSearch, draft.searchBackend);
+  },
+
+  setSearchSource: (source, catalog) => {
+    const parsed = parseSearchSource(source);
+    const providers = (catalog ?? get().catalog)?.providers ?? [];
+
+    set((s) => {
+      // Switching source invalidates the fields belonging to the old one:
+      // a Tavily key is not an Anthropic key, and a model id carried over
+      // from another provider is garbage. Cleared rather than kept, so what
+      // is saved is only ever what the visible fields say.
+      if (parsed.kind === 'backend') {
+        return {
+          draft: {
+            ...s.draft,
+            deepSearch: { ...EMPTY_ROLE },
+            searchBackend: { backend: parsed.id, baseUrl: '', apiKey: '' },
+          },
+        };
+      }
+      // Both remaining cases search through a model provider, which is what
+      // the stored backend calls "native".
+      const backend = { backend: NATIVE_BACKEND, baseUrl: '', apiKey: '' };
+      if (parsed.kind === 'chat') {
+        return { draft: { ...s.draft, deepSearch: { ...EMPTY_ROLE }, searchBackend: backend } };
+      }
+      const spec = providers.find((p) => p.id === parsed.id);
+      return {
+        draft: {
+          ...s.draft,
+          deepSearch: {
+            ...EMPTY_ROLE,
+            provider: parsed.id,
+            // Prefer a model whose search actually works: picking OpenAI and
+            // landing on gpt-4o gives a source that cannot search at all.
+            model: spec?.nativeWebSearchModels?.[0] ?? spec?.defaultModel ?? '',
+          },
+          searchBackend: backend,
+        },
+      };
+    });
+  },
 
   resetDraft: () => {
     const stored = get().stored;

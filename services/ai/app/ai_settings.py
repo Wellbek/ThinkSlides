@@ -261,7 +261,14 @@ def resolve_deep_search_model(
 def _native_search_supported(credentials: ProviderCredentials | None) -> tuple[bool, str]:
     """Whether the provider can search on its own, plus the reason if not."""
     if credentials is None:
-        return False, "No Deep Thinking model is configured."
+        # Deep Thinking searches with the reasoning model unless another
+        # source is chosen, so with nothing configured at all the honest
+        # answer names the thing to do first - not a second model the user
+        # has no reason to think about yet.
+        return False, (
+            "Set up a reasoning model first. Deep Thinking searches with it "
+            "unless you pick a different search source."
+        )
     spec = PROVIDERS_BY_ID.get(credentials.provider)
     if spec is None or not spec.native_web_search:
         return False, f"{credentials.provider} has no built-in web search."
@@ -273,8 +280,8 @@ def _native_search_supported(credentials: ProviderCredentials | None) -> tuple[b
         return False, (
             f"Set the Deep Thinking model to one of: {allowed}. "
             f"{spec.label}'s built-in web search does not work with "
-            f"'{credentials.model}'. Leave the chat model as it is - those "
-            "search models cannot drive the agent."
+            f"'{credentials.model}'. Leave the reasoning model as it is - "
+            "those search models cannot drive the agent."
         )
     if credentials.provider == "zhipu" and "." not in credentials.api_key:
         return False, "Zhipu web search needs an API key in 'id.secret' form."

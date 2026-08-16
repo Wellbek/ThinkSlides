@@ -65,10 +65,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_base_url="https://api.openai.com/v1",
         native_web_search=True,
         native_web_search_note=(
-            "OpenAI's web search is only available on the '-search-preview' "
-            "models through the chat completions API. Set one of those as the "
-            "Deep Thinking model below - not as the chat model, which they "
-            "cannot serve because they do not support tool calling."
+            "OpenAI only searches on its '-search-preview' models, and those "
+            "cannot be the reasoning model - they do not support tool calling."
         ),
         native_web_search_models=("gpt-4o-search-preview", "gpt-4o-mini-search-preview"),
         no_tool_calling_models=("gpt-4o-search-preview", "gpt-4o-mini-search-preview"),
@@ -83,8 +81,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         native_web_search=True,
         native_web_search_note=(
             "Zhipu's search index is China-focused: English factual queries "
-            "mostly return Chinese-language sources. Prefer an external backend "
-            "for non-Chinese content."
+            "mostly return Chinese-language sources. Pick another search "
+            "source for non-Chinese content."
         ),
         api_key_help="Create a key at open.bigmodel.cn. Must be in 'id.secret' form to use web search.",
     ),

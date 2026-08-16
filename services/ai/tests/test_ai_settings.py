@@ -238,6 +238,17 @@ def test_status_reports_why_deep_thinking_is_unavailable(no_env_provider):
     assert "Firecrawl" in status["deepThinkingUnavailableReason"]
 
 
+def test_a_workspace_with_nothing_configured_is_told_what_to_do_first(no_env_provider):
+    """Deep Thinking searches with the reasoning model unless another source
+    is picked, so "no Deep Thinking model" was naming a second model the user
+    had no reason to think about - on the screen that also says no model at
+    all is set up."""
+    reason = ai_settings.configuration_status(None)["deepThinkingUnavailableReason"]
+
+    assert "reasoning model" in reason
+    assert "Deep Thinking model" not in reason
+
+
 def test_status_reports_encryption_availability(monkeypatch):
     """Surfaces a missing SETTINGS_ENCRYPTION_KEY before the user types a key."""
     assert ai_settings.configuration_status(None)["encryptionAvailable"] is True

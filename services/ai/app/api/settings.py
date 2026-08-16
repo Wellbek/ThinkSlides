@@ -1,6 +1,11 @@
 """
-Settings API: configure the chat model, the Deep Thinking model, and the
-deep-search backend, and verify credentials before relying on them.
+Settings API: configure the reasoning model and the web search behind Deep
+Thinking, and verify credentials before relying on them.
+
+Storage still keeps the search model and the search backend as separate
+sections, because they are genuinely different things to call. The interface
+asks for them as one decision - "where do Deep Thinking's results come from" -
+and sends both halves consistently; see the web app's settings store.
 
 API keys are write-only across this boundary. A read returns a last-four hint
 and a boolean; a write either supplies a new key or omits the field to keep the
@@ -114,10 +119,10 @@ def _validate_chat_model(role: ModelRoleInput | None) -> None:
     raise HTTPException(
         status_code=400,
         detail=(
-            f"'{role.model}' cannot be the chat model: it does not support tool "
-            "calling, which the agent needs for every step of a generation. "
-            "Set it as the Deep Thinking model instead, and choose a "
-            "tool-calling model (such as gpt-4o) for chat."
+            f"'{role.model}' cannot be the reasoning model: it does not support "
+            "tool calling, which the agent needs for every step of a generation. "
+            "Use it as the Deep Thinking search model instead, and choose a "
+            "tool-calling model (such as gpt-4o) to reason with."
         ),
     )
 

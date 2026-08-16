@@ -159,6 +159,13 @@ export function WorkspaceShell() {
 
   return (
     <div className="ws-root">
+      {/* Above the app row, not inside it: the alert is about the whole
+          workspace, so it spans the whole window - nav rail included - and
+          takes its height out of everything below rather than floating over
+          it. It is also the only place this is said; the composer used to
+          repeat it directly above the input, which put the same sentence on
+          screen twice. */}
+      <SetupBanner />
       <div className="ws-app-row">
         <NavRail
           extended={navExt}
@@ -172,7 +179,6 @@ export function WorkspaceShell() {
         />
 
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-          <SetupBanner />
           {view === "home" || !activeSessionId ? (
             <HomeView onStarted={enterSession} />
           ) : (

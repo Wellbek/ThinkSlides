@@ -387,7 +387,7 @@ def test_search_only_models_are_not_valid_chat_models():
     assert supports_tool_calling("someone-else", "their-model") is True
 
 
-def test_saving_a_search_only_model_as_the_chat_model_is_rejected():
+def test_saving_a_search_only_model_as_the_reasoning_model_is_rejected():
     """Caught at save time, naming the field it does belong in."""
     from fastapi import HTTPException
     from app.api.settings import ModelRoleInput, _validate_chat_model
@@ -398,7 +398,8 @@ def test_saving_a_search_only_model_as_the_chat_model_is_rejected():
         )
 
     assert exc.value.status_code == 400
-    assert "Deep Thinking model" in exc.value.detail
+    assert "reasoning model" in exc.value.detail
+    assert "Deep Thinking search model" in exc.value.detail
     _validate_chat_model(ModelRoleInput(provider="openai", model="gpt-4o"))
 
 
