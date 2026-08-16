@@ -139,6 +139,9 @@ class TextRunSpec:
     # A line break before this run, so a primitive can carry a heading over a
     # body without becoming two primitives that have to be kept aligned.
     break_before: bool = False
+    # A true superscript, set as a baseline offset rather than a smaller font
+    # or a Unicode glyph, so it scales with the type around it.
+    superscript: bool = False
 
     @classmethod
     def from_dict(cls, data: Any) -> "TextRunSpec":
@@ -155,6 +158,7 @@ class TextRunSpec:
             color=_hex_or_none(data.get("colorHex", data.get("color"))),
             font=str(data["fontName"]) if data.get("fontName") else None,
             break_before=bool(data.get("breakBefore", False)),
+            superscript=bool(data.get("superscript", False)),
         )
 
 
@@ -374,6 +378,10 @@ def _paint_text(slide, primitive: Primitive, context: PaintContext):
         # Several stock Office layouts declare cap="all"; a block inheriting it
         # renders SHOUTED.
         run._r.get_or_add_rPr().set("cap", "none")
+        if run_spec.superscript:
+            from app.renderer.apparatus import apply_superscript
+
+            apply_superscript(run)
 
     if primitive.fill:
         _apply_fill(box, primitive.fill)
@@ -595,9 +603,13 @@ def measure_text(text: str, size_pt: float, width_in: float,
     """
     if not str(text or "").strip() or width_in <= 0 or size_pt <= 0:
         return 0.0
+    from app.renderer.apparatus import strip_markers
+
     slack = MEASURE_SLACK_BOLD if bold else MEASURE_SLACK
+    # Markers are four characters of syntax that render as one small digit;
+    # measuring them as written would reserve room for text nobody sees.
     lines = text_fit.estimate_wrapped_lines(
-        str(text), size_pt, max(1.0, width_in * 72.0 * slack)
+        strip_markers(str(text)), size_pt, max(1.0, width_in * 72.0 * slack)
     )
     return lines * size_pt * text_fit.LINE_HEIGHT_RATIO / 72.0
 

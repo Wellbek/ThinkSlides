@@ -39,7 +39,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from app import colors
-from app.renderer import icons, primitives
+from app.renderer import apparatus, icons, primitives
 from app.renderer.deck_theme import SlideStyle
 from app.renderer.layout import PositionConfig
 from app.renderer.primitives import Primitive, TextRunSpec
@@ -624,7 +624,7 @@ class BlockCompiler:
             id=primitive_id, kind="text",
             box=PositionConfig(left=left, top=top, width=max(0.1, width),
                                height=max(0.08, height)),
-            runs=(TextRunSpec(text=str(text), bold=bold),),
+            runs=_runs_with_markers(str(text), bold),
             size_pt=size_pt, color=color, bold=bold,
             font=font or self.type_scale.body_font, align=align,
         )
@@ -648,6 +648,23 @@ def _image_primitive(primitive_id: str, png: bytes, box: PositionConfig,
         id=primitive_id, kind="image", box=box, alt_text=alt_text,
         image={"source": "base64",
                "data": base64.b64encode(png).decode("ascii")},
+    )
+
+
+def _runs_with_markers(text: str, bold: bool) -> tuple[TextRunSpec, ...]:
+    """
+    A block's text, with any inline footnote marker as its own superscript run.
+
+    A stat callout's caption and a row band's implication are exactly where the
+    reference deck puts markers, so a block has to carry them like body copy
+    does rather than printing "[^1]" literally.
+    """
+    if not apparatus.has_marker(text):
+        return (TextRunSpec(text=text, bold=bold),)
+    return tuple(
+        TextRunSpec(text=part, bold=bold, superscript=marker is not None)
+        for part, marker in apparatus.split_markers(text)
+        if part
     )
 
 
