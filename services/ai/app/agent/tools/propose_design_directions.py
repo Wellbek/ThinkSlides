@@ -36,9 +36,8 @@ import time
 
 from app import directions as direction_model
 from app.agent.registry import ToolParameter, ToolRegistry, ToolResult
-from app.agent.run_context import get_chat_provider
+from app.agent.run_context import require_chat_provider
 from app.agent.tools._json_extract import extract_json_object
-from app.llm.provider import get_llm_provider
 from app.observability.logging import get_logger
 from app.renderer import specimen
 
@@ -187,7 +186,7 @@ class ProposeDesignDirectionsTool:
         wrong with its set is worth far more than asking again and hoping,
         and it is the difference between a floor and a lottery.
         """
-        llm = get_chat_provider() or get_llm_provider()
+        llm = require_chat_provider()
         wanted = (direction_model.DIRECTION_COUNT - 1) if uploaded else \
             direction_model.DIRECTION_COUNT
         problems: list[str] = []
@@ -266,12 +265,22 @@ def _prompt(brief: str, answers: str, brand_hex: str | None,
         }]}, indent=2),
         "",
         "Rules:",
-        "- The directions must differ on at least two of: ground, type "
+        "- EVERY DIRECTION MUST USE A DIFFERENT ground. It decides the cover, "
+        "which is the first thing the user sees, so two directions sharing one "
+        "are two directions they cannot tell apart. A set that repeats a ground "
+        "is rejected.",
+        "- The directions must also differ on at least two of: ground, type "
         "pairing, motif, density. Three directions differing only in hue is a "
         "failed set and will be rejected.",
-        "- ground is where the dark tone goes: 'light' is white throughout, "
-        "'dark' sets content pages on the dark tone, 'rail' is white with a "
-        "dark rail, 'split' is a tinted canvas.",
+        "- ground is the deck's deployment of tone, and each renders a visibly "
+        "different cover: 'light' is white throughout with the title in the "
+        "brand colour; 'dark' is a dark cover with content lifted slightly off "
+        "it; 'rail' is a dark cover with white content pages, the classic "
+        "report shape; 'split' puts the brand colour itself on the cover and "
+        "tints the content pages.",
+        "- motif is what is drawn under the title: 'rule' is a short accent "
+        "rule, 'band' a full-measure filled band, 'none' leaves the title "
+        "alone.",
         "- A serif display over a sans body is a different deck from sans over "
         "sans. Use real typefaces (Georgia, Arial, Helvetica, Times New "
         "Roman, Verdana), never invented ones.",

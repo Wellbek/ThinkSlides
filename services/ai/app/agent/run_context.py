@@ -32,7 +32,7 @@ from __future__ import annotations
 from contextvars import ContextVar, Token
 
 from app.ai_settings import SearchConfig
-from app.llm.provider import LLMProvider
+from app.llm.provider import AINotConfiguredError, LLMProvider
 
 _search_config: ContextVar[SearchConfig | None] = ContextVar(
     "thinkslides_search_config", default=None
@@ -171,6 +171,23 @@ def set_chat_provider(provider: LLMProvider | None) -> Token:
 def get_chat_provider() -> LLMProvider | None:
     """The current run's chat provider, or None outside a configured run."""
     return _chat_provider.get()
+
+
+def require_chat_provider() -> LLMProvider:
+    """The current run's chat provider, or fail saying it is not configured.
+
+    Every tool that makes its own LLM call used to write
+    ``get_chat_provider() or get_llm_provider()``, and the right-hand side is a
+    process-wide provider built from environment variables. That turned a
+    workspace with no model configured into a workspace silently running on
+    somebody else's key - and, when that key was out of credit, into a run that
+    reported a billing error nobody had any way to connect to their own
+    Settings page.
+    """
+    provider = _chat_provider.get()
+    if provider is None:
+        raise AINotConfiguredError()
+    return provider
 
 
 def reset_chat_provider(token: Token) -> None:

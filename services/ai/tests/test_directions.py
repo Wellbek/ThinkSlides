@@ -168,8 +168,9 @@ class TestASetThatIsNotASet:
 
         problems = directions.distinctness_problems(same)
 
-        assert problems
-        assert "the same direction" in problems[0]
+        assert any("the same direction" in problem for problem in problems)
+        # And they share a ground, so they render the same cover too.
+        assert any("the same cover" in problem for problem in problems)
 
     def test_differing_on_one_axis_is_not_enough(self):
         pair = [_spec(id="a", name="A", ground="light"),
@@ -203,10 +204,12 @@ class TestADirectionNobodyCanRead:
 
     def test_a_direction_whose_text_vanishes_into_its_ground_is_rejected(self):
         system = directions.compile_direction(_spec())
-        # A palette whose paper and its ink are the same colour.
+        # A palette whose paper and its ink are the same colour. The per-role
+        # grounds are compiled from that palette, so they move with it.
         for entry in system["palette"]["colors"]:
             if entry["name"] in ("white", "light", "dark", "primary"):
                 entry["value"] = "#7A7A7A"
+        system["grounds"] = {role: "#7A7A7A" for role in system["grounds"]}
 
         problems = directions.contrast_problems(system)
 
@@ -311,7 +314,7 @@ def no_previews(monkeypatch):
 def _install(monkeypatch, llm):
     import app.agent.tools.propose_design_directions as tool
 
-    monkeypatch.setattr(tool, "get_chat_provider", lambda: llm)
+    monkeypatch.setattr(tool, "require_chat_provider", lambda: llm)
     return tool.ProposeDesignDirectionsTool
 
 

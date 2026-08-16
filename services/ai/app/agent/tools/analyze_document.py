@@ -11,8 +11,7 @@ generating new ones.
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
-from app.agent.run_context import get_chat_provider
-from app.llm.provider import get_tools_llm_provider as get_llm_provider
+from app.agent.run_context import require_chat_provider
 from app.observability.logging import get_logger
 import os
 import json
@@ -156,7 +155,7 @@ class AnalyzeDocumentTool:
             return content[:max_chars] + "... [truncated]", True, False
 
         chunks = [content[i:i + _SUMMARIZE_CHUNK_CHARS] for i in range(0, len(content), _SUMMARIZE_CHUNK_CHARS)]
-        llm = get_chat_provider() or get_llm_provider()
+        llm = require_chat_provider()
         summaries: list[str] = []
         for chunk in chunks:
             try:

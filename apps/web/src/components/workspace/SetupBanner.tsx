@@ -30,16 +30,19 @@ export function SetupBanner() {
   const status = stored.status ?? UNCONFIGURED_STATUS;
   if (status.chatConfigured && status.encryptionAvailable) return null;
 
+  // Phrased as the offer it is. Nothing can be generated until this is done,
+  // so the banner's job is to get the user into settings, not to inform them
+  // of a fact they can do nothing with.
   const message = !status.chatConfigured
-    ? "No AI model is configured yet. Set up a provider and API key before generating a presentation."
-    : "Credential encryption is not configured on the AI service, so API keys cannot be saved.";
+    ? "No AI model is set up for this workspace yet, so nothing can be generated. Set one up now?"
+    : "Credential encryption is not configured on the AI service, so API keys cannot be saved. See the SETTINGS_ENCRYPTION_KEY setup step.";
 
   return (
     <div className="ws-setup-banner" role="alert">
       <AlertTriangle size={13} className="ws-setup-banner-icon" />
       <span className="ws-setup-banner-text">{message}</span>
       <button className="ws-setup-banner-cta" onClick={() => setSettingsOpen(true)}>
-        Open settings
+        {status.chatConfigured ? "Open settings" : "Set up now"}
       </button>
     </div>
   );

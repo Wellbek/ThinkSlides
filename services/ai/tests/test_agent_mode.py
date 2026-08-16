@@ -32,6 +32,7 @@ def _loop(mode: str | None = None) -> AgentLoop:
     """
     loop = AgentLoop(db=None, mode=mode)
     loop.working_state.consulted_before_planning = True
+    loop.working_state.offered_directions = True
     loop.working_state.reviewed_outline_with_user = True
     return loop
 
@@ -62,30 +63,40 @@ def test_normalize_mode_falls_back_to_simple(value, expected):
 # ── Tool gating ────────────────────────────────────────────────────────
 
 
-def test_simple_mode_does_not_offer_web_search():
-    """The model cannot call a tool it was never given."""
+def test_simple_mode_has_no_research_phase():
+    """The model cannot call a tool that no phase of its run offers."""
+    from app.agent import pipeline
+
     loop = _loop(MODE_SIMPLE)
+    loop.search_config = None
 
-    names = _tool_names(loop._tool_schemas_for_mode())
-
-    assert "web_search" not in names
-    # The rest of the toolset is untouched.
-    assert "finalize_and_render_pptx" in names
-    assert "plan_presentation_structure" in names
+    research = pipeline.PHASES_BY_NAME["research"]
+    assert research.applies(loop) is False
 
 
-def test_deep_mode_offers_web_search():
+def test_deep_mode_researches_with_web_search_and_nothing_else():
+    from app.agent import pipeline
+
     loop = _loop(MODE_DEEP)
+    loop.search_config = object()
 
-    assert "web_search" in _tool_names(loop._tool_schemas_for_mode())
+    research = pipeline.PHASES_BY_NAME["research"]
+    assert research.applies(loop) is True
+    assert research.tools == {"web_search"}
 
 
-def test_gating_removes_only_the_deep_only_tools():
-    """Simple mode is the full toolset minus web_search, nothing else."""
-    simple = _tool_names(_loop(MODE_SIMPLE)._tool_schemas_for_mode())
-    deep = _tool_names(_loop(MODE_DEEP)._tool_schemas_for_mode())
+def test_every_phase_offers_only_its_own_tools():
+    """Scoping is the whole mechanism: a phase hands the model the tools for
+    the step it is on, so there is nothing to jump to."""
+    from app.agent import pipeline
 
-    assert deep - simple == {"web_search"}
+    drafting = pipeline.PHASES_BY_NAME["draft"].tools
+    assert "design_slide_content" in drafting
+    assert "web_search" not in drafting
+    assert "plan_presentation_structure" not in drafting
+    # The loop makes its own calls in the loop-driven phases, so they offer
+    # the model nothing at all.
+    assert pipeline.PHASES_BY_NAME["plan"].tools == frozenset()
 
 
 # ── System prompt ──────────────────────────────────────────────────────
@@ -107,20 +118,39 @@ def test_deep_mode_prompt_asks_the_model_to_research_first():
     assert "call web_search FIRST" in prompt
 
 
-def test_tool_and_workflow_lists_stay_contiguously_numbered_in_simple_mode():
-    """Dropping web_search must renumber the lists, not leave a gap."""
-    prompt = _loop(MODE_SIMPLE)._build_system_prompt({})
+def _numbered_tools(prompt: str) -> list[int]:
     lines = prompt.splitlines()
-
-    tools_start = lines.index("## Available Tools") + 2
-    tool_numbers = []
-    for line in lines[tools_start:]:
+    start = lines.index("## Tools") + 2
+    numbers = []
+    for line in lines[start:]:
         if not line or not line[0].isdigit():
             break
-        tool_numbers.append(int(line.split(".", 1)[0]))
+        numbers.append(int(line.split(".", 1)[0]))
+    return numbers
 
-    assert tool_numbers == list(range(1, len(tool_numbers) + 1))
-    assert len(tool_numbers) == 14  # 15 in deep mode, minus web_search
+
+def test_the_tool_list_stays_contiguously_numbered_in_simple_mode():
+    """Dropping a tool must renumber the list, not leave a gap."""
+    loop = _loop(MODE_SIMPLE)
+    loop._session_has_documents = True
+    numbers = _numbered_tools(loop._build_system_prompt({}))
+
+    assert numbers == list(range(1, len(numbers) + 1))
+    assert len(numbers) == 15  # 16 in deep mode, minus web_search
+
+
+def test_the_document_tools_are_described_only_when_there_are_documents():
+    """The prompt describing a tool the run withholds is the two disagreeing,
+    and the model resolves that by trying it anyway."""
+    loop = _loop(MODE_SIMPLE)
+    loop._session_has_documents = False
+    prompt = loop._build_system_prompt({})
+    numbers = _numbered_tools(prompt)
+
+    assert numbers == list(range(1, len(numbers) + 1))
+    assert len(numbers) == 13
+    assert "extract_key_data" not in prompt
+    assert "analyze_document" not in prompt
 
 
 # ── Mode resolution and persistence ────────────────────────────────────
@@ -148,16 +178,18 @@ async def test_deep_mode_is_downgraded_when_no_search_backend_is_usable(monkeypa
 
     assert loop.mode == MODE_SIMPLE
     assert loop.search_config is None
-    assert "web_search" not in _tool_names(loop._tool_schemas_for_mode())
 
 
 @pytest.mark.asyncio
 async def test_deep_mode_installs_the_search_config_on_the_run_context(monkeypatch):
     """The web_search tool reads its backend off the run context, not a param."""
     from app.agent import run_context
-    from app.config import settings as env_settings
-    monkeypatch.setattr(env_settings, "web_search_provider", "tavily")
-    monkeypatch.setattr(env_settings, "tavily_api_key", "tvly-test")
+    from app.ai_settings import SearchConfig
+
+    monkeypatch.setattr(
+        "app.ai_settings.resolve_search_config",
+        lambda row: (SearchConfig(backend="tavily", api_key="tvly-test"), ""),
+    )
 
     loop = _loop(MODE_DEEP)
     try:
@@ -281,7 +313,7 @@ async def test_tools_use_the_run_s_configured_provider_not_the_environment():
     # Every one of them must prefer the run context over its module-level
     # getter, so a run's provider is what actually makes the call.
     for module in modules:
-        assert hasattr(module, "get_chat_provider"), (
+        assert hasattr(module, "require_chat_provider"), (
             f"{module.__name__} does not consult the run context"
         )
 
@@ -290,12 +322,18 @@ async def test_tools_use_the_run_s_configured_provider_not_the_environment():
     try:
         assert run_context.get_chat_provider() is stub
         for module in modules:
-            assert module.get_chat_provider() is stub
+            assert module.require_chat_provider() is stub
     finally:
         run_context.reset_chat_provider(token)
 
-    # Outside a run the context is empty, so the env provider still applies.
+    # Outside a run the context is empty - and that is now an error rather
+    # than a cue to fall back to a provider built from the environment.
+    from app.llm.provider import AINotConfiguredError
+
     assert run_context.get_chat_provider() is None
+    for module in modules:
+        with pytest.raises(AINotConfiguredError):
+            module.require_chat_provider()
 
 
 @pytest.mark.asyncio

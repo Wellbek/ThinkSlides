@@ -32,6 +32,26 @@ import time
 
 logger = get_logger(__name__)
 
+
+class AINotConfiguredError(RuntimeError):
+    """Raised when work needs a model the workspace has not configured.
+
+    There used to be no such state: an organisation with nothing saved in
+    Settings silently ran on whatever ``.env`` happened to hold, so a
+    deployment that had once been pointed at a Zhipu key kept using it, kept
+    reporting its billing failures as the run's failure, and gave the setup
+    banner nothing to trigger on. Settings is now the only source of a model,
+    and its absence is a first-class, named condition rather than a fallback.
+    """
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(
+            message
+            or "No AI model is configured for this workspace. Open Settings and "
+              "add a provider and API key before generating a presentation."
+        )
+
+
 # Rate limits are a routine, self-correcting condition - a token-per-minute
 # ceiling clears within seconds - but an unretried 429 surfaces as a failed
 # tool call. Mid-run that abandons a slide the agent was in the middle of

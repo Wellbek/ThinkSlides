@@ -6,11 +6,10 @@ Plans the overall slide structure and outline based on analyzed content and requ
 from __future__ import annotations
 from app.agent import run_context
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
-from app.agent.run_context import get_chat_provider
+from app.agent.run_context import require_chat_provider
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app import budget as budget_model
 from app.measure import archetypes as archetype_model
-from app.llm.provider import get_tools_llm_provider as get_llm_provider
 from app.observability.logging import get_logger
 import json
 import re
@@ -220,10 +219,11 @@ class PlanPresentationStructureTool:
     ) -> ToolResult:
         start = time.time()
         try:
-            # An organisation that configured its own provider gets it here
-            # too: its explicit choice outranks the environment's cheaper
-            # tools-tier model, which only exists for the default provider.
-            llm = get_chat_provider() or get_llm_provider()
+            # The workspace's configured model. There is no environment
+            # fallback: a run reaches a tool only after the loop resolved
+            # Settings into a provider, and its absence is an error, not a
+            # cue to quietly use somebody else's key.
+            llm = require_chat_provider()
 
             # coerce_json_arg, not a bare json.loads: a tool-calling model may
             # send a native JSON object for these despite their declared

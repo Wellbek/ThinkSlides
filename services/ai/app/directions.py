@@ -129,8 +129,13 @@ def compile_direction(spec: DirectionSpec, brand_hex: Optional[str] = None,
     palette = _palette_for(spec, brand_hex, system)
     system["palette"] = {"colors": palette,
                          "schemeName": f"direction-{spec.id}"}
+    grounds = _grounds_for(spec, palette)
+    system["grounds"] = {
+        role: value for role, value in grounds.items() if not role.startswith("_")
+    }
     system["typography"] = _typography_for(spec)
     system["density"] = _density_for(spec, system)
+    system["spacing"] = _spacing_for(spec, system)
     system["chrome"] = _chrome_for(spec, system)
     system["dataViz"] = derive_data_viz_config(palette, body_font=spec.body_face)
     system["colorTheme"] = spec.id
@@ -161,24 +166,68 @@ def _palette_for(spec: DirectionSpec, brand_hex: Optional[str],
     light = slots.get("light") or "#F0F4F8"
 
     # ``DeckTheme`` reads the "white" slot as the ground a content slide sits
-    # on, so that is where a direction's deployment lands - not a new slot the
-    # renderer would have to learn about. A "dark" direction is one whose
-    # content pages sit on the deck's dark tone; "split" tints them; "rail"
-    # and "light" keep the paper white and differ in the motif and the
-    # composition the grammar puts on top of it.
-    grounds = {
+    # on, so that is where a direction's content deployment lands - not a new
+    # slot the renderer would have to learn about.
+    #
+    # Lifted off the cover's own dark rather than equal to it: a dark direction
+    # that sets both to the same value gives every page one background, and a
+    # deck of identical pages reads as a set of unrelated documents.
+    content = {
         "light": "#FFFFFF",
-        # Lifted off the cover's own dark rather than equal to it. A dark
-        # direction that sets both to the same value gives every page in the
-        # deck one background, which is the defect #56 opened on with the
-        # colours the other way round - a deck of identical pages reads as a
-        # set of unrelated documents whichever tone they share.
         "dark": colors.mix(dark, "#FFFFFF", 0.12),
         "rail": "#FFFFFF",
         "split": light,
     }
-    _set(palette, "white", grounds.get(spec.ground, "#FFFFFF"))
+    _set(palette, "white", content.get(spec.ground, "#FFFFFF"))
     return palette
+
+
+def _grounds_for(spec: DirectionSpec, palette: list[dict]) -> dict:
+    """Which ground each kind of slide sits on, for this direction.
+
+    Every deck used to put its cover on the dark tone, whatever else it did -
+    so three directions rendered three identical covers, and the only thing a
+    user could actually see a difference in was the content background. The
+    cover is the first thing they look at, so it is the first thing a direction
+    has to change.
+
+    Four deployments, and no two of them share a cover:
+
+    * ``light`` - a tinted cover over white pages. The title carries the brand
+      colour and there is no dark page in the deck.
+    * ``dark``  - dark cover, content lifted slightly off it. One tone, two
+      values.
+    * ``rail``  - dark cover, white content. The classic report shape.
+    * ``split`` - the brand colour itself as the cover, content on a tint of
+      it. The loudest of the four.
+    """
+    slots = {entry.get("name"): entry.get("value") for entry in palette}
+    dark = slots.get("dark") or "#15334F"
+    primary = slots.get("primary") or dark
+    light = slots.get("light") or "#F0F4F8"
+    white = slots.get("white") or "#FFFFFF"
+
+    covers = {
+        # Not pure white: a cover indistinguishable from the page after it
+        # gives the deck no opening, and the invariant everywhere else here is
+        # that a cover reads as one. The tint is the whole difference, which is
+        # what makes this the minimal direction rather than the absent one.
+        "light": light,
+        "dark": dark,
+        "rail": dark,
+        "split": primary,
+    }
+    cover = covers.get(spec.ground, dark)
+    return {
+        "cover": cover,
+        "content": white,
+        # Section dividers echo the cover, so a deck reads as one document.
+        "section": cover,
+        "closing": cover,
+        # Kept for anything reading the axis by name rather than by colour.
+        "_ground": spec.ground,
+        "_light": light,
+    }
 
 
 def _typography_for(spec: DirectionSpec) -> dict:
@@ -223,6 +272,34 @@ def _density_for(spec: DirectionSpec, base: dict) -> dict:
         grid_columns_median=profile.grid_columns_median,
         words_per_block_median=profile.words_per_block_median,
     ).to_dict()
+
+
+def _spacing_for(spec: DirectionSpec, base: dict) -> dict:
+    """The motif, as the tokens the renderer actually draws it from.
+
+    ``spacing.accentRule`` is declared rather than hardcoded precisely so a
+    direction can move it or drop it - and until this existed the motif axis
+    changed nothing at all, so a "no motif" direction still drew the same rule
+    under the same title as the other two. Three directions that differ only
+    in background colour is what that produced.
+    """
+    spacing = dict(base.get("spacing") or {})
+    if spec.motif == "none":
+        spacing.pop("accentRule", None)
+        spacing.pop("heroAccentRule", None)
+        return spacing
+    if spec.motif == "band":
+        # A band rather than a rule: the full title measure, thick enough to
+        # read as a filled shape instead of a line.
+        for key, width_key in (("accentRule", "titleWidthEmu"),
+                               ("heroAccentRule", "heroWidthEmu")):
+            rule = dict(spacing.get(key) or {})
+            if not rule:
+                continue
+            rule["cxEmu"] = int(spacing.get(width_key) or rule.get("cxEmu", 0) * 4)
+            rule["cyEmu"] = int(rule.get("cyEmu", 0) * 3) or rule.get("cyEmu", 0)
+            spacing[key] = rule
+    return spacing
 
 
 def _chrome_for(spec: DirectionSpec, base: dict) -> dict:
@@ -283,6 +360,19 @@ def distinctness_problems(specs: Sequence[DirectionSpec]) -> list[str]:
     seen_ids = [spec.id for spec in specs]
     if len(set(seen_ids)) != len(seen_ids):
         problems.append("two directions share an id")
+
+    # The ground decides the cover, and the cover is the first thing a user
+    # looks at. Two directions sharing one is two directions they cannot tell
+    # apart in the thumbnail, whatever else differs - which is what "I have
+    # 2/3 the same designs" meant.
+    grounds = [spec.ground for spec in specs]
+    for ground in sorted({g for g in grounds if grounds.count(g) > 1}):
+        sharing = [spec.name for spec in specs if spec.ground == ground]
+        problems.append(
+            f"{' and '.join(repr(n) for n in sharing)} both sit on the "
+            f"{ground!r} ground, so they render the same cover - give each "
+            "direction a different one"
+        )
 
     for index, first in enumerate(specs):
         for second in specs[index + 1:]:
