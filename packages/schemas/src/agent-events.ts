@@ -140,10 +140,36 @@ export interface FileGeneratedEvent {
   timestamp: string;
 }
 
+/**
+ * A design direction offered as something to look at rather than read.
+ *
+ * A direction is a whole design system - ground, type pairing, motif,
+ * density - and five words of text cannot convey the difference between two
+ * of them. `previewUrls` are the specimen slides rendered under it, in order.
+ */
+export interface AgentQuestionPreviewOption {
+  kind: "preview";
+  id: string;
+  /** The direction's human name - "Dark analyst", never "Option A". */
+  label: string;
+  /** One line on why this direction, shown under the label. */
+  description?: string;
+  previewUrls: string[];
+}
+
+/**
+ * One answer a user can pick.
+ *
+ * A bare string is every question the agent has ever asked, and stays exactly
+ * that: sessions persisted before previews existed hold strings, and they
+ * must keep rendering and answering unchanged.
+ */
+export type AgentQuestionOption = string | AgentQuestionPreviewOption;
+
 /** One question put to the user, with the answers they can pick in a tap. */
 export interface AgentQuestion {
   question: string;
-  options: string[];
+  options: AgentQuestionOption[];
 }
 
 export interface QuestionEvent {
@@ -154,7 +180,7 @@ export interface QuestionEvent {
   /** The first question, also sent flat for consumers written before a
    *  single pause could carry several. */
   question: string;
-  options: string[];
+  options: AgentQuestionOption[];
   context?: string;
   timestamp: string;
 }

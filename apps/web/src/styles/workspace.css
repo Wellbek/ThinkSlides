@@ -470,10 +470,43 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-q-elab textarea { width: 100%; resize: none; border: 1px solid var(--ws-border); border-radius: var(--ws-radius-sm); background: var(--ws-bg); color: var(--ws-text-primary); font-family: var(--ws-font-ui); font-size: 12.5px; padding: 7px 9px; min-height: 36px; outline: none; }
 .ws-q-elab textarea:focus { border-color: var(--ws-ai-border); }
 .ws-q-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.ws-q-send { background: var(--ws-ai-text); color: #0D0D0D; border: none; border-radius: var(--ws-radius-sm); padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.ws-q-send { background: var(--ws-ai-text); color: #0D0D0D; border: none; border-radius: var(--ws-radius-sm); padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 .ws-q-send:hover { background: #9aa0f9; }
 .ws-q-send:disabled { background: #2A2A3A; color: #555; cursor: not-allowed; }
 .ws-q-hint { font-size: 11px; color: #555; }
+
+/* Design directions: an option that is a whole design system, shown as the
+   specimen slides rendered under it. The grid collapses to one column in the
+   chat panel, where a 320px column cannot carry three cards side by side and
+   a squeezed preview shows nothing. */
+.ws-q-directions { display: grid; grid-template-columns: 1fr; gap: 9px; }
+@media (min-width: 620px) { .ws-q-directions { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); } }
+.ws-q-direction { border: 1px solid var(--ws-border); border-radius: var(--ws-radius-sm); background: var(--ws-bg); padding: 8px; cursor: pointer; }
+.ws-q-direction:hover { border-color: #333; }
+.ws-q-direction.selected { border-color: var(--ws-ai-border); background: var(--ws-ai-bg); }
+.ws-q-direction:focus-visible { outline: 2px solid var(--ws-ai-text); outline-offset: 1px; }
+.ws-q-dir-shot { position: relative; border-radius: 3px; overflow: hidden; background: #0A0A0A; aspect-ratio: 16 / 9; }
+.ws-q-dir-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ws-q-dir-shot .radio { position: absolute; top: 6px; right: 6px; width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid #666; background: rgba(0,0,0,0.55); }
+.ws-q-direction.selected .radio { border-color: var(--ws-ai-text); color: var(--ws-ai-text); display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.7); }
+.ws-q-dir-missing { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 11px; color: #555; }
+.ws-q-dir-name { font-size: 12.5px; font-weight: 600; color: #C9C9E8; margin-top: 7px; }
+.ws-q-dir-why { font-size: 11px; color: #6E6E9A; line-height: 1.4; margin-top: 3px; }
+.ws-q-dir-thumbs { display: flex; gap: 4px; margin-top: 7px; }
+.ws-q-dir-thumb { width: 34px; height: 20px; object-fit: cover; border-radius: 2px; border: 1px solid var(--ws-border); cursor: zoom-in; }
+.ws-q-dir-thumb:hover { border-color: var(--ws-ai-text); }
+
+/* Every specimen at full size: a user choosing a design system should be able
+   to look at all three slides, not a thumbnail of the first. */
+.ws-q-lightbox { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,0.82); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.ws-q-lightbox-inner { max-width: min(1100px, 92vw); width: 100%; background: var(--ws-surface-1); border: 1px solid var(--ws-border); border-radius: var(--ws-radius-md); padding: 10px; }
+.ws-q-lightbox-bar { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #999; margin-bottom: 8px; }
+.ws-q-lightbox-bar button { background: none; border: none; color: #999; cursor: pointer; padding: 2px; }
+.ws-q-lightbox-bar button:hover { color: #DDD; }
+.ws-q-lightbox-inner > img { width: 100%; border-radius: 3px; display: block; }
+.ws-q-lightbox-thumbs { display: flex; gap: 6px; margin-top: 8px; }
+.ws-q-lightbox-thumbs img { width: 76px; height: 43px; object-fit: cover; border-radius: 2px; border: 1px solid var(--ws-border); cursor: pointer; }
+.ws-q-lightbox-thumbs img.active { border-color: var(--ws-ai-text); }
 
 /* Chat input */
 .ws-composer { flex-shrink: 0; border-top: 1px solid var(--ws-border); padding: 12px 14px; background: var(--ws-surface-1); }
