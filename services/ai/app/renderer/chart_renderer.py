@@ -119,6 +119,31 @@ def _group_pie_tail(labels: list[str], values: list[float]) -> tuple[list[str], 
     return kept_labels, kept_values
 
 
+def _adapt_to_ground(style, ground: str | None):
+    """
+    Re-colour a chart's furniture for the ground it will be drawn on.
+
+    The PNG is transparent, so the slide (or the region) shows through, and
+    the axis, ticks, labels and gridlines are all drawn in the design
+    system's ``dark`` tone. On a dark ground that is a chart with invisible
+    axes - the same defect as dark text on a dark slide, in the one element
+    that had no way to find out what was behind it.
+    """
+    from dataclasses import replace
+
+    from app import colors
+
+    if not ground or not colors.parse_hex(ground) or not colors.is_dark(ground):
+        return style
+    return replace(
+        style,
+        axis_color=colors.readable_on(ground, "#FFFFFF"),
+        # A gridline is meant to be barely there; on a dark ground that is a
+        # slight lift off the ground rather than a light grey line.
+        grid_color=colors.mix(ground, "#FFFFFF", 0.28),
+    )
+
+
 def render_chart_to_png(
     chart_data: dict,
     design_system: dict | None,
@@ -126,6 +151,7 @@ def render_chart_to_png(
     height_in: float,
     dpi: int = 200,
     slide_title: str | None = None,
+    ground: str | None = None,
 ) -> bytes | None:
     """
     Render a ChartContent-shaped dict to a transparent-background PNG.
@@ -135,7 +161,9 @@ def render_chart_to_png(
     rather than aborting the whole render.
 
     ``slide_title`` suppresses a chart title that merely restates the slide's
-    heading, which is the usual case and reads as a stutter.
+    heading, which is the usual case and reads as a stutter. ``ground`` is
+    what the transparent PNG will sit on, so the chart's own furniture can be
+    coloured to be visible against it.
     """
     series = _clean_series(chart_data.get("series") or chart_data.get("data"))
     if not series:
@@ -148,7 +176,7 @@ def render_chart_to_png(
         chart_type = "bar"
 
     categories = [str(c) for c in (chart_data.get("categories") or [])]
-    style = resolve_chart_style(design_system)
+    style = _adapt_to_ground(resolve_chart_style(design_system), ground)
     font = _resolve_font(style.font_name)
 
     unit_suffix = str(chart_data.get("valueSuffix") or "").strip()

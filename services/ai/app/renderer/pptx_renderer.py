@@ -26,6 +26,7 @@ from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
 from app.observability.logging import get_logger
 from app.renderer.layout import LayoutEngine, PositionConfig
+from app.renderer.regions import RegionTree
 from app.renderer.typography import TypeScale
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
 from app.renderer import text_fit
@@ -116,6 +117,11 @@ _STOCK_LAYOUT_FOR_CATALOG_ID = {
 CHROME_NAME_PREFIX = "ThinkSlides Chrome:"
 CHROME_ACCENT_RULE = f"{CHROME_NAME_PREFIX} Accent Rule"
 CHROME_FOOTER = f"{CHROME_NAME_PREFIX} Footer"
+# A region's own background fill. Chrome rather than content: it is the paper
+# a block is printed on, and measuring a half-slide fill as if it were an
+# element would tell every dead-space and density check that the slide is
+# full when nothing has been written on it yet.
+CHROME_REGION_GROUND = f"{CHROME_NAME_PREFIX} Region Ground"
 
 
 def is_chrome_shape(shape) -> bool:
@@ -132,6 +138,10 @@ class SlidePlan:
     body_regions: list[PositionConfig] = field(default_factory=list)
     accent_rule: Optional[PositionConfig] = None
     show_footer: bool = True
+    # The slide's own composition, when it declared one. None for every slide
+    # that binds by placeholder index, which is every slide written before
+    # regions existed and most written after.
+    regions: Optional[RegionTree] = None
 
     @property
     def content_region(self) -> PositionConfig:
@@ -385,6 +395,34 @@ def _resolve_image_bytes(img_data: dict) -> Optional[bytes]:
     return None
 
 
+def _describe_picture(picture, description: str) -> None:
+    """
+    Give a placed picture its own description, replacing python-pptx's.
+
+    ``add_picture`` takes a path, and python-pptx writes that path into the
+    shape's ``descr`` attribute. Every chart and every image this renderer
+    places comes from a ``NamedTemporaryFile``, so each shipped deck carried
+    strings like ``descr="tmp3nuj3me1.png"`` - a local temp filename, in the
+    file the user downloads, and different on every render of the same deck.
+    That made the renderer's own output non-deterministic, which is why this
+    surfaced: the region work needs "the same slide JSON renders the same
+    file" to be true before it can claim to have changed nothing.
+
+    The attribute is also the accessibility description a screen reader
+    reads, so it is set to the content's alt text where there is one and
+    removed where there is not.
+    """
+    try:
+        cNvPr = picture._element.nvPicPr.cNvPr
+    except AttributeError:                                # pragma: no cover
+        return
+    text = (description or "").strip()
+    if text:
+        cNvPr.set("descr", text)
+    else:
+        cNvPr.attrib.pop("descr", None)
+
+
 def _sniff_image_ext(img_bytes: bytes) -> str:
     """Determine a file extension from image content, not from a claimed source string."""
     try:
@@ -592,6 +630,9 @@ class PPTXRenderer:
 
             self._style = plan.style
             self._apply_background(slide, plan.style)
+            # Before any content: shapes stack in document order, so a ground
+            # added after a block would cover it.
+            self._paint_region_grounds(slide, plan)
             self._render_content_on_slide(slide, slide_data, plan)
             self._decorate_slide(slide, plan, catalog, index, total, metadata)
         self._style = None
@@ -677,6 +718,10 @@ class PPTXRenderer:
         )
         accent_rule = _region_from_placeholder_spec(rule_spec) if rule_spec else None
 
+        dimensions = catalog.get("slideDimensions") or {}
+        canvas_width = emu_to_inches(dimensions.get("widthEmu", 0)) or LayoutEngine.SLIDE_WIDTH
+        canvas_height = emu_to_inches(dimensions.get("heightEmu", 0)) or LayoutEngine.SLIDE_HEIGHT
+
         return SlidePlan(
             layout_id=layout_id or "content",
             style=style,
@@ -686,6 +731,7 @@ class PPTXRenderer:
             # The cover carries the deck's title already; a footer under it
             # is noise, and no real deck numbers its cover.
             show_footer=role != deck_theme.ROLE_COVER,
+            regions=RegionTree.from_slide(slide_data, canvas_width, canvas_height),
         )
 
     @staticmethod
@@ -713,7 +759,14 @@ class PPTXRenderer:
         language across a deck; without it, seven slides of the same white
         page read as seven unrelated documents.
         """
-        if plan.accent_rule is not None:
+        # The accent rule is positioned by the layout catalog, at a fixed point
+        # under where a catalog layout puts its title. A composed slide does
+        # not have that title there - the rule landed across the lead
+        # paragraph of a split canvas - and its composition is already the
+        # design language the rule stands in for on a plain slide. Chrome that
+        # knows about compositions is #126; until then a composed slide is
+        # left to its own structure rather than having a bar drawn through it.
+        if plan.accent_rule is not None and plan.regions is None:
             self._add_accent_rule(slide, plan.accent_rule, plan.style.accent_color)
 
         if not plan.show_footer:
@@ -824,6 +877,18 @@ class PPTXRenderer:
             self._strip_empty_placeholders(slide)
             return
 
+        # A slide may compose itself into named regions instead of, or as well
+        # as, binding to placeholder slots. Blocks that name a region it
+        # actually declares are drawn there; everything else goes down the
+        # path it always went down, untouched. A slide with no region tree
+        # never reaches the branch at all.
+        bound, contents = self._partition_by_region(contents, plan.regions)
+        if bound:
+            self._render_regions(slide, bound, plan, self._slide_title(contents, bound))
+        if not contents:
+            self._strip_empty_placeholders(slide)
+            return
+
         text_items = [c for c in contents if c.get("type") == "text"]
         object_items = [
             c for c in contents
@@ -915,6 +980,186 @@ class PPTXRenderer:
                 self._add_chart(slide, item.get("chart", {}), region, slide_title)
 
         self._strip_empty_placeholders(slide)
+
+    @staticmethod
+    def _partition_by_region(
+        contents: list[dict],
+        tree: Optional[RegionTree],
+    ) -> tuple[list[tuple[str, dict]], list[dict]]:
+        """
+        Split a slide's blocks into ``(region-bound, everything else)``.
+
+        A block naming a region the slide does not declare is *not* treated as
+        region-bound - it falls through to the placeholder path rather than
+        being dropped. Validation reports the dangling id; the renderer's job
+        at that point is to still put the content on the slide.
+        """
+        if not tree:
+            return [], list(contents)
+
+        bound: list[tuple[str, dict]] = []
+        rest: list[dict] = []
+        for item in contents:
+            if not isinstance(item, dict):
+                rest.append(item)
+                continue
+            resolved = tree.get(item.get("regionId"))
+            if resolved is None:
+                rest.append(item)
+            else:
+                bound.append((resolved.id, item))
+        return bound, rest
+
+    @staticmethod
+    def _slide_title(unbound: list[dict], bound: list[tuple[str, dict]]) -> str:
+        """The slide's headline, wherever it was bound - charts read it for context."""
+        for item in unbound:
+            if isinstance(item, dict) and item.get("type") == "text":
+                return " ".join(
+                    str(run.get("text", "")) for run in item.get("runs", [])
+                ).strip()
+        for _, item in bound:
+            if item.get("type") == "text":
+                return " ".join(
+                    str(run.get("text", "")) for run in item.get("runs", [])
+                ).strip()
+        return ""
+
+    def _paint_region_grounds(self, slide, plan: SlidePlan) -> None:
+        """
+        Fill each region that declared a ground of its own.
+
+        A slide used to have exactly one background, and text was coloured
+        from it. The moment a slide has two grounds that arrangement fails in
+        the worst possible way - half the text is correct and half is
+        invisible - which is the same defect ``_apply_text_color`` was written
+        to fix, returning at a larger scale.
+
+        Painted outermost first, so a rail inside a panel sits on top of it
+        rather than under it.
+        """
+        if plan.regions is None:
+            return
+        for resolved in plan.regions.grounded():
+            self._add_ground(slide, resolved.rect, resolved.region.ground or "")
+
+    @staticmethod
+    def _add_ground(slide, region: PositionConfig, color_hex: str) -> None:
+        """A filled rectangle standing in for a region's own paper."""
+        if region.width <= 0 or region.height <= 0:
+            return
+        try:
+            rgb = _hex_to_rgbcolor(color_hex)
+        except ValueError:
+            return
+        shape = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            Inches(region.left), Inches(region.top),
+            Inches(region.width), Inches(region.height),
+        )
+        shape.name = CHROME_REGION_GROUND
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = rgb
+        shape.line.fill.background()
+        # Same reason as the accent rule: an autoshape's <p:style> points at
+        # the theme's shadow, and LibreOffice draws it even when the effect
+        # list is cleared. A ground with a drop shadow reads as a floating
+        # card, not as the page.
+        style = shape._element.find(qn("p:style"))
+        if style is not None:
+            shape._element.remove(style)
+
+    def _style_on_ground(self, plan: SlidePlan, ground: Optional[str]) -> SlideStyle:
+        """The slide's style, re-resolved for a region's own ground."""
+        if not ground or self._theme is None:
+            return plan.style
+        if ground.upper() == (plan.style.background or "").upper():
+            return plan.style
+        return self._theme.style_on(ground, plan.style.role)
+
+    @contextmanager
+    def _styled(self, style: SlideStyle):
+        """Colour everything drawn inside the block for ``style``'s ground."""
+        previous = self._style
+        self._style = style
+        try:
+            yield
+        finally:
+            self._style = previous
+
+    def _render_regions(
+        self,
+        slide,
+        bound: list[tuple[str, dict]],
+        plan: SlidePlan,
+        slide_title: str,
+    ) -> None:
+        """
+        Draw the blocks that named a region, inside that region.
+
+        Region-bound blocks are drawn as explicitly positioned shapes rather
+        than into the stock layout's placeholders. A composed slide's regions
+        are its own geometry; borrowing a placeholder would mean inheriting a
+        box the composition did not ask for, and there is no reason to expect
+        the layout to have one per region anyway.
+
+        Two or more blocks in the same region stack inside it, through the
+        same allocation that divides a body band - so a region behaves like a
+        smaller slide, and autofit and composition measure against the region
+        the block is actually in rather than the whole content area.
+        """
+        tree = plan.regions
+        if tree is None:
+            return
+
+        grouped: dict[str, list[dict]] = {}
+        for region_id, item in bound:
+            grouped.setdefault(region_id, []).append(item)
+
+        first_text_id = id(next(
+            (item for _, item in bound if item.get("type") == "text"), None
+        ))
+
+        for region_id, items in grouped.items():
+            rect = tree.rect(region_id)
+            if rect is None or rect.width <= 0 or rect.height <= 0:
+                continue
+            entries = [(item.get("type", "text"), item) for item in items]
+            rects = (
+                [rect] if len(entries) == 1
+                else self._split_region_vertically(rect, entries)
+            )
+            # Text, bullets, rules and chart axes inside this region are
+            # coloured for the ground the region actually sits on, which is
+            # not necessarily the slide's.
+            ground = tree.ground(region_id)
+            with self._styled(self._style_on_ground(plan, ground)):
+                for (kind, item), target in zip(entries, rects):
+                    is_title = kind == "text" and id(item) == first_text_id
+                    self._draw_block(slide, kind, item, target, slide_title,
+                                     is_title, ground)
+
+    def _draw_block(
+        self,
+        slide,
+        kind: str,
+        item: dict,
+        rect: PositionConfig,
+        slide_title: str,
+        is_title: bool = False,
+        ground: Optional[str] = None,
+    ) -> None:
+        """Draw one content block into an explicit rectangle."""
+        if kind == "text":
+            self._add_text_box(slide, item.get("runs", []), rect, is_title=is_title)
+        elif kind == "image":
+            self._add_image(slide, item.get("image", {}), rect)
+        elif kind == "table":
+            self._add_table(slide, item.get("table", {}), rect)
+        elif kind == "metrics":
+            self._add_key_metrics(slide, item.get("metrics", {}), rect)
+        elif kind == "chart":
+            self._add_chart(slide, item.get("chart", {}), rect, slide_title, ground)
 
     @staticmethod
     def _placeholder_region(shape) -> PositionConfig:
@@ -1224,15 +1469,22 @@ class PPTXRenderer:
             pass
 
     def _apply_text_color(self, run, is_title: bool) -> None:
-        """Colour a run for the background the current slide is actually on.
+        """Colour a run for the ground it is actually landing on.
 
         Body text was previously left at the master's default (black) whatever
         was behind it, so the moment a slide gained a dark background its
-        subtitle became black-on-brand-dark.
+        subtitle became black-on-brand-dark. ``self._style`` now tracks the
+        *region's* ground while a region-bound block is being drawn, so the
+        same reasoning holds when one slide carries two canvases.
+
+        The contrast check is applied here rather than trusted from upstream:
+        it is one comparison, it is the last point before the colour reaches
+        the file, and an unreadable run is a defect no later pass can see.
         """
         if self._style is None:
             return
-        color_hex = self._style.title_color if is_title else self._style.body_color
+        preferred = self._style.title_color if is_title else self._style.body_color
+        color_hex = colors.readable_on(self._style.background, preferred)
         try:
             run.font.color.rgb = _hex_to_rgbcolor(color_hex)
         except ValueError:
@@ -1248,11 +1500,18 @@ class PPTXRenderer:
         chart_data: dict,
         pos: PositionConfig,
         slide_title: str = "",
+        ground: Optional[str] = None,
     ) -> None:
         """Render chart_data to a design-system-styled PNG and place it on the slide."""
         chart_bytes = chart_renderer.render_chart_to_png(
             chart_data, self.design_system, pos.width, pos.height,
             slide_title=slide_title,
+            # A chart PNG is transparent, so what it is drawn *on* decides
+            # whether its axes and labels are legible. A chart bound to a
+            # navy half rendered its axis in the deck's dark tone and came
+            # out invisible - the same failure as dark text on a dark
+            # ground, in the one element that had no way to know.
+            ground=ground or (self._style.background if self._style else None),
         )
         if not chart_bytes:
             return
@@ -1260,10 +1519,11 @@ class PPTXRenderer:
         try:
             img_stream.write(chart_bytes)
             img_stream.close()
-            slide.shapes.add_picture(
+            picture = slide.shapes.add_picture(
                 img_stream.name,
                 Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
             )
+            _describe_picture(picture, str(chart_data.get("title") or slide_title))
         finally:
             os.unlink(img_stream.name)
 
@@ -1485,10 +1745,11 @@ class PPTXRenderer:
         try:
             img_stream.write(img_bytes)
             img_stream.close()
-            slide.shapes.add_picture(
+            picture = slide.shapes.add_picture(
                 img_stream.name,
                 Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
             )
+            _describe_picture(picture, str(img_data.get("altText") or ""))
         finally:
             os.unlink(img_stream.name)
 
