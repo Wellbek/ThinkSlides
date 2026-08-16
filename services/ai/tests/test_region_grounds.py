@@ -255,6 +255,31 @@ class TestDeckThemeResolvesByGroundNotByRole:
         assert style.role == (role if role in deck_theme.DARK_ROLES
                               else deck_theme.ROLE_CONTENT)
 
+    @pytest.mark.parametrize("role", ["cover", "section", "closing"])
+    def test_a_hero_role_survives_a_light_ground(self, role):
+        """A design direction may put a cover on a light ground.
+
+        The role used to be rewritten to ``content`` on any light background,
+        which cost the slide all three things that key off it: chrome is
+        suppressed on ``cover``, the standfirst is set as running lines rather
+        than bullets on ``cover``, and the title steps up a size on any hero
+        role. A light-ground cover got a footer, a page number, a brand mark
+        and a bulleted agenda at body size.
+        """
+        theme = deck_theme.DeckTheme.from_design_system(None)
+
+        style = theme.style_on(PAPER, role)
+
+        assert style.role == role
+        assert not colors.is_dark(style.background)
+        assert colors.contrast_ratio(style.body_color, PAPER) >= colors.WCAG_AA_NORMAL
+
+    def test_an_unknown_role_still_falls_back_to_content(self):
+        theme = deck_theme.DeckTheme.from_design_system(None)
+
+        assert theme.style_on(PAPER, "exhibit").role == deck_theme.ROLE_CONTENT
+        assert theme.style_on(NAVY, "exhibit").role == deck_theme.ROLE_CONTENT
+
 
 class TestSlidesWithNoRegionGroundsAreUntouched:
     @pytest.fixture(scope="class")

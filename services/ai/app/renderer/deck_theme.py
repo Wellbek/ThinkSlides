@@ -29,6 +29,12 @@ ROLE_SECTION = "section"
 ROLE_CONTENT = "content"
 ROLE_CLOSING = "closing"
 
+ROLES = frozenset({ROLE_COVER, ROLE_SECTION, ROLE_CONTENT, ROLE_CLOSING})
+
+# The roles that get a hero treatment - a stepped-up title, no chrome. Named
+# for the ground they were once guaranteed to sit on, which is no longer true:
+# a design direction can put a cover on a light ground, and the role still
+# has to survive that.
 DARK_ROLES = frozenset({ROLE_COVER, ROLE_SECTION, ROLE_CLOSING})
 
 # Near-black rather than pure black: #000 against white is harsher than any
@@ -110,13 +116,22 @@ class DeckTheme:
         slide*, and picking either one from the slide's role would leave half
         the text invisible - which is the exact bug ``_apply_text_color``
         exists to prevent, returning the moment a slide has two canvases.
+
+        The ground decides the *treatment* and nothing else: the role is
+        carried through both branches untouched. It used to be rewritten to
+        ``content`` on any light ground, on the assumption that a hero slide
+        was always a dark one. A design direction breaks that assumption by
+        construction - ``light`` puts the cover on a tinted ground over white
+        pages - and a cover that came back labelled ``content`` was a cover
+        with a footer, a page number and a brand mark stamped on it, its
+        standfirst set as a bulleted agenda, and its title at body size.
         """
         if not colors.parse_hex(background):
             background = self.white
 
         if colors.is_dark(background):
             return SlideStyle(
-                role=role if role in DARK_ROLES else ROLE_CONTENT,
+                role=role if role in ROLES else ROLE_CONTENT,
                 background=background,
                 # White, not the brand colour: a brand hex deep enough to serve
                 # as a dark background is by definition too close to it to read
@@ -133,7 +148,7 @@ class DeckTheme:
             )
 
         return SlideStyle(
-            role=role if role == ROLE_CONTENT else ROLE_CONTENT,
+            role=role if role in ROLES else ROLE_CONTENT,
             background=background,
             title_color=colors.readable_on(background, self.primary, (self.dark,)),
             body_color=colors.readable_on(background, BODY_ON_LIGHT, (self.dark, self.white)),
@@ -172,4 +187,4 @@ def role_of(design_system: dict | None, layout_id: str, default: str = ROLE_CONT
     """The catalog's declared role for a layout, defaulting to content."""
     entry = layout_entry(design_system, layout_id) or {}
     role = entry.get("role")
-    return role if role in (ROLE_COVER, ROLE_SECTION, ROLE_CONTENT, ROLE_CLOSING) else default
+    return role if role in ROLES else default

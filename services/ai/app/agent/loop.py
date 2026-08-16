@@ -100,6 +100,65 @@ _AUTONOMY_YES_RE = re.compile(
 )
 
 
+# What the outline review's two options look like coming back. The card sends
+# a single question's answer as the bare option text, so - unlike the autonomy
+# question - there is no echoed question to match against by accident, and the
+# free-text elaboration follows on its own line.
+#
+# Approval is checked first here, which is the opposite of the autonomy pair
+# and for the same underlying reason: "go ahead as planned" is the exact,
+# unambiguous label of one option, whereas the change patterns are loose
+# enough to catch a user who typed their own words instead of tapping.
+_OUTLINE_APPROVED_RE = re.compile(
+    "|".join((
+        r"\bgo ahead as planned\b",
+        r"\bgo ahead\b(?![^.\n]*\bbut\b)",
+        r"\b(?:looks?|sounds?) (?:good|right|fine)\b",
+        r"\bbuild it\b",
+    )),
+    re.IGNORECASE,
+)
+
+_OUTLINE_CHANGE_RE = re.compile(
+    "|".join((
+        r"\bchange something\b",
+        r"\bchange\b[^.\n]*\b(?:outline|structure|slides?|order|it)\b",
+        r"\b(?:add|drop|remove|delete|cut|merge|split|reorder|rename|swap)\b"
+        r"[^.\n]*\bslides?\b",
+        r"\b(?:replan|re-?plan|rework|revise|redo)\b",
+        r"\b(?:shorten|lengthen|expand|trim)\b[^.\n]*\b(?:deck|outline|it)\b",
+        r"\binstead of\b",
+    )),
+    re.IGNORECASE,
+)
+
+
+def user_wants_outline_changed(chat_messages: list[dict]) -> bool:
+    """Whether the reply to the outline review asked for the outline to change.
+
+    Their latest word on it wins. Approval is matched first so that "go ahead
+    as planned" cannot be dragged into a change by a stray word after it.
+
+    Without this the flag the review phase completes on was set the moment the
+    question was *asked*, so both answers finished the checkpoint identically:
+    a user who tapped "Change something - I'll say what" and typed their change
+    watched the unchanged outline get built, because nothing cleared the plan
+    and the pipeline has no edge back to it from drafting.
+    """
+    for message in reversed(chat_messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content") or ""
+        if not content.strip():
+            continue
+        if _OUTLINE_APPROVED_RE.search(content):
+            return False
+        if _OUTLINE_CHANGE_RE.search(content):
+            return True
+        return False
+    return False
+
+
 def user_confirmed_autonomy(chat_messages: list[dict]) -> bool:
     """Whether the user handed the remaining decisions to the agent.
 
@@ -1311,6 +1370,13 @@ class AgentLoop:
                 ),
                 "timestamp": _iso_now(),
             })
+
+        # A request to change the outline, read before the walk for the same
+        # reason the direction is: the walker decides where to resume from the
+        # state it finds, so an answer acted on later would arrive after the
+        # phase it was meant to redirect.
+        async for event in self._reopen_outline_if_asked(chat_messages):
+            yield event
 
         # The one question every consulted run asks. Read here, before the walk,
         # because it decides whether the design pause happens at all.
@@ -3070,6 +3136,50 @@ class AgentLoop:
                 }
 
         return context
+
+    async def _reopen_outline_if_asked(
+        self, chat_messages: list[dict]
+    ) -> AsyncIterator[dict]:
+        """Walk the run back to planning when the outline review asked for it.
+
+        The review phase completes on ``reviewed_outline_with_user``, which is
+        set when the question is *put* rather than when it is answered - so
+        both options finished the checkpoint and the walk went on to drafting
+        either way. Clearing the plan is what actually reopens it: the ``plan``
+        phase completes on ``presentation_structure`` being set, so emptying it
+        makes planning outstanding again, and the user's words are already in
+        the history the planner is given.
+
+        Everything derived from the outline goes with it: a layout chosen for
+        slide 4 of the old plan is not a layout for slide 4 of the new one.
+
+        Scoped to a deck that has not been drafted yet, which is exactly where
+        the review checkpoint sits - nothing walks back to ``review`` once
+        drafting has started, so an outline answer arriving against a part-built
+        deck is not this checkpoint. A change asked for *mid-draft* is #109 and
+        is deliberately left alone here rather than silently throwing away
+        finished slides.
+        """
+        ws = self.working_state
+        if not ws.reviewed_outline_with_user or not ws.presentation_structure:
+            return
+        if ws.accumulated_slides:
+            return
+        if not user_wants_outline_changed(chat_messages):
+            return
+
+        ws.presentation_structure = None
+        ws.selected_layouts = {}
+        ws.slides_needing_revision = []
+        # The checkpoint reopens with the plan: the user has to see what their
+        # change produced, or the second outline ships less reviewed than the
+        # first one did.
+        ws.reviewed_outline_with_user = False
+        logger.info("outline_reopened_by_user")
+        yield _event("thought", "structure_planning", {
+            "content": "Replanning the outline around what you asked to change.",
+            "timestamp": _iso_now(),
+        })
 
     def _resolve_direction_choice(self, chat_messages: list[dict]) -> dict | None:
         """
