@@ -2,7 +2,6 @@
 Tests for the LLM provider abstraction.
 """
 
-import pytest
 from app.llm.provider import ZhipuProvider, AzureOpenAIProvider
 
 
@@ -20,7 +19,7 @@ def test_zhipu_provider_instantiation():
 
 def test_provider_selection():
     """Test that get_llm_provider returns the correct type."""
-    from app.llm.provider import get_llm_provider, _provider
+    from app.llm.provider import get_llm_provider
     import app.llm.provider as provider_module
 
     # Reset singleton

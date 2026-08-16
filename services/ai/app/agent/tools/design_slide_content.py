@@ -255,6 +255,10 @@ Design System Context:
             # (but not what is in it) is what keeps the copy from restating the
             # same figures next to the chart that already shows them.
             visual_info = _prepared_visual_guidance(attached)
+            # Carried through from the plan rather than re-invented per slide:
+            # the eyebrow only means anything if every slide in a part names
+            # that part identically.
+            section = str(outline.get("section") or "").replace('"', "'").strip()
 
             prompt = f"""Generate content for a single presentation slide.
 
@@ -277,6 +281,7 @@ Return a JSON object with this exact structure:
   "slideIndex": {slide_index},
   "layoutId": "{layout.get('layoutId', '1')}",
   "layoutName": "{layout_name}",
+  "section": "{section}",
   "contents": [
     {{
       "type": "text",

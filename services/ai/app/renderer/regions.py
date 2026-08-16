@@ -284,6 +284,25 @@ def _validate_level(raw: Sequence[object], path: str, seen: set[str],
                 )
 
 
+def declared_region_ids(raw_regions: object) -> set[str]:
+    """Every region id a slide declares, at any depth."""
+    found: set[str] = set()
+
+    def walk(level: object) -> None:
+        if not isinstance(level, list):
+            return
+        for data in level:
+            if not isinstance(data, dict):
+                continue
+            region_id = str(data.get("id") or "").strip()
+            if region_id:
+                found.add(region_id)
+            walk(data.get("children"))
+
+    walk(raw_regions)
+    return found
+
+
 def content_region_ids(contents: object) -> list[str]:
     """Every ``regionId`` a slide's content blocks bind to."""
     if not isinstance(contents, list):

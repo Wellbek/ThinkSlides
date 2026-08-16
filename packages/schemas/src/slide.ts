@@ -81,10 +81,43 @@ export interface EmbeddedMedia {
   fileSizeBytes?: number;
 }
 
+/** Where a piece of deck furniture sits. */
+export type ChromePosition = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+
+export interface ChromeElement {
+  enabled?: boolean;
+  position?: ChromePosition;
+  sizePt?: number;
+  color?: string;
+  /** Slide roles this element appears on; absent means every role. */
+  roles?: string[];
+}
+
+/**
+ * The deck's furniture, declared rather than hardcoded in the renderer.
+ *
+ * A design direction distinguishes itself partly by where chrome sits and
+ * whether it is there at all, so it has to be a token rather than a constant.
+ * A deck declaring none renders the footer band that was always there.
+ */
+export interface ChromeTokens {
+  eyebrow?: ChromeElement & { source?: "sectionName" | "deckTitle" | "none" };
+  brandMark?: ChromeElement & { kind?: "text" | "image"; value?: string };
+  pageNumber?: ChromeElement;
+  pageNumberFormat?: string;
+  footer?: ChromeElement;
+  footerRule?: ChromeElement;
+  /** Roles that carry no chrome at all. Defaults to the cover. */
+  suppressedRoles?: string[];
+  marginX?: number;
+  marginY?: number;
+}
+
 export interface DesignSystemBundle {
   palette: Palette;
   typography: Typography;
   spacing: SpacingTokens;
+  chrome?: ChromeTokens;
   layouts: LayoutDef[];
   slideDimensions: SlideDimensions;
   masterElements: MasterElement[];
@@ -172,11 +205,142 @@ export interface Region {
   children?: Region[];
 }
 
+// ──────────────────────────────────────────────
+// Primitives - the marks a slide is made of
+// ──────────────────────────────────────────────
+
+/**
+ * The five marks. Anything drawable on a slide is one of these, so the
+ * primitive layer has the same ceiling as writing python-pptx by hand - which
+ * is the point. A block (below) carries meaning and compiles down to these; a
+ * slide reaches for a primitive directly only when no block is the right
+ * shape ("a hairline two thirds of the way across").
+ *
+ * The escape hatch costs no expressivity and gives up no safety: containment,
+ * contrast and measurement all operate at this layer, so a slide that drops
+ * to it is checked exactly as thoroughly as one built from blocks.
+ */
+export type PrimitiveKind = "text" | "rect" | "line" | "ellipse" | "image";
+
+/**
+ * One authored mark.
+ *
+ * Geometry is **fractional against its frame** - the region named by
+ * `regionId`, or the whole canvas when there is none - so a composition
+ * survives a change of canvas. `id` is stable and addressable: it is what
+ * makes "move that heading 4pt left" a patch rather than a redesign.
+ */
+export interface PrimitiveSpec {
+  id?: string;
+  kind: PrimitiveKind;
+  regionId?: string;
+
+  // Box marks: text, rect, ellipse, image
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+
+  // Line marks
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+
+  runs?: TextRun[];
+  text?: string;
+  sizePt?: number;
+  bold?: boolean;
+  align?: "left" | "center" | "right" | "justify";
+  anchor?: "top" | "middle" | "bottom";
+  wrap?: boolean;
+  autofit?: boolean;
+
+  fill?: string;
+  stroke?: string;
+  strokeWeightPt?: number;
+  /** Corrected at render if it fails WCAG AA against the ground behind it. */
+  color?: string;
+  font?: string;
+
+  image?: ImageContent;
+  altText?: string;
+}
+
+// ──────────────────────────────────────────────
+// Block vocabulary
+// ──────────────────────────────────────────────
+
+/**
+ * A semantic colour, resolved once so a card and the legend explaining it
+ * cannot disagree. An explicit "#RRGGBB" is also accepted anywhere a tone is.
+ */
+export type BlockTone =
+  | "benefit" | "risk" | "positive" | "negative" | "neutral" | string;
+
+/** A large figure with a caption underneath. The number is the argument. */
+export interface StatCallout {
+  value: string;
+  caption?: string;
+  tone?: BlockTone;
+}
+
+/** A circular icon badge over a heading and body copy. */
+export interface IconCard {
+  icon: string;          // a concept ("financial services"), not a filename
+  heading: string;
+  body?: string[];
+}
+
+/** A card whose left bar carries its meaning - blue benefit, red risk. */
+export interface AccentCard {
+  heading: string;
+  body?: string[];
+  tone?: BlockTone;
+}
+
+/** One hairline-ruled row: an icon column, a label column, a prose column. */
+export interface RowBand {
+  icon?: string;
+  label: string;
+  prose: string;
+}
+
+/** An image at a shared height with a ruled title and a caption. */
+export interface ImageCard {
+  image: ImageContent;
+  title: string;
+  caption?: string;
+}
+
+/** A heading spanning an unequal subset of an image card row. */
+export interface ImageCardGroup {
+  label: string;
+  span: number;
+}
+
+/** Explains an encoding used elsewhere on the slide. */
+export interface LegendItem {
+  label: string;
+  tone?: BlockTone;
+}
+
 export type SlideContentItem =
   | { type: "text"; placeholderIdx?: number; regionId?: string; runs: TextRun[] }
   | { type: "image"; placeholderIdx?: number; regionId?: string; image: ImageContent }
   | { type: "table"; placeholderIdx?: number; regionId?: string; table: TableContent }
-  | { type: "chart"; placeholderIdx?: number; regionId?: string; chart: ChartContent };
+  | { type: "chart"; placeholderIdx?: number; regionId?: string; chart: ChartContent }
+  | { type: "statCallout"; regionId?: string; statCallouts: StatCallout[] }
+  | { type: "iconCard"; regionId?: string; iconCards: IconCard[] }
+  | { type: "accentCard"; regionId?: string; columns?: number; accentCards: AccentCard[] }
+  | { type: "rowBand"; regionId?: string; rowBands: RowBand[] }
+  | {
+      type: "imageCardRow";
+      regionId?: string;
+      imageCardRow: { cards: ImageCard[]; groups?: ImageCardGroup[] };
+    }
+  | { type: "banner"; regionId?: string; banner: { text: string } }
+  | { type: "legend"; regionId?: string; legend: { items: LegendItem[] } };
 
 export interface Slide {
   slideIndex: number;
@@ -189,6 +353,18 @@ export interface Slide {
    * through exactly the code it always did.
    */
   regions?: Region[];
+  /**
+   * Which part of the deck this slide belongs to, repeated verbatim across
+   * every slide in that part. Printed as the eyebrow, which is what tells a
+   * reader where they are in a long document.
+   */
+  section?: string;
+  /**
+   * Marks the slide places itself, for what no block covers. Drawn behind the
+   * slide's blocks, so a tinted panel or a rule frames the content rather
+   * than covering it.
+   */
+  primitives?: PrimitiveSpec[];
   notes?: string;
   speakerNotes?: string;
 }
