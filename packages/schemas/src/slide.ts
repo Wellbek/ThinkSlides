@@ -113,6 +113,55 @@ export interface ChromeTokens {
   marginY?: number;
 }
 
+/**
+ * How a deck DRAWS its charts and tables, not only what colour they are.
+ *
+ * Colours are the smallest part of why a chart looks like it belongs to a
+ * deck. The reference deck's charts are recognisable because they have no
+ * value axis and no gridlines, label every bar at its end, and state their
+ * unit on a second subtitle line - none of which was recordable before.
+ *
+ * Every token defaults to what the renderer already drew, so a deck that
+ * declares none of them is unchanged.
+ */
+export interface DataVizTokens {
+  chartColorSequence?: string[];
+  chartAxisColor?: string;
+  chartGridColor?: string;
+  fontFamily?: string;
+
+  chartValueAxis?: boolean;
+  chartCategoryAxis?: boolean;
+  chartValueGridlines?: boolean;
+  chartCategoryGridlines?: boolean;
+  chartGridlineWeightPt?: number;
+  chartBaselineRule?: boolean;
+
+  /** none | all | terminal (last point only) | end (bar ends) | auto */
+  chartLabelMode?: "auto" | "none" | "all" | "terminal" | "end";
+  chartLabelFormat?: string;
+  chartUnitSuffix?: string;
+
+  chartLegend?: "auto" | "none" | "swatches" | "inline";
+  /** Where the unit is stated: up the axis, on a second subtitle line, or in the title. */
+  chartUnitConvention?: "axis" | "subtitle" | "title";
+
+  /** Fraction of a category slot the bars fill, and the gap between grouped bars. */
+  chartBarThickness?: number;
+  chartBarGroupGap?: number;
+
+  tableHeaderBg?: string;
+  tableHeaderFg?: string;
+  tableBandBg?: string;
+  tableRowBg?: string;
+  tableBorder?: string;
+  /** Banded blocks of colour, or rows separated by hairlines on the slide's ground. */
+  tableTreatment?: "filled" | "hairline";
+  tableRuleWeightPt?: number;
+  tableHeaderRuleWeightPt?: number;
+  tableHeaderFilled?: boolean;
+}
+
 /** How a deck sets its per-slide footnotes and source line. */
 export interface ApparatusTokens {
   footnoteSizePt?: number;
@@ -126,6 +175,7 @@ export interface DesignSystemBundle {
   spacing: SpacingTokens;
   chrome?: ChromeTokens;
   apparatus?: ApparatusTokens;
+  dataViz?: DataVizTokens;
   layouts: LayoutDef[];
   slideDimensions: SlideDimensions;
   masterElements: MasterElement[];
@@ -168,11 +218,61 @@ export interface TableContent {
   placeholderIdx?: number;
 }
 
+/** One series, with the part of it that is projected rather than measured. */
+export interface ChartSeries {
+  name: string;
+  values: number[];
+  /**
+   * 0-based index from which values are PROJECTED. Those points render dashed
+   * and outlined so a reader can see which part of the chart is evidence.
+   * A chart marking a projection is rejected in validation unless the slide
+   * carries a footnote saying what it is extrapolated from.
+   */
+  forecastFrom?: number;
+  /**
+   * The measured portion of each value, where part of a figure is real and
+   * part extrapolated - reference page 110's final bar is 18.3 measured and
+   * 36.6 projected. The bar is solid to this and outlined to the full value.
+   */
+  measured?: number[];
+}
+
+/** A point in a bubble chart, carrying two encoded values at once. */
+export interface BubblePoint {
+  label: string;
+  x: number;
+  y: number;
+  /** Encoded as AREA, not radius - so it does not overstate by the square. */
+  size: number;
+  /** Indexes the deck's own series colours, keeping the encoding on-palette. */
+  colorValue?: number;
+}
+
 export interface ChartContent {
-  chartType: "bar" | "line" | "pie" | "scatter";
+  chartType: "bar" | "line" | "pie" | "scatter" | "area" | "bubble";
   title?: string;
+  /** The unit, as a second line under the title: "thousands", "$ billion". */
+  unitLine?: string;
   categories: string[];
-  series: { name: string; values: number[] }[];
+  series: ChartSeries[];
+
+  /** Bubble charts state their data as points rather than as series. */
+  points?: BubblePoint[];
+  /** Explains what colour encodes, as a swatch row. */
+  colorLegend?: { title: string; labels: string[] };
+  /** Explains what area encodes, as nested arcs sharing a baseline. */
+  sizeLegend?: { title: string; values: number[] };
+
+  xAxisTitle?: string;
+  yAxisTitle?: string;
+  valueFormat?: "number" | "percent" | "currency";
+
+  /** Per-chart overrides of the deck's own dataViz tokens. */
+  labelMode?: "auto" | "none" | "all" | "terminal" | "end";
+  legendStyle?: "auto" | "none" | "swatches" | "inline";
+  showValueAxis?: boolean;
+  showGridlines?: boolean;
+
   placeholderIdx?: number;
 }
 

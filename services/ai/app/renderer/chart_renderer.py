@@ -26,12 +26,33 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 from matplotlib.ticker import FuncFormatter
 
-from app.renderer.table_style import resolve_chart_style
+from app.renderer.table_style import (
+    DEFAULT_CHART_COLOR_SEQUENCE, resolve_chart_style,
+)
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-SUPPORTED_CHART_TYPES = {"bar", "line", "pie", "scatter", "area"}
+SUPPORTED_CHART_TYPES = {"bar", "line", "pie", "scatter", "area", "bubble"}
+
+# A projected value is drawn as an outline rather than a fill, so a reader can
+# see at a glance which part of a bar is measured and which is extrapolated.
+# Reference page 110's final bar does exactly this, and the footnote saying so
+# is required (see validate_slide_json) - without both, the chart claims a
+# measured figure it does not have.
+FORECAST_HATCH = "////"
+FORECAST_DASH = (0, (4, 3))
+# A bubble's area encodes a value, so the radius scales with its square root -
+# scaling the radius linearly overstates large values by their square, which
+# is the classic way an area chart lies.
+BUBBLE_MIN_AREA_PT = 60.0
+BUBBLE_MAX_AREA_PT = 2600.0
+# Labels are placed clear of the cloud and joined to their bubble by a leader.
+LEADER_COLOR_MIX = 0.45
+# How much of the plot a dual-encoding legend reserves for itself. Reserved
+# inside the axes: an inset hanging off the right edge is outside what
+# constrained layout accounts for, and the chart's title gets clipped for it.
+LEGEND_WIDTH_FRACTION = 0.30
 
 # Beyond this many points per series, per-point data labels collide into an
 # unreadable smear - the chart is better read off the axis.
@@ -103,7 +124,15 @@ def _clean_series(raw_series) -> list[dict]:
             except (TypeError, ValueError):
                 values.append(float("nan"))
         if values and not all(v != v for v in values):
-            cleaned.append({"name": entry.get("name"), "values": values})
+            # The forecast fields ride along: rebuilding the series as
+            # name+values alone silently dropped them, so a chart declaring a
+            # projection rendered as if every figure were measured - which is
+            # the exact claim the marking exists to prevent.
+            series_entry = {"name": entry.get("name"), "values": values}
+            for key in ("forecastFrom", "measured"):
+                if entry.get(key) is not None:
+                    series_entry[key] = entry[key]
+            cleaned.append(series_entry)
     return cleaned
 
 
@@ -172,15 +201,26 @@ def render_chart_to_png(
     what the transparent PNG will sit on, so the chart's own furniture can be
     coloured to be visible against it.
     """
-    series = _clean_series(chart_data.get("series") or chart_data.get("data"))
-    if not series:
-        return None
     if width_in <= 0 or height_in <= 0:
         return None
 
     chart_type = (chart_data.get("chartType") or chart_data.get("chart_type") or "bar").lower()
     if chart_type not in SUPPORTED_CHART_TYPES:
         chart_type = "bar"
+
+    # A bubble chart states its data as points carrying two encoded values,
+    # not as series over shared categories - so it is the one type with no
+    # "series" to check for.
+    series = _clean_series(chart_data.get("series") or chart_data.get("data"))
+    if not series and chart_type != "bubble":
+        return None
+    if chart_type == "bubble" and not _bubble_points(chart_data):
+        # Bubbles state their data as points carrying two encoded values. Given
+        # a plain series instead, the honest rendering is the scatter that data
+        # supports rather than nothing at all.
+        if not series:
+            return None
+        chart_type = "scatter"
 
     # Footnote markers are written inline (see renderer/apparatus). A chart
     # label is drawn into a PNG, where no run-level superscript exists, so the
@@ -197,6 +237,12 @@ def render_chart_to_png(
     if not unit_suffix and str(chart_data.get("valueFormat") or "").lower() == "percent":
         unit_suffix = "%"
 
+    # A chart may override the deck's own data-viz tokens. The deck sets the
+    # convention; one exhibit is allowed to differ from it, which is what the
+    # reference itself does - most of its charts drop the axis, and the bubble
+    # chart on page 3 keeps both.
+    style = _apply_chart_overrides(style, chart_data)
+
     # Point sizes are chosen against the band the chart is drawn into, so a
     # half-height chart does not render with type twice as large relative to
     # its own axes as a full-height one.
@@ -208,8 +254,11 @@ def render_chart_to_png(
         fig.patch.set_alpha(0.0)
         ax.set_facecolor("none")
 
+        finish_legend = None
         if chart_type == "pie":
             _draw_pie(ax, series, categories, style, font, base_pt)
+        elif chart_type == "bubble":
+            finish_legend = _draw_bubble(ax, chart_data, style, font, base_pt)
         else:
             _draw_cartesian(
                 ax, chart_type, series, categories, chart_data,
@@ -225,6 +274,16 @@ def render_chart_to_png(
         # the margins instead keeps the saved pixels exactly figsize * dpi.
         fig.set_layout_engine("constrained")
 
+        if finish_legend is not None:
+            # Drawn after the layout has settled, because a size key has to be
+            # made of *circles*: the correction from data units to equal
+            # display units depends on the axes' final proportions, and before
+            # the layout runs those are the defaults rather than the real ones.
+            # An elliptical size key is a legend that misstates the encoding it
+            # exists to explain.
+            fig.canvas.draw()
+            finish_legend()
+
         buf = io.BytesIO()
         fig.savefig(buf, format="png", transparent=True)
         return buf.getvalue()
@@ -236,21 +295,197 @@ def render_chart_to_png(
             plt.close(fig)
 
 
+def _apply_chart_overrides(style, chart_data: dict):
+    """One chart's own departures from the deck's data-viz tokens."""
+    from dataclasses import replace
+
+    from app.renderer.table_style import LABEL_MODES, LEGEND_STYLES
+
+    overrides = {}
+    mode = str(chart_data.get("labelMode") or "").strip().lower()
+    if mode in LABEL_MODES:
+        overrides["label_mode"] = mode
+    legend = str(chart_data.get("legendStyle") or "").strip().lower()
+    if legend in LEGEND_STYLES:
+        overrides["legend_style"] = legend
+    for key, field in (("showValueAxis", "show_value_axis"),
+                       ("showGridlines", "show_value_gridlines")):
+        if isinstance(chart_data.get(key), bool):
+            overrides[field] = chart_data[key]
+    return replace(style, **overrides) if overrides else style
+
+
 def _apply_title(fig, ax, chart_data, slide_title, style, font, base_pt) -> None:
-    """Draw the chart's own title, unless the slide heading already says it."""
+    """
+    Draw the chart's own title, and the unit line under it.
+
+    The reference states its unit as a second line of the subtitle -
+    "thousands", "$ billion" - set apart from the title rather than rotated up
+    the side of the plot. That is a deck convention (see the unit tokens in
+    table_style), and this is where it lands.
+    """
     title = _superscript(str(chart_data.get("title") or "").strip())
-    if not title:
+    unit_line = _superscript(str(chart_data.get("unitLine") or "").strip())
+    if not unit_line and style.unit_convention == "subtitle":
+        unit_line = _superscript(_value_axis_label(chart_data,
+                                                   _clean_series(chart_data.get("series"))))
+
+    if title and slide_title and _normalise(title) == _normalise(slide_title):
+        title = ""
+    if not title and not unit_line:
         return
-    if slide_title and _normalise(title) == _normalise(slide_title):
+
+    if title and unit_line:
+        # Two lines, the second smaller and quieter: it is a unit, not a
+        # second heading.
+        ax.set_title(title, color=style.axis_color, fontname=font,
+                     fontsize=base_pt * 1.15, fontweight="bold", loc="left",
+                     pad=base_pt * 1.9)
+        ax.annotate(
+            unit_line, xy=(0.0, 1.0), xycoords="axes fraction",
+            xytext=(0, base_pt * 0.5), textcoords="offset points",
+            ha="left", va="bottom", color=style.axis_color, fontname=font,
+            fontsize=base_pt * 0.95,
+        )
         return
+
     ax.set_title(
-        title, color=style.axis_color, fontname=font,
-        fontsize=base_pt * 1.15, fontweight="bold", loc="left", pad=base_pt,
+        title or unit_line, color=style.axis_color, fontname=font,
+        fontsize=base_pt * 1.15, fontweight="bold" if title else "normal",
+        loc="left", pad=base_pt,
     )
 
 
 def _normalise(text: str) -> str:
     return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _set_grid(axis, visible: bool, style) -> None:
+    """Turn one axis's gridlines on (styled) or off (silently)."""
+    if visible:
+        axis.grid(True, color=style.grid_color, linewidth=style.gridline_weight_pt)
+    else:
+        axis.grid(False)
+
+
+def _forecast_from(series_entry: dict, n_points: int) -> int:
+    """The index at which a series stops being measured, or n_points."""
+    raw = series_entry.get("forecastFrom")
+    try:
+        index = int(raw)
+    except (TypeError, ValueError):
+        return n_points
+    return max(0, min(n_points, index))
+
+
+def _measured_values(series_entry: dict, values: list, forecast_from: int) -> list:
+    """
+    The measured portion of each value.
+
+    Two shapes, and both are needed. A series that simply stops being measured
+    at some index projects everything after it, so those points have no
+    measured portion at all. Page 110's final bar is the other shape: 18.3
+    measured and 36.6 extrapolated, so the bar is solid to the measured figure
+    and outlined to the projected one, and a reader can see which part of it
+    is evidence.
+    """
+    raw = series_entry.get("measured")
+    stated = isinstance(raw, (list, tuple))
+    out = []
+    for index, value in enumerate(values):
+        if stated:
+            try:
+                measured = float(raw[index])
+            except (TypeError, ValueError, IndexError):
+                measured = value if index < forecast_from else 0.0
+        else:
+            measured = value if index < forecast_from else 0.0
+        out.append(measured if measured == measured else 0.0)
+    return out
+
+
+def _draw_bars_with_forecast(ax, offsets, values, measured, forecast_from,
+                             bar_width, color, name) -> None:
+    """
+    Bars, with any projected part drawn as an outline rather than a fill.
+
+    A projection filled the same as a measurement is a chart asserting a
+    figure it does not have. The outline is the visual claim "this part is
+    extrapolated", and #125's footnote is the words for it - validation
+    requires both.
+    """
+    solid = [
+        max(0.0, min(value, measured[index])) if value == value else 0.0
+        for index, value in enumerate(values)
+    ]
+    ax.bar(offsets, solid, width=bar_width, label=name, color=color)
+
+    for index, value in enumerate(values):
+        base = solid[index]
+        if value != value or value - base <= 0:
+            continue
+        ax.bar(
+            [offsets[index]], [value - base], bottom=[base], width=bar_width,
+            facecolor="none", edgecolor=color, linewidth=1.4,
+            linestyle=FORECAST_DASH, hatch=None,
+        )
+
+
+def _draw_line_with_forecast(ax, x, values, forecast_from, color, name,
+                             base_pt) -> None:
+    """A line whose projected tail is dashed, joined to the measured part."""
+    if forecast_from >= len(values):
+        ax.plot(x, values, label=name, color=color, linewidth=2.5, marker="o",
+                markersize=base_pt * 0.5)
+        return
+
+    split = max(0, forecast_from - 1)
+    ax.plot(x[:forecast_from], values[:forecast_from], label=name, color=color,
+            linewidth=2.5, marker="o", markersize=base_pt * 0.5)
+    ax.plot(x[split:], values[split:], color=color, linewidth=2.0,
+            linestyle=FORECAST_DASH, marker="o", markersize=base_pt * 0.5,
+            markerfacecolor="none")
+
+
+def _bar_geometry(style, n_series: int, index: int, x: list) -> tuple[float, list]:
+    """
+    Bar width and per-series offsets, from the deck's own bar thickness.
+
+    A template whose bars are thin and widely spaced and one whose bars nearly
+    touch are visibly different charts of the same data, and the difference is
+    two numbers.
+    """
+    n_series = max(1, n_series)
+    span = max(0.05, min(1.0, style.bar_thickness))
+    gap = max(0.0, min(0.5, style.bar_group_gap))
+    bar_width = span / n_series * (1.0 - gap)
+    start = -span / 2 + bar_width / 2 + index * (span / n_series)
+    return bar_width, [xi + start for xi in x]
+
+
+def _legend_wanted(style, n_series: int) -> bool:
+    """Whether this chart draws a legend at all."""
+    if style.legend_style == "none":
+        return False
+    if style.legend_style in ("swatches", "inline"):
+        return n_series > 1
+    return n_series > 1
+
+
+def _points_to_label(style, chart_type: str, x: list) -> set:
+    """
+    Which points carry a data label.
+
+    ``terminal`` is reference page 110's line chart: one label, on the final
+    point, saying where the series ended up. ``end`` is page 22's bar chart:
+    a label at the end of every bar, which is what lets the chart drop its
+    axis entirely.
+    """
+    if not x:
+        return set()
+    if style.label_mode == "terminal":
+        return {len(x) - 1}
+    return set(range(len(x)))
 
 
 def _draw_pie(ax, series, categories, style, font, base_pt) -> None:
@@ -298,6 +533,290 @@ def _draw_pie(ax, series, categories, style, font, base_pt) -> None:
         text.set_fontname(font)
 
 
+def _bubble_points(chart_data: dict) -> list[dict]:
+    """Well-formed bubble points only, with their two encoded values."""
+    out = []
+    for entry in chart_data.get("points") or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            x = float(entry.get("x"))
+            y = float(entry.get("y"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            size = float(entry.get("size", 1.0))
+        except (TypeError, ValueError):
+            size = 1.0
+        out.append({
+            "label": str(entry.get("label") or "").strip(),
+            "x": x, "y": y, "size": max(0.0, size),
+            "color_value": entry.get("colorValue"),
+        })
+    return out
+
+
+def _draw_bubble(ax, chart_data, style, font, base_pt):
+    """
+    A bubble chart carrying **two** encodings at once - colour and area - with
+    labels placed clear of the cloud and a legend explaining both.
+
+    Reference page 3 is this chart: colour for adoption score, area for
+    investment, leader lines out to labels, and a nested-arc size key. Every
+    part of it matters. A bubble chart with one encoding is a scatter plot; a
+    bubble chart with two and no legend is a picture of some circles.
+
+    Area, not radius, encodes the value - matplotlib's ``s`` is an area in
+    points squared, so scaling it linearly in the value is correct by
+    construction. Scaling the radius instead would overstate large values by
+    their square, which is the classic way an area chart lies.
+    """
+    points = _bubble_points(chart_data)
+    if not points:
+        raise ValueError("bubble chart has no usable points")
+
+    sizes = [p["size"] for p in points]
+    largest = max(sizes) or 1.0
+    areas = [
+        BUBBLE_MIN_AREA_PT + (BUBBLE_MAX_AREA_PT - BUBBLE_MIN_AREA_PT)
+        * (size / largest)
+        for size in sizes
+    ]
+    colours = [
+        _bubble_colour(point["color_value"], style, index)
+        for index, point in enumerate(points)
+    ]
+
+    has_legend = bool(chart_data.get("colorLegend") or chart_data.get("sizeLegend"))
+    # Limits are set before anything is drawn so the label placement below can
+    # convert a bubble's radius from points into data units. Room for the
+    # legend is reserved inside the axes rather than beside them: an inset
+    # hanging off the right edge is outside what constrained layout accounts
+    # for, and the chart's own title gets clipped to make room for it.
+    _set_bubble_limits(ax, points, areas, reserve_right=LEGEND_WIDTH_FRACTION
+                       if has_legend else 0.0)
+
+    ax.scatter([p["x"] for p in points], [p["y"] for p in points],
+               s=areas, c=colours, edgecolors="none", zorder=3)
+
+    _label_bubbles(ax, points, areas, style, font, base_pt)
+
+    for axis_key, setter in (("xAxisTitle", ax.set_xlabel),
+                             ("yAxisTitle", ax.set_ylabel)):
+        label = str(chart_data.get(axis_key) or "").strip()
+        if label:
+            setter(label, color=style.axis_color, fontname=font,
+                   fontsize=base_pt * 0.9, labelpad=base_pt * 0.5)
+
+    ax.tick_params(colors=style.axis_color, labelsize=base_pt * 0.85)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(style.axis_color)
+    _set_grid(ax.yaxis, style.show_value_gridlines, style)
+    _set_grid(ax.xaxis, style.show_category_gridlines, style)
+    ax.set_axisbelow(True)
+
+    # The space reserved for the legend is not part of the data range, so it
+    # gets no tick marks - an axis running on under a legend reads as data
+    # that is not there.
+    if has_legend:
+        furthest = max(p["x"] for p in points)
+        ax.set_xticks([t for t in ax.get_xticks() if t <= furthest * 1.05])
+
+    if not has_legend:
+        return None
+    return lambda: _draw_bubble_legend(ax, chart_data, style, font, base_pt)
+
+
+def _set_bubble_limits(ax, points, areas, reserve_right: float) -> None:
+    """Axis limits with room for the bubbles themselves and for the legend."""
+    xs = [p["x"] for p in points]
+    ys = [p["y"] for p in points]
+    x_span = (max(xs) - min(xs)) or 1.0
+    y_span = (max(ys) - min(ys)) or 1.0
+    pad_x, pad_y = x_span * 0.18, y_span * 0.22
+
+    left, right = min(xs) - pad_x, max(xs) + pad_x
+    width = right - left
+    if reserve_right > 0:
+        right = left + width / (1.0 - reserve_right)
+    ax.set_xlim(left, right)
+    ax.set_ylim(min(ys) - pad_y, max(ys) + pad_y)
+
+
+def _data_radius(ax, area_pt: float) -> tuple[float, float]:
+    """A bubble's radius in data units, on each axis."""
+    figure = ax.get_figure()
+    radius_pt = math.sqrt(max(area_pt, 1.0) / math.pi)
+    width_pt = ax.get_window_extent().width / figure.dpi * 72.0
+    height_pt = ax.get_window_extent().height / figure.dpi * 72.0
+    x_lo, x_hi = ax.get_xlim()
+    y_lo, y_hi = ax.get_ylim()
+    return (
+        radius_pt / max(1.0, width_pt) * (x_hi - x_lo),
+        radius_pt / max(1.0, height_pt) * (y_hi - y_lo),
+    )
+
+
+def _bubble_colour(color_value, style, index: int) -> str:
+    """
+    The colour encoding a bubble's second dimension.
+
+    A declared ``colorValue`` indexes the deck's own series colours, so the
+    encoding stays in the deck's palette rather than importing a colormap.
+    """
+    sequence = style.color_sequence or list(DEFAULT_CHART_COLOR_SEQUENCE)
+    try:
+        return sequence[int(color_value) % len(sequence)]
+    except (TypeError, ValueError):
+        return sequence[index % len(sequence)]
+
+
+def _label_bubbles(ax, points, areas, style, font, base_pt) -> None:
+    """
+    Label each bubble, placed clear of the cloud and joined by a leader line.
+
+    A label inside a small bubble is unreadable and a label on top of its
+    neighbour is worse, so each label is pushed out past its own bubble's
+    radius, away from the cloud's centre, and then separated vertically from
+    the others on its side. A hairline connects it back to what it names -
+    which is the whole point of a leader line, and why the label may be moved
+    at all.
+    """
+    from app import colors as color_utils
+
+    centre_x = sum(p["x"] for p in points) / len(points)
+    centre_y = sum(p["y"] for p in points) / len(points)
+    leader = color_utils.mix(style.axis_color, style.grid_color, LEADER_COLOR_MIX)
+
+    x_lo, x_hi = ax.get_xlim()
+    y_lo, y_hi = ax.get_ylim()
+    x_span, y_span = x_hi - x_lo, y_hi - y_lo
+    line_height = y_span * base_pt / 260.0
+
+    placed: list[dict] = []
+    for point, area in zip(points, areas):
+        if not point["label"]:
+            continue
+        radius_x, radius_y = _data_radius(ax, area)
+        dx = (point["x"] - centre_x) / (x_span or 1.0)
+        dy = (point["y"] - centre_y) / (y_span or 1.0)
+        magnitude = math.hypot(dx, dy) or 1.0
+        gap_x = radius_x + x_span * 0.03
+        gap_y = radius_y + y_span * 0.03
+        to_the_right = dx >= 0
+        label_x = point["x"] + dx / magnitude * gap_x * 1.6
+        # A label pushed off the left edge collides with the axis furniture,
+        # so it goes to the right of its bubble instead - the leader line is
+        # what makes either side legible.
+        if not to_the_right and label_x < x_lo + x_span * 0.16:
+            to_the_right = True
+            label_x = point["x"] + gap_x * 1.6
+        placed.append({
+            "point": point,
+            "x": label_x,
+            "y": point["y"] + dy / magnitude * gap_y * 1.6,
+            "right": to_the_right,
+        })
+
+    # Separate labels that would sit on top of each other, one side at a time.
+    for side in (True, False):
+        column = sorted((p for p in placed if p["right"] is side),
+                        key=lambda entry: entry["y"])
+        for index in range(1, len(column)):
+            gap = column[index]["y"] - column[index - 1]["y"]
+            if gap < line_height:
+                column[index]["y"] = column[index - 1]["y"] + line_height
+
+    for entry in placed:
+        ax.annotate(
+            entry["point"]["label"],
+            xy=(entry["point"]["x"], entry["point"]["y"]),
+            xytext=(
+                min(max(entry["x"], x_lo + x_span * 0.01), x_hi - x_span * 0.01),
+                min(max(entry["y"], y_lo + y_span * 0.02), y_hi - y_span * 0.02),
+            ),
+            ha="left" if entry["right"] else "right",
+            va="center",
+            color=style.axis_color, fontname=font, fontsize=base_pt * 0.78,
+            arrowprops={"arrowstyle": "-", "linewidth": 0.6, "color": leader,
+                        "shrinkA": 0, "shrinkB": 1},
+            zorder=4,
+        )
+
+
+def _draw_bubble_legend(ax, chart_data, style, font, base_pt) -> None:
+    """
+    The hand-built legend that explains both encodings.
+
+    Colour as a swatch row, size as **nested arcs sharing a baseline** - the
+    key the reference uses, and the only one that shows a reader what an area
+    of that size actually looks like. A dual-encoded chart without this is
+    asking the reader to guess which dimension is which.
+
+    A circle in an axes whose x and y scales differ is an ellipse, which is
+    exactly what a *size* key must not be - so every circle here is drawn as
+    an ellipse with the axes' own aspect divided back out. That correction
+    needs the final layout, which is why this runs after it.
+    """
+    from matplotlib.patches import Ellipse
+
+    colour_legend = chart_data.get("colorLegend") or {}
+    size_legend = chart_data.get("sizeLegend") or {}
+
+    panel = ax.inset_axes([1.0 - LEGEND_WIDTH_FRACTION + 0.02, 0.0,
+                           LEGEND_WIDTH_FRACTION - 0.03, 1.0])
+    panel.set_xlim(0, 1)
+    panel.set_ylim(0, 1)
+    panel.axis("off")
+
+    extent = panel.get_window_extent()
+    # One data unit is this many display units on each axis; dividing it out
+    # of the width is what makes a "circle" round.
+    aspect = (extent.height / extent.width) if extent.width else 1.0
+
+    def circle(centre, radius, **kwargs):
+        panel.add_patch(Ellipse(centre, 2 * radius * aspect, 2 * radius, **kwargs))
+
+    cursor = 0.97
+    swatch_r = 0.028
+    labels = [str(v) for v in (colour_legend.get("labels") or [])]
+    if labels:
+        panel.text(0.0, cursor, str(colour_legend.get("title") or "").strip(),
+                   color=style.axis_color, fontname=font,
+                   fontsize=base_pt * 0.8, fontweight="bold", va="top")
+        cursor -= 0.07
+        step = min(0.16, 0.95 / max(1, len(labels)))
+        for index, label in enumerate(labels):
+            x = index * step
+            circle((x + swatch_r * aspect, cursor), swatch_r,
+                   facecolor=_bubble_colour(index, style, index), edgecolor="none")
+            panel.text(x + swatch_r * aspect * 2.4, cursor, label,
+                       color=style.axis_color, fontname=font,
+                       fontsize=base_pt * 0.7, va="center")
+        cursor -= 0.11
+
+    values = [float(v) for v in (size_legend.get("values") or []) if v is not None]
+    if not values:
+        return
+    panel.text(0.0, cursor, str(size_legend.get("title") or "").strip(),
+               color=style.axis_color, fontname=font, fontsize=base_pt * 0.8,
+               fontweight="bold", va="top")
+    cursor -= 0.06
+
+    biggest = max(values) or 1.0
+    max_radius = 0.13
+    baseline = cursor - max_radius * 2
+    for value in sorted(values, reverse=True):
+        radius = max_radius * math.sqrt(value / biggest)
+        circle((max_radius * aspect, baseline + radius), radius,
+               facecolor="none", edgecolor=style.axis_color, linewidth=0.8)
+        panel.text(max_radius * aspect * 2.3, baseline + radius * 2,
+                   _format_number(value), color=style.axis_color, fontname=font,
+                   fontsize=base_pt * 0.68, va="center")
+
+
 def _draw_cartesian(
     ax, chart_type, series, categories, chart_data, style, font, base_pt, unit_suffix,
 ) -> None:
@@ -309,19 +828,24 @@ def _draw_cartesian(
         name = str(s.get("name") or f"Series {i + 1}")
         color = style.color_sequence[i % len(style.color_sequence)]
 
+        # Which points are projected rather than measured. Everything from
+        # forecastFrom onwards, plus any point whose measured portion is
+        # smaller than its value (page 110's split final bar).
+        forecast_from = _forecast_from(s, n_points)
+        measured = _measured_values(s, values, forecast_from)
+
         if chart_type == "line":
-            ax.plot(x, values, label=name, color=color, linewidth=2.5, marker="o",
-                    markersize=base_pt * 0.5)
+            _draw_line_with_forecast(ax, x, values, forecast_from, color, name,
+                                     base_pt)
         elif chart_type == "area":
             ax.plot(x, values, label=name, color=color, linewidth=2.0)
             ax.fill_between(x, values, color=color, alpha=0.22)
         elif chart_type == "scatter":
             ax.scatter(x, values, label=name, color=color, s=base_pt * 6)
         else:  # bar
-            n_series = len(series)
-            bar_width = 0.78 / max(1, n_series)
-            offsets = [xi + i * bar_width - 0.39 + bar_width / 2 for xi in x]
-            ax.bar(offsets, values, width=bar_width, label=name, color=color)
+            bar_width, offsets = _bar_geometry(style, len(series), i, x)
+            _draw_bars_with_forecast(ax, offsets, values, measured, forecast_from,
+                                     bar_width, color, name)
 
     if categories:
         ax.set_xticks(x)
@@ -330,11 +854,33 @@ def _draw_cartesian(
     ax.tick_params(colors=style.axis_color, labelsize=base_pt)
     for label in ax.get_yticklabels():
         label.set_fontname(font)
+
+    # Axis and gridline behaviour come from the deck's tokens rather than
+    # being drawn unconditionally. Reference page 22's bar chart has no value
+    # axis and no gridlines - every bar carries its own label instead - and
+    # rendering that template's charts with a gridded axis in its brand
+    # colours is the single most visible way a generated chart fails to
+    # belong to the deck it is in.
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
+    ax.spines["left"].set_visible(
+        style.show_value_axis or (style.baseline_rule and chart_type == "barh")
+    )
+    ax.spines["bottom"].set_visible(style.show_category_axis or style.baseline_rule)
     for side in ("left", "bottom"):
         ax.spines[side].set_color(style.axis_color)
-    ax.yaxis.grid(True, color=style.grid_color, linewidth=0.7)
+
+    if not style.show_value_axis:
+        ax.tick_params(axis="y", left=False, labelleft=False)
+    if not style.show_category_axis:
+        ax.tick_params(axis="x", bottom=False, labelbottom=False)
+
+    # Passing line properties alongside a False first argument makes
+    # matplotlib warn and turn the grid *on* anyway - so a chart whose tokens
+    # said "no gridlines" got them. Enable and style, or disable and say
+    # nothing else.
+    _set_grid(ax.yaxis, style.show_value_gridlines, style)
+    _set_grid(ax.xaxis, style.show_category_gridlines, style)
     ax.set_axisbelow(True)
     ax.yaxis.set_major_formatter(_axis_formatter(unit_suffix))
 
@@ -344,8 +890,15 @@ def _draw_cartesian(
     if chart_type in ("bar", "area"):
         ax.set_ylim(bottom=min(0.0, ax.get_ylim()[0]))
 
+    # Where the unit is stated is a deck convention, not a chart decision.
+    # The reference puts it on a second subtitle line ("thousands", "$ billion")
+    # rather than rotated up the side of the plot.
+    # An explicit unitLine says the unit outright, so repeating it up the side
+    # of the plot states it twice.
     value_label = _value_axis_label(chart_data, series)
-    if value_label:
+    states_unit_above = bool(str(chart_data.get("unitLine") or "").strip())
+    if (value_label and not states_unit_above
+            and style.unit_convention == "axis" and style.show_value_axis):
         ax.set_ylabel(value_label, color=style.axis_color, fontname=font,
                       fontsize=base_pt, labelpad=base_pt * 0.6)
 
@@ -357,7 +910,7 @@ def _draw_cartesian(
                       fontsize=base_pt, labelpad=base_pt * 0.5)
 
     # A legend for one series would only repeat the value-axis label.
-    if len(series) > 1:
+    if _legend_wanted(style, len(series)):
         legend = ax.legend(frameon=False, fontsize=base_pt, labelcolor=style.axis_color,
                            loc="best")
         for text in legend.get_texts():
@@ -371,21 +924,28 @@ def _draw_data_labels(
     ax, chart_type, series, x, style, font, base_pt, unit_suffix, chart_data,
 ) -> None:
     """Print each point's value next to it, where that stays readable."""
-    if chart_data.get("showDataLabels") is False:
+    if chart_data.get("showDataLabels") is False or style.label_mode == "none":
         return
     if chart_type == "scatter":
         return
+
     total_points = sum(len(s["values"]) for s in series)
-    if total_points > MAX_LABELLED_POINTS * 2 or len(x) > MAX_LABELLED_POINTS:
+    crowded = (total_points > MAX_LABELLED_POINTS * 2
+               or len(x) > MAX_LABELLED_POINTS)
+    # "auto" is what the renderer always did: label everything, unless there
+    # is so much of it that the labels smear into each other. A declared mode
+    # overrides that, because a deck whose convention is "label the end of
+    # every bar" means it however many bars there are.
+    if style.label_mode == "auto" and crowded:
         return
 
-    n_series = len(series)
-    bar_width = 0.78 / max(1, n_series)
+    labelled = _points_to_label(style, chart_type, x)
     for i, s in enumerate(series):
-        for xi, value in zip(x, s["values"]):
-            if value != value:
+        bar_width, offsets = _bar_geometry(style, len(series), i, x)
+        for position, (xi, value) in enumerate(zip(x, s["values"])):
+            if value != value or position not in labelled:
                 continue
-            px = xi + i * bar_width - 0.39 + bar_width / 2 if chart_type == "bar" else xi
+            px = offsets[position] if chart_type == "bar" else xi
             ax.annotate(
                 f"{_format_number(value)}{unit_suffix}",
                 xy=(px, value),

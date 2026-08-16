@@ -349,11 +349,17 @@ Return a JSON object with these EXACT keys (no extra keys, no missing keys):
 7. "embeddedMedia": [ {{"mediaType": "image"|"audio"|"video", "rId": "", "fileName": string, "mimeType": string, "fileSizeBytes": number}} ]
    - Any embedded images/logos visible in the template.
 
-8. "dataViz": {{ "chartColorSequence": [hex, hex, ...], "chartAxisColor": hex, "chartGridColor": hex, "tableHeaderBg": hex, "tableHeaderFg": hex, "tableBandBg": hex, "tableRowBg": hex, "tableBorder": hex, "fontFamily": string }}
-   - How this template's own brand colors should be used for generated tables and charts, so they look like they belong to this deck.
+8. "dataViz": {{ "chartColorSequence": [hex, hex, ...], "chartAxisColor": hex, "chartGridColor": hex, "tableHeaderBg": hex, "tableHeaderFg": hex, "tableBandBg": hex, "tableRowBg": hex, "tableBorder": hex, "fontFamily": string, "chartValueAxis": bool, "chartCategoryAxis": bool, "chartValueGridlines": bool, "chartCategoryGridlines": bool, "chartBaselineRule": bool, "chartLabelMode": "auto"|"none"|"all"|"terminal"|"end", "chartLegend": "auto"|"none"|"swatches"|"inline", "chartUnitConvention": "axis"|"subtitle"|"title", "chartBarThickness": number, "tableTreatment": "filled"|"hairline", "tableHeaderFilled": bool }}
+   - How this template DRAWS its charts and tables, not only what colour they are. Colours are the smallest part of why a chart looks like it belongs to a deck.
    - chartColorSequence: 3-5 of the template's own colors, ordered for use as chart data-series colors (most prominent/brand color first).
    - tableHeaderBg should be the template's primary/accent brand color; tableHeaderFg should be whichever of black/white has better contrast against it.
-   - Base every value on colors you actually identified in "palette" above - do not invent new colors here.
+   - Look at the template's own charts and answer what you SEE:
+     * chartValueAxis / chartValueGridlines: does a chart in this template have a numbered value axis and horizontal gridlines, or has it dropped both? Many consultancy decks drop both and label the data directly instead.
+     * chartLabelMode: "end" if every bar carries its value at its end, "terminal" if only the last point of a line is labelled, "all" if every point is, "none" if the chart relies on its axis, "auto" if you cannot tell.
+     * chartUnitConvention: where the unit is stated - "axis" (rotated up the side), "subtitle" (a second line under the chart's title, e.g. "thousands", "$ billion"), or "title".
+     * chartBarThickness: roughly what fraction of each category slot the bars fill, 0.4 (thin, widely spaced) to 0.95 (nearly touching).
+     * tableTreatment: "hairline" if the template's tables separate rows with thin rules on the page's own background, "filled" if rows are banded blocks of colour.
+   - Base every colour on colors you actually identified in "palette" above - do not invent new colors here. For the style questions, describe the template rather than a preference.
 
 Be precise with hex colors and positions. Return ONLY valid JSON — no markdown fences, no commentary."""
 
@@ -434,14 +440,20 @@ Be precise with hex colors and positions. Return ONLY valid JSON — no markdown
         # template), trust it; otherwise derive one from whatever palette
         # was actually extracted rather than falling back to an unrelated
         # generic default.
+        derived = derive_data_viz_config(
+            result.get("palette", {}).get("colors", []),
+            result.get("typography", {}).get("bodyFont", {}).get("typeface", "Arial"),
+        )
         vision_data_viz = parsed.get("dataViz") if isinstance(parsed, dict) else None
         if isinstance(vision_data_viz, dict) and vision_data_viz.get("chartColorSequence"):
-            result["dataViz"] = vision_data_viz
+            # Merged over the derived set rather than replacing it: the model
+            # reliably answers the colour questions and answers the style ones
+            # partially, and a half-answered dataViz used to mean the style
+            # tokens were simply absent. Whatever it did not say keeps the
+            # deterministic default.
+            result["dataViz"] = {**derived, **vision_data_viz}
         else:
-            result["dataViz"] = derive_data_viz_config(
-                result.get("palette", {}).get("colors", []),
-                result.get("typography", {}).get("bodyFont", {}).get("typeface", "Arial"),
-            )
+            result["dataViz"] = derived
 
         return result
 

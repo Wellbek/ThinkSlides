@@ -180,6 +180,27 @@ def derive_data_viz_config(palette_colors: list[dict], body_font: str = "Arial")
         "tableRowBg": "#FFFFFF",
         "tableBorder": by_name.get("gray", "#CCCCCC"),
         "fontFamily": body_font,
+        # Style tokens, not just colours. A chart belongs to a deck because of
+        # how it is drawn - whether it has an axis, where its labels sit, how
+        # thick its bars are - and none of that was recordable before. These
+        # are the values the renderer already used, stated rather than
+        # hardcoded, so this function's output is unchanged in effect and
+        # newly changeable.
+        "chartValueAxis": True,
+        "chartCategoryAxis": True,
+        "chartValueGridlines": True,
+        "chartCategoryGridlines": False,
+        "chartGridlineWeightPt": 0.7,
+        "chartBaselineRule": True,
+        "chartLabelMode": "auto",
+        "chartLegend": "auto",
+        "chartUnitConvention": "axis",
+        "chartBarThickness": 0.78,
+        "chartBarGroupGap": 0.0,
+        "tableTreatment": "filled",
+        "tableRuleWeightPt": 0.75,
+        "tableHeaderRuleWeightPt": 1.25,
+        "tableHeaderFilled": True,
     }
 
 
