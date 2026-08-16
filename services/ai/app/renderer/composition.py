@@ -14,6 +14,21 @@ block should start - from the text that is actually there.
 Deliberately not "stretch to fill": text spread edge-to-edge down a slide
 reads as broken, not balanced. Each adjustment is bounded, and a block that
 already fills its band comes back untouched.
+
+It works in both directions. The module was written for the sparse case and
+only ever grew, because that was the only failure a four-bullet deck could
+have. Once slides are written to a density budget (#129) the other case
+appears: a block that overruns its band. Left to itself the caller's autofit
+takes it in one step to whatever fits, which is how one slide ends up two
+sizes off the rest of the deck. So a small, bounded tighten happens here
+first, on the same reasoning that bounds the growth - the deck should look
+like one type scale, not one per slide - and autofit remains the backstop for
+anything this cannot rescue.
+
+What this still refuses to do is *add* content. A slide with four bullets on a
+page that wants ten is not fixed by setting the four larger; that is the same
+sparse page in bigger type. The budget rejects it upstream, where more content
+can actually come from.
 """
 
 from __future__ import annotations
@@ -23,6 +38,17 @@ from app.renderer import text_fit
 
 # Above this fill ratio the block is doing its job and is left alone.
 COMFORTABLE_FILL = 0.72
+# ...until it passes this, at which point it is overrunning its band and the
+# tightening below applies. The gap between the two is the band where a block
+# is simply full, and touching it either way would be fussing.
+CROWDED_FILL = 1.0
+# A block may be set smaller, but only this far - the mirror of MAX_GROWTH and
+# for the same reason. Past it the slide stops matching the deck's type scale,
+# and the honest answer is that the slide has too much on it.
+MAX_TIGHTEN = 0.88
+# Where a tightened block should land. Slightly under the box rather than
+# exactly at it, because the estimate is an estimate.
+TIGHTENED_FILL = 0.96
 # A short block may be set larger, but only so far. Two limits bite here:
 # past about this the slide reads as shouting rather than well-set, and body
 # copy that varies wildly slide to slide is its own design smell - the deck
@@ -85,6 +111,8 @@ def balance_body(
         return NO_CHANGE
 
     fill = measured / box_height_in
+    if fill > CROWDED_FILL:
+        return _tighten(texts, sizes, usable_width_pt, box_height_in)
     if fill >= COMFORTABLE_FILL:
         return NO_CHANGE
 
@@ -120,7 +148,32 @@ def balance_body(
     )
 
 
+def _tighten(texts: list[str], sizes: list[float], usable_width_pt: float,
+             box_height_in: float) -> BodyBalance:
+    """
+    Set an overfull block a little smaller, within the deck's type scale.
+
+    The paragraph gap and the offset stay at zero: there is nothing left over
+    to lead with, and a block that overruns its band should sit at the top of
+    it. Only the size moves, and only as far as MAX_TIGHTEN - a block this
+    cannot rescue is handed on to the caller's autofit unchanged, which is the
+    honest outcome for a slide carrying more than its band holds.
+    """
+    target_in = box_height_in * TIGHTENED_FILL
+    for candidate in _tighten_steps():
+        if _measure_in(texts, sizes, usable_width_pt, candidate) <= target_in:
+            return BodyBalance(size_scale=candidate, paragraph_gap_pt=0.0,
+                               top_offset_in=0.0)
+    return BodyBalance(size_scale=MAX_TIGHTEN, paragraph_gap_pt=0.0,
+                       top_offset_in=0.0)
+
+
 def _steps(upper: float) -> list[float]:
     """Growth factors to try, largest first, never below 1.0."""
     candidates = [upper, 1.2, 1.15, 1.1, 1.05, 1.0]
     return [round(c, 3) for c in candidates if c <= upper + 1e-9] or [1.0]
+
+
+def _tighten_steps() -> list[float]:
+    """Shrink factors to try, gentlest first, never below MAX_TIGHTEN."""
+    return [round(c, 3) for c in (0.97, 0.94, 0.91, MAX_TIGHTEN)]

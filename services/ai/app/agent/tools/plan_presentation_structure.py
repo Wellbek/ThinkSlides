@@ -4,15 +4,24 @@ Plans the overall slide structure and outline based on analyzed content and requ
 """
 
 from __future__ import annotations
+from app.agent import run_context
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import get_chat_provider
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
+from app import budget as budget_model
 from app.llm.provider import get_tools_llm_provider as get_llm_provider
 from app.observability.logging import get_logger
 import json
+import re
 import time
 
 logger = get_logger(__name__)
+
+# A figure in the analysed content is something a slide could be built around,
+# which is what separates a deck that can honestly be dense from one that
+# cannot. Percentages, currency and plain numbers all count; a year on its own
+# does not, because every document has those.
+_FIGURE_RE = re.compile(r"(?<!\d)(?!(?:19|20)\d{2}(?!\d))\d[\d,.]*\s?%?")
 
 # How much content depth to plan for, keyed by the composer's detail_level.
 _DETAIL_GUIDANCE = {
@@ -37,6 +46,77 @@ _DETAIL_GUIDANCE = {
         "alongside the prose one rather than choosing between them."
     ),
 }
+
+
+def _density_guidance(design_system: dict, material: float = 1.0) -> str:
+    """
+    The template's own density, stated to the planner as a per-kind target.
+
+    Without this the plan is written against a fixed "4-6 key points",
+    whatever the template does - so a user uploading a dense analyst deck got
+    its colours and its fonts and none of its substance. The figures are
+    measured off the template's rendered pages, so they are not a preference
+    to argue with.
+
+    Per kind of page rather than one number, because holding a cover and a
+    matrix to the same figure produces a deck of uniformly cluttered pages,
+    which is a different failure from the one this fixes. And scaled by how
+    much material the run actually has: a plan told to fill fifteen cells from
+    three paragraphs will invent twelve.
+    """
+    from app.measure.density import density_brief
+
+    brief = density_brief(design_system)
+    if not brief:
+        return ""
+
+    content = budget_model.budget_for(design_system, budget_model.CONTENT, material)
+    exhibit = budget_model.budget_for(design_system, budget_model.EXHIBIT, material)
+    thin = material < 0.5
+    lines = [
+        f"\n\nDensity target: {brief}.",
+        "A block is one countable thing on the page - a bullet, a card, a row "
+        "of a table, a labelled statistic, a chart.",
+        f"So a content slide should come to roughly {content.blocks_target:.0f} "
+        f"blocks and {content.words_target:.0f} words, and a chart or table "
+        f"slide to roughly {exhibit.blocks_target:.0f} blocks and "
+        f"{exhibit.words_target:.0f} words including the exhibit. A cover or a "
+        "section divider carries its headline and nothing else.",
+    ]
+    if thin:
+        lines.append(
+            "The material supplied for this deck is thin, and those targets "
+            "are already scaled down for it. Plan fewer slides rather than "
+            "padding them: a short deck that says something is the right "
+            "outcome here, and inventing content to reach a density is not."
+        )
+    else:
+        lines.append(
+            "If the target is well above the key-point count below, that is "
+            "the target speaking: give those slides more points, or richer "
+            "ones, rather than adding more slides. Only where the analysed "
+            "content actually supports it - a slide of invented detail is "
+            "worse than a sparse one."
+        )
+    return " ".join(lines)
+
+
+def _deck_material(content_summary: str, key_data: dict) -> float:
+    """
+    How much this run has to say, before any slide is planned.
+
+    The same reading the content designer makes per slide, made once over
+    everything the run gathered, so the plan's density and each slide's
+    density are scaled by the same judgement rather than two different ones.
+    """
+    figures = len(_FIGURE_RE.findall(json.dumps(key_data or {})))
+    return budget_model.material_score(
+        [key for key in (key_data or {}) if key],
+        has_exhibit=figures >= 3,
+        figures=figures,
+        research_findings=len(run_context.get_research_findings() or []),
+        source_words=len(str(content_summary or "").split()),
+    )
 
 
 class PlanPresentationStructureTool:
@@ -129,6 +209,9 @@ class PlanPresentationStructureTool:
                 layout_info = f"\nAvailable layout names in template: {', '.join(layout_names)}"
 
             detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
+            density_info = _density_guidance(
+                parsed_ds, _deck_material(content_summary, parsed_data)
+            )
 
             prompt = f"""Plan a presentation structure based on the following:
 
@@ -139,7 +222,7 @@ Key Data: {json.dumps(parsed_data, indent=2)[:2000]}
 
 Target Audience: {audience}
 Target Slide Count: {target_slide_count if target_slide_count > 0 else 'auto-determine'}
-{layout_info}
+{layout_info}{density_info}
 
 Return a JSON object with this structure:
 {{

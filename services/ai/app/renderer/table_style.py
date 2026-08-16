@@ -27,7 +27,7 @@ extraction step having populated it.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dc_field
 from typing import Any
 
 DEFAULT_HEADER_BG = "#1F4E79"
@@ -68,6 +68,8 @@ class TableStyle:
     rule_weight_pt: float = 0.75
     header_rule_weight_pt: float = 1.25
     header_filled: bool = True
+    # The stack to try when ``font_name`` is not installed where we render.
+    font_fallbacks: list[str] = dc_field(default_factory=list)
 
 
 @dataclass
@@ -98,6 +100,13 @@ class ChartStyle:
     # Bar geometry.
     bar_thickness: float = 0.78
     bar_group_gap: float = 0.0
+
+    # The stack to try when ``font_name`` is not installed where we render.
+    # A chart is rasterised on this host, so unlike the PPTX's own text it
+    # cannot leave the substitution to the machine that opens the deck - and
+    # a serif deck whose charts come back in DejaVu Sans is a mismatch a
+    # reader sees immediately.
+    font_fallbacks: list[str] = dc_field(default_factory=list)
 
     def labels_visible(self, point_count: int, max_points: int) -> bool:
         """Whether any data label is drawn at all."""
@@ -145,6 +154,7 @@ def resolve_table_style(design_system: dict | None) -> TableStyle:
                                             style.header_rule_weight_pt)
     style.header_filled = _flag(data_viz.get("tableHeaderFilled"),
                                 style.header_filled)
+    style.font_fallbacks = font_chain(design_system, style.font_name)
     return style
 
 
@@ -198,7 +208,26 @@ def resolve_chart_style(design_system: dict | None) -> ChartStyle:
                                     style.bar_thickness)
     style.bar_group_gap = max(0.0, _number(data_viz.get("chartBarGroupGap"),
                                            style.bar_group_gap))
+    style.font_fallbacks = font_chain(design_system, style.font_name)
     return style
+
+
+def font_chain(design_system: dict | None, font_name: str) -> list[str]:
+    """
+    The stack to try for a face: the deck's recorded chain, or one derived.
+
+    Extraction records a chain per role. A design system written before that
+    existed - or one a model hand-assembled - has only a name, so the chain is
+    derived from the name's own family, which is still better than the sans
+    stack the chart renderer used to fall back to unconditionally.
+    """
+    from app.measure.density import fallback_chain
+
+    body = (((design_system or {}).get("typography") or {}).get("bodyFont")) or {}
+    declared = body.get("fallbacks") or []
+    if declared and str(body.get("typeface") or "").strip() == font_name.strip():
+        return [str(face) for face in declared if str(face).strip()]
+    return fallback_chain(font_name)
 
 
 def _flag(value: Any, default: bool) -> bool:

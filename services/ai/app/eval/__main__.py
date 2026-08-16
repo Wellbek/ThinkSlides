@@ -19,7 +19,7 @@ import sys
 import tempfile
 
 from app.eval import corpus, reference, scorecard
-from app.eval.deck_metrics import profile_pdf
+from app.measure.deck_metrics import profile_pdf
 
 DEFAULT_OUTPUT_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),

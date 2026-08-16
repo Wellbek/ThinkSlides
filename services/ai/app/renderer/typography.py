@@ -85,9 +85,22 @@ class TypeScale:
     body_size_pt: float = 20.0
     caption_size_pt: float = 12.0
     title_bold: bool = True
+    # The stacks to try for each face where the face itself is unavailable.
+    # The PPTX writes the declared name and leaves substitution to whichever
+    # machine opens it, but anything this service rasterises - a chart, a
+    # specimen - has to resolve the chain here or it gets the host default.
+    title_fallbacks: tuple[str, ...] = ()
+    body_fallbacks: tuple[str, ...] = ()
+    # Whether the display face is a serif. A pairing, not a decoration: the
+    # reference sets Georgia over Arial, and a deck that loses the pairing
+    # loses a large part of how it reads.
+    display_is_serif: bool = False
 
     @classmethod
     def from_design_system(cls, design_system: dict | None) -> "TypeScale":
+        from app.measure.density import fallback_chain
+        from app.measure.page_metrics import _is_serif
+
         typography = ((design_system or {}).get("typography") or {})
         title = typography.get("titleFont") or {}
         body = typography.get("bodyFont") or {}
@@ -104,6 +117,10 @@ class TypeScale:
             body_size_pt=_positive(body.get("sizePt"), defaults.body_size_pt),
             caption_size_pt=_positive(caption.get("sizePt"), defaults.caption_size_pt),
             title_bold=bool(title.get("bold", defaults.title_bold)),
+            title_fallbacks=_chain(title.get("fallbacks"), title_font, fallback_chain),
+            body_fallbacks=_chain(body.get("fallbacks"), body_font, fallback_chain),
+            display_is_serif=bool(typography.get("displayIsSerif",
+                                                 _is_serif(title_font))),
         )
 
     def title_style(self, hero: bool = False) -> TextStyle:
@@ -123,6 +140,15 @@ class TypeScale:
             font_size_pt=max(MIN_BODY_PT, round(self.body_size_pt * ratio)),
             bold=False,
         )
+
+
+def _chain(declared, face: str, derive) -> tuple[str, ...]:
+    """A recorded fallback chain, or one derived from the face's own family."""
+    if isinstance(declared, (list, tuple)):
+        chain = tuple(str(f).strip() for f in declared if str(f).strip())
+        if chain:
+            return chain
+    return tuple(derive(face))
 
 
 def _positive(value, fallback: float) -> float:

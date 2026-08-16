@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Iterable, Optional, Sequence
 
 from app import titles
-from app.eval.page_metrics import PageMetrics, measure_pdf
+from app.measure.page_metrics import PageMetrics, measure_pdf
 
 # A page carrying less than this much ink is a cover, a divider or a blank -
 # real pages, but not evidence about how dense the deck's content pages are.
