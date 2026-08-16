@@ -29,7 +29,7 @@ from app.design_system import get_default_design_system
 def _spec(**kwargs) -> directions.DirectionSpec:
     base = {"id": "d", "name": "D", "rationale": "why", "ground": "light",
             "display_face": "Arial", "body_face": "Arial", "density": "balanced",
-            "motif": "rule"}
+            "motif": "rule", "structure": "list"}
     base.update(kwargs)
     return directions.DirectionSpec(**base)
 
@@ -81,28 +81,56 @@ class TestCompilingADirection:
             budget.budget_for(airy).blocks_target * 2
 
     def test_the_motif_reaches_the_chrome(self):
-        assert directions.compile_direction(_spec(motif="none"))["chrome"][
-            "footerRule"]["show"] == "never"
+        """And in the key ChromeSpec reads. Declaring {"show": "never"} read
+        as an element with no opinion, so it defaulted to on - the one
+        direction asking for no footer rule was the only one drawing one."""
+        from app.renderer.chrome import ChromeSpec
+
+        no_rule = directions.compile_direction(_spec(motif="none"))
+        banded = directions.compile_direction(_spec(motif="band"))
+
+        assert ChromeSpec.from_design_system(no_rule).footer_rule.enabled is False
+        assert ChromeSpec.from_design_system(banded).footer_rule.enabled is True
+
+    def test_the_structure_travels_on_the_design_system(self):
+        """It is what the specimen deck shapes its points with, and what the
+        drafting phase tells the model to keep shaping them with."""
+        system = directions.compile_direction(_spec(structure="bands"))
+
+        assert system["structure"] == "bands"
 
     def test_a_spec_is_read_from_whatever_the_model_sent(self):
         spec = directions.DirectionSpec.from_dict({
             "name": "Dark Analyst", "ground": "DARK", "density": "dense",
-            "displayFace": "Georgia", "bodySizePt": "15",
+            "displayFace": "Georgia", "bodySizePt": "15", "structure": "BANDS",
+            "paletteHex": "1b4332",
         })
 
         assert spec.id == "dark-analyst"
         assert spec.ground == "dark"
         assert spec.body_pt == 15.0
         assert spec.display_is_serif is True
+        assert spec.structure == "bands"
+        assert spec.palette_hex == "#1B4332"
 
     def test_nonsense_from_the_model_falls_back_rather_than_raising(self):
         spec = directions.DirectionSpec.from_dict({
             "ground": "purple", "density": "extremely", "motif": "swoosh",
-            "displaySizePt": "huge",
+            "displaySizePt": "huge", "structure": "swirls",
+            "paletteHex": "not a colour",
         })
 
         assert (spec.ground, spec.density, spec.motif) == ("light", "balanced", "rule")
         assert spec.display_pt == 36.0
+        assert spec.structure == "list"
+        assert spec.palette_hex == ""
+
+    def test_a_spec_round_trips_so_it_can_be_compiled_again(self):
+        """The colour is answered in the same pause the direction is chosen
+        in, so the chosen direction has to be recompilable after the fact."""
+        spec = _spec(structure="cards", palette_hex="#1B4332", motif="band")
+
+        assert directions.DirectionSpec.from_dict(spec.to_dict()) == spec
 
 
 class TestTheColourIsAlreadySettled:
@@ -156,6 +184,66 @@ class TestTheColourIsAlreadySettled:
 
         assert palette["primary"]
 
+    def test_with_nothing_settled_a_direction_proposes_its_own_hue(self):
+        """Every direction of every deck used to resolve to the house navy,
+        so a preview said nothing about the subject it was drawn for."""
+        system = directions.compile_direction(_spec(palette_hex="#1B4332"))
+        palette = {c["name"]: c["value"] for c in system["palette"]["colors"]}
+
+        assert palette["primary"] == "#1B4332"
+
+    def test_a_settled_colour_still_overrules_the_proposed_one(self):
+        system = directions.compile_direction(_spec(palette_hex="#1B4332"),
+                                              brand_hex="#00704A")
+        palette = {c["name"]: c["value"] for c in system["palette"]["colors"]}
+
+        assert palette["primary"] == "#00704A"
+
+
+class TestRecolouringTheChosenDirection:
+    """The colour rides in the same card as the direction, so its answer
+    lands after the specimens were drawn - it is applied afterwards, to the
+    one direction the user actually picked."""
+
+    @staticmethod
+    def _chosen(**kwargs):
+        compiled, _ = directions.validate([_spec(**kwargs)])
+        return compiled[0]
+
+    def test_the_chosen_direction_is_compiled_again_in_the_new_hue(self):
+        recoloured = directions.recolour(self._chosen(), "#00704A")
+        palette = {c["name"]: c["value"] for c in
+                   recoloured["designSystem"]["palette"]["colors"]}
+
+        assert palette["primary"] == "#00704A"
+
+    def test_everything_else_about_the_direction_survives_it(self):
+        chosen = self._chosen(ground="dark", structure="bands", motif="band")
+
+        recoloured = directions.recolour(chosen, "#00704A")
+
+        assert recoloured["designSystem"]["ground"] == "dark"
+        assert recoloured["designSystem"]["structure"] == "bands"
+        assert recoloured["id"] == chosen["id"]
+
+    def test_a_colour_nobody_could_read_is_not_applied(self):
+        """A user who asked for a colour and got unreadable body copy has been
+        given a worse deck than the one they were looking at."""
+        chosen = self._chosen(ground="split")
+
+        assert directions.recolour(chosen, "#7A7A7A") == chosen
+
+    def test_nonsense_leaves_the_direction_alone(self):
+        chosen = self._chosen()
+
+        assert directions.recolour(chosen, "cornflower") == chosen
+
+    def test_an_uploaded_template_is_never_recoloured(self):
+        """Its palette is the user's own and is not ours to overwrite."""
+        uploaded = directions.template_direction(get_default_design_system("warm"))
+
+        assert directions.recolour(uploaded, "#00704A") == uploaded
+
 
 # ──────────────────────────────────────────────────────────────────────
 # The floor
@@ -184,8 +272,28 @@ class TestASetThatIsNotASet:
 
         assert directions.distinctness_problems(pair) == []
 
+    def test_shaping_the_points_identically_everywhere_is_rejected(self):
+        """Three covers a user can tell apart, and three content slides they
+        cannot, is a comparison of colour - which is #151."""
+        same = [_spec(id="a", name="A", ground="light", density="airy"),
+                _spec(id="b", name="B", ground="dark", density="dense"),
+                _spec(id="c", name="C", ground="split", motif="none")]
+
+        problems = directions.distinctness_problems(same)
+
+        assert any("the same slide" in problem for problem in problems)
+
+    def test_structure_alone_can_make_two_directions_two_directions(self):
+        pair = [_spec(id="a", name="A", ground="light", structure="stats"),
+                _spec(id="b", name="B", ground="dark", structure="bands")]
+
+        assert directions.distinctness_problems(pair) == []
+
     def test_the_default_set_passes_its_own_check(self):
         assert directions.distinctness_problems(directions.default_specs()) == []
+
+    def test_the_default_set_shapes_its_points_three_different_ways(self):
+        assert len({spec.structure for spec in directions.default_specs()}) == 3
 
     def test_two_directions_sharing_an_id_are_reported(self):
         pair = [_spec(id="same", name="A", ground="light", density="airy"),
@@ -274,25 +382,58 @@ class _StubLLM:
         return {"message": {"content": json.dumps(payload)}}
 
 
-def _payload(*specs):
-    return {"directions": list(specs)}
+def _payload(*specs, **extra):
+    return {"directions": list(specs), **extra}
 
+
+CONTENT = {
+    "title": "Cold chain in 2026",
+    "subtitle": "Where the next phase of margin comes from",
+    "headline": "Three shifts decide the next twelve months",
+    "points": [
+        {"label": "Adoption", "figure": "24%", "prose": "of depots now run it",
+         "icon": "adoption"},
+        {"label": "Cost", "figure": "$1.8m", "prose": "of run-rate released",
+         "icon": "cost"},
+        {"label": "Speed", "figure": "6 weeks", "prose": "to a live deployment",
+         "icon": "speed"},
+    ],
+    "evidenceHeadline": "Growth held in every measured year",
+    "takeaway": "Both lines have compounded since the programme began",
+    "chart": {"title": "Depots live, percent",
+              "categories": ["2022", "2023", "2024"],
+              "series": [{"name": "Core", "values": [18, 36, 54]}]},
+}
+COLOURS = [{"name": "Forest green", "hex": "#1B4332"},
+           {"name": "Signal red", "hex": "#8B1E1E"}]
 
 GOOD = _payload(
     {"id": "clean", "name": "Clean minimal", "rationale": "Airy.",
      "ground": "light", "displayFace": "Arial", "bodyFace": "Arial",
-     "density": "airy", "motif": "rule"},
+     "density": "airy", "motif": "rule", "structure": "stats"},
     {"id": "dark", "name": "Dark analyst", "rationale": "Dense.",
      "ground": "dark", "displayFace": "Arial", "bodyFace": "Arial",
-     "density": "dense", "motif": "band"},
+     "density": "dense", "motif": "band", "structure": "bands"},
     {"id": "editorial", "name": "Editorial serif", "rationale": "Written.",
      "ground": "split", "displayFace": "Georgia", "bodyFace": "Arial",
-     "density": "balanced", "motif": "none"},
+     "density": "balanced", "motif": "none", "structure": "list"},
+    content=CONTENT, colorOptions=COLOURS,
 )
 HUE_ONLY = _payload(
     *[{"id": f"d{n}", "name": f"D{n}", "rationale": "r", "ground": "light",
        "displayFace": "Arial", "bodyFace": "Arial", "density": "balanced",
-       "motif": "rule"} for n in range(3)]
+       "motif": "rule", "structure": "list"} for n in range(3)]
+)
+ONE_SHAPE = _payload(
+    {"id": "clean", "name": "Clean minimal", "rationale": "Airy.",
+     "ground": "light", "displayFace": "Arial", "bodyFace": "Arial",
+     "density": "airy", "motif": "rule", "structure": "list"},
+    {"id": "dark", "name": "Dark analyst", "rationale": "Dense.",
+     "ground": "dark", "displayFace": "Arial", "bodyFace": "Arial",
+     "density": "dense", "motif": "band", "structure": "list"},
+    {"id": "editorial", "name": "Editorial serif", "rationale": "Written.",
+     "ground": "split", "displayFace": "Georgia", "bodyFace": "Arial",
+     "density": "balanced", "motif": "none", "structure": "list"},
 )
 
 
@@ -301,7 +442,13 @@ def no_previews(monkeypatch):
     """The tool's own logic, without paying for LibreOffice three times."""
     from app.renderer import specimen
 
-    async def fake(directions_, session_id, output_dir=None):
+    rendered: dict = {}
+
+    async def fake(directions_, session_id, output_dir=None, content=None):
+        rendered["content"] = content
+        rendered["structures"] = [
+            (d.get("designSystem") or {}).get("structure") for d in directions_
+        ]
         return {d["id"]: [f"/previews/{session_id}/direction/{d['id']}/1.png"]
                 for d in directions_}
 
@@ -309,6 +456,7 @@ def no_previews(monkeypatch):
     import app.agent.tools.propose_design_directions as tool
 
     monkeypatch.setattr(tool.specimen, "render_directions", fake)
+    return rendered
 
 
 def _install(monkeypatch, llm):
@@ -354,6 +502,120 @@ class TestProposingDirections:
         assert "rejected" in llm.prompts[1]
         assert [d["id"] for d in result.data["directions"]] == \
             ["clean", "dark", "editorial"]
+
+    @pytest.mark.asyncio
+    async def test_a_set_that_shapes_every_slide_alike_is_re_asked(
+            self, monkeypatch, no_previews):
+        """Three different covers over three identical content slides is a
+        comparison of colour, which is what #151 opened on."""
+        llm = _StubLLM(ONE_SHAPE, GOOD)
+        tool = _install(monkeypatch, llm)
+
+        await tool.run(brief="a deck", session_id="s1")
+
+        assert len(llm.prompts) == 2
+        assert "the same slide" in llm.prompts[1]
+
+    @pytest.mark.asyncio
+    async def test_each_direction_previews_its_own_structure(
+            self, monkeypatch, no_previews):
+        tool = _install(monkeypatch, _StubLLM(GOOD))
+
+        await tool.run(brief="a deck", session_id="s1")
+
+        assert no_previews["structures"] == ["stats", "bands", "list"]
+
+    @pytest.mark.asyncio
+    async def test_one_set_of_copy_is_written_for_all_three(
+            self, monkeypatch, no_previews):
+        """Holding the words constant is what makes three previews a
+        comparison of design; holding them at lorem ipsum is what made every
+        run's previews identical to every other run's."""
+        tool = _install(monkeypatch, _StubLLM(GOOD))
+
+        await tool.run(brief="a deck on cold chain logistics", session_id="s1")
+
+        content = no_previews["content"]
+        assert content.title == "Cold chain in 2026"
+        assert [p.figure for p in content.points] == ["24%", "$1.8m", "6 weeks"]
+
+    @pytest.mark.asyncio
+    async def test_copy_the_model_did_not_write_falls_back_rather_than_failing(
+            self, monkeypatch, no_previews):
+        """The specimen deck supplies its own copy when there is none, so a
+        model that answered with directions alone still gets previews."""
+        tool = _install(monkeypatch, _StubLLM(_payload(*GOOD["directions"])))
+
+        result = await tool.run(brief="a deck", session_id="s1")
+
+        assert no_previews["content"] is None
+        assert all(d["previewUrls"] for d in result.data["directions"])
+
+    @pytest.mark.asyncio
+    async def test_the_colour_is_the_second_question_on_the_same_card(
+            self, monkeypatch, no_previews):
+        """It used to be asked in the consultation and then was not asked at
+        all, which left every deck in the house navy."""
+        tool = _install(monkeypatch, _StubLLM(GOOD))
+
+        result = await tool.run(brief="a deck", session_id="s1")
+
+        questions = result.data["questions"]
+        assert len(questions) == 2
+        assert questions[1]["options"][0].startswith("As proposed")
+        assert "Forest green (#1B4332)" in questions[1]["options"]
+
+    @pytest.mark.asyncio
+    async def test_a_colour_already_settled_is_not_asked_about_again(
+            self, monkeypatch, no_previews):
+        tool = _install(monkeypatch, _StubLLM(GOOD))
+
+        result = await tool.run(brief="a deck", answers="Use #00704A",
+                                session_id="s1")
+
+        assert len(result.data["questions"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_uploaded_template_is_not_asked_about_either(
+            self, monkeypatch, no_previews):
+        """Its own palette is used as-is."""
+        uploaded = get_default_design_system("warm")
+        uploaded["sourceType"] = "pptx"
+        tool = _install(monkeypatch, _StubLLM(GOOD))
+
+        result = await tool.run(brief="a deck", session_id="s1",
+                                design_system=uploaded)
+
+        assert len(result.data["questions"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_direction_is_proposed_in_its_own_colour(
+            self, monkeypatch, no_previews):
+        tool = _install(monkeypatch, _StubLLM(_payload(
+            *[{**d, "paletteHex": hex_value} for d, hex_value in
+              zip(GOOD["directions"], ("#1B4332", "#8B1E1E", "#2F3E9E"))],
+        )))
+
+        result = await tool.run(brief="a deck", session_id="s1")
+
+        primaries = [
+            {c["name"]: c["value"]
+             for c in d["designSystem"]["palette"]["colors"]}["primary"]
+            for d in result.data["directions"]
+        ]
+        assert primaries == ["#1B4332", "#8B1E1E", "#2F3E9E"]
+
+    @pytest.mark.asyncio
+    async def test_every_direction_carries_the_spec_it_was_compiled_from(
+            self, monkeypatch, no_previews):
+        """So the chosen one can be compiled again once the colour answer
+        arrives - it lands after the specimens were drawn."""
+        tool = _install(monkeypatch, _StubLLM(GOOD))
+
+        result = await tool.run(brief="a deck", session_id="s1")
+
+        for direction in result.data["directions"]:
+            assert direction["spec"]["structure"]
 
     @pytest.mark.asyncio
     async def test_a_model_that_never_produces_a_set_falls_back(

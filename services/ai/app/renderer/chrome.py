@@ -55,6 +55,10 @@ DEFAULT_BRAND_PT = 9.0
 CHROME_LINE_HEIGHT_IN = 0.22
 CHROME_BLOCK_WIDTH_IN = 4.2
 BRAND_IMAGE_HEIGHT_IN = 0.24
+# How far above the footer band the footer rule sits. It used to be derived
+# from the line height in a way that landed it inside the band, so every deck
+# that declared one drew a line straight through its own footer text.
+CHROME_FOOTER_RULE_GAP_IN = 0.07
 
 # What the eyebrow says. "sectionName" is the reference deck's own choice; a
 # deck with no sections falls back rather than printing an empty line.
@@ -216,7 +220,11 @@ def compile_chrome(
         rule_colour = spec.footer_rule.color or colors.mix(
             style.background, style.body_color, 0.30
         )
-        top = canvas.height * (1.0 - spec.margin_y) - CHROME_LINE_HEIGHT_IN * 0.6
+        # Above the footer band, not through it: the label and the page number
+        # occupy a CHROME_LINE_HEIGHT_IN box seated on the bottom margin, and a
+        # rule anywhere inside that box strikes the words out.
+        top = (canvas.height - canvas.height * spec.margin_y
+               - CHROME_LINE_HEIGHT_IN - CHROME_FOOTER_RULE_GAP_IN)
         marks.append(Primitive(
             id="chrome-footer-rule", kind="rect",
             box=PositionConfig(

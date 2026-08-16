@@ -74,7 +74,10 @@ export function EffortSelector({ size = "sm" }: { size?: "sm" | "md" }) {
           </button>
         );
       })}
-      {!deepAvailable && (
+      {/* Only when Deep Thinking specifically is missing. A workspace with no
+          model at all already carries the top-bar alert, and a second "set up"
+          link beside it is the same instruction twice. */}
+      {status.chatConfigured && !deepAvailable && (
         <button
           type="button"
           className="ws-effort-setup"

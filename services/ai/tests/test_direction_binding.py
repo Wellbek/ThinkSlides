@@ -150,6 +150,54 @@ class TestTheChoiceGovernsTheRun:
             [{"role": "user", "content": "dark analyst"}]
         ) is None
 
+    def test_the_colour_answered_beside_it_is_applied_to_it(self):
+        """Both questions ride on one card, so the colour necessarily lands
+        after the specimens were drawn. It catches up here."""
+        from app import directions as direction_model
+
+        loop = _loop()
+        compiled, _ = direction_model.validate([direction_model.DirectionSpec(
+            id="dark-analyst", name="Dark analyst", rationale="r", ground="dark",
+        )])
+
+        chosen, applied = loop._apply_colour_choice(
+            compiled[0],
+            [{"role": "user", "content": "Dark analyst (direction: dark-analyst)\n"
+                                         "And the colour? Forest green (#1B4332)"}],
+        )
+
+        assert applied == "#1B4332"
+        assert {c["name"]: c["value"] for c in
+                chosen["designSystem"]["palette"]["colors"]}["primary"] == "#1B4332"
+
+    def test_as_proposed_carries_no_colour_and_changes_nothing(self):
+        loop = _loop()
+        offered = {"id": "d", "designSystem": {"marker": "kept"}}
+
+        chosen, applied = loop._apply_colour_choice(
+            offered,
+            [{"role": "user", "content": "Dark analyst (direction: dark-analyst)\n"
+                                         "And the colour? As proposed"}],
+        )
+
+        assert applied is None
+        assert chosen is offered
+
+    def test_a_colour_settled_before_the_pause_is_not_applied_twice(self):
+        """All three directions were already built from it, so re-reading it
+        off an older message would recompile for no reason."""
+        loop = _loop()
+        offered = {"id": "d", "designSystem": {"marker": "kept"}}
+
+        chosen, applied = loop._apply_colour_choice(offered, [
+            {"role": "user", "content": "Use #00704A"},
+            {"role": "assistant", "content": "Which direction?"},
+            {"role": "user", "content": "Clean minimal (direction: clean-minimal)"},
+        ])
+
+        assert applied is None
+        assert chosen is offered
+
     def test_the_choice_survives_the_pause_it_was_made_in(self):
         """Killing the worker between the direction pause and generation must
         not lose the thing the user explicitly asked for."""
@@ -213,3 +261,51 @@ class TestTheChoiceGovernsTheRun:
         assert saved["offered_directions"] is True
         assert saved["chosen_direction"]["designSystem"]["marker"] == "dark"
         assert len(saved["proposed_directions"]) == 2
+
+
+class TestTheDeckKeepsTheShapeTheUserSaw:
+    """The user picked a direction by looking at what its points *looked*
+    like. A deck that then writes bullets whatever they chose makes the
+    preview a lie."""
+
+    @staticmethod
+    def _drafting(structure: str):
+        loop = _loop()
+        loop.working_state.presentation_structure = {
+            "totalSlides": 1, "slides": [{"title": "One"}]
+        }
+        loop.working_state.chosen_direction = {
+            "id": "d", "designSystem": {"structure": structure}
+        }
+        return loop
+
+    def test_a_banded_direction_asks_for_row_bands(self):
+        assert "build_row_bands" in self._drafting("bands").slide_directive()
+
+    def test_a_figure_led_direction_asks_for_stat_callouts(self):
+        assert "build_stat_callouts" in self._drafting("stats").slide_directive()
+
+    def test_a_card_led_direction_asks_for_accent_cards(self):
+        assert "build_accent_cards" in self._drafting("cards").slide_directive()
+
+    def test_a_prose_direction_asks_for_no_block_in_particular(self):
+        directive = self._drafting("list").slide_directive()
+
+        assert "written prose" in directive
+        assert "build_row_bands" not in directive
+
+    def test_a_run_with_no_chosen_direction_says_nothing_extra(self):
+        loop = _loop()
+        loop.working_state.presentation_structure = {
+            "totalSlides": 1, "slides": [{"title": "One"}]
+        }
+
+        assert "direction" not in loop.slide_directive()
+
+    def test_every_structure_a_direction_can_take_has_a_directive(self):
+        """A shape with nothing said about it is a preview the deck cannot
+        honour."""
+        from app import directions as direction_model
+        from app.agent.loop import _STRUCTURE_DIRECTIVE
+
+        assert set(direction_model.STRUCTURES) == set(_STRUCTURE_DIRECTIVE)

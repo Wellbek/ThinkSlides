@@ -13,7 +13,6 @@ export function Composer() {
   const sendMessage = useChatStore((s) => s.sendMessage);
   const isSending = useChatStore((s) => s.isSending);
   const activeMessages = useChatStore((s) => s.activeMessages);
-  const setSettingsOpen = useChatStore((s) => s.setSettingsOpen);
   // Settings can be cleared mid-session, so the composer checks rather than
   // assuming the session it belongs to is still runnable.
   const { ready, reason } = useAiReadiness();
@@ -43,14 +42,9 @@ export function Composer() {
 
   return (
     <div className="ws-composer">
-      {!ready && (
-        <div className="ws-setup-notice" role="status">
-          <span className="ws-setup-notice-text">{reason}</span>
-          <button className="ws-setup-notice-cta" onClick={() => setSettingsOpen(true)}>
-            Set up now
-          </button>
-        </div>
-      )}
+      {/* The setup alert lives in the top bar and nowhere else - see
+          WorkspaceShell. Repeating it here said the same sentence twice on
+          one screen. */}
       <div className="ws-composer-ctx">
         {files.map((f, i) => (
           <span className="ws-ctx-chip" key={i}>

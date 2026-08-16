@@ -100,6 +100,65 @@ _AUTONOMY_YES_RE = re.compile(
 )
 
 
+# What the outline review's two options look like coming back. The card sends
+# a single question's answer as the bare option text, so - unlike the autonomy
+# question - there is no echoed question to match against by accident, and the
+# free-text elaboration follows on its own line.
+#
+# Approval is checked first here, which is the opposite of the autonomy pair
+# and for the same underlying reason: "go ahead as planned" is the exact,
+# unambiguous label of one option, whereas the change patterns are loose
+# enough to catch a user who typed their own words instead of tapping.
+_OUTLINE_APPROVED_RE = re.compile(
+    "|".join((
+        r"\bgo ahead as planned\b",
+        r"\bgo ahead\b(?![^.\n]*\bbut\b)",
+        r"\b(?:looks?|sounds?) (?:good|right|fine)\b",
+        r"\bbuild it\b",
+    )),
+    re.IGNORECASE,
+)
+
+_OUTLINE_CHANGE_RE = re.compile(
+    "|".join((
+        r"\bchange something\b",
+        r"\bchange\b[^.\n]*\b(?:outline|structure|slides?|order|it)\b",
+        r"\b(?:add|drop|remove|delete|cut|merge|split|reorder|rename|swap)\b"
+        r"[^.\n]*\bslides?\b",
+        r"\b(?:replan|re-?plan|rework|revise|redo)\b",
+        r"\b(?:shorten|lengthen|expand|trim)\b[^.\n]*\b(?:deck|outline|it)\b",
+        r"\binstead of\b",
+    )),
+    re.IGNORECASE,
+)
+
+
+def user_wants_outline_changed(chat_messages: list[dict]) -> bool:
+    """Whether the reply to the outline review asked for the outline to change.
+
+    Their latest word on it wins. Approval is matched first so that "go ahead
+    as planned" cannot be dragged into a change by a stray word after it.
+
+    Without this the flag the review phase completes on was set the moment the
+    question was *asked*, so both answers finished the checkpoint identically:
+    a user who tapped "Change something - I'll say what" and typed their change
+    watched the unchanged outline get built, because nothing cleared the plan
+    and the pipeline has no edge back to it from drafting.
+    """
+    for message in reversed(chat_messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content") or ""
+        if not content.strip():
+            continue
+        if _OUTLINE_APPROVED_RE.search(content):
+            return False
+        if _OUTLINE_CHANGE_RE.search(content):
+            return True
+        return False
+    return False
+
+
 def user_confirmed_autonomy(chat_messages: list[dict]) -> bool:
     """Whether the user handed the remaining decisions to the agent.
 
@@ -177,15 +236,44 @@ change the deck: the angle when the topic has several, the audience when the \
 register depends on it, which parts of a broad subject to cover, how deep to \
 go. Even a well-specified request usually leaves one of those open; find the \
 one whose answer would change most. Never ask about visual style or colour - \
-the user is shown three rendered designs to choose from later - and never ask \
-something the request already answers. Each entry needs real options a user \
-could tap, drawn from this request and what you have read.
+the user is shown three rendered designs to choose from later, and the colour \
+is asked beside them - and never ask something the request already answers. \
+Each entry needs real options a user could tap, drawn from this request and \
+what you have read.
 """
 
 
 # Tools whose whole purpose is to stop and ask. A successful call ends the run
 # until the user answers, wherever it was made from.
 PAUSING_TOOLS = frozenset({"ask_user_question", "propose_design_directions"})
+
+# What the direction the user chose asks of every slide, keyed by its
+# structure axis (see app/directions.py). The user picked by looking at the
+# shape its points took, so the deck has to keep taking that shape - a
+# preview the deck does not honour is worse than no preview.
+_STRUCTURE_DIRECTIVE = {
+    "list": (
+        " This deck's direction sets its points as written prose, so reach for "
+        "a block only where the content genuinely has a shape a paragraph "
+        "cannot hold."
+    ),
+    "stats": (
+        " This deck's direction leads with oversized figures: where a slide's "
+        "points carry numbers, call build_stat_callouts rather than writing "
+        "them into bullets."
+    ),
+    "cards": (
+        " This deck's direction leads with accent-barred cards: where a slide "
+        "has a set of parallel points, call build_accent_cards rather than "
+        "writing them as a bulleted list."
+    ),
+    "bands": (
+        " This deck's direction leads with ruled row bands: where a slide has "
+        "a set of parallel points, call build_row_bands rather than writing "
+        "them as a bulleted list."
+    ),
+}
+
 
 def normalize_mode(mode: str | None) -> str:
     """Map any caller-supplied value onto a known mode, defaulting to simple."""
@@ -1264,6 +1352,11 @@ class AgentLoop:
         # any later would arrive after the decisions it was meant to make.
         chosen = self._resolve_direction_choice(chat_messages)
         if chosen is not None:
+            # The colour was the second question on the same card, so its
+            # answer arrives with the direction's. Applied here, to the one
+            # direction that was actually picked - the specimens were drawn
+            # before it existed.
+            chosen, recoloured = self._apply_colour_choice(chosen, chat_messages)
             self.working_state.chosen_direction = chosen
             context["design_system"] = chosen.get("designSystem") or {}
             run_context.set_design_system(context["design_system"])
@@ -1272,9 +1365,18 @@ class AgentLoop:
                 "content": (
                     f"Building in the {chosen.get('name') or 'chosen'} direction: "
                     f"{chosen.get('rationale') or ''}".strip()
+                    + (f" Recoloured to {recoloured}, as you asked."
+                       if recoloured else "")
                 ),
                 "timestamp": _iso_now(),
             })
+
+        # A request to change the outline, read before the walk for the same
+        # reason the direction is: the walker decides where to resume from the
+        # state it finds, so an answer acted on later would arrive after the
+        # phase it was meant to redirect.
+        async for event in self._reopen_outline_if_asked(chat_messages):
+            yield event
 
         # The one question every consulted run asks. Read here, before the walk,
         # because it decides whether the design pause happens at all.
@@ -2116,7 +2218,22 @@ class AgentLoop:
             + f"{index}, then any build_* tool its point needs (a chart, table or metric "
             "row for figures; a block for content with a shape), then "
             f"design_slide_content for slide_index={index}. This slide only."
+            + self._structure_directive()
         )
+
+    def _structure_directive(self) -> str:
+        """The block the chosen direction leads with, as an instruction.
+
+        The user picked a direction by looking at what its points *looked
+        like* - bullets, a row of figures, ruled bands. A deck that then
+        writes bullets whatever they chose makes the preview a lie, so the
+        shape they saw is named here, where the slide is actually built.
+        """
+        structure = str(
+            ((self.working_state.chosen_direction or {}).get("designSystem") or {})
+            .get("structure") or ""
+        )
+        return _STRUCTURE_DIRECTIVE.get(structure, "")
 
     def _research_budget(self) -> tuple[int, int]:
         """(floor, cap) on this run's number of web searches."""
@@ -3020,6 +3137,50 @@ class AgentLoop:
 
         return context
 
+    async def _reopen_outline_if_asked(
+        self, chat_messages: list[dict]
+    ) -> AsyncIterator[dict]:
+        """Walk the run back to planning when the outline review asked for it.
+
+        The review phase completes on ``reviewed_outline_with_user``, which is
+        set when the question is *put* rather than when it is answered - so
+        both options finished the checkpoint and the walk went on to drafting
+        either way. Clearing the plan is what actually reopens it: the ``plan``
+        phase completes on ``presentation_structure`` being set, so emptying it
+        makes planning outstanding again, and the user's words are already in
+        the history the planner is given.
+
+        Everything derived from the outline goes with it: a layout chosen for
+        slide 4 of the old plan is not a layout for slide 4 of the new one.
+
+        Scoped to a deck that has not been drafted yet, which is exactly where
+        the review checkpoint sits - nothing walks back to ``review`` once
+        drafting has started, so an outline answer arriving against a part-built
+        deck is not this checkpoint. A change asked for *mid-draft* is #109 and
+        is deliberately left alone here rather than silently throwing away
+        finished slides.
+        """
+        ws = self.working_state
+        if not ws.reviewed_outline_with_user or not ws.presentation_structure:
+            return
+        if ws.accumulated_slides:
+            return
+        if not user_wants_outline_changed(chat_messages):
+            return
+
+        ws.presentation_structure = None
+        ws.selected_layouts = {}
+        ws.slides_needing_revision = []
+        # The checkpoint reopens with the plan: the user has to see what their
+        # change produced, or the second outline ships less reviewed than the
+        # first one did.
+        ws.reviewed_outline_with_user = False
+        logger.info("outline_reopened_by_user")
+        yield _event("thought", "structure_planning", {
+            "content": "Replanning the outline around what you asked to change.",
+            "timestamp": _iso_now(),
+        })
+
     def _resolve_direction_choice(self, chat_messages: list[dict]) -> dict | None:
         """
         Which direction the user picked, out of the ones they were offered.
@@ -3052,6 +3213,47 @@ class AgentLoop:
             if name and name in said:
                 return direction
         return None
+
+    def _apply_colour_choice(
+        self, chosen: dict, chat_messages: list[dict]
+    ) -> tuple[dict, str | None]:
+        """
+        The colour the user picked, applied to the direction they picked.
+
+        Both answers come off one card, so the colour necessarily lands after
+        the specimens were drawn - the previews are honest about ground, type,
+        motif and structure, and this is where the hue catches up. Read from
+        the newest reply only: a hex from earlier in the conversation was
+        already settled before the directions were authored, and all three
+        were built from it.
+
+        "As proposed" carries no hex, so it resolves to no change - which is
+        the same path as a reply that answered the direction and ignored the
+        colour.
+        """
+        from app import directions as direction_model
+
+        latest = next(
+            (str(m.get("content") or "") for m in reversed(chat_messages)
+             if m.get("role") == "user"),
+            "",
+        )
+        found = _HEX_IN_TEXT.search(latest)
+        if not found:
+            return chosen, None
+        wanted = found.group(0).upper()
+
+        recoloured = direction_model.recolour(chosen, wanted)
+        if recoloured is chosen or recoloured == chosen:
+            # An uploaded template, an unreadable pairing, or the colour it was
+            # already in. Saying nothing beats claiming a change that did not
+            # happen.
+            logger.info("direction_recolour_skipped",
+                        direction=chosen.get("id"), wanted=wanted)
+            return chosen, None
+        logger.info("direction_recoloured", direction=chosen.get("id"),
+                    color=wanted)
+        return recoloured, wanted
 
     def _clean_up_direction_previews(self, session_id: uuid.UUID, keep: str | None) -> None:
         """
@@ -3203,19 +3405,15 @@ class AgentLoop:
             "the concrete alternatives for THAT data ('Line chart of revenue 2011-2025', "
             "'Table of year-by-year figures', 'Keep it as bullets') rather than asking "
             "abstractly whether the user likes charts.",
-            "6. THE LOOK IS SETTLED BY propose_design_directions, NOT BY ADJECTIVES. Never ask "
-            "the user to choose between 'professional', 'warm', 'bold' or a colour in words - "
-            "they cannot see what those mean, and it spends a pause on a question the specimen "
-            "slides answer better. The one thing worth asking about colour, and only inside the "
-            "consultation call, is a brand colour the topic implies: if the deck is about a "
-            "specific company, offer THAT company's own colour as an option, named with its real "
-            "hex (the pattern is \"<Company> <colour name> (#RRGGBB)\") and derived from the "
-            "company actually being presented - never carried over from another deck or from an "
-            "example in these instructions. If you are not confident of the real hex, do not "
-            "invent one; leave the colour to the directions. Whatever colour is settled that way "
-            "is passed on to propose_design_directions, and all three directions are built from "
-            "it. When the user uploaded a template, ask nothing about colour at all: its own "
-            "palette is used as-is, and it is offered back to them as the first direction.",
+            "6. THE LOOK AND THE COLOUR ARE BOTH SETTLED BY propose_design_directions. Never ask "
+            "the user to choose between 'professional', 'warm', 'bold' in words - they cannot see "
+            "what those mean, and it spends a pause on a question the specimen slides answer "
+            "better. Do not ask about colour in the consultation either: that call carries the "
+            "colour question itself, next to the rendered directions, with options drawn from the "
+            "subject. If the user names a colour of their own accord, pass it to "
+            "propose_design_directions as brand_color and all three directions are built from it. "
+            "When the user uploaded a template, colour is not asked at all: its own palette is "
+            "used as-is, and it is offered back to them as the first direction.",
             "7. EXCEPTION: if the user has explicitly said not to ask questions (e.g. 'don't ask me "
             "anything', 'just build it', 'use your best judgment', 'no more questions'), make the most "
             "reasonable assumption yourself and proceed without asking - briefly note any significant "

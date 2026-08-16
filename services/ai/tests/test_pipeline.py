@@ -346,6 +346,8 @@ class TestRevisionWalksBackwards:
         loop.questions_declined = True
         ws = loop.working_state
         ws.brief = {"needsResearch": False}
+        # A consulted run: the outline review only happens on one.
+        ws.consulted_before_planning = True
         ws.offered_directions = True
         ws.presentation_structure = {"totalSlides": 2, "slides": [{}, {}]}
         ws.accumulated_slides = [{"slideIndex": 0}, {"slideIndex": 1}]
@@ -500,3 +502,130 @@ class TestTheAutonomyAnswerIsReadCorrectly:
             {"role": "user", "content": "you decide"},
             {"role": "user", "content": "actually, ask me first"},
         ]) is False
+
+
+class TestTheOutlineReviewAnswerIsActedOn:
+    """"Change something - I'll say what" used to change nothing.
+
+    The flag the review phase completes on was set when the question was put,
+    not when it was answered, so both options finished the checkpoint
+    identically. Nothing cleared the plan, the plan phase completes on that
+    plan existing, and the pipeline has no edge back to planning from
+    drafting - so the user typed their change and watched the outline they
+    had just rejected get built.
+    """
+
+    @staticmethod
+    def _said(text: str) -> bool:
+        from app.agent.loop import user_wants_outline_changed
+        return user_wants_outline_changed([{"role": "user", "content": text}])
+
+    def test_the_offered_approval_is_an_approval(self):
+        assert self._said("Go ahead as planned") is False
+
+    def test_the_offered_change_is_a_change(self):
+        assert self._said(
+            "Change something - I'll say what\nDrop the market-size slide."
+        ) is True
+
+    def test_a_typed_change_still_counts(self):
+        assert self._said("add a slide on pricing before the summary") is True
+
+    def test_and_a_typed_approval_still_counts(self):
+        assert self._said("looks good, build it") is False
+
+    def test_an_approval_wins_over_a_loose_change_word(self):
+        assert self._said("go ahead as planned, instead of waiting") is False
+
+    def test_the_latest_word_wins(self):
+        from app.agent.loop import user_wants_outline_changed
+
+        assert user_wants_outline_changed([
+            {"role": "user", "content": "change something - reorder the slides"},
+            {"role": "user", "content": "Go ahead as planned"},
+        ]) is False
+
+    @pytest.mark.asyncio
+    async def test_a_change_reopens_planning(self):
+        loop = AgentLoop(db=None, mode="simple")
+        ws = loop.working_state
+        ws.brief = {"needsResearch": False}
+        # A consulted run: the outline review only happens on one.
+        ws.consulted_before_planning = True
+        ws.offered_directions = True
+        ws.presentation_structure = {"totalSlides": 2, "slides": [{}, {}]}
+        ws.selected_layouts = {0: "content"}
+        ws.reviewed_outline_with_user = True
+
+        assert pipeline.next_phase(loop).name == "draft"
+
+        events = [e async for e in loop._reopen_outline_if_asked(
+            [{"role": "user",
+              "content": "Change something - I'll say what\nCut the last two."}]
+        )]
+
+        assert events, "the user should be told the outline is being replanned"
+        assert ws.presentation_structure is None
+        assert ws.selected_layouts == {}
+        # The new outline gets reviewed too, or the second one ships less
+        # examined than the first.
+        assert ws.reviewed_outline_with_user is False
+        assert pipeline.next_phase(loop).name == "plan"
+
+    @pytest.mark.asyncio
+    async def test_an_approval_leaves_the_plan_alone(self):
+        loop = AgentLoop(db=None, mode="simple")
+        ws = loop.working_state
+        ws.brief = {"needsResearch": False}
+        # A consulted run: the outline review only happens on one.
+        ws.consulted_before_planning = True
+        ws.offered_directions = True
+        ws.presentation_structure = {"totalSlides": 2, "slides": [{}, {}]}
+        ws.reviewed_outline_with_user = True
+
+        events = [e async for e in loop._reopen_outline_if_asked(
+            [{"role": "user", "content": "Go ahead as planned"}]
+        )]
+
+        assert events == []
+        assert ws.presentation_structure is not None
+        assert pipeline.next_phase(loop).name == "draft"
+
+    @pytest.mark.asyncio
+    async def test_a_change_asked_before_any_plan_exists_is_not_a_reopen(self):
+        """The consultation is not the outline review; there is nothing to reopen."""
+        loop = AgentLoop(db=None, mode="simple")
+        ws = loop.working_state
+        ws.brief = {"needsResearch": False}
+
+        events = [e async for e in loop._reopen_outline_if_asked(
+            [{"role": "user", "content": "add a slide on pricing"}]
+        )]
+
+        assert events == []
+        assert ws.reviewed_outline_with_user is False
+
+    @pytest.mark.asyncio
+    async def test_a_part_drafted_deck_is_left_alone(self):
+        """A change arriving mid-draft is #109, not this checkpoint.
+
+        Nothing walks back to ``review`` once drafting has started, so an
+        outline-shaped answer against a part-built deck is a different
+        request - and answering it here would throw away finished slides.
+        """
+        loop = AgentLoop(db=None, mode="simple")
+        ws = loop.working_state
+        ws.brief = {"needsResearch": False}
+        ws.consulted_before_planning = True
+        ws.offered_directions = True
+        ws.presentation_structure = {"totalSlides": 2, "slides": [{}, {}]}
+        ws.reviewed_outline_with_user = True
+        ws.add_slide({"slideIndex": 0})
+
+        events = [e async for e in loop._reopen_outline_if_asked(
+            [{"role": "user", "content": "add a slide on pricing"}]
+        )]
+
+        assert events == []
+        assert ws.presentation_structure is not None
+        assert ws.accumulated_slides

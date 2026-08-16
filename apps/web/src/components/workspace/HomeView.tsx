@@ -6,7 +6,7 @@ import { useAiReadiness } from "@/hooks/useAiReadiness";
 import { EffortSelector } from "./EffortSelector";
 import { DetailLevelSelector } from "./DetailLevelSelector";
 import { SourcesToggle } from "./SourcesToggle";
-import { Paperclip, ArrowUp, Sparkles, Settings2 } from "lucide-react";
+import { Paperclip, ArrowUp, Sparkles } from "lucide-react";
 
 const SUGGESTIONS = [
   "Investor pitch from my Q3 financials",
@@ -18,7 +18,6 @@ const SUGGESTIONS = [
 export function HomeView({ onStarted }: { onStarted: () => void }) {
   const createSession = useChatStore((s) => s.createSession);
   const sendMessage = useChatStore((s) => s.sendMessage);
-  const setSettingsOpen = useChatStore((s) => s.setSettingsOpen);
   // A deck cannot be generated without a model, so the first prompt is not
   // taken until one exists - a run that fails at its first LLM call is a
   // worse way to find that out.
@@ -48,15 +47,10 @@ export function HomeView({ onStarted }: { onStarted: () => void }) {
       <div className="ws-home-greet">What deck shall we build today?</div>
       <div className="ws-home-sub">Describe your presentation, attach docs or data, and the agent will draft a branded, template-faithful deck.</div>
 
-      {!ready && (
-        <div className="ws-setup-notice" role="status">
-          <span className="ws-setup-notice-text">{reason}</span>
-          <button className="ws-setup-notice-cta" onClick={() => setSettingsOpen(true)}>
-            <Settings2 size={13} /> Set up now
-          </button>
-        </div>
-      )}
-
+      {/* The setup alert lives in the top bar and nowhere else. It used to be
+          repeated here as well, which put the same sentence on screen twice
+          with two "Set up now" buttons. What stays is the consequence: the
+          composer says what it is waiting for and refuses to send. */}
       <div className="ws-home-card">
         <textarea
           placeholder={

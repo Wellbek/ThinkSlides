@@ -453,6 +453,9 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-q-option.selected .radio { border-color: var(--ws-ai-text); }
 .ws-q-option.selected .radio::after { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: var(--ws-ai-text); }
 .ws-q-option .otxt { flex: 1; min-width: 0; }
+/* An option naming a colour shows it. Picking a colour by reading its name is
+   what the rendered directions exist to replace. */
+.ws-q-swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.18); flex-shrink: 0; }
 /* Several questions in one pause: each is its own block, separated so the
    options underneath are unambiguously attached to the question above. */
 .ws-q-block + .ws-q-block { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--ws-border); }
@@ -492,8 +495,12 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-q-dir-missing { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 11px; color: #555; }
 .ws-q-dir-name { font-size: 12.5px; font-weight: 600; color: #C9C9E8; margin-top: 7px; }
 .ws-q-dir-why { font-size: 11px; color: #6E6E9A; line-height: 1.4; margin-top: 3px; }
+/* The remaining specimens, at a size their shape is legible at. A direction
+   differs from its neighbours in what its content slides DO with the same
+   points - as a row of figures, as ruled bands, as bullets - and at 34px
+   wide all three read as the same grey rectangle. */
 .ws-q-dir-thumbs { display: flex; gap: 4px; margin-top: 7px; }
-.ws-q-dir-thumb { width: 34px; height: 20px; object-fit: cover; border-radius: 2px; border: 1px solid var(--ws-border); cursor: zoom-in; }
+.ws-q-dir-thumb { flex: 1; min-width: 0; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 2px; border: 1px solid var(--ws-border); cursor: zoom-in; }
 .ws-q-dir-thumb:hover { border-color: var(--ws-ai-text); }
 
 /* Every specimen at full size: a user choosing a design system should be able
@@ -531,21 +538,14 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-send:hover { background: #9aa0f9; }
 .ws-send:disabled { background: #2A2A3A; color: #555; cursor: not-allowed; }
 
-/* Setup banner - spans the full width above the topbar so it is unmissable
-   without displacing the workspace layout. */
-.ws-setup-banner { flex-shrink: 0; display: flex; align-items: center; gap: 9px; padding: 8px 16px; background: var(--ws-orange-bg); border-bottom: 1px solid var(--ws-orange-border); }
+/* Setup banner - the whole width of the window, above the nav rail and
+   everything else, taking its height out of the app below rather than
+   floating over it. The one place the workspace says it cannot generate. */
+.ws-setup-banner { flex-shrink: 0; display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 16px; background: var(--ws-orange-bg); border-bottom: 1px solid var(--ws-orange-border); }
 .ws-setup-banner-icon { color: var(--ws-orange-text); flex-shrink: 0; }
 .ws-setup-banner-text { flex: 1; min-width: 0; font-family: var(--ws-font-ui); font-size: 12px; line-height: 1.4; color: #E8C9A8; }
 .ws-setup-banner-cta { flex-shrink: 0; padding: 4px 10px; font-family: var(--ws-font-ui); font-size: 11px; font-weight: 500; line-height: 1; color: var(--ws-orange-text); background: transparent; border: 1px solid var(--ws-orange-border); border-radius: var(--ws-radius-sm); cursor: pointer; transition: background 120ms ease, border-color 120ms ease; }
 .ws-setup-banner-cta:hover { background: rgba(249, 115, 22, 0.16); border-color: var(--ws-orange-text); }
-
-/* Setup notice - the same warning as the banner, said where the user is
-   actually being stopped: above the composer they cannot type into. Rounded
-   rather than full-bleed, because it belongs to the input below it. */
-.ws-setup-notice { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; padding: 8px 12px; background: var(--ws-orange-bg); border: 1px solid var(--ws-orange-border); border-radius: var(--ws-radius-sm); }
-.ws-setup-notice-text { flex: 1; min-width: 0; font-family: var(--ws-font-ui); font-size: 12px; line-height: 1.4; color: #E8C9A8; }
-.ws-setup-notice-cta { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; font-family: var(--ws-font-ui); font-size: 11px; font-weight: 500; line-height: 1; color: var(--ws-orange-text); background: transparent; border: 1px solid var(--ws-orange-border); border-radius: var(--ws-radius-sm); cursor: pointer; white-space: nowrap; transition: background 120ms ease, border-color 120ms ease; }
-.ws-setup-notice-cta:hover { background: rgba(249, 115, 22, 0.16); border-color: var(--ws-orange-text); }
 
 /* A composer that cannot be used says so by looking unusable, not only by
    refusing the keystroke. */

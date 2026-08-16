@@ -1,8 +1,15 @@
 "use client";
 
 /**
- * AI model configuration: the chat model, and the model plus backend that
- * power Deep Thinking.
+ * AI model configuration: the reasoning model, and the web search behind Deep
+ * Thinking.
+ *
+ * Two decisions, because there are two. Deep Thinking *is* web search - there
+ * is no third mode where it reasons harder without searching - so it is not
+ * asked about as a backend and a model separately. One picker names where the
+ * results come from, and the fields under it are whatever that source needs:
+ * a model and a key for a provider searching with its own index, a key alone
+ * for an external search API.
  *
  * API keys only ever travel one way. A saved key comes back as a last-four
  * hint shown in the placeholder, so leaving the field blank means "keep the
@@ -22,9 +29,16 @@ import {
   X,
 } from "lucide-react";
 import {
+  NATIVE_BACKEND,
+  SEARCH_SOURCE_SAME_AS_CHAT,
+  backendSource,
+  parseSearchSource,
+  providerSource,
   useSettingsStore,
   type ModelRoleDraft,
   type ProviderSpec,
+  type SearchBackendSpec,
+  type StoredSettings,
   type TestResult,
   type TestTarget,
 } from "@/stores/settings-store";
@@ -42,6 +56,8 @@ export function AISettingsSection() {
     updateChat,
     updateDeepSearch,
     updateSearchBackend,
+    searchSource,
+    setSearchSource,
     isDirty,
     test,
   } = useSettingsStore();
@@ -59,17 +75,31 @@ export function AISettingsSection() {
   const backends = useMemo(() => catalog?.searchBackends ?? [], [catalog]);
   const status = stored?.status;
 
-  const selectedBackend = useMemo(
-    () => backends.find((b) => b.id === draft.searchBackend.backend) ?? null,
-    [backends, draft.searchBackend.backend]
+  // Every place Deep Thinking's results can come from, as one list. "native"
+  // is not among them: it is not a source, it is what a model provider
+  // searching with its own index is called in storage.
+  const externalBackends = useMemo(
+    () => backends.filter((b) => b.id !== NATIVE_BACKEND),
+    [backends]
+  );
+  const searchProviders = useMemo(
+    () => providers.filter((p) => p.nativeWebSearch),
+    [providers]
   );
 
-  // Native search borrows the deep-search model's credentials, so the note
-  // that matters is the one belonging to whichever provider will be used.
-  const nativeProvider = useMemo(() => {
-    const id = draft.deepSearch.provider || draft.chat.provider;
+  const source = searchSource();
+  const parsedSource = parseSearchSource(source);
+  const sourceBackend =
+    parsedSource.kind === "backend"
+      ? backends.find((b) => b.id === parsedSource.id) ?? null
+      : null;
+  // Which provider actually does the searching - the one chosen here, or the
+  // reasoning model's when the source is "same as".
+  const sourceProvider = useMemo(() => {
+    if (parsedSource.kind === "backend") return null;
+    const id = parsedSource.kind === "provider" ? parsedSource.id : draft.chat.provider;
     return providers.find((p) => p.id === id) ?? null;
-  }, [providers, draft.deepSearch.provider, draft.chat.provider]);
+  }, [providers, parsedSource, draft.chat.provider]);
 
   // Recomputed on every render rather than memoised: it reads the draft, which
   // is exactly what changes on every keystroke.
@@ -103,12 +133,12 @@ export function AISettingsSection() {
         </Callout>
       )}
 
-      {/* ── Chat model ─────────────────────────────────────────── */}
+      {/* ── Reasoning model ────────────────────────────────────── */}
       <section>
         <SectionHeading
           icon={<MessageSquare size={13} />}
-          title="Chat model"
-          subtitle="Answers every message and writes your slide content."
+          title="Reasoning model"
+          subtitle="Answers every message, plans the deck, and writes your slide content."
         />
 
         <div className="space-y-3">
@@ -152,25 +182,22 @@ export function AISettingsSection() {
       <section>
         <SectionHeading
           icon={<Globe size={13} />}
-          title="Deep Thinking"
-          subtitle="The research mode in the composer. It needs a working search backend; without one the composer falls back to Simple."
+          title="Deep Thinking (web search)"
+          subtitle="The research mode in the composer: it searches the web and cites what it finds. Without a working search source the composer falls back to Simple."
         />
 
         {status && (
           <div className="mb-4">
             {status.deepThinkingAvailable ? (
               <Callout tone="success" icon={<ShieldCheck size={14} />}>
-                Deep Thinking is available using{" "}
-                <strong className="text-paper">
-                  {backends.find((b) => b.id === status.deepSearchBackend)?.label ??
-                    status.deepSearchBackend}
-                </strong>
+                Deep Thinking is available, searching with{" "}
+                <strong className="text-paper">{savedSourceLabel(stored, providers, backends)}</strong>
                 .
               </Callout>
             ) : (
               <Callout tone="warning" icon={<AlertTriangle size={14} />}>
                 {status.deepThinkingUnavailableReason ??
-                  "No deep-search backend is configured yet."}
+                  "No web search source is configured yet."}
               </Callout>
             )}
           </div>
@@ -178,74 +205,79 @@ export function AISettingsSection() {
 
         <div className="space-y-3">
           <div>
-            <label className="field-label">Search backend</label>
+            <label className="field-label">Web search source</label>
             <select
               className="field-input"
-              value={draft.searchBackend.backend}
-              onChange={(e) => updateSearchBackend({ backend: e.target.value })}
+              value={source}
+              onChange={(e) => setSearchSource(e.target.value, catalog)}
             >
-              <option value="">Not configured</option>
-              {backends.map((b) => (
-                <option key={b.id} value={b.id}>
+              <option value={SEARCH_SOURCE_SAME_AS_CHAT}>
+                The reasoning model&apos;s own search
+              </option>
+              {searchProviders.map((p) => (
+                <option key={p.id} value={providerSource(p.id)}>
+                  {p.label} - its own search
+                </option>
+              ))}
+              {externalBackends.map((b) => (
+                <option key={b.id} value={backendSource(b.id)}>
                   {b.label}
                 </option>
               ))}
             </select>
-            {selectedBackend && <p className="field-hint">{selectedBackend.description}</p>}
-            {selectedBackend?.id === "native" && nativeProvider?.nativeWebSearchNote && (
-              <p className="field-hint text-ice/80">{nativeProvider.nativeWebSearchNote}</p>
+            <p className="field-hint">
+              {sourceBackend?.description ??
+                (parsedSource.kind === "provider"
+                  ? "Searches with this provider's own index, using its own key - separate from the reasoning model."
+                  : "Searches with the reasoning model's provider, using the key above. Nothing else to set up.")}
+            </p>
+            {sourceProvider?.nativeWebSearchNote && (
+              <p className="field-hint text-ice/80">{sourceProvider.nativeWebSearchNote}</p>
             )}
           </div>
 
-          {selectedBackend?.requiresApiKey && (
+          {/* An external search API needs one thing: its key. */}
+          {sourceBackend?.requiresApiKey && (
             <ApiKeyField
-              label={`${selectedBackend.label} API key`}
+              label={`${sourceBackend.label} API key`}
               value={draft.searchBackend.apiKey}
               hint={stored?.searchBackend.apiKeyHint ?? null}
               hasKey={stored?.searchBackend.hasApiKey ?? false}
-              help={selectedBackend.apiKeyHelp}
+              help={sourceBackend.apiKeyHelp}
               onChange={(apiKey) => updateSearchBackend({ apiKey })}
             />
           )}
 
-          <div>
-            <label className="field-label">Deep Thinking model</label>
-            <p className="field-hint !mt-0 mb-2">
-              Optional. Leave the provider blank to reason with the chat model above. A separate
-              model is mainly useful when the backend is the provider&apos;s own search.
-            </p>
-            <ProviderPicker
-              role={draft.deepSearch}
-              providers={providers}
-              onChange={updateDeepSearch}
-              blankLabel="Same as chat model"
-              purpose="search"
-            />
-          </div>
-
-          {draft.deepSearch.provider && (
+          {/* A provider searching with its own index needs a model and a key.
+              The provider itself is not asked for again - the source picker
+              above already is that question. */}
+          {parsedSource.kind === "provider" && (
             <>
+              <ModelField
+                spec={sourceProvider}
+                value={draft.deepSearch.model}
+                onChange={(model) => updateDeepSearch({ model })}
+              />
+
               <ApiKeyField
-                label="Deep Thinking API key"
+                label={`${sourceProvider?.label ?? "Search"} API key`}
                 value={draft.deepSearch.apiKey}
                 hint={stored?.deepSearch.apiKeyHint ?? null}
                 hasKey={stored?.deepSearch.hasApiKey ?? false}
-                help={providers.find((p) => p.id === draft.deepSearch.provider)?.apiKeyHelp}
+                help={sourceProvider?.apiKeyHelp}
                 onChange={(apiKey) => updateDeepSearch({ apiKey })}
               />
 
               <Advanced
                 open={showDeepAdvanced}
                 onToggle={() => setShowDeepAdvanced((v) => !v)}
-                placeholder={
-                  providers.find((p) => p.id === draft.deepSearch.provider)?.defaultBaseUrl
-                }
+                placeholder={sourceProvider?.defaultBaseUrl}
                 value={draft.deepSearch.baseUrl}
                 onChange={(baseUrl) => updateDeepSearch({ baseUrl })}
               />
 
               <TestRow
-                label="Test Deep Thinking model"
+                label="Test search model"
                 description="Checks the model answers before it is used for research."
                 target="deepSearch"
                 testing={testing}
@@ -272,6 +304,21 @@ export function AISettingsSection() {
 
     </div>
   );
+}
+
+/** What the *saved* settings actually search with, for the status callout. */
+function savedSourceLabel(
+  stored: StoredSettings | null,
+  providers: ProviderSpec[],
+  backends: SearchBackendSpec[]
+): string {
+  const backend = stored?.status.deepSearchBackend;
+  if (backend && backend !== NATIVE_BACKEND) {
+    return backends.find((b) => b.id === backend)?.label ?? backend;
+  }
+  const providerId = stored?.deepSearch.provider || stored?.chat.provider;
+  const label = providers.find((p) => p.id === providerId)?.label;
+  return label ? `${label}'s own search` : "the reasoning model's own search";
 }
 
 /**
@@ -363,34 +410,22 @@ function Callout({
   );
 }
 
+/**
+ * Provider and model for the reasoning role.
+ *
+ * Only the reasoning role asks for a provider now: Deep Thinking's provider
+ * *is* its search source, chosen once in the picker above it.
+ */
 function ProviderPicker({
   role,
   providers,
   onChange,
-  blankLabel = "Not configured",
-  purpose = "chat",
 }: {
   role: ModelRoleDraft;
   providers: ProviderSpec[];
   onChange: (patch: Partial<ModelRoleDraft>) => void;
-  blankLabel?: string;
-  /** Chat models must support tool calling; Deep Thinking models need not. */
-  purpose?: "chat" | "search";
 }) {
   const spec = providers.find((p) => p.id === role.provider) ?? null;
-  const listId = `models-${role.provider || "none"}-${blankLabel.replace(/\s/g, "")}`;
-
-  // Search-only models are offered for Deep Thinking and kept out of the chat
-  // suggestions, because one of them in the chat role fails every generation.
-  const noToolCalling = spec?.noToolCallingModels ?? [];
-  const suggestions = (spec?.suggestedModels ?? []).filter(
-    (m) => purpose === "search" || !noToolCalling.includes(m)
-  );
-  const searchOnlyExtras =
-    purpose === "search" ? (spec?.nativeWebSearchModels ?? []) : [];
-  const allSuggestions = Array.from(new Set([...suggestions, ...searchOnlyExtras]));
-  const chatModelIsSearchOnly =
-    purpose === "chat" && !!role.model && noToolCalling.includes(role.model);
 
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -401,19 +436,13 @@ function ProviderPicker({
           value={role.provider}
           onChange={(e) => {
             const provider = e.target.value;
-            const next = providers.find((p) => p.id === provider);
             // Switching provider carries the old model id over as garbage, so
-            // reset to that provider's default. In the search role, prefer a
-            // model its built-in search actually works with - otherwise
-            // picking OpenAI here lands on gpt-4o, which cannot search.
-            const model =
-              (purpose === "search" ? next?.nativeWebSearchModels?.[0] : undefined) ??
-              next?.defaultModel ??
-              "";
-            onChange({ provider, model });
+            // reset to that provider's default.
+            const next = providers.find((p) => p.id === provider);
+            onChange({ provider, model: next?.defaultModel ?? "" });
           }}
         >
-          <option value="">{blankLabel}</option>
+          <option value="">Not configured</option>
           {providers.map((p) => (
             <option key={p.id} value={p.id}>
               {p.label}
@@ -421,30 +450,67 @@ function ProviderPicker({
           ))}
         </select>
       </div>
-      <div>
-        <label className="field-label">Model</label>
-        {/* A datalist rather than a select: providers ship new model ids faster
-            than the catalog tracks them, so free text has to stay possible. */}
-        <input
-          className="field-input"
-          list={listId}
-          value={role.model}
-          placeholder={spec?.defaultModel ?? "Select a provider first"}
-          disabled={!role.provider}
-          onChange={(e) => onChange({ model: e.target.value })}
-        />
-        <datalist id={listId}>
-          {allSuggestions.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
-        {chatModelIsSearchOnly && (
-          <p className="field-hint text-error">
-            {role.model} is a search-only model and cannot drive the agent. Use it as the
-            Deep Thinking model below and pick a tool-calling model here.
-          </p>
-        )}
-      </div>
+      <ModelField spec={spec} value={role.model} purpose="chat" onChange={(model) => onChange({ model })} />
+    </div>
+  );
+}
+
+/**
+ * One model id, with the provider's own suggestions behind it.
+ *
+ * A datalist rather than a select: providers ship new model ids faster than
+ * the catalog tracks them, so free text has to stay possible.
+ */
+function ModelField({
+  spec,
+  value,
+  onChange,
+  purpose = "search",
+}: {
+  spec: ProviderSpec | null;
+  value: string;
+  onChange: (model: string) => void;
+  /** The reasoning model must support tool calling; a search model need not. */
+  purpose?: "chat" | "search";
+}) {
+  const listId = `models-${purpose}-${spec?.id ?? "none"}`;
+  const noToolCalling = spec?.noToolCallingModels ?? [];
+
+  // Search-only models are offered for search and kept out of the reasoning
+  // suggestions, because one of them in that role fails every generation.
+  const suggestions = (spec?.suggestedModels ?? []).filter(
+    (m) => purpose === "search" || !noToolCalling.includes(m)
+  );
+  const searchOnly = purpose === "search" ? spec?.nativeWebSearchModels ?? [] : [];
+  const options = Array.from(new Set([...searchOnly, ...suggestions]));
+  const isSearchOnly = purpose === "chat" && !!value && noToolCalling.includes(value);
+
+  return (
+    <div>
+      <label className="field-label">Model</label>
+      <input
+        className="field-input"
+        list={listId}
+        value={value}
+        placeholder={
+          (purpose === "search" ? spec?.nativeWebSearchModels?.[0] : undefined) ??
+          spec?.defaultModel ??
+          "Select a provider first"
+        }
+        disabled={!spec}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <datalist id={listId}>
+        {options.map((m) => (
+          <option key={m} value={m} />
+        ))}
+      </datalist>
+      {isSearchOnly && (
+        <p className="field-hint text-error">
+          {value} is a search-only model and cannot drive the agent. Use it as the Deep
+          Thinking search model below and pick a tool-calling model here.
+        </p>
+      )}
     </div>
   );
 }

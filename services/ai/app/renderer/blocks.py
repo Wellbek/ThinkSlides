@@ -335,26 +335,41 @@ class BlockCompiler:
         heading_pt = self._pt(self.type_scale.body_style(0).font_size_pt)
         body_pt = self._pt(self.type_scale.body_style(1).font_size_pt)
 
+        # Measured for every card first, because the bars of one row have to
+        # be one length. Sizing each bar to its own card leaves three cards
+        # side by side with three different rules beside them, which reads as
+        # a mistake rather than as a set.
+        measured = []
+        for entry in entries:
+            heading = str(entry.get("heading") or "").strip()
+            body_lines = _lines(entry.get("body"))
+            heading_height = primitives.measure_text(heading, heading_pt, text_width,
+                                                     bold=True) if heading else 0.0
+            body_heights = [primitives.measure_text(line, body_pt, text_width)
+                            for line in body_lines]
+            measured.append((
+                heading, heading_height, body_lines, body_heights,
+                (heading_height + sum(body_heights)
+                 + self._gap * 0.4 * max(0, len(body_lines))),
+            ))
+        row_heights = [
+            max(card[4] for card in measured[start:start + columns])
+            for start in range(0, len(measured), columns)
+        ]
+
         out: list[Primitive] = []
         tops = [rect.top] * columns
         for index, entry in enumerate(entries):
             slot = index % columns
             left = rect.left + slot * (column + BLOCK_GAP_IN)
             top = tops[slot]
-
-            heading = str(entry.get("heading") or "").strip()
-            body_lines = _lines(entry.get("body"))
-            heading_height = primitives.measure_text(heading, heading_pt, text_width,
-                                                    bold=True)
-            body_heights = [primitives.measure_text(line, body_pt, text_width)
-                            for line in body_lines]
-            card_height = heading_height + sum(body_heights) + \
-                self._gap * 0.4 * max(0, len(body_lines))
+            heading, heading_height, body_lines, body_heights, _ = measured[index]
+            row_height = row_heights[index // columns]
 
             out.append(Primitive(
                 id=f"{prefix}-accent{index}-bar", kind="rect",
                 box=PositionConfig(left=left, top=top, width=ACCENT_BAR_IN,
-                                   height=max(HAIRLINE_IN, card_height)),
+                                   height=max(HAIRLINE_IN, row_height)),
                 fill=resolve_tone(entry.get("tone"), self.design_system),
             ))
             text_left = left + ACCENT_BAR_IN + BLOCK_GAP_IN
@@ -374,7 +389,7 @@ class BlockCompiler:
                     font=self.type_scale.body_font,
                 ))
                 cursor += height + self._gap * 0.4
-            tops[slot] = top + card_height + self._gap * 1.8
+            tops[slot] = top + row_height + self._gap * 1.8
         return out
 
     # ------------------------------------------------------------ row bands
