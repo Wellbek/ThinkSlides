@@ -23,6 +23,7 @@ import os
 from typing import Optional
 
 from app.eval import corpus
+from app.measure import archetypes as archetype_model
 from app.measure import clusters, grammar
 from app.measure.deck_metrics import DeckProfile, profile_pdf
 from app.measure.density import DensityProfile, TypeProfile
@@ -95,6 +96,13 @@ def load_reference_survey() -> clusters.TemplateSurvey:
     )
 
 
+def load_archetypes() -> archetype_model.TemplateArchetypes:
+    """The reference's named archetypes and its chapter, as committed."""
+    with open(REFERENCE_PROFILE_PATH, encoding="utf-8") as handle:
+        data = json.load(handle)
+    return archetype_model.TemplateArchetypes.from_dict(data.get("archetypes"))
+
+
 def load_design_grammar() -> grammar.TemplateGrammar:
     """The region grammar read from the reference's design pages, as committed."""
     with open(REFERENCE_PROFILE_PATH, encoding="utf-8") as handle:
@@ -107,7 +115,8 @@ def reference_metadata() -> dict:
         data = json.load(handle)
     return {k: v for k, v in data.items()
             if k not in ("profiles", "density", "blocksByDesignPage",
-                         "pageSurvey", "designGrammar")}
+                         "pageSurvey", "designGrammar",
+                         "archetypes")}
 
 
 def build_reference_profile(pdf_path: Optional[str] = None) -> str:
@@ -148,6 +157,13 @@ def build_reference_profile(pdf_path: Optional[str] = None) -> str:
     # half of the corpus the extractor is *tuned* against, and committing the
     # grammar of a held-out page would be reading it.
     design_grammar = grammar.read_pdf(path, corpus.DESIGN_PAGES)
+    # The archetypes and the chapter, read over the whole deck - the
+    # pattern only exists across all of it. What is committed is the
+    # *shape* of the chapter, not the pages it was read from.
+    survey_grammar = grammar.read_pdf(
+        path, [c.representative for c in survey.clusters]
+    )
+    named = archetype_model.read_pdf(path, survey, survey_grammar)
     payload = {
         "source": os.path.basename(path),
         "pageCount": corpus.REFERENCE_PAGE_COUNT,
@@ -162,6 +178,7 @@ def build_reference_profile(pdf_path: Optional[str] = None) -> str:
         "blocksByDesignPage": blocks_by_page,
         "pageSurvey": survey.to_dict(),
         "designGrammar": design_grammar.to_dict(),
+        "archetypes": named.to_dict(),
     }
     os.makedirs(FIXTURE_DIR, exist_ok=True)
     with open(REFERENCE_PROFILE_PATH, "w", encoding="utf-8") as handle:

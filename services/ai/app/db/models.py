@@ -134,6 +134,10 @@ class DesignSystemBundle(Base):
     # card rows - so a later deck composes into this template's layouts
     # rather than into placeholder boxes.
     layout_grammar = Column(JSONB, nullable=False, default=dict)
+    # The named archetypes those layouts are, and the chapter the template
+    # repeats them in - so a deck can instantiate a pattern per subject
+    # rather than being planned slide by slide from scratch.
+    archetypes = Column(JSONB, nullable=False, default=dict)
     raw_xml_snapshot = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 

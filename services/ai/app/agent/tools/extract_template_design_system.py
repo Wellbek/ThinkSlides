@@ -14,6 +14,7 @@ as a versioned DesignSystemBundle in the database.
 
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.measure import archetypes as archetype_model
 from app.measure import clusters
 from app.measure import density as density_model
 from app.measure import grammar as grammar_model
@@ -300,6 +301,22 @@ class ExtractTemplateDesignSystemTool:
             "layout_grammar_read",
             layouts=len(read.layouts),
             features=sorted(read.features),
+        )
+
+        # And what those layouts are *called*, plus the chapter the template
+        # repeats them in. Its own try: a deck with no repeating series is the
+        # normal case, and failing to find one must not cost the grammar.
+        try:
+            named = archetype_model.read_pdf(pdf_path, survey, read)
+        except Exception as e:  # pragma: no cover - a page that will not read
+            logger.warning("archetypes_failed", error=str(e))
+            return
+        design_system["archetypes"] = named.to_dict()
+        logger.info(
+            "archetypes_read",
+            archetypes=len(named.archetypes),
+            chapter_length=named.chapter.length if named.chapter else 0,
+            chapter_count=named.chapter.count if named.chapter else 0,
         )
 
     @staticmethod

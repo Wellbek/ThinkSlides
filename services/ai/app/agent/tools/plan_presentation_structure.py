@@ -9,6 +9,7 @@ from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import get_chat_provider
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app import budget as budget_model
+from app.measure import archetypes as archetype_model
 from app.llm.provider import get_tools_llm_provider as get_llm_provider
 from app.observability.logging import get_logger
 import json
@@ -99,6 +100,37 @@ def _density_guidance(design_system: dict, material: float = 1.0) -> str:
             "worse than a sparse one."
         )
     return " ".join(lines)
+
+
+def _chapter_guidance(design_system: dict) -> str:
+    """
+    The series this template repeats, offered to the planner to instantiate.
+
+    A template like the reference is not a set of individually designed pages;
+    it is one chapter run once per subject, with the same questions asked in
+    the same order every time. That repetition is most of what makes such a
+    deck read as one document. The planner had no way to say so, so a
+    fourteen-subject deck came out as fourteen unrelated runs of invention.
+    """
+    chapter = archetype_model.chapter_of(design_system)
+    if chapter is None or chapter.length < 2:
+        return ""
+    return (
+        f"\n\n{chapter.describe()}\n"
+        "If this deck covers several comparable subjects - products, markets, "
+        "trends, business units - plan it the same way: repeat that series "
+        "once per subject, reusing each position's question verbatim as the "
+        "slide title, and set \"chapterOf\" on every slide to the subject it "
+        "belongs to. A reader who can tell where they are without reading is "
+        "what the pattern buys.\n"
+        "Deviate where the material demands it, and say so by leaving the "
+        "position out - a subject with no figures cannot fill a chart slide, "
+        "and substituting a slide that says something is right where "
+        "inventing data to fill the shape is not. Deviation should be a "
+        "decision, not the default.\n"
+        "If the content is one subject rather than several, ignore the "
+        "pattern and plan the deck on its own terms."
+    )
 
 
 def _deck_material(content_summary: str, key_data: dict) -> float:
@@ -212,6 +244,7 @@ class PlanPresentationStructureTool:
             density_info = _density_guidance(
                 parsed_ds, _deck_material(content_summary, parsed_data)
             )
+            chapter_info = _chapter_guidance(parsed_ds)
 
             prompt = f"""Plan a presentation structure based on the following:
 
@@ -222,7 +255,7 @@ Key Data: {json.dumps(parsed_data, indent=2)[:2000]}
 
 Target Audience: {audience}
 Target Slide Count: {target_slide_count if target_slide_count > 0 else 'auto-determine'}
-{layout_info}{density_info}
+{layout_info}{density_info}{chapter_info}
 
 Return a JSON object with this structure:
 {{
@@ -237,6 +270,7 @@ Return a JSON object with this structure:
       "keyPoints": ["point1", "point2"],
       "suggestedLayout": "Title Slide",
       "contentType": "title|content|twoColumn|image|table|chart|conclusion",
+      "chapterOf": "The subject this slide belongs to, when the deck repeats a chapter per subject - otherwise omit",
       "notes": "Any additional notes for content generation"
     }}
   ]
@@ -282,9 +316,25 @@ Rules:
                 )
 
             duration_ms = int((time.time() - start) * 1000)
+            # A pattern instantiated inconsistently has the cost of a pattern
+            # and none of the benefit, and it is the kind of thing nobody
+            # notices until slide forty. The plan carries the finding back to
+            # the model rather than being rejected over it: a deviation can be
+            # the right call, and only the material knows.
+            inconsistencies = archetype_model.check_consistency(
+                structure.get("slides") or []
+            )
+            if inconsistencies:
+                structure["chapterWarnings"] = inconsistencies
+                logger.info("chapter_pattern_inconsistent",
+                            problems=inconsistencies[:3])
             logger.info(
                 "presentation_structure_planned",
                 slide_count=structure.get("totalSlides", 0),
+                chapters=len({
+                    str(s.get("chapterOf") or "") for s in structure.get("slides") or []
+                    if isinstance(s, dict) and s.get("chapterOf")
+                }),
                 duration_ms=duration_ms,
             )
 

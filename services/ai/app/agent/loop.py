@@ -2167,6 +2167,7 @@ class AgentLoop:
                     "density": bundle.density,
                     "pageSurvey": bundle.page_survey,
                     "layoutGrammar": bundle.layout_grammar,
+                    "archetypes": bundle.archetypes,
                 }
 
         return context
