@@ -263,11 +263,12 @@
 .ws-badge.muted { background: var(--ws-surface-3); color: #888; border: 1px solid var(--ws-border); }
 .ws-badge .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .ws-divider { height: 1px; background: #171717; margin: 13px 0; }
-.ws-sect-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ws-text-ghost); margin-bottom: 9px; }
+.ws-sect-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #888; margin-bottom: 9px; }
 .ws-sect-toggle { display: flex; align-items: center; gap: 6px; width: 100%; background: none; border: none; padding: 0; margin-bottom: 9px; cursor: pointer; }
 .ws-sect-toggle .ws-sect-label { margin-bottom: 0; }
 .ws-sect-toggle:hover .ws-sect-label { color: var(--ws-text-primary); }
 .ws-sect-count { font-size: 10.5px; color: #444; background: var(--ws-surface-3); border-radius: 8px; padding: 0 6px; line-height: 15px; }
+.ws-sect-count.has-items { color: var(--ws-blue-text); background: rgba(96,165,250,0.10); }
 .ws-sect-chev { margin-left: auto; color: #444; transition: transform 0.14s; }
 .ws-sect-chev.open { transform: rotate(180deg); }
 .ws-meta-grid { display: grid; grid-template-columns: 78px 1fr; row-gap: 7px; }

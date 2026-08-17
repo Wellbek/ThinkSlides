@@ -197,7 +197,7 @@ function CollapsibleSection({
     <>
       <button type="button" className="ws-sect-toggle" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <span className="ws-sect-label">{title}</span>
-        <span className="ws-sect-count">{count}</span>
+        <span className={`ws-sect-count ${count > 0 ? "has-items" : ""}`}>{count}</span>
         <ChevronDown size={13} className={`ws-sect-chev ${open ? "open" : ""}`} />
       </button>
       {open && children}
