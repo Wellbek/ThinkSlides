@@ -26,7 +26,7 @@ from app.agent.tools.build_blocks import BLOCK_BUILDER_TOOLS
 from app.connections import mcp_tools
 from app.connections import store as connection_store
 from app.agent.tools.generate_image import GenerateImageTool
-from app.connections.catalog import KIND_IMAGE, KIND_MCP
+from app.connections.catalog import KIND_FIGURE, KIND_IMAGE, KIND_MCP
 from app.llm.provider import (
     AINotConfiguredError,
     _is_quota_exhausted,
@@ -1035,6 +1035,10 @@ class AgentLoop:
         # case, and generate_image is not registered at all in that case.
         self.image_connection = None
         self._image_token = None
+        # The workspace's figure provider, when it has one. None means every
+        # chart is drawn by matplotlib, which is also the default when it is set.
+        self.figure_connection = None
+        self._figure_token = None
 
     async def _configure(self) -> None:
         """Resolve the organisation's settings into this run's provider and mode.
@@ -1094,6 +1098,7 @@ class AgentLoop:
 
         await self._connect_mcp_servers()
         await self._enable_image_generation()
+        await self._enable_figure_rendering()
 
         logger.info(
             "agent_run_configured",
@@ -1179,6 +1184,31 @@ class AgentLoop:
         )
         logger.info("image_generation_enabled",
                     provider=self.image_connection.connection_id)
+
+    async def _enable_figure_rendering(self) -> None:
+        """Make a figure provider available to build_chart's renderer preference.
+
+        Unlike image generation this gates no tool: build_chart always exists,
+        and the connection only decides whether ``renderer='figure'`` is honoured
+        or falls back to matplotlib. So there is nothing conditional to register -
+        just a connection to publish.
+        """
+        if self.org_id is None:
+            return
+        try:
+            available = await connection_store.resolve_enabled(
+                self.db, self.org_id, kind=KIND_FIGURE
+            )
+        except Exception as e:  # noqa: BLE001 - never fail a run over connections
+            logger.error("figure_connection_load_failed",
+                         organisation_id=str(self.org_id), error=str(e))
+            return
+        if not available:
+            return
+        self.figure_connection = available[0]
+        self._figure_token = run_context.set_figure_connection(self.figure_connection)
+        logger.info("figure_rendering_enabled",
+                    provider=self.figure_connection.connection_id)
 
     def _degraded_connections(self) -> list[dict]:
         """The servers this run could not reach, for the one warning it sends.
@@ -1398,6 +1428,9 @@ class AgentLoop:
             if self._image_token is not None:
                 run_context.reset_image_connection(self._image_token)
                 self._image_token = None
+            if self._figure_token is not None:
+                run_context.reset_figure_connection(self._figure_token)
+                self._figure_token = None
             if self._design_system_token is not None:
                 run_context.reset_design_system(self._design_system_token)
                 self._design_system_token = None

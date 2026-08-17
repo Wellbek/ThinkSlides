@@ -39,6 +39,7 @@ _search_config: ContextVar[SearchConfig | None] = ContextVar(
 )
 
 _image_connection: ContextVar = ContextVar("image_connection", default=None)
+_figure_connection: ContextVar = ContextVar("figure_connection", default=None)
 _chat_provider: ContextVar[LLMProvider | None] = ContextVar(
     "thinkslides_chat_provider", default=None
 )
@@ -219,3 +220,22 @@ def get_image_connection():
 
 def reset_image_connection(token: Token) -> None:
     _image_connection.reset(token)
+
+
+def set_figure_connection(connection: object | None) -> Token:
+    """Install the organisation's figure provider for the current run.
+
+    Unlike the image connection, this does not gate a tool. ``build_chart``
+    always exists; the connection only decides whether its ``renderer='figure'``
+    preference can be honoured or falls back to matplotlib.
+    """
+    return _figure_connection.set(connection)
+
+
+def get_figure_connection():
+    """The current run's figure provider, or None - which means matplotlib."""
+    return _figure_connection.get()
+
+
+def reset_figure_connection(token: Token) -> None:
+    _figure_connection.reset(token)
