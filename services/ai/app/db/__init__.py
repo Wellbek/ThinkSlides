@@ -20,6 +20,8 @@ from app.db.models import (
     GeneratedFile,
     IngestedDocument,
     Organisation,
+    OrganisationAISettings,
+    OrganisationConnection,
     Template,
     User,
 )
@@ -34,6 +36,8 @@ __all__ = [
     "GeneratedFile",
     "IngestedDocument",
     "Organisation",
+    "OrganisationAISettings",
+    "OrganisationConnection",
     "Template",
     "User",
     "get_db",

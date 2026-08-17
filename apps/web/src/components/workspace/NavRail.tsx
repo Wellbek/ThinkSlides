@@ -1,24 +1,46 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useChatStore } from "@/stores/chat-store";
-import { Home, History, Settings, Plus, MessageSquare } from "lucide-react";
+import { useConnectionsStore } from "@/stores/connections-store";
+import { ConnectionsPanel } from "@/components/workspace/ConnectionsPanel";
+import { Home, History, Plug, Settings, Plus, MessageSquare } from "lucide-react";
+
+/** Which extended panel the rail is showing, if any. */
+export type RailPanel = "history" | "connections";
 
 interface NavRailProps {
   extended: boolean;
+  panel: RailPanel;
   view: "home" | "workspace";
-  onToggleExtend: () => void;
+  onOpenPanel: (panel: RailPanel) => void;
   onHome: () => void;
   onPickSession: (id: string) => void;
   onNewChat: () => void;
 }
 
-export function NavRail({ extended, view, onToggleExtend, onHome, onPickSession, onNewChat }: NavRailProps) {
+export function NavRail({
+  extended,
+  panel,
+  view,
+  onOpenPanel,
+  onHome,
+  onPickSession,
+  onNewChat,
+}: NavRailProps) {
   const sessions = useChatStore((s) => s.sessions);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const setSettingsOpen = useChatStore((s) => s.setSettingsOpen);
+  const refreshConnections = useConnectionsStore((s) => s.refresh);
+  const degradedCount = useConnectionsStore((s) => s.degradedCount());
 
   const grouped = useMemo(() => groupByDate(sessions), [sessions]);
+
+  // The count and the status dot are visible without the panel being open, so
+  // they cannot wait for the panel to fetch them.
+  useEffect(() => {
+    refreshConnections();
+  }, [refreshConnections]);
 
   return (
     <nav className="ws-nav">
@@ -32,11 +54,19 @@ export function NavRail({ extended, view, onToggleExtend, onHome, onPickSession,
           <Home size={16} />
         </button>
         <button
-          className={`ws-nav-icon ${extended ? "active" : ""}`}
-          onClick={onToggleExtend}
+          className={`ws-nav-icon ${extended && panel === "history" ? "active" : ""}`}
+          onClick={() => onOpenPanel("history")}
           title="History"
         >
           <History size={16} />
+        </button>
+        <button
+          className={`ws-nav-icon ${extended && panel === "connections" ? "active" : ""}`}
+          onClick={() => onOpenPanel("connections")}
+          title="Connections"
+        >
+          <Plug size={16} />
+          {degradedCount > 0 && <span className="ws-nav-badge" aria-hidden />}
         </button>
         <div className="ws-nav-sep" />
         <button className="ws-nav-icon" onClick={() => setSettingsOpen(true)} title="Settings">
@@ -44,7 +74,9 @@ export function NavRail({ extended, view, onToggleExtend, onHome, onPickSession,
         </button>
       </div>
 
-      {extended && (
+      {extended && panel === "connections" && <ConnectionsPanel />}
+
+      {extended && panel === "history" && (
         <div className="ws-nav-panel">
           <div className="ws-nav-panel-head">
             <button className="ws-new-chat" onClick={onNewChat}>

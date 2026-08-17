@@ -23,6 +23,9 @@ from app.agent.tools._binding import slot_key
 from app.agent.tools._json_extract import extract_json_object
 from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
 from app.agent.tools.build_blocks import BLOCK_BUILDER_TOOLS
+from app.connections import mcp_tools
+from app.connections import store as connection_store
+from app.connections.catalog import KIND_MCP
 from app.llm.provider import (
     AINotConfiguredError,
     _is_quota_exhausted,
@@ -974,7 +977,10 @@ class AgentLoop:
         no composer to read it from, so None inherits it from the paused run.
         """
         self.db = db
-        self.registry = get_registry()
+        # A fork, not the global singleton: run-scoped tools discovered from one
+        # organisation's MCP server must not still be registered when another
+        # organisation's run starts, in a service that is shared.
+        self.registry = get_registry().fork()
         # Built in _configure() from the workspace's settings. Deliberately not
         # a process-wide environment provider: that default is what let a run
         # start on a model nobody had chosen.
@@ -1015,6 +1021,11 @@ class AgentLoop:
         # _has_grounding is still False, but offering to search the web instead
         # of reading the user's own file would be the wrong question.
         self._session_has_documents: bool = False
+        # Discovered MCP servers, and which phases their tools are offered in.
+        # Both empty on a workspace with no connections, which is the only
+        # difference that makes to a run.
+        self.mcp_servers: list = []
+        self.mcp_tools_by_phase: dict[str, frozenset[str]] = {}
 
     async def _configure(self) -> None:
         """Resolve the organisation's settings into this run's provider and mode.
@@ -1072,13 +1083,67 @@ class AgentLoop:
                 self.search_config = config
                 self._search_token = run_context.set_search_config(config)
 
+        await self._connect_mcp_servers()
+
         logger.info(
             "agent_run_configured",
             mode=self.mode,
             organisation_id=str(self.org_id) if self.org_id else None,
             chat_provider=credentials.provider if credentials else None,
             search_backend=self.search_config.backend if self.search_config else None,
+            mcp_servers=len(self.mcp_servers),
         )
+
+    async def _connect_mcp_servers(self) -> None:
+        """Discover this workspace's MCP tools and scope them to their phases.
+
+        Runs once, at configure time, so the schemas exist before the first
+        phase that could offer them. Every handshake happens concurrently: N
+        servers should cost roughly one round trip, not N, or a workspace with
+        ten connections waits a minute before its first slide.
+
+        Nothing here can fail a run. A workspace with no connections gets two
+        empty collections, and a server that will not answer gets recorded with
+        its reason and skipped - #183 is what reports that to the user.
+        """
+        if self.org_id is None:
+            return
+        try:
+            connections = await connection_store.resolve_enabled(
+                self.db, self.org_id, kind=KIND_MCP
+            )
+        except Exception as e:  # noqa: BLE001 - never fail a run over connections
+            logger.error("connections_load_failed",
+                         organisation_id=str(self.org_id), error=str(e))
+            return
+
+        if not connections:
+            return
+
+        self.mcp_servers = await mcp_tools.discover(connections)
+        self.mcp_tools_by_phase = mcp_tools.register(self.registry, self.mcp_servers)
+
+        by_slug = {server.slug: server for server in self.mcp_servers}
+        await connection_store.record_health(self.db, self.org_id, {
+            connection.id: (
+                by_slug[connection.slug].error,
+                len(by_slug[connection.slug].tools),
+            )
+            for connection in connections
+            if connection.slug in by_slug
+        })
+
+    def _degraded_connections(self) -> list[dict]:
+        """The servers this run could not reach, for the one warning it sends.
+
+        Named rather than counted. "One connection is degraded" tells a user
+        nothing they can act on; "Company wiki: the server refused the
+        credential" tells them which credential to go and fix.
+        """
+        return [
+            {"label": server.label, "reason": server.error}
+            for server in self.mcp_servers if not server.ok
+        ]
 
     async def _get_redis_client(self) -> redis.Redis:
         """Get or create Redis client."""
@@ -1317,6 +1382,18 @@ class AgentLoop:
         # Resolve models, search backend, and the effective mode. Must run
         # after the working state load, which can supply the mode on a resume.
         await self._configure()
+
+        # Said once, at the top, and never again for this run. A connection that
+        # would not answer is not retried mid-run - retrying is how a six-second
+        # timeout becomes a minute of them - but it must not vanish silently
+        # either. A user who cannot tell "no relevant results" from "the tool
+        # was never there" is worse off than one told the tool is down.
+        degraded = self._degraded_connections()
+        if degraded:
+            yield _event("connection_degraded", "content_analysis", {
+                "connections": degraded,
+                "timestamp": import_timestamp,
+            })
 
         # ── Phase 1: Load context ────────────────────
         # Narrated only on a fresh run. On a resume the user has just answered
@@ -1954,9 +2031,13 @@ class AgentLoop:
         cannot do is leave: the phase ends when the phase's own exit condition
         says so, or when it runs out of turns.
         """
+        # The phase's declared toolset, plus whatever this workspace's MCP
+        # servers said they belong in. Added rather than merged into the phase
+        # table because the second half is not known until the run starts.
+        offered = phase.tools | self.mcp_tools_by_phase.get(phase.name, frozenset())
         schemas = [
             schema for schema in self.registry.get_function_schemas()
-            if _schema_name(schema) in phase.tools
+            if _schema_name(schema) in offered
         ]
         messages = [
             {"role": "system", "content": self._build_system_prompt(

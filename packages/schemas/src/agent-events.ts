@@ -37,6 +37,7 @@ export const AGENT_EVENT_TYPES = [
   "question",
   "rate_limit",
   "validation_unresolved",
+  "connection_degraded",
   "timer_update",
   "session_title_updated",
   "done",
@@ -218,6 +219,21 @@ export interface ValidationUnresolvedEvent {
   timestamp: string;
 }
 
+/**
+ * A configured connection could not be reached, and the run carried on without
+ * it.
+ *
+ * Reported once per run and never fatal. The alternative failure mode is worse
+ * than the outage: a deck quietly built from fewer sources, with the user
+ * unable to tell "no relevant results" from "the tool was never there".
+ */
+export interface ConnectionDegradedEvent {
+  type: "connection_degraded";
+  phase: AgentEventPhase;
+  connections: { label: string; reason: string }[];
+  timestamp: string;
+}
+
 /** Wall-clock elapsed time for the run, ticked while it is in flight. */
 export interface TimerUpdateEvent {
   type: "timer_update";
@@ -253,6 +269,7 @@ export type AgentEvent =
   | ProgressEvent
   | QuestionEvent
   | ValidationUnresolvedEvent
+  | ConnectionDegradedEvent
   | DoneEvent;
 // TimerUpdateEvent, SessionTitleUpdatedEvent and RateLimitEvent are
 // deliberately absent: this union models what lands in a message's

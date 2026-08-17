@@ -28,6 +28,7 @@ CLIENT_EVENT_TYPES = frozenset({
     "question",
     "rate_limit",
     "validation_unresolved",
+    "connection_degraded",
     "timer_update",
     "session_title_updated",
     "done",

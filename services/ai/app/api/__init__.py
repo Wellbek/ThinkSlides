@@ -6,6 +6,7 @@ from app.api.files import router as files_router
 from app.api.health import router as health_router
 from app.api.titles import router as titles_router
 from app.api.settings import router as settings_router
+from app.api.connections import router as connections_router
 
 router = APIRouter()
 router.include_router(health_router, tags=["health"])
@@ -15,3 +16,4 @@ router.include_router(generate_router, prefix="/generate", tags=["generate"])
 router.include_router(files_router, prefix="/files", tags=["files"])
 router.include_router(titles_router, prefix="/titles", tags=["titles"])
 router.include_router(settings_router, prefix="/settings", tags=["settings"])
+router.include_router(connections_router, prefix="/connections", tags=["connections"])
