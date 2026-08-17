@@ -751,3 +751,158 @@ class TestTheArchetypeSurvivesToTheDesignedSlide:
         slide = carry_archetype({"archetype": "divider"}, {"contentType": "chart"})
 
         assert budget.archetype_for(slide) == budget.DIVIDER
+
+
+class TestTheDashboardArchetype:
+    """
+    A page of several exhibits, and the gate that stops it becoming a quota.
+
+    The archetype exists so a genuine board-pack page is not scored as a
+    content page that lost its text. The gate exists because this is the
+    biggest version of the trap this module was written against: a dashboard
+    asks for four exhibits, and four fabricated exhibits are worse than the
+    sparse page they replaced, because a chart makes a number look sourced.
+    """
+
+    @staticmethod
+    def _page(exhibits=4, words_each=6, metrics=0, interpretation=0):
+        """
+        A dashboard page, shaped the way a real one is.
+
+        Two things matter here beyond the exhibit count. A headline strip
+        counts one block per figure, which is most of how a board-pack page
+        reaches its block count - four bare charts is four blocks, and that is
+        an exhibit page. And a dashboard still carries *interpretation*: what
+        the exhibits together establish. A page of exhibits with no reading of
+        them is a page that makes the reader do the work.
+        """
+        contents = [
+            {"type": "text", "placeholderIdx": 0,
+             "runs": [{"text": "Revenue held flat but the mix moved"}]},
+        ]
+        if interpretation:
+            contents.append({
+                "type": "text", "placeholderIdx": 1,
+                "runs": [
+                    {"text": "Subscription now carries the growth that "
+                             f"licence used to, point {n}",
+                     "bullet": True, "level": 0}
+                    for n in range(interpretation)
+                ],
+            })
+        if metrics:
+            contents.append({
+                "type": "metrics", "regionId": "strip",
+                "metrics": {"items": [
+                    {"value": f"${n}.1B", "label": " ".join(["measure"] * 3)}
+                    for n in range(metrics)
+                ]},
+            })
+        for n in range(exhibits):
+            contents.append({
+                "type": "chart", "slot": f"e{n}",
+                "chart": {"chartType": "bar", "title": " ".join(["word"] * words_each)},
+            })
+        return {"contentType": "dashboard", "contents": contents}
+
+    def test_the_content_type_maps_to_the_archetype(self):
+        assert budget.archetype_for({"contentType": "dashboard"}) == budget.DASHBOARD
+
+    def test_it_is_budgeted_for_more_blocks_than_a_content_page(self):
+        content = budget.budget_for(DENSE, budget.CONTENT, 1.0)
+        dashboard = budget.budget_for(DENSE, budget.DASHBOARD, 1.0)
+
+        assert dashboard.blocks_target > content.blocks_target
+        # ...and fewer words: its prose is captions, not argument.
+        assert dashboard.words_target < content.words_target
+
+    def test_its_block_ceiling_is_raised_above_the_global_one(self):
+        enormous = {"density": {"blocksPerSlide": {"median": 400},
+                                "wordsPerSlide": {"median": 400},
+                                "pagesMeasured": 9}}
+
+        content = budget.budget_for(enormous, budget.CONTENT, 1.0)
+        dashboard = budget.budget_for(enormous, budget.DASHBOARD, 1.0)
+
+        assert content.blocks_target == budget.MAX_BLOCKS
+        assert dashboard.blocks_target == budget.MAX_BLOCKS_BY_ARCHETYPE[
+            budget.DASHBOARD
+        ]
+
+
+class TestTheDashboardHasToBeEarned:
+    def test_material_alone_is_not_enough(self):
+        """One chart in a two-panel layout is an exhibit page, not a dashboard."""
+        assert not budget.dashboard_is_earned(material=0.95, exhibits=1)
+
+    def test_exhibits_alone_are_not_enough(self):
+        """Four exhibits off thin material are four invented exhibits."""
+        assert not budget.dashboard_is_earned(material=0.2, exhibits=4)
+
+    def test_both_together_earn_it(self):
+        assert budget.dashboard_is_earned(material=0.8, exhibits=3)
+
+    def test_an_unearned_dashboard_is_demoted_rather_than_refused(self):
+        """The page still has a chart on it; it is judged as one."""
+        resolved = budget.resolve_archetype(
+            {"contentType": "dashboard"}, material=0.2, exhibits=1
+        )
+
+        assert resolved == budget.EXHIBIT
+
+    def test_an_earned_one_survives(self):
+        resolved = budget.resolve_archetype(
+            {"contentType": "dashboard"}, material=0.8, exhibits=4
+        )
+
+        assert resolved == budget.DASHBOARD
+
+    def test_nothing_measured_leaves_the_claim_alone(self):
+        """A slide validated outside a run has no material to judge it by."""
+        assert budget.resolve_archetype({"contentType": "dashboard"}) == (
+            budget.DASHBOARD
+        )
+
+    def test_a_demotion_says_why_and_says_not_to_pad(self):
+        thin = TestTheDashboardArchetype._page(exhibits=1)
+
+        errors, warnings = budget.validate_density(thin, DENSE, 0.2)
+
+        assert any("planned as a dashboard" in w for w in warnings)
+        assert any("Do not add exhibits to reach a count" in w for w in warnings)
+
+    def test_a_real_dashboard_page_passes(self):
+        """A figure strip and three exhibits - the board-pack page."""
+        page = TestTheDashboardArchetype._page(
+            exhibits=3, words_each=12, metrics=4, interpretation=3
+        )
+
+        errors, _ = budget.validate_density(page, DENSE, 0.85)
+
+        assert errors == []
+
+
+class TestExhibitCountDoesNotDisturbTheMaterialScore:
+    """
+    ``exhibits`` is accepted but weighted exactly as ``has_exhibit`` was.
+
+    Weighting the count would have quietly lowered every existing
+    single-exhibit slide's score, and the terms already sum to 1.0 - paying
+    for a count means taking it from points, figures or research. The count
+    is read where it actually decides something, in dashboard_is_earned.
+    """
+
+    def test_a_count_and_the_old_boolean_agree(self):
+        assert budget.material_score(["a"], has_exhibit=True) == (
+            budget.material_score(["a"], exhibits=1)
+        )
+
+    def test_more_exhibits_do_not_change_it(self):
+        assert budget.material_score(["a", "b"], exhibits=4) == (
+            budget.material_score(["a", "b"], exhibits=1)
+        )
+
+    def test_no_exhibit_still_scores_lower(self):
+        assert budget.material_score(["a"], exhibits=0) < (
+            budget.material_score(["a"], exhibits=1)
+        )
