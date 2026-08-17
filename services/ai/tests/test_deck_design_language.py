@@ -163,7 +163,7 @@ class TestCatalogGeometryIsApplied:
         supplied another.
         """
         catalog = get_default_design_system()
-        content = next(l for l in catalog["layouts"] if l["layoutId"] == "content")
+        content = next(layout for layout in catalog["layouts"] if layout["layoutId"] == "content")
         spec = next(p for p in content["placeholders"] if p["type"] == "title")
 
         title = next(s for s in deck.slides[1].shapes
@@ -299,7 +299,7 @@ class TestSlidesAreVerticallyBalanced:
             os.unlink(output_path)
 
         catalog = get_default_design_system()
-        content = next(l for l in catalog["layouts"] if l["layoutId"] == "content")
+        content = next(layout for layout in catalog["layouts"] if layout["layoutId"] == "content")
         band = next(p for p in content["placeholders"] if p["type"] == "body")
 
         body = next(s for s in prs.slides[1].shapes
@@ -339,7 +339,7 @@ class TestUnderfilledLayouts:
             os.unlink(output_path)
 
         catalog = get_default_design_system()
-        two_column = next(l for l in catalog["layouts"] if l["layoutId"] == "twoColumn")
+        two_column = next(layout for layout in catalog["layouts"] if layout["layoutId"] == "twoColumn")
         column_width = next(
             p for p in two_column["placeholders"] if p["name"] == "Left Column"
         )["cxEmu"]
