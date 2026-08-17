@@ -48,6 +48,79 @@ _DETAIL_GUIDANCE = {
 }
 
 
+# A dashboard answers two to four different questions about one claim. One
+# question is an exhibit slide; past four, none of the exhibits is legible at
+# the size a quarter-page leaves it.
+MIN_EXHIBIT_QUESTIONS = 2
+MAX_EXHIBIT_QUESTIONS = 4
+
+
+def demote_unearned_dashboards(slides: list) -> list[str]:
+    """
+    Turn a dashboard with no real exhibit plan back into a chart slide.
+
+    The exhibit plan is what makes the archetype safe to have. A dashboard is
+    a promise that this page answers several *different* questions about one
+    claim, and the plan is where that promise is checked - at the point the
+    page is specified, rather than at render time when the only remaining
+    option is to redesign it.
+
+    Three ways the promise fails, all of them producing the same bad page:
+
+    * no plan at all - the slide asked for four exhibits and said nothing
+      about what they are for;
+    * one question - that is an exhibit slide that used the wrong word;
+    * the same question twice - four exhibits saying one thing, which reads
+      worse than one exhibit saying it once.
+
+    Demoted rather than rejected, and in place: the slide is still a good
+    chart slide, and failing the whole plan over it would throw away the
+    fifteen slides around it that were fine. The reason is returned so the
+    plan can carry it back to the model.
+    """
+    problems: list[str] = []
+    for slide in slides:
+        if not isinstance(slide, dict):
+            continue
+        if str(slide.get("contentType") or "").strip().lower() != "dashboard":
+            continue
+
+        questions = [
+            str(q).strip() for q in (slide.get("exhibitPlan") or [])
+            if str(q or "").strip()
+        ]
+        index = slide.get("slideIndex")
+        reason = ""
+        if len(questions) < MIN_EXHIBIT_QUESTIONS:
+            reason = (
+                f"it lists {len(questions)} exhibit question(s); a dashboard "
+                f"needs at least {MIN_EXHIBIT_QUESTIONS} genuinely different ones"
+            )
+        elif len(questions) > MAX_EXHIBIT_QUESTIONS:
+            reason = (
+                f"it lists {len(questions)} exhibit questions; past "
+                f"{MAX_EXHIBIT_QUESTIONS} no exhibit is legible at the size a "
+                "quarter-page leaves it"
+            )
+        elif len({q.lower() for q in questions}) != len(questions):
+            reason = (
+                "two of its exhibit questions are the same, so two of its "
+                "exhibits would say one thing"
+            )
+
+        if reason:
+            slide["contentType"] = "chart"
+            slide.pop("exhibitPlan", None)
+            problems.append(
+                f"Slide {index}: planned as a dashboard, but {reason}. It is "
+                "planned as a chart slide instead. Do not re-plan it as a "
+                "dashboard by inventing more questions."
+            )
+        else:
+            slide["exhibitPlan"] = questions
+    return problems
+
+
 def _density_guidance(design_system: dict, material: float = 1.0) -> str:
     """
     The template's own density, stated to the planner as a per-kind target.
@@ -269,7 +342,8 @@ Return a JSON object with this structure:
       "titleRegister": "claim|question|label",
       "keyPoints": ["point1", "point2"],
       "suggestedLayout": "Title Slide",
-      "contentType": "title|content|twoColumn|image|table|chart|conclusion",
+      "contentType": "title|content|twoColumn|image|table|chart|dashboard|conclusion",
+      "exhibitPlan": ["Only on a dashboard slide: one QUESTION per intended exhibit, 2-4 of them"],
       "chapterOf": "The subject this slide belongs to, when the deck repeats a chapter per subject - otherwise omit",
       "notes": "Any additional notes for content generation"
     }}
@@ -290,6 +364,8 @@ Rules:
 - Judge every slide against the data behind it, not just its word count. If a slide's key points are carried by numbers - a trend over time, a comparison across categories, a breakdown of a whole - give it contentType "chart". If they are carried by structured rows and columns, give it contentType "table". A deck that states figures only as prose bullets when a chart would show them is a worse deck at every level of detail.
 - KPIs, metrics, financial results, growth rates, targets vs actuals and year-on-year figures are chart material by default. If the user asked for KPIs or metrics, or the key data is a set of numbers, at least one slide MUST have contentType "chart" - returning a deck of prose bullets for a numbers request is a failure, not a stylistic choice. A "chart" slide still keeps its keyPoints: they become the short interpretation alongside the visual.
 - Do not manufacture visuals. Only propose "chart" or "table" where the analyzed content genuinely supplies the underlying numbers or rows; a topic with no real data should stay prose.
+- A "dashboard" slide carries SEVERAL exhibits on one page - a figure strip, a chart, a second chart of a different kind, a small table. Use it only where one slide has to answer two to four genuinely DIFFERENT questions about the same claim, and the material answers all of them. Give it an "exhibitPlan": one question per intended exhibit, in the order they should be read. For example, for "Revenue held flat but the mix moved": ["What are the headline figures?", "Where did the movement come from?", "What changed underneath the flat total?", "Does it hold across regions?"] - a bridge, a mix chart and a set of regional trends each answer a different one.
+- Most slides are NOT dashboards. A dashboard is the exception a page earns, and the test is the exhibit plan: if two of its questions would be answered by the same exhibit, or if any question has no figures behind it, the slide is an ordinary "chart" or "content" slide. Four exhibits saying the same thing read worse than one saying it once, and an exhibit built from figures the material does not have is the worst outcome available - a chart makes a number look sourced.
 - {detail_guidance}
 - Choose suggestedLayout names from the available layouts if a template is provided"""
 
@@ -316,6 +392,10 @@ Rules:
                 )
 
             duration_ms = int((time.time() - start) * 1000)
+            demotions = demote_unearned_dashboards(structure.get("slides") or [])
+            if demotions:
+                structure["dashboardWarnings"] = demotions
+                logger.info("dashboards_demoted", problems=demotions[:3])
             # A pattern instantiated inconsistently has the cost of a pattern
             # and none of the benefit, and it is the kind of thing nobody
             # notices until slide forty. The plan carries the finding back to
