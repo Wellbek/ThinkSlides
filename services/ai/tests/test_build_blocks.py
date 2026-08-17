@@ -17,7 +17,6 @@ from app.agent.tools.build_blocks import (
     BuildImageCardRowTool, BuildLegendTool, BuildRowBandsTool,
     BuildStatCalloutsTool, DrawPrimitivesTool, MAX_BAND_PROSE_CHARS,
 )
-from app.renderer.blocks import BLOCK_TYPES
 
 
 def _bands(count=3):
@@ -333,8 +332,46 @@ class TestTheToolsAreRegistered:
                          "build_banner", "build_legend", "build_image_card_row"):
             assert expected in names, f"{expected} is not registered"
 
-    def test_the_vocabulary_and_the_builders_line_up(self):
-        assert len(BLOCK_TYPES) == 7
+    def test_every_block_type_can_actually_be_compiled(self):
+        """
+        The invariant a count cannot state. A block type in the vocabulary with
+        no compiler behind it validates, reaches the renderer, and draws
+        nothing - which looks like a layout bug rather than a missing handler.
+
+        This replaced ``len(BLOCK_TYPES) == 7``, which broke on every branch
+        that added a block type and said nothing about whether the new one
+        worked. Same lesson as the tool-count assertions.
+        """
+        from app.renderer.blocks import BLOCK_PAYLOAD_KEY, BlockCompiler, _snake
+
+        for kind in BLOCK_PAYLOAD_KEY:
+            handler = getattr(BlockCompiler, f"_compile_{_snake(kind)}", None)
+            assert handler is not None, (
+                f"block type {kind!r} has no _compile_{_snake(kind)} on "
+                "BlockCompiler, so it would render as nothing"
+            )
+
+    def test_every_block_type_is_counted_by_the_density_budget(self):
+        """
+        A block the budget cannot count is a block that is free: a slide could
+        carry any number of them and never read as full.
+        """
+        from app.renderer.blocks import BLOCK_PAYLOAD_KEY, block_entry_count
+
+        for kind in BLOCK_PAYLOAD_KEY:
+            payload_key = BLOCK_PAYLOAD_KEY[kind]
+            # One entry, in whatever shape this type carries them.
+            payloads = {
+                "diagram": {"kind": "flow", "items": [{"label": "x"}]},
+                "banner": {"text": "x"},
+                "imageCardRow": {"cards": [{"caption": "x"}]},
+            }
+            item = {"type": kind,
+                    payload_key: payloads.get(kind, [{"label": "x", "value": "1"}])}
+            assert block_entry_count(item) >= 1, (
+                f"block_entry_count reads {kind!r} as carrying nothing, so the "
+                "density budget cannot see it"
+            )
 
 
 class TestBlocksReachTheSlideThroughTheLoop:

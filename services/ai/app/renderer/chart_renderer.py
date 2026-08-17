@@ -774,13 +774,26 @@ def _draw_pie(ax, series, categories, style, font, base_pt,
     for text in legend.get_texts():
         text.set_fontname(font)
 
-    if centre_total:
+    if centre_total and not _total_is_meaningless(total, unit_suffix):
         ax.annotate(
             f"{_format_number(total)}{unit_suffix}",
             xy=(0, 0), xycoords="data", ha="center", va="center",
             color=style.axis_color, fontname=font,
             fontsize=base_pt * 1.6, fontweight="bold",
         )
+
+
+def _total_is_meaningless(total: float, unit_suffix: str) -> bool:
+    """Whether a donut's centre total says anything worth the space.
+
+    A donut of absolute values earns its centre - "$4.15B" is the thing the
+    slices are shares of. A donut of percentages does not: the total is 100 by
+    construction, and a bare "100" in the middle of a ring reads as a figure
+    when it is an artefact of the arithmetic.
+    """
+    if "%" in (unit_suffix or ""):
+        return True
+    return abs(total - 100.0) < 0.51
 
 
 def _bubble_points(chart_data: dict) -> list[dict]:

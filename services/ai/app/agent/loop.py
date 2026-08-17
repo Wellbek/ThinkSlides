@@ -945,6 +945,16 @@ class AgentLoop:
 
     MAX_ITERATIONS = 25
 
+    # The workspace's optional providers, declared on the class so every
+    # construction path has them. __init__ sets them per instance; the class
+    # defaults are what make a loop built for a prompt-shape test - which skips
+    # __init__ - answer "nothing configured" rather than raise, and "nothing
+    # configured" is the correct answer for an instance that never resolved any.
+    image_connection = None
+    figure_connection = None
+    mcp_servers: list = []
+    mcp_tools_by_phase: dict = {}
+
     # Transient provider failures (5xx, timeouts) are a wait, not a failure.
     # Rate limits are retried in the provider layer instead - see
     # _chat_with_retry for why they must not be retried in both places.
