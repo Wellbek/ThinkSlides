@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
 from app import colors
+from app.renderer import table_style
 from app.design_system import (
     COLOR_THEMES, derive_brand_palette, derive_data_viz_config,
     get_default_design_system,
@@ -62,6 +63,17 @@ MOTIFS = ("rule", "band", "none")
 # deck can actually build in - see ``specimen.ARGUMENT_BUILDERS``, which the
 # test suite holds to this same tuple.
 STRUCTURES = ("list", "stats", "cards", "bands")
+
+# How this direction draws a chart. The tokens have existed since #120 and
+# nothing authored them, so three visibly different directions all drew the
+# same matplotlib chart - which is the one element of a deck a reader is most
+# likely to be looking at.
+#
+# Paired with the structure it belongs beside rather than left free: a deck
+# whose points are oversized figures and whose charts are gridded analyst
+# plots is two decks. The model may still name one explicitly.
+CHART_FAMILIES_BY_DENSITY = {"airy": "minimal", "balanced": "labelled",
+                             "dense": "gridded"}
 
 # WCAG AA for normal text. Enforced before a direction is rendered, not after
 # a user has chosen it.
@@ -89,6 +101,10 @@ class DirectionSpec:
     density: str = "balanced"
     motif: str = "rule"
     structure: str = "list"
+    # Empty means "take it from the density", which pairs a chart treatment
+    # with the deck's own register rather than leaving three directions to
+    # draw the same plot.
+    chart_family: str = ""
     # The hue this direction proposes for itself, when the run has not settled
     # one. Before it existed every direction resolved to the house navy, so a
     # deck about anything at all was previewed in the same blue three times.
@@ -107,6 +123,13 @@ class DirectionSpec:
 
         return f"{'serif' if _is_serif(self.display_face) else 'sans'}-over-" \
                f"{'serif' if _is_serif(self.body_face) else 'sans'}"
+
+    @property
+    def resolved_chart_family(self) -> str:
+        """The family this direction draws its charts in."""
+        return self.chart_family or CHART_FAMILIES_BY_DENSITY.get(
+            self.density, "labelled"
+        )
 
     def axes(self) -> tuple[str, str, str, str, str]:
         return (self.ground, self.pairing, self.motif, self.density,
@@ -128,6 +151,8 @@ class DirectionSpec:
             density=_one_of(data.get("density"), tuple(DENSITIES), "balanced"),
             motif=_one_of(data.get("motif"), MOTIFS, "rule"),
             structure=_one_of(data.get("structure"), STRUCTURES, "list"),
+            chart_family=_one_of(data.get("chartFamily"),
+                                 table_style.CHART_FAMILY_NAMES, ""),
             palette_hex=_hex_or_blank(data.get("paletteHex")),
         )
 
@@ -146,6 +171,7 @@ class DirectionSpec:
             "bodyFace": self.body_face, "displaySizePt": self.display_pt,
             "bodySizePt": self.body_pt, "density": self.density,
             "motif": self.motif, "structure": self.structure,
+            "chartFamily": self.chart_family,
             "paletteHex": self.palette_hex,
         }
 
@@ -173,7 +199,11 @@ def compile_direction(spec: DirectionSpec, brand_hex: Optional[str] = None,
     system["density"] = _density_for(spec, system)
     system["spacing"] = _spacing_for(spec, system)
     system["chrome"] = _chrome_for(spec, system)
-    system["dataViz"] = derive_data_viz_config(palette, body_font=spec.body_face)
+    system["dataViz"] = table_style.apply_chart_family(
+        derive_data_viz_config(palette, body_font=spec.body_face),
+        spec.resolved_chart_family, wins=True,
+    )
+    system["dataViz"]["chartFamily"] = spec.resolved_chart_family
     system["colorTheme"] = spec.id
     system["name"] = spec.name
     system["ground"] = spec.ground

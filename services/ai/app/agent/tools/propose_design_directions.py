@@ -335,6 +335,7 @@ def _prompt(brief: str, answers: str, brand_hex: str | None,
                 "rationale": "One line on why this direction, in plain words.",
                 "ground": "light|dark|rail|split",
                 "structure": "list|stats|cards|bands",
+                "chartFamily": "labelled|gridded|minimal (optional - follows density if omitted)",
                 "paletteHex": "#RRGGBB",
                 "displayFace": "a real typeface name",
                 "bodyFace": "a real typeface name",
@@ -388,6 +389,14 @@ def _prompt(brief: str, answers: str, brand_hex: str | None,
         "Roman, Verdana), never invented ones.",
         "- density sets how much the planner puts on a slide, not only the "
         "look: 'dense' is an analyst deck, 'airy' is an executive one.",
+        "- chartFamily is how this direction DRAWS a chart, which is the "
+        "element a reader is most often actually looking at: 'labelled' drops "
+        "the axis and puts a figure at the end of every bar, so the chart is "
+        "read off the bars; 'gridded' keeps a ruled grid and an axis carrying "
+        "the unit, and reads as a document; 'minimal' draws no furniture at all "
+        "beyond the numbers. Omit it and it follows the density, which pairs the "
+        "chart with the deck's own register - name it only when the direction "
+        "wants a treatment its density would not give it.",
         "- Name each direction for what it looks like - 'Dark analyst', "
         "'Editorial serif', 'Clean minimal'. Never lettered A/B/C.",
         "- The rationale is one line a non-designer can act on.",
