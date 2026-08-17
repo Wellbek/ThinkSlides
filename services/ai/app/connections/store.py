@@ -33,6 +33,7 @@ import re
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -380,6 +381,38 @@ async def _unique_slug(
     raise ConnectionConfigError("Too many connections with that name.")
 
 
+async def record_health(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    results: dict[uuid.UUID, tuple[str, int]],
+) -> None:
+    """Write what each connection's last discovery attempt found.
+
+    ``results`` maps a connection's row id to ``(error, tool_count)``, with an
+    empty error meaning it worked. Recorded after the attempt rather than
+    derived on read, because between runs there is nobody to ask - the panel has
+    to be able to say "we could not reach this an hour ago".
+
+    Never fatal. This is bookkeeping about a degraded connection; failing a run
+    over a failed write about a failure would be absurd.
+    """
+    if not results:
+        return
+    try:
+        checked = datetime.now(timezone.utc)
+        for row in await load_rows(db, org_id):
+            if row.id not in results:
+                continue
+            error, tools = results[row.id]
+            row.last_checked_at = checked
+            row.last_error = error or None
+            row.tool_count = tools
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a run
+        logger.error("connection_health_write_failed",
+                     organisation_id=str(org_id), error=str(exc))
+
+
 async def delete_connection(
     db: AsyncSession, org_id: uuid.UUID, row_id: uuid.UUID
 ) -> bool:
@@ -419,10 +452,31 @@ def redacted_connection(row: OrganisationConnection) -> dict:
             for f in (spec.fields if spec else ())
             if f.secret
         },
+        "health": {
+            # Three distinguishable states, which is the point: never tried,
+            # working, and reachable-an-hour-ago-but-not-now. A single boolean
+            # collapses the first two, and a user with a brand new connection
+            # would be told it was broken.
+            "status": _health_status(row),
+            "lastCheckedAt": (
+                row.last_checked_at.isoformat() if row.last_checked_at else None
+            ),
+            "lastError": row.last_error or None,
+            "toolCount": row.tool_count,
+        },
         # A connection whose catalogue entry has gone is shown rather than
         # hidden: a row nobody can see is a row nobody can delete.
         "known": spec is not None,
     }
+
+
+def _health_status(row: OrganisationConnection) -> str:
+    """"unknown", "healthy" or "degraded"."""
+    if not row.enabled:
+        return "disabled"
+    if row.last_checked_at is None:
+        return "unknown"
+    return "degraded" if row.last_error else "healthy"
 
 
 def redacted_payload(rows: list[OrganisationConnection]) -> dict:

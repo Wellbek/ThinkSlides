@@ -14,7 +14,8 @@ import re
 from app.db.models import OrganisationConnection
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
-ALEMBIC = REPO / "services/ai/alembic/versions/009_add_organisation_connections.py"
+VERSIONS = REPO / "services/ai/alembic/versions"
+ALEMBIC = VERSIONS / "009_add_organisation_connections.py"
 SQL = REPO / "db/migrations/012_create_organisation_connections.sql"
 
 TABLE = "organisation_connections"
@@ -25,8 +26,19 @@ def _model_columns() -> set[str]:
 
 
 def _alembic_columns() -> set[str]:
-    text = ALEMBIC.read_text()
-    return set(re.findall(r'sa\.Column\(\s*"([a-z_]+)"', text))
+    """Every column any migration puts on this table.
+
+    Gathered across migrations rather than from one file, because the table is
+    built by more than one - and a later add_column that the Docker SQL never
+    gained is exactly the drift this file exists to catch.
+    """
+    names: set[str] = set()
+    for path in VERSIONS.glob("[0-9]*.py"):
+        text = path.read_text()
+        if TABLE not in text:
+            continue
+        names |= set(re.findall(r'sa\.Column\(\s*"([a-z_]+)"', text))
+    return names
 
 
 def _sql_columns() -> set[str]:
@@ -62,31 +74,32 @@ class TestTheThreeDeclarationsAgree:
         assert {
             "id", "organisation_id", "connection_id", "slug", "label",
             "enabled", "config", "secrets_encrypted", "secret_hints",
+            "last_checked_at", "last_error", "tool_count",
             "created_at", "updated_at",
         } == _model_columns()
 
 
 class TestTheMigrationChainIsIntact:
-    def test_it_revises_the_previous_head(self):
+    def test_the_chain_is_linear_from_one_root(self):
         """
-        A migration whose down_revision points at a revision that is no longer
-        the head is a branch, and Alembic refuses to upgrade through one.
+        Two migrations revising the same parent is a branch, and Alembic
+        refuses to upgrade through one. A chain is linear exactly when every
+        revision except the head is some other revision's parent, once.
         """
-        text = ALEMBIC.read_text()
-        revision = re.search(r'^revision: str = "(\d+)"', text, re.M).group(1)
-        down = re.search(r'^down_revision: Union\[str, None\] = "(\d+)"',
-                         text, re.M).group(1)
+        chain = {}
+        for path in VERSIONS.glob("[0-9]*.py"):
+            text = path.read_text()
+            revision = re.search(r'^revision: str = "(\d+)"', text, re.M).group(1)
+            down = re.search(
+                r'^down_revision: Union\[str, None\] = (?:"(\d+)"|None)', text, re.M
+            ).group(1)
+            chain[revision] = down
 
-        versions = ALEMBIC.parent
-        revisions = {
-            re.search(r'^revision: str = "(\d+)"', p.read_text(), re.M).group(1)
-            for p in versions.glob("[0-9]*.py")
-        }
-        assert down in revisions, f"{down} is not a revision"
-        # The head is the highest revision that is not this one. A migration
-        # revising anything else is a branch, and Alembic refuses to upgrade
-        # through one.
-        assert down == max(revisions - {revision})
+        parents = [down for down in chain.values() if down is not None]
+        assert len(parents) == len(set(parents)), "two migrations share a parent"
+        assert sum(1 for down in chain.values() if down is None) == 1, "two roots"
+        for down in parents:
+            assert down in chain, f"{down} is not a revision"
 
 
 class TestBothMigrationsCarryTheConstraintTheCodeRelieson:

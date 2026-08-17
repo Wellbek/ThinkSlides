@@ -521,6 +521,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         rate_limit: onRateLimit,
         question: recordOnly,
         validation_unresolved: recordOnly,
+        // A connection that could not be reached. Recorded, not
+        // thrown: the run carried on without it, and the user has to
+        // be able to tell that from a deck that simply found nothing.
+        connection_degraded: recordOnly,
         timer_update: onTimerUpdate,
         session_title_updated: onSessionTitleUpdated,
         file_generated: onFileGenerated,

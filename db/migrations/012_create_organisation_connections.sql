@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS organisation_connections (
     secrets_encrypted JSONB   NOT NULL DEFAULT '{}'::jsonb,
     secret_hints      JSONB   NOT NULL DEFAULT '{}'::jsonb,
 
+    -- What the last discovery attempt found. Written after every run and read
+    -- by the connections panel, because between runs there is nobody to ask
+    -- and "we could not reach this an hour ago" is what a user needs to see.
+    -- last_error is empty on a healthy connection, which is the only thing
+    -- that distinguishes "reached, working" from "never tried".
+    last_checked_at   TIMESTAMPTZ,
+    last_error        TEXT,
+    tool_count        INTEGER,
+
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 

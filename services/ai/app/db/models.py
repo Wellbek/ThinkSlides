@@ -132,6 +132,17 @@ class OrganisationConnection(Base):
     secrets_encrypted = Column(JSONB, nullable=False, default=dict)
     secret_hints = Column(JSONB, nullable=False, default=dict)
 
+    # Health, written after each run's discovery. Kept here rather than derived
+    # on read because "we could not reach this an hour ago" is exactly what a
+    # user needs to see, and there is nobody to ask between runs.
+    #
+    # last_error is empty on a healthy connection, which is the only way to
+    # distinguish "reached, working" from "never tried" - last_checked_at alone
+    # cannot say which.
+    last_checked_at = Column(DateTime(timezone=True))
+    last_error = Column(Text)
+    tool_count = Column(Integer)
+
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
