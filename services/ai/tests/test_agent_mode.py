@@ -136,7 +136,7 @@ def test_the_tool_list_stays_contiguously_numbered_in_simple_mode():
     numbers = _numbered_tools(loop._build_system_prompt({}))
 
     assert numbers == list(range(1, len(numbers) + 1))
-    assert len(numbers) == 15  # 16 in deep mode, minus web_search
+    assert len(numbers) == 16  # 17 in deep mode, minus web_search
 
 
 def test_the_document_tools_are_described_only_when_there_are_documents():
@@ -148,7 +148,7 @@ def test_the_document_tools_are_described_only_when_there_are_documents():
     numbers = _numbered_tools(prompt)
 
     assert numbers == list(range(1, len(numbers) + 1))
-    assert len(numbers) == 13
+    assert len(numbers) == 14
     assert "extract_key_data" not in prompt
     assert "analyze_document" not in prompt
 

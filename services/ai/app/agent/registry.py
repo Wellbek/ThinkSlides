@@ -161,6 +161,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     from app.agent.tools.plan_presentation_structure import PlanPresentationStructureTool
     from app.agent.tools.select_layout import SelectLayoutTool
     from app.agent.tools.build_visuals import (
+        BuildChartGridTool,
         BuildChartTool,
         BuildKeyMetricsTool,
         BuildTableTool,
@@ -192,6 +193,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     PlanPresentationStructureTool.register(registry)
     SelectLayoutTool.register(registry)
     BuildChartTool.register(registry)
+    BuildChartGridTool.register(registry)
     BuildTableTool.register(registry)
     BuildKeyMetricsTool.register(registry)
     BuildStatCalloutsTool.register(registry)
