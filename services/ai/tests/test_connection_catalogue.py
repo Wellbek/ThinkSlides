@@ -282,7 +282,8 @@ class TestThePayload:
         for connection in catalog_payload()["connections"]:
             for f in connection["fields"]:
                 assert set(f) == {
-                    "name", "label", "secret", "required", "placeholder", "help",
+                    "name", "label", "secret", "required", "placeholder",
+                    "help", "options",
                 }, f"{connection['id']}.{f['name']}"
 
     def test_field_shapes_are_camel_cased_for_the_frontend(self):
