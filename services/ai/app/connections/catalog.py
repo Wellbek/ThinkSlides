@@ -233,12 +233,7 @@ MCP_PHASES_FIELD = CredentialField(
     secret=False,
     required=False,
     options=("research", "draft"),
-    help=(
-        "Research is for sources a deck is built from. Drafting is for tools "
-        "that help write a slide. Research alone is the default, because every "
-        "extra tool in the drafting phase costs the model attention on every "
-        "single slide."
-    ),
+    help="Research is for sources a deck is built from; drafting helps write a slide.",
 )
 
 

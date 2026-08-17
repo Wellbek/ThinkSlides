@@ -139,6 +139,7 @@ func main() {
 	authHandler := handler.NewAuthHandler(userRepo, jwtSecret, devMode)
 	sessionHandler := handler.NewSessionHandler(redisQueue, hub, aiClient, dbURL, redisClient)
 	settingsHandler := handler.NewSettingsHandler(aiServiceURL)
+	connectionsHandler := handler.NewConnectionsHandler(aiServiceURL)
 
 	// ── HTTP Server ────────────────────────────────────────────────────
 	r := gin.Default()
@@ -181,6 +182,12 @@ func main() {
 		// AI settings live in the Python service; the orchestrator proxies
 		// them so the frontend has a single authenticated origin.
 		protected.Any("/settings/*path", settingsHandler.Proxy)
+
+		// Connections - MCP servers, image and figure renderers - are the same
+		// arrangement: credentials stay in one service, identity is translated
+		// here.
+		protected.Any("/connections", connectionsHandler.Proxy)
+		protected.Any("/connections/*path", connectionsHandler.Proxy)
 	}
 
 	// ── Background workers ─────────────────────────────────────────────
