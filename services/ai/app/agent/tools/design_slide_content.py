@@ -274,6 +274,19 @@ Design System Context:
                     f"  Available sources:\n{numbered}"
                 )
 
+            # The flat "there is no image-generation step" was true, and is
+            # now true only when no image provider is configured. Saying it
+            # unconditionally on a workspace that HAS one would have the model
+            # refusing to place an image it had just successfully generated.
+            image_rule = (
+                "Never invent image data yourself - an image reaches a slide "
+                "only through select_source_image or generate_image."
+                if run_context.get_image_connection() is not None else
+                "Never invent image data yourself; there is no image-generation "
+                "step on this run, only reuse of images that genuinely already "
+                "exist."
+            )
+
             # A visual built through build_chart/build_table/build_key_metrics
             # is attached to the slide server-side. Telling the model it exists
             # (but not what is in it) is what keeps the copy from restating the
@@ -351,7 +364,7 @@ Rules:
 - Put the slide title in the title placeholder (placeholderIdx={title_idx}).
 - Put EVERY key point listed above into the body placeholder (placeholderIdx={body_idx}) as its OWN bullet run - one run per key point, with bullet: true and level: 0. Never collapse multiple key points into a single bullet or drop points to save space.
 - {detail_guidance}
-- Only use "image" type when a pre-vetted source image was supplied above (source: "selected") - never invent image data yourself; there is no image-generation step, only reuse of images that genuinely already exist.
+- Only use "image" type when an image was supplied above - either a pre-vetted source image (source: "selected") or one built by generate_image. {image_rule}
 - Use "table" type for tbl placeholders (or any content placeholder, if no dedicated table placeholder exists) when the content is genuinely tabular (comparisons, structured data with 2+ rows and 2+ columns) - do not force prose bullet points into a table, and do not use a table for anything that reads better as bullets. Shape: {{type: "table", placeholderIdx: N, table: {{headerRow: true, rows: [["Column A", "Column B"], ["Row 1 value", "Row 1 value"], ["Row 2 value", "Row 2 value"]]}}}}. Every row must have the same number of cells as the header row. Keep cell text short (a few words) - tables are rendered at a fixed size, not auto-expanded.
 - Use "chart" type whenever the key points for this slide carry numbers that tell a story a reader would rather SEE than read: a trend over time, a comparison across categories, a breakdown of a whole, or a correlation. A slide whose points are mostly figures ("revenue rose from $11.7B to $37.2B across 2011-2025") should render that data as a chart, not as a list of sentences. Shape: {{type: "chart", placeholderIdx: N, chart: {{chartType: "bar"|"line"|"pie"|"scatter", categories: ["2011", "2020", "2025"], series: [{{name: "Revenue ($B)", values: [11.7, 23.5, 37.2]}}]}}}}. Pick chartType by intent - the build_chart tool carries the full vocabulary and its guidance, and you should prefer calling it over writing chart JSON here at all: "line" for change over time, "bar" for comparison across categories, "pie"/"donut" for parts of a single whole (one series, values summing to a meaningful total), "scatter" for relationships between two measures, "waterfall" for where the movement between two totals came from, "stacked100" for a mix that shifted under a flat total. Every series must have exactly as many values as there are categories, and values must be plain numbers - no units, no "%" or "$" inside the number (put those in the series name). Only chart figures that are actually present in the key points or key data; never invent or estimate values to fill a chart.
 - A chart or a table REPLACES the prose it visualizes - do not emit a chart and then also restate the same figures as bullets in the same body placeholder. A short bullet or two of interpretation ("growth flattened after 2023") alongside a chart is good; a duplicate of the chart's own numbers is not.

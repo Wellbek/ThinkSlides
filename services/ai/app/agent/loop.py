@@ -25,7 +25,8 @@ from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
 from app.agent.tools.build_blocks import BLOCK_BUILDER_TOOLS
 from app.connections import mcp_tools
 from app.connections import store as connection_store
-from app.connections.catalog import KIND_MCP
+from app.agent.tools.generate_image import GenerateImageTool
+from app.connections.catalog import KIND_IMAGE, KIND_MCP
 from app.llm.provider import (
     AINotConfiguredError,
     _is_quota_exhausted,
@@ -495,6 +496,7 @@ TOOL_PHASES = {
     "build_diagram": "content_generation",
     "build_table": "content_generation",
     "build_key_metrics": "content_generation",
+    "generate_image": "content_generation",
     "finalize_and_render_pptx": "rendering",
     "validate_rendered_output": "validation",
     "ask_user_question": "user_input",  # Future: pause for user input
@@ -766,6 +768,8 @@ class WorkingState:
         if marks:
             slide_data = {**slide_data, "primitives": list(marks)}
 
+        slide_data = _credit_generated_images(slide_data)
+
         self.add_slide(slide_data)
 
     def get_slides_json(self) -> str:
@@ -1027,6 +1031,10 @@ class AgentLoop:
         # difference that makes to a run.
         self.mcp_servers: list = []
         self.mcp_tools_by_phase: dict[str, frozenset[str]] = {}
+        # The workspace's image provider, when it has one. None is the ordinary
+        # case, and generate_image is not registered at all in that case.
+        self.image_connection = None
+        self._image_token = None
 
     async def _configure(self) -> None:
         """Resolve the organisation's settings into this run's provider and mode.
@@ -1085,6 +1093,7 @@ class AgentLoop:
                 self._search_token = run_context.set_search_config(config)
 
         await self._connect_mcp_servers()
+        await self._enable_image_generation()
 
         logger.info(
             "agent_run_configured",
@@ -1133,6 +1142,43 @@ class AgentLoop:
             for connection in connections
             if connection.slug in by_slug
         })
+
+    async def _enable_image_generation(self) -> None:
+        """Register generate_image, but only where there is a provider for it.
+
+        Absent an image connection the tool does not exist and the drafting
+        prompt keeps saying image generation does not exist - which is then
+        true. A tool that is registered but always fails teaches a model to keep
+        trying it, and the prompt's flat statement is the right thing to say
+        when there is nothing behind it.
+
+        Same conditional shape as the document tools, which are described only
+        when the session actually has something to read.
+        """
+        if self.org_id is None:
+            return
+        try:
+            available = await connection_store.resolve_enabled(
+                self.db, self.org_id, kind=KIND_IMAGE
+            )
+        except Exception as e:  # noqa: BLE001 - never fail a run over connections
+            logger.error("image_connection_load_failed",
+                         organisation_id=str(self.org_id), error=str(e))
+            return
+        if not available:
+            return
+
+        self.image_connection = available[0]
+        self._image_token = run_context.set_image_connection(self.image_connection)
+        GenerateImageTool.register(self.registry)
+        # Offered while a slide is being drafted, which is the only phase where
+        # a slide exists to put an image on.
+        self.mcp_tools_by_phase.setdefault("draft", frozenset())
+        self.mcp_tools_by_phase["draft"] = (
+            self.mcp_tools_by_phase["draft"] | {"generate_image"}
+        )
+        logger.info("image_generation_enabled",
+                    provider=self.image_connection.connection_id)
 
     def _degraded_connections(self) -> list[dict]:
         """The servers this run could not reach, for the one warning it sends.
@@ -1349,6 +1395,9 @@ class AgentLoop:
             if self._provider_token is not None:
                 run_context.reset_chat_provider(self._provider_token)
                 self._provider_token = None
+            if self._image_token is not None:
+                run_context.reset_image_connection(self._image_token)
+                self._image_token = None
             if self._design_system_token is not None:
                 run_context.reset_design_system(self._design_system_token)
                 self._design_system_token = None
@@ -3040,7 +3089,8 @@ class AgentLoop:
             # Charts/tables/metric rows are attached to their slide
             # here rather than handed back for the model to re-state.
             if (fn_name in BUILD_VISUAL_TOOLS
-                    or fn_name in BLOCK_BUILDER_TOOLS) and tool_result.data:
+                    or fn_name in BLOCK_BUILDER_TOOLS
+                    or fn_name == "generate_image") and tool_result.data:
                 target = tool_result.data.get("slideIndex")
                 block = tool_result.data.get("content")
                 if target is not None and block:
@@ -3621,6 +3671,13 @@ class AgentLoop:
             "extract_key_data — Pull specific data points out of a document that "
             "analyze_document has read",
         ] if self._session_has_documents else []
+        image_tools = [
+            "generate_image — Generate a grounded illustration for a cover, a "
+            "divider or a conceptual idea. It must illustrate something the "
+            "deck established (you name which points or sources), and must "
+            "never carry figures, axes or labels. Prefer build_diagram for "
+            "structure and build_chart for quantity"
+        ] if self.image_connection is not None else []
         tool_lines = [
             *document_tools,
             "extract_template_design_system — Parse a template's design system, or get the built-in default (omit template_path). Call it once; if a design system is already in your context below, it is already loaded",
@@ -3635,6 +3692,7 @@ class AgentLoop:
             "Returns the region ids to pass as build_* region_id",
             "build_chart — Build a validated chart for a slide from typed arguments (categories, series, axis titles). Use this rather than writing chart JSON yourself",
             "build_chart_grid — Build a grid of small charts, one per segment, all on one shared scale. Use it to say whether a pattern holds everywhere or one segment is carrying it",
+            *image_tools,
             "build_diagram — Draw a structural graphic: process flow, 2x2 matrix, "
             "funnel, timeline, pyramid, value chain, Venn or org chart. Use it when "
             "the point is a STRUCTURE rather than a quantity - a chart shows how "
@@ -3977,6 +4035,45 @@ def _project_design_system(fn_name: str, design_system: dict) -> dict:
         }
 
     return design_system
+
+
+def _credit_generated_images(slide_data: dict) -> dict:
+    """Put a visible credit on any slide carrying a generated image.
+
+    As a footnote, not as bespoke chrome: the apparatus is already compiled,
+    measured and rendered on both the template and the default path, so a credit
+    that goes through it cannot be dropped by whichever path a deck happens to
+    take. A credit only the default renderer drew would be missing on exactly
+    the decks that matter most - the ones built on a customer's own template.
+
+    This is not optional. A picture is the easiest thing on a slide to mistake
+    for a photograph of something real, and the credit is the reader's only way
+    to tell.
+    """
+    contents = slide_data.get("contents")
+    if not isinstance(contents, list):
+        return slide_data
+
+    credits = []
+    for item in contents:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("provenance") or "") != "generated":
+            continue
+        line = str(item.get("credit") or "").strip()
+        if line and line not in credits:
+            credits.append(line)
+    if not credits:
+        return slide_data
+
+    existing = [
+        str(note).strip() for note in (slide_data.get("footnotes") or [])
+        if str(note or "").strip()
+    ]
+    added = [line for line in credits if line not in existing]
+    if not added:
+        return slide_data
+    return {**slide_data, "footnotes": [*existing, *added]}
 
 
 def _event(event_type: str, phase: str, data: dict) -> dict:

@@ -353,3 +353,170 @@ def check_density(pdf_path: str) -> list[dict]:
     finally:
         doc.close()
     return advisories
+
+
+# ── Generated images that came back carrying text ──────────────────────
+
+# A generated image whose pixels are this share ink is an image that was drawn
+# with lines in it. Below this, the odd dark region is texture; above it, the
+# thing has structure it was told not to have.
+GENERATED_TEXT_INK_RATIO = 0.055
+
+# How wide a run of dark pixels has to be, as a share of the image, before it
+# reads as a rule rather than as part of a picture. An axis is a long straight
+# line; a photograph almost never has one.
+GENERATED_RULE_SHARE = 0.62
+GENERATED_RULE_ROWS = 3
+
+# Below this the image is too small to judge, and the check would be reading
+# noise. Skipped rather than guessed at.
+MIN_INSPECTABLE_PX = 64
+
+
+def slides_with_generated_images(slides: list[dict]) -> dict[int, list[dict]]:
+    """Which slides carry a generated image, and which items they are.
+
+    Read from the provenance the builder attached, so this cannot drift from
+    what ``generate_image`` actually produced - and so an image reused from the
+    user's own document is never inspected, because a photograph of a real
+    dashboard in a source PDF is legitimate content.
+    """
+    found: dict[int, list[dict]] = {}
+    for position, slide in enumerate(slides or []):
+        if not isinstance(slide, dict):
+            continue
+        index = slide.get("slideIndex")
+        index = index if isinstance(index, int) else position
+        generated = [
+            item for item in (slide.get("contents") or [])
+            if isinstance(item, dict)
+            and str(item.get("provenance") or "") == "generated"
+        ]
+        if generated:
+            found[index] = generated
+    return found
+
+
+def check_generated_images(slides: list[dict]) -> list[dict]:
+    """Generated images that came back carrying text or chart furniture.
+
+    The builder's bar (#177) stops a *request* for a data-bearing image. It
+    cannot stop a provider from returning one anyway: a model asked for "an
+    abstract representation of growth" may well answer with axes and numbers on
+    it, and a fabricated chart is indistinguishable from a real one on the page.
+
+    So this reads the bytes that actually came back. It is deliberately blunt -
+    it looks for the two things a chart has and an illustration does not, a high
+    ink ratio and long straight rules - because a full OCR pass would cost more
+    than the failure it is preventing and would still miss a chart with no
+    labels on it.
+
+    A hit sends the slide back, the same way an overflow does.
+    """
+    issues: list[dict] = []
+    for index, items in slides_with_generated_images(slides).items():
+        for item in items:
+            reason = _generated_image_defect(item)
+            if reason:
+                issues.append({
+                    "slideIndex": index,
+                    "type": "generated_image_carries_data",
+                    "detail": reason,
+                })
+    return issues
+
+
+def _generated_image_defect(item: dict) -> str:
+    """Why this generated image may not ship, or "" if it is fine."""
+    payload = item.get("image") if isinstance(item.get("image"), dict) else {}
+    raw = str(payload.get("data") or "")
+    if not raw:
+        return ""
+
+    try:
+        import base64
+        import io
+
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(base64.b64decode(raw)))
+        image = image.convert("L")
+    except Exception:  # noqa: BLE001 - an unreadable image is the renderer's problem
+        return ""
+
+    width, height = image.size
+    if width < MIN_INSPECTABLE_PX or height < MIN_INSPECTABLE_PX:
+        return ""
+
+    # Downsampled first: the check is about structure, not detail, and a
+    # megapixel scan per image would put seconds on every validation pass.
+    scale = 240 / max(width, height)
+    if scale < 1.0:
+        image = image.resize((max(1, int(width * scale)), max(1, int(height * scale))))
+        width, height = image.size
+
+    pixels = list(image.getdata())
+    ink = _ink_mask(pixels, width, height)
+
+    ratio = sum(ink) / float(len(ink) or 1)
+    rules = _long_rules(ink, width, height)
+
+    if rules >= GENERATED_RULE_ROWS:
+        return (
+            f"The generated image on this slide has {rules} long straight "
+            "rules across it, which is what an axis or a gridline looks like. "
+            "A generated image must never carry chart furniture - regenerate "
+            "it as a scene or an idea, or use build_chart if the point is a "
+            "quantity."
+        )
+    if ratio > GENERATED_TEXT_INK_RATIO and rules:
+        return (
+            "The generated image on this slide reads as a diagram rather than "
+            "an illustration - it has ruled lines and dense dark structure. "
+            "Regenerate it without any text, axes or labels, or use "
+            "build_diagram if the point is a structure."
+        )
+    return ""
+
+
+def _ink_mask(pixels: list[int], width: int, height: int) -> list[bool]:
+    """Which pixels are dark relative to the image's own median.
+
+    Relative rather than absolute: an illustration on a dark ground is all
+    "dark" by an absolute threshold, and would fail every time.
+    """
+    ordered = sorted(pixels)
+    median = ordered[len(ordered) // 2] if ordered else 128
+    threshold = median - 55 if median > 110 else median + 55
+    darker = median > 110
+    return [
+        (value < threshold) if darker else (value > threshold)
+        for value in pixels
+    ]
+
+
+def _long_rules(ink: list[bool], width: int, height: int) -> int:
+    """How many rows or columns are a long unbroken run of ink.
+
+    An axis, a gridline and a table border are all this; a face, a landscape
+    and an abstract shape are not. Counting rows and columns separately catches
+    both orientations without any notion of what a chart is.
+    """
+    rules = 0
+    for y in range(height):
+        row = ink[y * width:(y + 1) * width]
+        if _longest_run(row) >= width * GENERATED_RULE_SHARE:
+            rules += 1
+    for x in range(width):
+        column = [ink[y * width + x] for y in range(height)]
+        if _longest_run(column) >= height * GENERATED_RULE_SHARE:
+            rules += 1
+    return rules
+
+
+def _longest_run(values: list[bool]) -> int:
+    longest = current = 0
+    for value in values:
+        current = current + 1 if value else 0
+        longest = max(longest, current)
+    return longest

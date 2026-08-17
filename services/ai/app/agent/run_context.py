@@ -38,6 +38,7 @@ _search_config: ContextVar[SearchConfig | None] = ContextVar(
     "thinkslides_search_config", default=None
 )
 
+_image_connection: ContextVar = ContextVar("image_connection", default=None)
 _chat_provider: ContextVar[LLMProvider | None] = ContextVar(
     "thinkslides_chat_provider", default=None
 )
@@ -193,3 +194,28 @@ def require_chat_provider() -> LLMProvider:
 def reset_chat_provider(token: Token) -> None:
     """Restore whatever provider was in place before ``set_chat_provider``."""
     _chat_provider.reset(token)
+
+
+def set_image_connection(connection: object | None) -> Token:
+    """Install the organisation's image provider for the current run.
+
+    Published on the context rather than passed as a tool argument, for the same
+    reason the chat provider is: a tool cannot be handed a connection through
+    the registry, and routing a decrypted credential through an LLM response is
+    not a thing to do.
+    """
+    return _image_connection.set(connection)
+
+
+def get_image_connection():
+    """The current run's image provider, or None when none is configured.
+
+    None is the ordinary case and is not an error. ``generate_image`` is only
+    registered when this is set, so a tool that finds it empty means the
+    registry and the run have disagreed.
+    """
+    return _image_connection.get()
+
+
+def reset_image_connection(token: Token) -> None:
+    _image_connection.reset(token)
