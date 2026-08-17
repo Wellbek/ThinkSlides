@@ -57,8 +57,40 @@ SUPPORTED_CHART_TYPES = {
     # And one that is a grid of charts rather than a chart: the same shape
     # repeated per segment, on one shared scale, to say whether a pattern
     # holds everywhere or one segment is carrying it.
-    "smallMultiples",
+    "smallmultiples",
 }
+
+# Names a caller may reasonably write, mapped to the canonical one. The
+# renderer lowercases whatever it is given, so a camelCase type registered in
+# camelCase can never match it - "smallMultiples" resolved to "bar" and drew a
+# grouped bar chart, silently, for exactly the same reason "barh" never fired.
+# Everything a caller can send has to be reachable from the lowercased form.
+CHART_TYPE_ALIASES = {
+    "smallmultiples": "smallmultiples",
+    "small_multiples": "smallmultiples",
+    "smallmultiple": "smallmultiples",
+    "grid": "smallmultiples",
+    "stacked_100": "stacked100",
+    "stacked100pct": "stacked100",
+    "horizontalbar": "barh",
+    "barhorizontal": "barh",
+    "doughnut": "donut",
+}
+
+
+def resolve_chart_type(raw: object) -> tuple[str, bool]:
+    """
+    The canonical type for what a caller wrote, and whether it was recognised.
+
+    Returning the recognised flag rather than silently defaulting is the point.
+    A type that falls back to "bar" still renders a valid PNG, so nothing
+    downstream - including a test asserting "a PNG came out" - can tell the
+    difference between the chart that was asked for and a bar chart. Both of
+    this module's two type bugs hid behind exactly that.
+    """
+    text = str(raw or "bar").strip().lower()
+    canonical = CHART_TYPE_ALIASES.get(text, text)
+    return (canonical, True) if canonical in SUPPORTED_CHART_TYPES else ("bar", False)
 
 # Past this many panels nothing in any of them is legible at slide size, and
 # the grid has stopped being a comparison and become a contact sheet.
@@ -245,9 +277,17 @@ def render_chart_to_png(
     if width_in <= 0 or height_in <= 0:
         return None
 
-    chart_type = (chart_data.get("chartType") or chart_data.get("chart_type") or "bar").lower()
-    if chart_type not in SUPPORTED_CHART_TYPES:
-        chart_type = "bar"
+    chart_type, recognised = resolve_chart_type(
+        chart_data.get("chartType") or chart_data.get("chart_type")
+    )
+    if not recognised:
+        # Loud, because the fallback renders a perfectly good chart of the
+        # wrong kind and nothing downstream can see that it happened.
+        logger.warning(
+            "chart_type_not_recognised",
+            requested=chart_data.get("chartType") or chart_data.get("chart_type"),
+            rendered_as=chart_type,
+        )
 
     # A bubble chart states its data as points carrying two encoded values,
     # not as series over shared categories - so it is the one type with no
@@ -289,7 +329,7 @@ def render_chart_to_png(
     # its own axes as a full-height one.
     base_pt = max(8.0, min(13.0, 3.6 * math.sqrt(width_in * height_in / 6.0) + 6.0))
 
-    if chart_type == "smallMultiples":
+    if chart_type == "smallmultiples":
         return _render_small_multiples(
             chart_data, series, categories, style, font, unit_suffix,
             width_in, height_in, dpi, slide_title,
@@ -1165,8 +1205,14 @@ def _label_stack_band(ax, x, heights, bottoms, style, font, base_pt,
     for index, height in enumerate(heights):
         if height <= floor:
             continue
+        # Whole percentages on a 100% stack. _format_number keeps a decimal
+        # for anything that is not exactly integral, so a column summing to
+        # 99.999 through floating point printed "30%" beside "29.0%" - one
+        # chart using two conventions, in labels a reader compares directly.
+        shown = (f"{height:.0f}" if percent
+                 else _format_number(height))
         ax.annotate(
-            f"{_format_number(height)}{unit_suffix}",
+            f"{shown}{unit_suffix}",
             xy=(x[index], bottoms[index] + height / 2.0),
             ha="center", va="center", color=colour,
             fontname=font, fontsize=base_pt * 0.8,
@@ -1197,43 +1243,99 @@ def _draw_waterfall(ax, series, categories, chart_data, style, font, base_pt,
     x = list(range(n_points))
     totals = _total_indices(chart_data, n_points)
 
-    width = max(0.05, min(1.0, style.bar_thickness))
+    # Running levels first, so the frame can be chosen before anything is
+    # drawn. The order matters: the anchor bars are drawn from the frame's
+    # floor, and the frame is decided by where the movements sit.
     running = 0.0
+    levels = []
+    for index, value in enumerate(values):
+        if index in totals:
+            levels.append((0.0, value))
+            running = value
+        else:
+            base = running if value >= 0 else running + value
+            levels.append((base, abs(value)))
+            running += value
+
+    floor, ceiling = _waterfall_frame(levels, totals)
+    ax.set_ylim(floor, ceiling)
+
+    width = max(0.05, min(1.0, style.bar_thickness))
     bottoms, heights, colors = [], [], []
     for index, value in enumerate(values):
         if index in totals:
-            bottoms.append(0.0)
-            heights.append(value)
+            # From the frame's floor, not from zero. A bridge whose anchors are
+            # drawn from zero forces the axis to include zero, and a movement
+            # of 72 against a total of 4,104 is then under 2% of the plot
+            # height - four coloured slivers along the top, and a chart that
+            # says nothing. Every published bridge does it this way.
+            bottoms.append(floor)
+            heights.append(value - floor)
             colors.append(style.waterfall_total_color)
-            running = value
         else:
-            bottoms.append(running if value >= 0 else running + value)
-            heights.append(abs(value))
+            base, height = levels[index]
+            bottoms.append(base)
+            heights.append(height)
             colors.append(
                 style.waterfall_rise_color if value >= 0
                 else style.waterfall_fall_color
             )
-            running += value
 
     ax.bar(x, heights, bottom=bottoms, width=width, color=colors)
     _connect_waterfall(ax, x, bottoms, heights, values, totals, width, style)
 
-    if style.label_mode != "none":
-        for index, value in enumerate(values):
-            top = bottoms[index] + heights[index]
-            sign = "" if index in totals or value < 0 else "+"
-            ax.annotate(
-                f"{sign}{_format_number(value)}{unit_suffix}",
-                xy=(x[index], top),
-                xytext=(0, base_pt * 0.4), textcoords="offset points",
-                ha="center", va="bottom",
-                color=style.axis_color, fontname=font, fontsize=base_pt * 0.85,
-            )
+    # Not conditional on label_mode: a framed axis means the bar lengths no
+    # longer state the figures, so the labels ARE the figures. A deck whose
+    # convention is "no data labels" still gets them here, because the
+    # alternative is a chart with no numbers on it at all.
+    for index, value in enumerate(values):
+        top = bottoms[index] + heights[index]
+        sign = "" if index in totals or value < 0 else "+"
+        ax.annotate(
+            f"{sign}{_format_number(value)}{unit_suffix}",
+            xy=(x[index], top),
+            xytext=(0, base_pt * 0.4), textcoords="offset points",
+            ha="center", va="bottom",
+            color=style.axis_color, fontname=font, fontsize=base_pt * 0.85,
+        )
 
     _cartesian_furniture(ax, categories, chart_data, style, font, base_pt,
-                         unit_suffix, x)
-    bottom, top = ax.get_ylim()
-    ax.set_ylim(bottom, top + (top - bottom) * 0.12)
+                         unit_suffix, x, zero_baseline=False)
+    # _cartesian_furniture may have widened the limits; the frame is the
+    # decision here and it wins.
+    ax.set_ylim(floor, ceiling)
+
+
+def _waterfall_frame(levels, totals) -> tuple[float, float]:
+    """
+    The value range a bridge is drawn in.
+
+    Chosen from where the bars actually sit rather than forced to zero, which
+    is the one place in this module that departs from "a bar's length is its
+    value". It is honest here in a way it would not be on a comparison chart,
+    because a waterfall's movements encode differences positioned at levels
+    rather than lengths from an origin - the reader follows the connectors and
+    reads the labels.
+
+    Zero is still included whenever the data comes near it, so a build-up from
+    nothing looks like one rather than being needlessly zoomed.
+    """
+    tops = [base + height for base, height in levels]
+    bases = [
+        base for index, (base, _height) in enumerate(levels)
+        if index not in totals
+    ]
+    high = max(tops) if tops else 1.0
+    low = min([*bases, *tops]) if bases else min(tops or [0.0])
+
+    span = (high - low) or (abs(high) or 1.0)
+    # A bridge whose lowest movement is already near zero should show zero:
+    # zooming a build-up from nothing hides that it started at nothing.
+    if 0.0 < low < span * 0.75:
+        low = 0.0
+        span = high - low
+
+    return low - span * 0.10, high + span * 0.18
 
 
 def _total_indices(chart_data: dict, n_points: int) -> set[int]:
@@ -1427,10 +1529,25 @@ def _draw_bullet(ax, series, categories, chart_data, style, font, base_pt,
     """
     Whether each measure is hitting its target.
 
-    A bar for the actual, a rule across it for the target, and a pale band
-    behind for the range being judged against. The KPI scorecard row, which a
-    grouped bar chart renders as "actual and target side by side" - readable,
-    but it makes the reader compare two heights to answer a yes/no question.
+    A bar for the actual, a rule for the target, a pale band behind for the
+    scale being judged on. The KPI scorecard row, which a grouped bar chart
+    renders as "actual and target side by side" - readable, but it makes the
+    reader compare two heights to answer a yes/no question.
+
+    **Every row is scaled to its own target, not to a shared axis.** This is
+    the opposite of the small-multiples rule and it is right for the opposite
+    reason: the rows are different measures in different units. A rendered
+    deck made it obvious - revenue of 4.12, margin of 31 and NPS of 44 on one
+    shared axis drew the revenue bar as an invisible stub with its target rule
+    on top of it, and the one row a reader most wanted was the one they could
+    not see. What a bullet row compares is progress against *its own* target,
+    so that is what the width encodes.
+
+    The value axis is therefore hidden outright: it has no single meaning once
+    each row has its own scale, and drawing it would invite reading one row's
+    length against another's. The labels carry the figures, and they carry
+    both the actual and the target so the comparison is stated in words as
+    well as drawn.
 
     Targets are stated on the chart rather than derived from a second series,
     because a target is not a measurement and drawing it as one is the same
@@ -1441,49 +1558,64 @@ def _draw_bullet(ax, series, categories, chart_data, style, font, base_pt,
     actual = [_finite(series[0]["values"], i) for i in range(n_points)]
     targets = _bullet_targets(chart_data, series, n_points)
 
-    span = max([*actual, *[t for t in targets if t is not None], 0.0]) or 1.0
-    height = max(0.05, min(0.8, style.bar_thickness)) * 0.55
+    # One row, one scale. Headroom past whichever of actual and target is
+    # larger, so a measure that beat its target still has its bar inside the
+    # band rather than running off the end of it.
+    scales = [
+        max(abs(actual[i]), abs(targets[i] or 0.0)) * 1.25 or 1.0
+        for i in range(n_points)
+    ]
+    fractions = [
+        max(0.0, min(1.0, actual[i] / scales[i])) for i in range(n_points)
+    ]
 
-    # The band behind is the scale the measure is judged on, so it runs to the
-    # larger of the actual and the target - a band that stopped at the target
-    # would clip any bar that beat it.
-    for index in range(n_points):
-        reach = max(actual[index], targets[index] or 0.0, span * 0.05)
-        ax.barh([index], [reach * 1.08], height=height * 2.6,
-                color=style.grid_color, alpha=0.35, zorder=0)
+    bar_h = max(0.05, min(0.8, style.bar_thickness)) * 0.42
+    band_h = bar_h * 2.3
 
-    ax.barh(y, actual, height=height, color=style.color_sequence[0], zorder=2,
+    ax.barh(y, [1.0] * n_points, height=band_h, color=style.grid_color,
+            alpha=0.30, zorder=0)
+    ax.barh(y, fractions, height=bar_h, color=style.color_sequence[0], zorder=2,
             label=str(series[0].get("name") or ""))
 
     for index, target in enumerate(targets):
         if target is None:
             continue
-        ax.plot([target, target],
-                [index - height * 1.3, index + height * 1.3],
-                color=style.waterfall_total_color, linewidth=2.0, zorder=4)
+        at = max(0.0, min(1.0, target / scales[index]))
+        ax.plot([at, at], [index - band_h / 2, index + band_h / 2],
+                color=style.waterfall_total_color, linewidth=2.2, zorder=4,
+                solid_capstyle="butt")
 
-    if style.label_mode != "none":
-        for index, value in enumerate(actual):
-            target = targets[index]
-            met = target is not None and value >= target
-            text = f"{_format_number(value)}{unit_suffix}"
-            if target is not None:
-                text += f" of {_format_number(target)}{unit_suffix}"
-            ax.annotate(
-                text,
-                xy=(max(value, target or 0.0), index),
-                xytext=(base_pt * 0.6, 0), textcoords="offset points",
-                ha="left", va="center",
-                color=(style.waterfall_rise_color if met
-                       else style.waterfall_fall_color) if target is not None
-                else style.axis_color,
-                fontname=font, fontsize=base_pt * 0.8,
-            )
+    for index, value in enumerate(actual):
+        target = targets[index]
+        text = f"{_format_number(value)}{unit_suffix}"
+        if target is not None:
+            text += f" of {_format_number(target)}{unit_suffix}"
+        met = target is not None and value >= target
+        ax.annotate(
+            text, xy=(1.0, index), xytext=(base_pt * 0.6, 0),
+            textcoords="offset points", ha="left", va="center",
+            color=(style.waterfall_rise_color if met
+                   else style.waterfall_fall_color) if target is not None
+            else style.axis_color,
+            fontname=font, fontsize=base_pt * 0.82,
+        )
 
-    _cartesian_furniture(ax, categories, chart_data, style, font, base_pt,
-                         unit_suffix, y, horizontal=True)
-    left, right = ax.get_xlim()
-    ax.set_xlim(0.0, right + (right - left) * 0.22)
+    ax.set_yticks(y)
+    ax.set_yticklabels(categories[:n_points] or [str(i) for i in y],
+                       color=style.axis_color, fontname=font, fontsize=base_pt)
+    ax.invert_yaxis()
+    ax.set_ylim(n_points - 0.5, -0.5)
+    # Room to the right for the "4.12 of 4.0" labels, which sit outside the band.
+    ax.set_xlim(0.0, 1.42)
+    ax.tick_params(colors=style.axis_color, labelsize=base_pt, length=0)
+    for side in ("top", "right", "bottom"):
+        ax.spines[side].set_visible(False)
+    ax.spines["left"].set_visible(style.show_category_axis or style.baseline_rule)
+    ax.spines["left"].set_color(style.axis_color)
+    # No value axis and no gridlines, by construction: each row has its own
+    # scale, so a shared axis would be a scale that describes none of them.
+    ax.tick_params(axis="x", bottom=False, labelbottom=False)
+    ax.grid(False)
 
 
 def _bullet_targets(chart_data: dict, series, n_points: int) -> list:
@@ -1792,7 +1924,7 @@ def _render_small_multiples(
         fig.savefig(buf, format="png", transparent=True)
         return buf.getvalue()
     except Exception as e:
-        logger.warning("chart_render_failed", chart_type="smallMultiples",
+        logger.warning("chart_render_failed", chart_type="smallmultiples",
                        error=str(e))
         return None
     finally:
