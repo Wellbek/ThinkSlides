@@ -34,7 +34,7 @@ from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-SUPPORTED_CHART_TYPES = {"bar", "line", "pie", "scatter", "area", "bubble"}
+SUPPORTED_CHART_TYPES = {"bar", "barh", "line", "pie", "scatter", "area", "bubble"}
 
 # A projected value is drawn as an outline rather than a fill, so a reader can
 # see at a glance which part of a bar is measured and which is extrapolated.
@@ -413,7 +413,7 @@ def _measured_values(series_entry: dict, values: list, forecast_from: int) -> li
 
 
 def _draw_bars_with_forecast(ax, offsets, values, measured, forecast_from,
-                             bar_width, color, name) -> None:
+                             bar_width, color, name, horizontal=False) -> None:
     """
     Bars, with any projected part drawn as an outline rather than a fill.
 
@@ -426,17 +426,23 @@ def _draw_bars_with_forecast(ax, offsets, values, measured, forecast_from,
         max(0.0, min(value, measured[index])) if value == value else 0.0
         for index, value in enumerate(values)
     ]
-    ax.bar(offsets, solid, width=bar_width, label=name, color=color)
+    if horizontal:
+        ax.barh(offsets, solid, height=bar_width, label=name, color=color)
+    else:
+        ax.bar(offsets, solid, width=bar_width, label=name, color=color)
 
     for index, value in enumerate(values):
         base = solid[index]
         if value != value or value - base <= 0:
             continue
-        ax.bar(
-            [offsets[index]], [value - base], bottom=[base], width=bar_width,
-            facecolor="none", edgecolor=color, linewidth=1.4,
-            linestyle=FORECAST_DASH, hatch=None,
-        )
+        outline = dict(facecolor="none", edgecolor=color, linewidth=1.4,
+                       linestyle=FORECAST_DASH, hatch=None)
+        if horizontal:
+            ax.barh([offsets[index]], [value - base], left=[base],
+                    height=bar_width, **outline)
+        else:
+            ax.bar([offsets[index]], [value - base], bottom=[base],
+                   width=bar_width, **outline)
 
 
 def _draw_line_with_forecast(ax, x, values, forecast_from, color, name,
@@ -828,6 +834,17 @@ def _draw_bubble_legend(ax, chart_data, style, font, base_pt) -> None:
 def _draw_cartesian(
     ax, chart_type, series, categories, chart_data, style, font, base_pt, unit_suffix,
 ) -> None:
+    # A horizontal bar chart is the same chart with its axes exchanged: the
+    # value runs along x and the categories down y. Everything below that
+    # names an axis therefore has to ask which is which, rather than assuming
+    # y is the value - which is why the one branch that already mentioned
+    # "barh" could never fire.
+    horizontal = chart_type == "barh"
+    value_axis = ax.xaxis if horizontal else ax.yaxis
+    category_axis = ax.yaxis if horizontal else ax.xaxis
+    value_side = "bottom" if horizontal else "left"
+    category_side = "left" if horizontal else "bottom"
+
     n_points = len(categories) if categories else max(len(s["values"]) for s in series)
     x = list(range(n_points))
 
@@ -850,18 +867,24 @@ def _draw_cartesian(
             ax.fill_between(x, values, color=color, alpha=0.22)
         elif chart_type == "scatter":
             ax.scatter(x, values, label=name, color=color, s=base_pt * 6)
-        else:  # bar
+        else:  # bar / barh
             bar_width, offsets = _bar_geometry(style, len(series), i, x)
             _draw_bars_with_forecast(ax, offsets, values, measured, forecast_from,
-                                     bar_width, color, name)
+                                     bar_width, color, name, horizontal)
 
     if categories:
-        ax.set_xticks(x)
-        ax.set_xticklabels(categories, color=style.axis_color, fontname=font,
-                           fontsize=base_pt)
+        category_axis.set_ticks(x)
+        category_axis.set_ticklabels(categories, color=style.axis_color,
+                                     fontname=font, fontsize=base_pt)
     ax.tick_params(colors=style.axis_color, labelsize=base_pt)
-    for label in ax.get_yticklabels():
+    for label in (ax.get_xticklabels() if horizontal else ax.get_yticklabels()):
         label.set_fontname(font)
+
+    # Reading order runs down the page, so the first category belongs at the
+    # top. matplotlib counts y upwards, which would otherwise print a ranked
+    # list upside down.
+    if horizontal:
+        ax.invert_yaxis()
 
     # Axis and gridline behaviour come from the deck's tokens rather than
     # being drawn unconditionally. Reference page 22's bar chart has no value
@@ -871,32 +894,39 @@ def _draw_cartesian(
     # belong to the deck it is in.
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
-    ax.spines["left"].set_visible(
-        style.show_value_axis or (style.baseline_rule and chart_type == "barh")
+    ax.spines[value_side].set_visible(style.show_value_axis)
+    # The category axis is also the line the bars grow from, so a deck that
+    # draws a baseline keeps it even where it hides the axis itself.
+    ax.spines[category_side].set_visible(
+        style.show_category_axis or style.baseline_rule
     )
-    ax.spines["bottom"].set_visible(style.show_category_axis or style.baseline_rule)
-    for side in ("left", "bottom"):
+    for side in (value_side, category_side):
         ax.spines[side].set_color(style.axis_color)
 
     if not style.show_value_axis:
-        ax.tick_params(axis="y", left=False, labelleft=False)
+        ax.tick_params(**{"axis": "x" if horizontal else "y",
+                          value_side: False, f"label{value_side}": False})
     if not style.show_category_axis:
-        ax.tick_params(axis="x", bottom=False, labelbottom=False)
+        ax.tick_params(**{"axis": "y" if horizontal else "x",
+                          category_side: False, f"label{category_side}": False})
 
     # Passing line properties alongside a False first argument makes
     # matplotlib warn and turn the grid *on* anyway - so a chart whose tokens
     # said "no gridlines" got them. Enable and style, or disable and say
     # nothing else.
-    _set_grid(ax.yaxis, style.show_value_gridlines, style)
-    _set_grid(ax.xaxis, style.show_category_gridlines, style)
+    _set_grid(value_axis, style.show_value_gridlines, style)
+    _set_grid(category_axis, style.show_category_gridlines, style)
     ax.set_axisbelow(True)
-    ax.yaxis.set_major_formatter(_axis_formatter(unit_suffix))
+    value_axis.set_major_formatter(_axis_formatter(unit_suffix))
 
     # A bar chart's length *is* its value, so a non-zero baseline misstates
     # the comparison. Line and scatter show change, where a zoomed axis is
     # legitimate, so they keep matplotlib's own range.
-    if chart_type in ("bar", "area"):
-        ax.set_ylim(bottom=min(0.0, ax.get_ylim()[0]))
+    if chart_type in ("bar", "barh", "area"):
+        if horizontal:
+            ax.set_xlim(left=min(0.0, ax.get_xlim()[0]))
+        else:
+            ax.set_ylim(bottom=min(0.0, ax.get_ylim()[0]))
 
     # Where the unit is stated is a deck convention, not a chart decision.
     # The reference puts it on a second subtitle line ("thousands", "$ billion")
@@ -907,15 +937,17 @@ def _draw_cartesian(
     states_unit_above = bool(str(chart_data.get("unitLine") or "").strip())
     if (value_label and not states_unit_above
             and style.unit_convention == "axis" and style.show_value_axis):
-        ax.set_ylabel(value_label, color=style.axis_color, fontname=font,
-                      fontsize=base_pt, labelpad=base_pt * 0.6)
+        set_value_label = ax.set_xlabel if horizontal else ax.set_ylabel
+        set_value_label(value_label, color=style.axis_color, fontname=font,
+                        fontsize=base_pt, labelpad=base_pt * 0.6)
 
     category_label = str(
         chart_data.get("xAxisTitle") or chart_data.get("categoryAxisTitle") or ""
     ).strip()
     if category_label:
-        ax.set_xlabel(category_label, color=style.axis_color, fontname=font,
-                      fontsize=base_pt, labelpad=base_pt * 0.5)
+        set_category_label = ax.set_ylabel if horizontal else ax.set_xlabel
+        set_category_label(category_label, color=style.axis_color, fontname=font,
+                           fontsize=base_pt, labelpad=base_pt * 0.5)
 
     # A legend for one series would only repeat the value-axis label.
     if _legend_wanted(style, len(series)):
@@ -947,27 +979,37 @@ def _draw_data_labels(
     if style.label_mode == "auto" and crowded:
         return
 
+    horizontal = chart_type == "barh"
     labelled = _points_to_label(style, chart_type, x)
     for i, s in enumerate(series):
         bar_width, offsets = _bar_geometry(style, len(series), i, x)
         for position, (xi, value) in enumerate(zip(x, s["values"])):
             if value != value or position not in labelled:
                 continue
-            px = offsets[position] if chart_type == "bar" else xi
+            along = offsets[position] if chart_type in ("bar", "barh") else xi
+            # A horizontal bar's value runs along x, so its label goes at the
+            # end of the bar rather than above it - which is the whole reason
+            # the orientation exists: the category label has the width it
+            # needs and the figure is still at the bar's tip.
             ax.annotate(
                 f"{_format_number(value)}{unit_suffix}",
-                xy=(px, value),
+                xy=(value, along) if horizontal else (along, value),
                 # Offset in points, not data units: a fixed typographic gap
-                # above the marker whatever the series' magnitude.
-                xytext=(0, base_pt * 0.45),
+                # from the marker whatever the series' magnitude.
+                xytext=(base_pt * 0.4, 0) if horizontal else (0, base_pt * 0.45),
                 textcoords="offset points",
-                ha="center",
-                va="bottom",
+                ha="left" if horizontal else "center",
+                va="center" if horizontal else "bottom",
                 color=style.axis_color,
                 fontname=font,
                 fontsize=base_pt * 0.85,
             )
 
-    # Labels sit above the highest point, so the axis needs room for them.
-    bottom, top = ax.get_ylim()
-    ax.set_ylim(bottom, top + (top - bottom) * 0.12)
+    # Labels sit past the end of the longest bar, so the value axis needs
+    # room for them.
+    if horizontal:
+        left, right = ax.get_xlim()
+        ax.set_xlim(left, right + (right - left) * 0.12)
+    else:
+        bottom, top = ax.get_ylim()
+        ax.set_ylim(bottom, top + (top - bottom) * 0.12)
