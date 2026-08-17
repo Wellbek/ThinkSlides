@@ -101,6 +101,19 @@ class ChartStyle:
     bar_thickness: float = 0.78
     bar_group_gap: float = 0.0
 
+    # A figure printed inside a stacked band sits on that band's own colour,
+    # not on the slide, so it is the one label that cannot take axis_color.
+    # None means "work it out from the band" at draw time.
+    stack_label_color: str | None = None
+
+    # A waterfall says its content with colour: a rise, a fall, and the two
+    # totals it bridges between. Semantic rather than sequential - taking
+    # these from the palette's first three would make the sign of a movement
+    # depend on where the deck happened to put its accent colours.
+    waterfall_rise_color: str = "#2E9AA6"
+    waterfall_fall_color: str = "#C0553B"
+    waterfall_total_color: str = "#12233F"
+
     # The stack to try when ``font_name`` is not installed where we render.
     # A chart is rasterised on this host, so unlike the PPTX's own text it
     # cannot leave the substitution to the machine that opens the deck - and

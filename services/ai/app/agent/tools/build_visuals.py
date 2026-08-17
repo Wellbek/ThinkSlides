@@ -31,13 +31,20 @@ from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-CHART_TYPES = ["bar", "barh", "line", "pie", "scatter", "area"]
+CHART_TYPES = ["bar", "barh", "line", "pie", "scatter", "area",
+               "stacked", "stacked100", "waterfall"]
 
 # Past roughly this, a category label cannot be printed under a vertical bar
 # without being rotated or truncated, and both read badly on a slide. The
 # figure is the label length the axis can carry at slide size, divided among
 # the categories - so six long names trip it and twelve short ones do not.
 HORIZONTAL_LABEL_BUDGET = 90
+
+# A stack of more than this many bands cannot be read: the middle segments
+# are thinner than their own labels. The renderer groups the tail rather
+# than dropping it, but a caller stating nine bands has chosen the wrong
+# chart, and the tool says so where it can still be changed.
+MAX_STACK_SERIES = 6
 LABEL_MODES = ["auto", "none", "all", "terminal", "end"]
 VALUE_FORMATS = ["number", "percent", "currency"]
 
@@ -137,8 +144,12 @@ class BuildChartTool:
                         "category names are long (a ranked list of companies or "
                         "sectors), pie for parts of one whole, scatter for a "
                         "relationship between two measures, area for a cumulative "
-                        "total. Ask for bar and the tool switches to barh by "
-                        "itself when the labels need it."
+                        "total, stacked for what a total is made of, stacked100 "
+                        "for how a composition shifted when the total barely "
+                        "moved, waterfall for where the movement between two "
+                        "totals came from (a revenue or cost bridge). Ask for bar "
+                        "and the tool switches to barh by itself when the labels "
+                        "need it."
                     ),
                 ),
                 ToolParameter(
@@ -222,6 +233,18 @@ class BuildChartTool:
                     ),
                 ),
                 ToolParameter(
+                    name="total_indices", type="array", items={"type": "integer"},
+                    required=False,
+                    description=(
+                        "waterfall only: which bars are TOTALS sitting on the "
+                        "baseline rather than movements floating at the running "
+                        "level. Defaults to the first and last. State it when the "
+                        "bridge has a subtotal in the middle - guessing totals "
+                        "from the numbers draws a real subtotal floating, and a "
+                        "reader has no way to see that happened."
+                    ),
+                ),
+                ToolParameter(
                     name="unit_line", type="string", required=False,
                     description=(
                         "The unit, as a second line under the title - \"thousands\", "
@@ -255,6 +278,7 @@ class BuildChartTool:
         title: str = "",
         unit_line: str = "",
         label_mode: str = "",
+        total_indices=None,
     ) -> ToolResult:
         start = time.time()
         categories = [str(c) for c in _as_list(categories)]
@@ -273,6 +297,17 @@ class BuildChartTool:
                 'series is empty. Give at least one {"name": ..., "values": [...]}.',
                 start,
             )
+        chart_type = (chart_type or "bar").lower()
+        if chart_type in ("stacked", "stacked100") and len(raw_series) > MAX_STACK_SERIES:
+            # Ahead of the generic series cap, because this message names the
+            # fix - and it is the one the renderer applies for itself if the
+            # chart gets that far.
+            return cls._error(
+                f"{len(raw_series)} bands is more than a stack can show "
+                f"(max {MAX_STACK_SERIES}) - the middle segments come out thinner "
+                "than their own labels. Group the smallest into an 'Other' series.",
+                start,
+            )
         if len(raw_series) > MAX_SERIES:
             return cls._error(
                 f"{len(raw_series)} series is more than a slide-sized chart can "
@@ -280,7 +315,6 @@ class BuildChartTool:
                 start,
             )
 
-        chart_type = (chart_type or "bar").lower()
         if chart_type not in CHART_TYPES:
             return cls._error(
                 f"chart_type {chart_type!r} is not supported. Use one of: "
@@ -291,6 +325,20 @@ class BuildChartTool:
             return cls._error(
                 "A pie shows parts of ONE whole, so it takes exactly one series. "
                 "Use a bar chart to compare several series across categories.",
+                start,
+            )
+        if chart_type == "waterfall" and len(raw_series) > 1:
+            return cls._error(
+                "A waterfall bridges ONE running total, so it takes exactly one "
+                "series: the opening total, each movement as a signed number, "
+                "and the closing total. Use a stacked chart to show several "
+                "measures at once.",
+                start,
+            )
+        if chart_type in ("stacked", "stacked100") and len(raw_series) < 2:
+            return cls._error(
+                f"A {chart_type} chart shows what a total is MADE OF, so it needs "
+                "at least two series to stack. With one, use a plain bar chart.",
                 start,
             )
 
@@ -376,6 +424,27 @@ class BuildChartTool:
             return cls._error(
                 "The pie's values sum to zero, so there are no shares to draw.", start
             )
+        if chart_type == "stacked100":
+            empty = [
+                categories[i] for i in range(len(categories))
+                if sum(s["values"][i] for s in clean_series) <= 0
+            ]
+            if empty:
+                return cls._error(
+                    f"The values for {', '.join(repr(c) for c in empty)} sum to "
+                    "zero, so there is no composition to show for them. A "
+                    "100%-stacked bar with nothing in it reads as 'this category "
+                    "is zero' rather than 'we have no breakdown' - drop those "
+                    "categories.",
+                    start,
+                )
+        if chart_type == "waterfall" and len(categories) < 3:
+            return cls._error(
+                "A waterfall needs at least three bars: an opening total, at "
+                "least one movement, and a closing total. With fewer, the "
+                "comparison is two numbers and reads better as text.",
+                start,
+            )
 
         chart_type, orientation_note = _orient(chart_type, categories)
 
@@ -396,6 +465,12 @@ class BuildChartTool:
             chart["unitLine"] = unit_line.strip()
         if (label_mode or "").lower() in LABEL_MODES:
             chart["labelMode"] = label_mode.lower()
+        if chart_type == "waterfall":
+            marked = [int(i) for i in _as_list(total_indices)
+                      if str(i).lstrip("-").isdigit()]
+            marked = [i for i in marked if 0 <= i < len(categories)]
+            if marked:
+                chart["totalIndices"] = sorted(set(marked))
 
         if any(s.get("forecastFrom") is not None or s.get("measured")
                for s in clean_series):
