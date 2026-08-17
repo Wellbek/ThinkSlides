@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
-import { useChatStore, type GeneratedFile } from "@/stores/chat-store";
+import { useMemo, useState, type ReactNode } from "react";
+import { useChatStore } from "@/stores/chat-store";
 import { collectPreviewSlides } from "@/lib/slides";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
-import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download, ExternalLink } from "lucide-react";
+import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download, ExternalLink, ChevronDown } from "lucide-react";
 
 export function DetailsPanel() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -19,7 +19,8 @@ export function DetailsPanel() {
     : null;
 
   const slides = useMemo(() => collectPreviewSlides(activeMessages), [activeMessages]);
-  const sources = useMemo(() => collectSources(activeMessages, activeFiles), [activeMessages, activeFiles]);
+  const documents = useMemo(() => collectDocuments(activeMessages), [activeMessages]);
+  const webSources = useMemo(() => collectWebSources(activeMessages), [activeMessages]);
   const generatedFiles = useMemo(
     () => activeFiles.map((f) => ({ ...f, downloadUrl: buildDownloadUrl(f.file_url) })),
     [activeFiles]
@@ -58,38 +59,6 @@ export function DetailsPanel() {
       </div>
 
       <div className="ws-divider" />
-      <div className="ws-sect-label">Sources</div>
-      <div className="ws-sources">
-        {sources.length === 0 && <div className="ws-empty-note">No sources attached yet.</div>}
-        {sources.map((src) => {
-          const inner = (
-            <>
-              <div className={`s-ic ${src.kind}`}>
-                {src.kind === "xlsx" && <FileSpreadsheet size={14} />}
-                {src.kind === "pptx" && <Presentation size={14} />}
-                {src.kind === "web" && <Globe size={14} />}
-              </div>
-              <div className="s-body">
-                <div className="s-name">{src.name}</div>
-                <div className="s-meta">{src.meta}</div>
-              </div>
-              {src.url
-                ? <span className="s-tag"><ExternalLink size={13} /></span>
-                : <span className="s-tag">used</span>}
-            </>
-          );
-          return src.url ? (
-            <a className="ws-src" key={src.key} href={src.url} target="_blank" rel="noopener noreferrer" title={src.url}>
-              {inner}
-            </a>
-          ) : (
-            <div className="ws-src" key={src.key} title={src.name}>{inner}</div>
-          );
-        })}
-        <div className="ws-src-add"><Plus size={13} /> Attach doc or data</div>
-      </div>
-
-      <div className="ws-divider" />
       <div className="ws-sect-label">Slide Outline</div>
       <div className="ws-outline">
         {slides.length === 0 && <div className="ws-empty-note">Slides will appear here as they are generated.</div>}
@@ -102,35 +71,72 @@ export function DetailsPanel() {
         ))}
       </div>
 
-      {generatedFiles.length > 0 && (
-        <>
-          <div className="ws-divider" />
-          <div className="ws-sect-label">Downloads</div>
-          <div className="ws-sources">
-            {generatedFiles.map((f) => (
-              <a className="ws-src ws-src-dl" key={f.id} href={f.downloadUrl} download title={`Download ${f.filename}`}>
-                <div className="s-ic pptx"><Presentation size={14} /></div>
-                <div className="s-body">
-                  <div className="s-name">{f.filename}</div>
-                  <div className="s-meta">
-                    {f.slide_count ? `${f.slide_count} slides` : "PPTX"}
-                    {f.file_size ? ` - ${formatFileSize(f.file_size)}` : ""}
-                  </div>
+      <div className="ws-divider" />
+      <CollapsibleSection title="Output">
+        <div className="ws-sources">
+          {generatedFiles.length === 0 && <div className="ws-empty-note">Generated files will appear here.</div>}
+          {generatedFiles.map((f) => (
+            <a className="ws-src ws-src-dl" key={f.id} href={f.downloadUrl} download title={`Download ${f.filename}`}>
+              <div className="s-ic pptx"><Presentation size={14} /></div>
+              <div className="s-body">
+                <div className="s-name">{f.filename}</div>
+                <div className="s-meta">
+                  {f.slide_count ? `${f.slide_count} slides` : "PPTX"}
+                  {f.file_size ? ` - ${formatFileSize(f.file_size)}` : ""}
                 </div>
-                <span className="s-tag"><Download size={13} /></span>
-              </a>
-            ))}
-          </div>
-        </>
-      )}
+              </div>
+              <span className="s-tag"><Download size={13} /></span>
+            </a>
+          ))}
+        </div>
+      </CollapsibleSection>
+
+      <div className="ws-divider" />
+      <CollapsibleSection title="Documents">
+        <div className="ws-sources">
+          {documents.length === 0 && <div className="ws-empty-note">No documents attached yet.</div>}
+          {documents.map((doc) => (
+            <div className="ws-src" key={doc.key} title={doc.name}>
+              <div className={`s-ic ${doc.kind}`}>
+                {doc.kind === "xlsx" && <FileSpreadsheet size={14} />}
+                {doc.kind === "pptx" && <Presentation size={14} />}
+              </div>
+              <div className="s-body">
+                <div className="s-name">{doc.name}</div>
+                <div className="s-meta">{doc.meta}</div>
+              </div>
+              <span className="s-tag">used</span>
+            </div>
+          ))}
+          <div className="ws-src-add"><Plus size={13} /> Attach doc or data</div>
+        </div>
+      </CollapsibleSection>
+
+      <div className="ws-divider" />
+      <CollapsibleSection title="Web Sources">
+        <div className="ws-sources">
+          {webSources.length === 0 && <div className="ws-empty-note">No web sources cited yet.</div>}
+          {webSources.map((src) => (
+            <a className="ws-src" key={src.key} href={src.url} target="_blank" rel="noopener noreferrer" title={src.url}>
+              <WebSourceIcon url={src.url} />
+              <div className="s-body">
+                <div className="s-name">{src.name}</div>
+                <div className="s-meta">{src.meta}</div>
+              </div>
+              <span className="s-tag"><ExternalLink size={13} /></span>
+            </a>
+          ))}
+        </div>
+      </CollapsibleSection>
     </div>
   );
 }
 
-interface SourceRow { key: string; name: string; meta: string; kind: "xlsx" | "pptx" | "web"; url?: string }
+interface DocumentRow { key: string; name: string; meta: string; kind: "xlsx" | "pptx" }
+interface WebSourceRow { key: string; name: string; meta: string; url: string }
 
-function collectSources(messages: any[], files: GeneratedFile[]): SourceRow[] {
-  const rows: SourceRow[] = [];
+function collectDocuments(messages: any[]): DocumentRow[] {
+  const rows: DocumentRow[] = [];
   const seen = new Set<string>();
 
   // Attached files from user messages
@@ -142,17 +148,13 @@ function collectSources(messages: any[], files: GeneratedFile[]): SourceRow[] {
       rows.push({ key: `att-${name}`, name, meta: "attachment", kind: extKind(name) });
     }
   }
-  // Generated files
-  for (const f of files) {
-    if (seen.has(f.filename)) continue;
-    seen.add(f.filename);
-    rows.push({
-      key: `file-${f.id}`,
-      name: f.filename,
-      meta: f.slide_count ? `${f.slide_count} slides` : "generated",
-      kind: extKind(f.filename),
-    });
-  }
+  return rows;
+}
+
+function collectWebSources(messages: any[]): WebSourceRow[] {
+  const rows: WebSourceRow[] = [];
+  const seen = new Set<string>();
+
   // Cited web sources - the structured `sources` array the agent loop
   // attaches to web_search tool_result events (title + url). Aggregated
   // across the whole session and de-duplicated by URL. Replaces the old
@@ -166,16 +168,32 @@ function collectSources(messages: any[], files: GeneratedFile[]): SourceRow[] {
         seen.add(s.url);
         let host = s.url;
         try { host = new URL(s.url).hostname.replace(/^www\./, ""); } catch { /* keep raw */ }
-        rows.push({ key: `web-${s.url}`, name: s.title || host, meta: host, kind: "web", url: s.url });
+        rows.push({ key: `web-${s.url}`, name: s.title || host, meta: host, url: s.url });
       }
     }
   }
   return rows;
 }
 
-function extKind(name: string): "xlsx" | "pptx" | "web" {
+function extKind(name: string): "xlsx" | "pptx" {
   const n = name.toLowerCase();
   if (n.endsWith(".xlsx") || n.endsWith(".xls") || n.endsWith(".csv")) return "xlsx";
-  if (n.endsWith(".pptx") || n.endsWith(".ppt")) return "pptx";
   return "pptx";
+}
+
+function CollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <>
+      <div className="ws-sect-label">{title}</div>
+      {children}
+    </>
+  );
+}
+
+function WebSourceIcon({ url }: { url: string }) {
+  return (
+    <div className="s-ic web">
+      <Globe size={14} />
+    </div>
+  );
 }
