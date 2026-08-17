@@ -72,7 +72,7 @@ export function DetailsPanel() {
       </div>
 
       <div className="ws-divider" />
-      <CollapsibleSection title="Output">
+      <CollapsibleSection title="Output" count={generatedFiles.length}>
         <div className="ws-sources">
           {generatedFiles.length === 0 && <div className="ws-empty-note">Generated files will appear here.</div>}
           {generatedFiles.map((f) => (
@@ -92,7 +92,7 @@ export function DetailsPanel() {
       </CollapsibleSection>
 
       <div className="ws-divider" />
-      <CollapsibleSection title="Documents">
+      <CollapsibleSection title="Documents" count={documents.length}>
         <div className="ws-sources">
           {documents.length === 0 && <div className="ws-empty-note">No documents attached yet.</div>}
           {documents.map((doc) => (
@@ -113,7 +113,7 @@ export function DetailsPanel() {
       </CollapsibleSection>
 
       <div className="ws-divider" />
-      <CollapsibleSection title="Web Sources">
+      <CollapsibleSection title="Web Sources" count={webSources.length}>
         <div className="ws-sources">
           {webSources.length === 0 && <div className="ws-empty-note">No web sources cited yet.</div>}
           {webSources.map((src) => (
@@ -181,11 +181,26 @@ function extKind(name: string): "xlsx" | "pptx" {
   return "pptx";
 }
 
-function CollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
+function CollapsibleSection({
+  title,
+  count,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  count: number;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <>
-      <div className="ws-sect-label">{title}</div>
-      {children}
+      <button type="button" className="ws-sect-toggle" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <span className="ws-sect-label">{title}</span>
+        <span className="ws-sect-count">{count}</span>
+        <ChevronDown size={13} className={`ws-sect-chev ${open ? "open" : ""}`} />
+      </button>
+      {open && children}
     </>
   );
 }
