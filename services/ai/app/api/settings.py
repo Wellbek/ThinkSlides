@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import ai_settings
 from app.agent.tools.search_backends import run_search
 from app.api.tenancy import resolve_org_id
+from app.connections.catalog import catalog_payload as connections_catalog_payload
 from app.db.session import get_db
 from app.llm.catalog import (
     PROVIDER_IDS,
@@ -181,8 +182,13 @@ def describe_provider_error(exc: Exception) -> str:
 
 @router.get("/catalog")
 async def get_catalog() -> dict:
-    """Selectable providers and deep-search backends, for the Settings UI."""
-    return catalog_payload()
+    """Everything selectable, for the Settings and Connections UI.
+
+    One endpoint rather than two. The two catalogues are separate modules
+    because they describe different things, but they are one fetch because a
+    user configuring a workspace does not care which module a choice came from.
+    """
+    return {**catalog_payload(), **connections_catalog_payload()}
 
 
 @router.get("/ai")
