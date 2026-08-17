@@ -36,7 +36,16 @@ async def _grid(**kwargs):
 
 class TestItIsRegistered:
     def test_the_renderer_knows_the_shape(self):
-        assert "smallMultiples" in SUPPORTED_CHART_TYPES
+        """
+        Asserted through resolve_chart_type, not against the set. Membership
+        was true while the name was registered in camelCase and the renderer
+        lowercased what it was given, so every grid silently drew a grouped
+        bar chart - see test_chart_defects.
+        """
+        from app.renderer.chart_renderer import resolve_chart_type
+
+        assert resolve_chart_type("smallMultiples") == ("smallmultiples", True)
+        assert "smallmultiples" in SUPPORTED_CHART_TYPES
 
     def test_the_tool_is_one_of_the_visual_builders(self):
         assert "build_chart_grid" in BUILD_VISUAL_TOOLS
@@ -144,8 +153,12 @@ class TestTheTool:
 
         assert result.success
         chart = result.data["content"]["chart"]
-        assert chart["chartType"] == "smallMultiples"
         assert len(chart["series"]) == 4
+        # The block the tool emits has to be one the renderer resolves, which
+        # is the thing that was broken.
+        from app.renderer.chart_renderer import resolve_chart_type
+
+        assert resolve_chart_type(chart["chartType"]) == ("smallmultiples", True)
 
     @pytest.mark.asyncio
     async def test_it_binds_to_a_region_like_any_other_exhibit(self):
