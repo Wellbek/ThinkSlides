@@ -127,6 +127,33 @@ LEGEND_WIDTH_FRACTION = 0.30
 # Beyond this many points per series, per-point data labels collide into an
 # unreadable smear - the chart is better read off the axis.
 MAX_LABELLED_POINTS = 8
+
+# ── Furniture against the size the chart is actually drawn at ──────────
+#
+# A four-exhibit page can be entirely correct and completely unreadable. The
+# type already scales with the plot's area, which keeps the *proportion* right,
+# and that is exactly the problem: a full page's worth of labels, legend, ticks
+# and title, all correctly proportioned into a quarter of a page, is a smear.
+#
+# So furniture is dropped by size rather than shrunk. Same reasoning as
+# MAX_LABELLED_POINTS, applied to the chart's rendered dimensions instead of its
+# data count: past a threshold the thing stops carrying information and starts
+# occluding it, so it goes.
+#
+# Areas in square inches. A deck-width exhibit is around 40; a half is 18; a
+# quarter of a composed page is 6 or less.
+SMALL_CHART_AREA_IN2 = 14.0
+TINY_CHART_AREA_IN2 = 7.0
+
+# What a small chart may still label. A quarter-page line with eight labels on
+# it is eight overlapping numbers.
+SMALL_LABELLED_POINTS = 4
+TINY_LABELLED_POINTS = 2
+
+# Ticks at a small size. Six category labels across three inches is six labels
+# on top of each other.
+SMALL_MAX_TICKS = 5
+TINY_MAX_TICKS = 3
 # A pie with more slices than this is unreadable; the tail is grouped.
 MAX_PIE_SLICES = 7
 
@@ -332,6 +359,26 @@ def render_chart_to_png(
     # half-height chart does not render with type twice as large relative to
     # its own axes as a full-height one.
     base_pt = max(8.0, min(13.0, 3.6 * math.sqrt(width_in * height_in / 6.0) + 6.0))
+
+    # And the furniture is thinned against the same size. Correctly proportioned
+    # is not the same as legible: a full page's worth of labels, legend, ticks
+    # and title scaled into a quarter page is a smear, so past a threshold they
+    # are dropped rather than shrunk.
+    style = _thin_furniture(style, width_in, height_in, chart_data)
+    # The two caps that are read deep inside the drawing code travel on the
+    # chart dict rather than through eight call signatures. Underscored because
+    # they are the renderer talking to itself about this one render - nothing
+    # authors them and nothing outside this module reads them.
+    chart_data = {
+        **chart_data,
+        "_maxLabelledPoints": max_labelled_points(width_in, height_in),
+        "_maxTicks": max_ticks(width_in, height_in),
+    }
+    if _is_small(width_in, height_in) and not chart_data.get("keepTitle"):
+        # A title inside a small exhibit is a line of type competing with the
+        # data for the room. On a composed page the region's own label, or the
+        # slide's, is already saying what this is.
+        chart_data = {**chart_data, "title": ""}
 
     if chart_type == "smallmultiples":
         return _render_small_multiples(
@@ -581,6 +628,73 @@ def _bar_geometry(style, n_series: int, index: int, x: list) -> tuple[float, lis
     bar_width = span / n_series * (1.0 - gap)
     start = -span / 2 + bar_width / 2 + index * (span / n_series)
     return bar_width, [xi + start for xi in x]
+
+
+def _tick_stride(count: int, cap: object) -> int:
+    """Label every nth category, so no more than ``cap`` labels are drawn."""
+    limit = int(cap) if isinstance(cap, int) and cap > 0 else 0
+    if not limit or count <= limit:
+        return 1
+    return -(-count // limit)
+
+
+def _is_small(width_in: float, height_in: float) -> bool:
+    return width_in * height_in <= SMALL_CHART_AREA_IN2
+
+
+def _is_tiny(width_in: float, height_in: float) -> bool:
+    return width_in * height_in <= TINY_CHART_AREA_IN2
+
+
+def max_labelled_points(width_in: float, height_in: float) -> int:
+    """How many points this chart may label, at the size it is drawn."""
+    if _is_tiny(width_in, height_in):
+        return TINY_LABELLED_POINTS
+    if _is_small(width_in, height_in):
+        return SMALL_LABELLED_POINTS
+    return MAX_LABELLED_POINTS
+
+
+def max_ticks(width_in: float, height_in: float) -> int | None:
+    """How many category ticks fit, or None for "as many as there are"."""
+    if _is_tiny(width_in, height_in):
+        return TINY_MAX_TICKS
+    if _is_small(width_in, height_in):
+        return SMALL_MAX_TICKS
+    return None
+
+
+def _thin_furniture(style, width_in: float, height_in: float,
+                    chart_data: dict):
+    """The chart style, with what will not fit taken out of it.
+
+    Dropped, not scaled. A legend at 5pt beside a two-inch plot is a legend
+    nobody reads that has taken a third of the plot to say so, and gridlines
+    under a three-inch chart are a grey wash. What survives at a small size is
+    the data, its axis, and the one or two labels that carry the finding.
+    """
+    if not _is_small(width_in, height_in):
+        return style
+
+    updates = {"show_value_gridlines": False}
+    if _is_tiny(width_in, height_in):
+        # A legend on a tiny chart is worse than no legend: the plot it leaves
+        # behind is too small to compare the series it is naming.
+        updates["legend_style"] = "none"
+        updates["show_value_axis"] = False
+    from dataclasses import replace as _replace
+
+    # An explicit override on the chart itself still wins - the deck sets the
+    # convention, one exhibit may differ, and a caller who said "keep the
+    # legend" on a small chart meant it.
+    stated = {
+        "legend_style" if "legendStyle" in chart_data else "": None,
+        "show_value_axis" if "showValueAxis" in chart_data else "": None,
+    }
+    for key in list(updates):
+        if key in stated:
+            updates.pop(key)
+    return _replace(style, **updates)
 
 
 def _legend_wanted(style, n_series: int) -> bool:
@@ -1046,8 +1160,16 @@ def _cartesian_furniture(ax, categories, chart_data, style, font, base_pt,
     category_side = "left" if horizontal else "bottom"
 
     if categories:
+        # At a small size only every nth category is labelled. Eight labels
+        # across three inches is eight labels on top of each other, and a
+        # reader who can see one in three still knows what the axis is.
+        stride = _tick_stride(len(x), chart_data.get("_maxTicks"))
+        shown = [
+            categories[i] if i < len(categories) and i % stride == 0 else ""
+            for i in range(len(x))
+        ]
         category_axis.set_ticks(x)
-        category_axis.set_ticklabels(categories, color=style.axis_color,
+        category_axis.set_ticklabels(shown, color=style.axis_color,
                                      fontname=font, fontsize=base_pt)
     ax.tick_params(colors=style.axis_color, labelsize=base_pt)
     for label in (ax.get_xticklabels() if horizontal else ax.get_yticklabels()):
@@ -1994,8 +2116,8 @@ def _draw_data_labels(
         return
 
     total_points = sum(len(s["values"]) for s in series)
-    crowded = (total_points > MAX_LABELLED_POINTS * 2
-               or len(x) > MAX_LABELLED_POINTS)
+    cap = int(chart_data.get("_maxLabelledPoints") or MAX_LABELLED_POINTS)
+    crowded = total_points > cap * 2 or len(x) > cap
     # "auto" is what the renderer always did: label everything, unless there
     # is so much of it that the labels smear into each other. A declared mode
     # overrides that, because a deck whose convention is "label the end of
