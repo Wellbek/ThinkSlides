@@ -80,6 +80,10 @@ class CredentialField:
     required: bool = True
     placeholder: str = ""
     help: str = ""
+    # A closed set of values, when there is one. Rendered as a choice rather
+    # than a text box, and checked on save - a field whose valid values are
+    # known should not accept an invalid one.
+    options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -219,6 +223,24 @@ BEARER_TOKEN_FIELD = CredentialField(
     help="Sent as 'Authorization: Bearer ...'. Leave empty for an open server.",
 )
 
+# Which phase of a run this server's tools are offered in. Declared by the
+# organisation rather than guessed from the tool names, because the server does
+# not say what it is for and the person who configured it does. See
+# ``connections/mcp_tools.py``.
+MCP_PHASES_FIELD = CredentialField(
+    name="phases",
+    label="Offer its tools during",
+    secret=False,
+    required=False,
+    options=("research", "draft"),
+    help=(
+        "Research is for sources a deck is built from. Drafting is for tools "
+        "that help write a slide. Research alone is the default, because every "
+        "extra tool in the drafting phase costs the model attention on every "
+        "single slide."
+    ),
+)
+
 
 CONNECTIONS: tuple[ConnectionSpec, ...] = (
     ConnectionSpec(
@@ -229,7 +251,7 @@ CONNECTIONS: tuple[ConnectionSpec, ...] = (
             "A remote MCP server. Its tools are discovered when a run starts "
             "and offered only in the phases that admit them."
         ),
-        fields=(MCP_URL_FIELD, BEARER_TOKEN_FIELD),
+        fields=(MCP_URL_FIELD, BEARER_TOKEN_FIELD, MCP_PHASES_FIELD),
         docs_url="https://modelcontextprotocol.io/docs/concepts/transports",
     ),
     ConnectionSpec(
@@ -389,7 +411,7 @@ def check_mcp_url(raw: str) -> tuple[bool, str]:
         return False, "That address is internal to the hosting environment."
 
     address = _as_ip(host)
-    if address is not None and not _is_public(address):
+    if address is not None and not is_public_address(address):
         return False, (
             "That address is inside the network this service runs in, which is "
             "not somewhere a connection may point."
@@ -406,7 +428,7 @@ def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
         return None
 
 
-def _is_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+def is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Whether an address is one it is reasonable to send a tenant's token to.
 
     ``is_global`` alone is not enough: it is False for the ranges that matter
@@ -437,6 +459,7 @@ def _field_payload(f: CredentialField) -> dict:
         "required": f.required,
         "placeholder": f.placeholder,
         "help": f.help,
+        "options": list(f.options),
     }
 
 

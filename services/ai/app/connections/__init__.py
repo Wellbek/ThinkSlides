@@ -11,6 +11,7 @@ from app.connections.catalog import (
     McpServerPreset,
     catalog_payload,
     check_mcp_url,
+    is_public_address,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "McpServerPreset",
     "catalog_payload",
     "check_mcp_url",
+    "is_public_address",
 ]
