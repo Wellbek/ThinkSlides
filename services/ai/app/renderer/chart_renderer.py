@@ -96,6 +96,10 @@ def resolve_chart_type(raw: object) -> tuple[str, bool]:
 # the grid has stopped being a comparison and become a contact sheet.
 MAX_PANELS = 6
 
+# How much of a zoomed waterfall sits below its lowest level, as a share of the
+# range the bars occupy. See _waterfall_frame.
+ANCHOR_ROOM = 0.55
+
 # A stack of more than this many segments is a stack nobody can read: the
 # middle bands are thinner than their own labels and the legend runs longer
 # than the chart.
@@ -1332,10 +1336,16 @@ def _waterfall_frame(levels, totals) -> tuple[float, float]:
     # A bridge whose lowest movement is already near zero should show zero:
     # zooming a build-up from nothing hides that it started at nothing.
     if 0.0 < low < span * 0.75:
-        low = 0.0
-        span = high - low
+        return -span * 0.04, high + span * 0.18
 
-    return low - span * 0.10, high + span * 0.18
+    # Room below the lowest level so the anchor columns read as anchors. With
+    # only label headroom the floor sat just under the opening total and the
+    # anchors came out as 8% stubs beside movements twice their height, which
+    # inverts what the chart is saying - the totals are the thing being
+    # bridged. This much leaves the anchors and the movements comparable, and
+    # the anchors visibly entering from the bottom edge, which is how a
+    # zoomed bridge is conventionally drawn.
+    return low - span * ANCHOR_ROOM, high + span * 0.18
 
 
 def _total_indices(chart_data: dict, n_points: int) -> set[int]:
@@ -1365,6 +1375,12 @@ def _connect_waterfall(ax, x, bottoms, heights, values, totals, width,
     Without them the bars are a row of floating rectangles and the reader has
     to reconstruct the staircase themselves, which is the one thing the chart
     was supposed to do for them.
+
+    Drawn above the gridlines. ``set_axisbelow(True)`` puts the grid at zorder
+    0.5, so a connector below that vanishes wherever its level happens to
+    coincide with a gridline - the one connector on a build-up from 40 with
+    ticks every 20 was invisible, and only that one, which reads as a missing
+    hairline rather than as an occlusion.
     """
     for index in range(len(x) - 1):
         level = (bottoms[index] + heights[index]
@@ -1372,7 +1388,7 @@ def _connect_waterfall(ax, x, bottoms, heights, values, totals, width,
         ax.plot(
             [x[index] + width / 2, x[index + 1] - width / 2], [level, level],
             color=style.axis_color, linewidth=0.8, linestyle=(0, (3, 3)),
-            zorder=0,
+            zorder=0.9,
         )
 
 

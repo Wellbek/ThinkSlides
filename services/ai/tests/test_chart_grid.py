@@ -168,8 +168,8 @@ class TestTheTool:
         assert result.data["content"]["slot"] == "regions"
 
     @pytest.mark.asyncio
-    async def test_a_grid_of_one_is_a_chart(self):
-        result = await _grid(panels=REGIONS[:1])
+    async def test_a_grid_below_the_minimum_is_a_chart(self):
+        result = await _grid(panels=REGIONS[:MIN_PANELS - 1])
 
         assert not result.success
         assert "build_chart" in result.error
