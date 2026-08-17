@@ -37,7 +37,34 @@ from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-CHART_TYPES = ["bar", "line", "pie", "scatter", "area"]
+CHART_TYPES = ["bar", "barh", "line", "pie", "donut", "scatter", "area",
+               "stacked", "stacked100", "waterfall",
+               "slope", "dumbbell", "bullet", "heatmap", "combo"]
+
+# A slope chart compares moments, and two is the pair a reader can follow.
+# Past four the lines cross so often that the reordering - the whole content -
+# is unreadable, and the chart wanted to be a line chart.
+MAX_SLOPE_POINTS = 4
+# A heatmap's cells have to be big enough to hold their own figure.
+MAX_HEATMAP_ROWS = 10
+MAX_HEATMAP_COLUMNS = 12
+# Past this many panels nothing in any of them is legible at slide size, and
+# the grid has stopped being a comparison and become a contact sheet.
+MAX_PANELS = 6
+MIN_PANELS = 2
+PANEL_TYPES = ["line", "bar", "area"]
+
+# Past roughly this, a category label cannot be printed under a vertical bar
+# without being rotated or truncated, and both read badly on a slide. The
+# figure is the label length the axis can carry at slide size, divided among
+# the categories - so six long names trip it and twelve short ones do not.
+HORIZONTAL_LABEL_BUDGET = 90
+
+# A stack of more than this many bands cannot be read: the middle segments
+# are thinner than their own labels. The renderer groups the tail rather
+# than dropping it, but a caller stating nine bands has chosen the wrong
+# chart, and the tool says so where it can still be changed.
+MAX_STACK_SERIES = 6
 LABEL_MODES = ["auto", "none", "all", "terminal", "end"]
 VALUE_FORMATS = ["number", "percent", "currency"]
 
@@ -76,6 +103,36 @@ def _as_list(value) -> list:
     return []
 
 
+def _orient(chart_type: str, categories: list[str]) -> tuple[str, str]:
+    """
+    Turn a bar chart on its side when its labels need the room.
+
+    "Enterprise software and services" under a vertical bar is either rotated
+    forty-five degrees or truncated, and both read badly on a slide. Which of
+    the two happens is a matplotlib detail; that the chart is worse either way
+    is not.
+
+    Decided here rather than asked of the model, for the same reason the rest
+    of this module validates rather than trusts: label geometry is arithmetic,
+    and a tool that already normalises its input should not make the caller
+    reason about pixel widths. A caller that explicitly asked for barh, or for
+    anything that is not a bar, is left alone.
+    """
+    if chart_type != "bar" or not categories:
+        return chart_type, ""
+
+    total = sum(len(str(c)) for c in categories)
+    if total <= HORIZONTAL_LABEL_BUDGET:
+        return chart_type, ""
+
+    longest = max(categories, key=lambda c: len(str(c)))
+    return "barh", (
+        f". Drawn as horizontal bars: the category labels total {total} "
+        f"characters (longest {str(longest)!r}), which will not print under "
+        "vertical bars without being rotated or truncated"
+    )
+
+
 class BuildChartTool:
     """Validate and normalise a chart before it reaches a slide."""
 
@@ -103,8 +160,22 @@ class BuildChartTool:
                     name="chart_type", type="string", enum=CHART_TYPES,
                     description=(
                         "line for change over time, bar for comparison across "
-                        "categories, pie for parts of one whole, scatter for a "
-                        "relationship between two measures, area for a cumulative total"
+                        "categories, barh for the same comparison when the "
+                        "category names are long (a ranked list of companies or "
+                        "sectors), pie for parts of one whole, scatter for a "
+                        "relationship between two measures, area for a cumulative "
+                        "total, stacked for what a total is made of, stacked100 "
+                        "for how a composition shifted when the total barely "
+                        "moved, waterfall for where the movement between two "
+                        "totals came from (a revenue or cost bridge), slope for "
+                        "who moved up and who moved down between two dates, "
+                        "dumbbell for the size of the gap between two states, "
+                        "bullet for whether a measure is hitting its target, "
+                        "heatmap for the hot spots in a dense matrix, combo for a "
+                        "volume and a rate that only mean something together, "
+                        "donut for parts of one whole with the total in the "
+                        "middle. Ask for bar and the tool switches to barh by "
+                        "itself when the labels need it."
                     ),
                 ),
                 ToolParameter(
@@ -188,6 +259,43 @@ class BuildChartTool:
                     ),
                 ),
                 ToolParameter(
+                    name="total_indices", type="array", items={"type": "integer"},
+                    required=False,
+                    description=(
+                        "waterfall only: which bars are TOTALS sitting on the "
+                        "baseline rather than movements floating at the running "
+                        "level. Defaults to the first and last. State it when the "
+                        "bridge has a subtotal in the middle - guessing totals "
+                        "from the numbers draws a real subtotal floating, and a "
+                        "reader has no way to see that happened."
+                    ),
+                ),
+                ToolParameter(
+                    name="targets", type="array", items={"type": "number"},
+                    required=False,
+                    description=(
+                        "bullet only: the target for each measure, one per "
+                        "category. A measure with no target still draws - a bar "
+                        "with no rule across it, which is honest - so give null "
+                        "where there genuinely is none rather than inventing one."
+                    ),
+                ),
+                ToolParameter(
+                    name="secondary_axis_series", type="array",
+                    items={"type": "string"}, required=False,
+                    description=(
+                        "combo only: the NAMES of the series belonging on the "
+                        "right-hand axis, drawn as lines. State it rather than "
+                        "leaving it to be guessed from magnitudes - guessing "
+                        "works until a rate happens to be larger than a volume, "
+                        "and the chart is then wrong in a way that looks fine."
+                    ),
+                ),
+                ToolParameter(
+                    name="secondary_axis_title", type="string", required=False,
+                    description="combo only: what the right-hand axis measures, with its unit",
+                ),
+                ToolParameter(
                     name="unit_line", type="string", required=False,
                     description=(
                         "The unit, as a second line under the title - \"thousands\", "
@@ -223,6 +331,10 @@ class BuildChartTool:
         title: str = "",
         unit_line: str = "",
         label_mode: str = "",
+        total_indices=None,
+        targets=None,
+        secondary_axis_series=None,
+        secondary_axis_title: str = "",
         region_id: str = "",
         slot: str = "",
     ) -> ToolResult:
@@ -243,24 +355,88 @@ class BuildChartTool:
                 'series is empty. Give at least one {"name": ..., "values": [...]}.',
                 start,
             )
-        if len(raw_series) > MAX_SERIES:
+        chart_type = (chart_type or "bar").lower()
+        if chart_type in ("stacked", "stacked100") and len(raw_series) > MAX_STACK_SERIES:
+            # Ahead of the generic series cap, because this message names the
+            # fix - and it is the one the renderer applies for itself if the
+            # chart gets that far.
+            return cls._error(
+                f"{len(raw_series)} bands is more than a stack can show "
+                f"(max {MAX_STACK_SERIES}) - the middle segments come out thinner "
+                "than their own labels. Group the smallest into an 'Other' series.",
+                start,
+            )
+        if chart_type != "heatmap" and len(raw_series) > MAX_SERIES:
+            # A heatmap's "series" are matrix rows, not overlaid lines a reader
+            # has to tell apart by colour, so the legibility limit is a
+            # different one - see MAX_HEATMAP_ROWS above.
             return cls._error(
                 f"{len(raw_series)} series is more than a slide-sized chart can "
                 f"distinguish (max {MAX_SERIES}).",
                 start,
             )
 
-        chart_type = (chart_type or "bar").lower()
         if chart_type not in CHART_TYPES:
             return cls._error(
                 f"chart_type {chart_type!r} is not supported. Use one of: "
                 f"{', '.join(CHART_TYPES)}.",
                 start,
             )
-        if chart_type == "pie" and len(raw_series) > 1:
+        if chart_type in ("pie", "donut") and len(raw_series) > 1:
             return cls._error(
-                "A pie shows parts of ONE whole, so it takes exactly one series. "
-                "Use a bar chart to compare several series across categories.",
+                f"A {chart_type} shows parts of ONE whole, so it takes exactly "
+                "one series. Use a bar chart to compare several series across "
+                "categories, or stacked100 to compare compositions.",
+                start,
+            )
+        if chart_type == "dumbbell" and len(raw_series) != 2:
+            return cls._error(
+                f"A dumbbell shows the gap between TWO states, so it takes "
+                f"exactly two series (got {len(raw_series)}) - plan and actual, "
+                "us and the peer group, this year and last.",
+                start,
+            )
+        if chart_type == "combo" and len(raw_series) < 2:
+            return cls._error(
+                "A combo chart pairs a volume with a rate on a second axis, so "
+                "it needs at least two series. With one, use a bar or line chart.",
+                start,
+            )
+        if chart_type == "slope" and not 2 <= len(categories) <= MAX_SLOPE_POINTS:
+            return cls._error(
+                f"A slope chart compares {len(categories)} moments; it wants 2 to "
+                f"{MAX_SLOPE_POINTS}. Two is the pair a reader can follow, and "
+                "past four the lines cross so often that the reordering - the "
+                "whole point of the chart - is unreadable. Use a line chart for a "
+                "longer series.",
+                start,
+            )
+        if chart_type == "heatmap":
+            if len(raw_series) > MAX_HEATMAP_ROWS:
+                return cls._error(
+                    f"{len(raw_series)} rows is more than a heatmap can show at "
+                    f"slide size (max {MAX_HEATMAP_ROWS}) - the cells come out "
+                    "smaller than the figures in them.",
+                    start,
+                )
+            if len(categories) > MAX_HEATMAP_COLUMNS:
+                return cls._error(
+                    f"{len(categories)} columns is more than a heatmap can show "
+                    f"at slide size (max {MAX_HEATMAP_COLUMNS}).",
+                    start,
+                )
+        if chart_type == "waterfall" and len(raw_series) > 1:
+            return cls._error(
+                "A waterfall bridges ONE running total, so it takes exactly one "
+                "series: the opening total, each movement as a signed number, "
+                "and the closing total. Use a stacked chart to show several "
+                "measures at once.",
+                start,
+            )
+        if chart_type in ("stacked", "stacked100") and len(raw_series) < 2:
+            return cls._error(
+                f"A {chart_type} chart shows what a total is MADE OF, so it needs "
+                "at least two series to stack. With one, use a plain bar chart.",
                 start,
             )
 
@@ -346,6 +522,29 @@ class BuildChartTool:
             return cls._error(
                 "The pie's values sum to zero, so there are no shares to draw.", start
             )
+        if chart_type == "stacked100":
+            empty = [
+                categories[i] for i in range(len(categories))
+                if sum(s["values"][i] for s in clean_series) <= 0
+            ]
+            if empty:
+                return cls._error(
+                    f"The values for {', '.join(repr(c) for c in empty)} sum to "
+                    "zero, so there is no composition to show for them. A "
+                    "100%-stacked bar with nothing in it reads as 'this category "
+                    "is zero' rather than 'we have no breakdown' - drop those "
+                    "categories.",
+                    start,
+                )
+        if chart_type == "waterfall" and len(categories) < 3:
+            return cls._error(
+                "A waterfall needs at least three bars: an opening total, at "
+                "least one movement, and a closing total. With fewer, the "
+                "comparison is two numbers and reads better as text.",
+                start,
+            )
+
+        chart_type, orientation_note = _orient(chart_type, categories)
 
         chart: dict = {
             "chartType": chart_type,
@@ -364,6 +563,32 @@ class BuildChartTool:
             chart["unitLine"] = unit_line.strip()
         if (label_mode or "").lower() in LABEL_MODES:
             chart["labelMode"] = label_mode.lower()
+        if chart_type == "bullet":
+            cleaned = [_as_number(v) for v in _as_list(targets)]
+            if any(v is not None for v in cleaned):
+                chart["targets"] = cleaned[:len(categories)]
+        if chart_type == "combo":
+            named = [str(n).strip() for n in _as_list(secondary_axis_series)
+                     if str(n or "").strip()]
+            known = {s["name"] for s in clean_series}
+            unknown = [n for n in named if n not in known]
+            if unknown:
+                return cls._error(
+                    f"secondary_axis_series names {unknown[0]!r}, which is not "
+                    f"one of this chart's series ({', '.join(sorted(known))}). "
+                    "Name them exactly as you gave them.",
+                    start,
+                )
+            if named:
+                chart["secondaryAxisSeries"] = named
+            if secondary_axis_title.strip():
+                chart["secondaryAxisTitle"] = secondary_axis_title.strip()
+        if chart_type == "waterfall":
+            marked = [int(i) for i in _as_list(total_indices)
+                      if str(i).lstrip("-").isdigit()]
+            marked = [i for i in marked if 0 <= i < len(categories)]
+            if marked:
+                chart["totalIndices"] = sorted(set(marked))
 
         if any(s.get("forecastFrom") is not None or s.get("measured")
                for s in clean_series):
@@ -382,7 +607,7 @@ class BuildChartTool:
                 "summary": (
                     f"{chart_type} chart with {len(clean_series)} series over "
                     f"{len(categories)} categories, attached to slide "
-                    f"{slide_index + 1}"
+                    f"{slide_index + 1}{orientation_note}"
                 ),
             },
             duration_ms=int((time.time() - start) * 1000),
@@ -650,4 +875,200 @@ class BuildKeyMetricsTool:
         )
 
 
-BUILD_VISUAL_TOOLS = ("build_chart", "build_table", "build_key_metrics")
+class BuildChartGridTool:
+    """Small multiples: the same shape per segment, on one shared scale."""
+
+    @classmethod
+    def register(cls, registry: ToolRegistry) -> None:
+        registry.register_tool(
+            name="build_chart_grid",
+            description=(
+                "Build a grid of small charts for one slide - the same shape "
+                "repeated once per segment, all on ONE shared scale. Use this to "
+                "answer a question no single chart can: does this pattern hold "
+                "everywhere, or is one segment carrying it? Four regional trends "
+                "overlaid on one axes is a tangle; the same four as a row of "
+                "panels is readable at a glance. Every panel is scaled "
+                "identically, which is not optional - independently scaled panels "
+                "look alike and are not comparable, and the one with the smallest "
+                "numbers gets the steepest-looking line."
+            ),
+            fn=cls.run,
+            parameters=[
+                ToolParameter(
+                    name="slide_index", type="integer",
+                    description="0-based index of the slide this grid belongs to",
+                ),
+                ToolParameter(
+                    name="categories", type="array", items={"type": "string"},
+                    description=(
+                        "The x-axis labels, shared by every panel - that sharing "
+                        'is what makes the panels comparable, e.g. ["Q1", "Q2"]'
+                    ),
+                ),
+                ToolParameter(
+                    name="panels", type="array",
+                    items={
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": (
+                                    "What this panel is - the segment, region or "
+                                    'cohort, e.g. "Americas"'
+                                ),
+                            },
+                            "values": {
+                                "type": "array", "items": {"type": "number"},
+                                "description": (
+                                    "One plain number per category, in the same "
+                                    "order. No units inside the numbers."
+                                ),
+                            },
+                        },
+                        "required": ["name", "values"],
+                    },
+                    description=(
+                        f"{MIN_PANELS}-{MAX_PANELS} panels. One is not a "
+                        "comparison; past six nothing in any panel is legible."
+                    ),
+                ),
+                ToolParameter(
+                    name="panel_type", type="string", enum=PANEL_TYPES,
+                    required=False,
+                    description=(
+                        "The shape each panel takes: line for a trajectory "
+                        "(default), bar for a comparison, area for a cumulative "
+                        "total"
+                    ),
+                ),
+                ToolParameter(
+                    name="value_label", type="string", required=False,
+                    description=(
+                        "What every panel measures, with its unit. Stated once "
+                        "for the grid, because it is the same in all of them."
+                    ),
+                ),
+                ToolParameter(
+                    name="title", type="string", required=False,
+                    description=(
+                        "A title for the grid. Omit it when the slide's own "
+                        "heading already says the same thing."
+                    ),
+                ),
+                ToolParameter(
+                    name="unit_line", type="string", required=False,
+                    description='The unit, as a second line under the title - "$ billion"',
+                ),
+                region_param(),
+                slot_param('"regions" and "cohorts" on one page'),
+            ],
+        )
+
+    @classmethod
+    async def run(cls, slide_index: int, categories, panels,
+                  panel_type: str = "line", value_label: str = "",
+                  title: str = "", unit_line: str = "",
+                  region_id: str = "", slot: str = "") -> ToolResult:
+        start = time.time()
+        categories = [str(c) for c in _as_list(categories)]
+        raw_panels = _as_list(panels)
+
+        if not categories:
+            return cls._error(
+                "categories is empty. Every panel shares them, and that sharing "
+                "is what makes the panels comparable.",
+                start,
+            )
+        if len(raw_panels) < MIN_PANELS:
+            return cls._error(
+                f"{len(raw_panels)} panel(s) is not a comparison - a grid of one "
+                "is a chart. Use build_chart for a single series.",
+                start,
+            )
+        if len(raw_panels) > MAX_PANELS:
+            return cls._error(
+                f"{len(raw_panels)} panels is more than a slide-sized grid can "
+                f"show (max {MAX_PANELS}); past that nothing in any panel is "
+                "legible. Chart the segments that carry the finding.",
+                start,
+            )
+
+        clean = []
+        for position, entry in enumerate(raw_panels):
+            entry = coerce_json_arg(entry, entry)
+            if not isinstance(entry, dict):
+                return cls._error(
+                    f"panels[{position}] is not an object. Each is "
+                    '{"name": "...", "values": [...]}.',
+                    start,
+                )
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                return cls._error(
+                    f"panels[{position}] has no name. The name is the only thing "
+                    "saying which segment the panel is.",
+                    start,
+                )
+            raw_values = _as_list(entry.get("values"))
+            values = [_as_number(v) for v in raw_values]
+            if any(v is None for v in values):
+                bad = next(r for r, v in zip(raw_values, values) if v is None)
+                return cls._error(
+                    f"panel {name!r} has a value that is not a plain number: "
+                    f"{bad!r}. Put units in value_label, not in the values.",
+                    start,
+                )
+            if len(values) != len(categories):
+                return cls._error(
+                    f"panel {name!r} has {len(values)} values but there are "
+                    f"{len(categories)} categories. Every panel needs exactly one "
+                    "value per category - a panel measured over a different span "
+                    "is not comparable with the others, which is the whole point "
+                    "of the grid.",
+                    start,
+                )
+            clean.append({"name": name, "values": values})
+
+        panel_type = (panel_type or "line").lower()
+        if panel_type not in PANEL_TYPES:
+            panel_type = "line"
+
+        chart: dict = {
+            "chartType": "smallMultiples",
+            "panelType": panel_type,
+            "categories": categories,
+            "series": clean,
+        }
+        if value_label.strip():
+            chart["yAxisTitle"] = value_label.strip()
+        if title.strip():
+            chart["title"] = title.strip()
+        if unit_line.strip():
+            chart["unitLine"] = unit_line.strip()
+
+        logger.info("chart_grid_built", slide_index=slide_index,
+                    panels=len(clean), panel_type=panel_type)
+        return ToolResult(
+            success=True,
+            data={
+                "slideIndex": slide_index,
+                "content": bind({"type": "chart", "chart": chart}, region_id, slot),
+                "summary": (
+                    f"{len(clean)}-panel {panel_type} grid over "
+                    f"{len(categories)} categories on one shared scale, attached "
+                    f"to slide {slide_index + 1}"
+                ),
+            },
+            duration_ms=int((time.time() - start) * 1000),
+        )
+
+    @staticmethod
+    def _error(message: str, start: float) -> ToolResult:
+        return ToolResult(
+            success=False, error=message, duration_ms=int((time.time() - start) * 1000)
+        )
+
+
+BUILD_VISUAL_TOOLS = ("build_chart", "build_chart_grid", "build_table",
+                      "build_key_metrics")

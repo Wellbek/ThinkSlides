@@ -101,6 +101,27 @@ class ChartStyle:
     bar_thickness: float = 0.78
     bar_group_gap: float = 0.0
 
+    # A figure printed inside a stacked band sits on that band's own colour,
+    # not on the slide, so it is the one label that cannot take axis_color.
+    # None means "work it out from the band" at draw time.
+    stack_label_color: str | None = None
+
+    # A waterfall says its content with colour: a rise, a fall, and the two
+    # totals it bridges between. Semantic rather than sequential - taking
+    # these from the palette's first three would make the sign of a movement
+    # depend on where the deck happened to put its accent colours.
+    waterfall_rise_color: str = "#2E9AA6"
+    waterfall_fall_color: str = "#C0553B"
+    waterfall_total_color: str = "#12233F"
+
+    # A heatmap's ramp runs between these. Built from the deck's own accent
+    # rather than a library colormap: matplotlib's defaults are excellent and
+    # belong to no deck, and a heatmap in someone else's palette is the most
+    # obvious way a generated exhibit announces that it was generated.
+    # heatmap_high_color of None means "use the palette's first colour".
+    heatmap_low_color: str = "#F4F6F8"
+    heatmap_high_color: str | None = None
+
     # The stack to try when ``font_name`` is not installed where we render.
     # A chart is rasterised on this host, so unlike the PPTX's own text it
     # cannot leave the substitution to the machine that opens the deck - and
@@ -161,6 +182,10 @@ def resolve_table_style(design_system: dict | None) -> TableStyle:
 def resolve_chart_style(design_system: dict | None) -> ChartStyle:
     design_system = design_system or {}
     data_viz = design_system.get("dataViz") or {}
+    # A named family expands into the tokens it stands for, under anything the
+    # design system states explicitly. A direction that names no family is
+    # unchanged, which is every design system written before this existed.
+    data_viz = apply_chart_family(data_viz, data_viz.get("chartFamily"))
 
     if data_viz.get("chartColorSequence"):
         style = ChartStyle(
@@ -208,8 +233,108 @@ def resolve_chart_style(design_system: dict | None) -> ChartStyle:
                                     style.bar_thickness)
     style.bar_group_gap = max(0.0, _number(data_viz.get("chartBarGroupGap"),
                                            style.bar_group_gap))
+    style.stack_label_color = _hex(data_viz.get("chartStackLabelColor"),
+                                   style.stack_label_color)
+    style.waterfall_rise_color = _hex(data_viz.get("chartRiseColor"),
+                                      style.waterfall_rise_color)
+    style.waterfall_fall_color = _hex(data_viz.get("chartFallColor"),
+                                      style.waterfall_fall_color)
+    style.waterfall_total_color = _hex(data_viz.get("chartTotalColor"),
+                                       style.waterfall_total_color)
+    style.heatmap_low_color = _hex(data_viz.get("chartHeatmapLowColor"),
+                                    style.heatmap_low_color)
+    style.heatmap_high_color = _hex(data_viz.get("chartHeatmapHighColor"),
+                                     style.heatmap_high_color)
     style.font_fallbacks = font_chain(design_system, style.font_name)
     return style
+
+
+# ── Chart families ────────────────────────────────────────────────────
+#
+# A direction that differs in shape, motif and density but draws the same
+# matplotlib chart is three decks with one exhibit style. The tokens to make
+# them differ have existed since #120; nothing authored them, so every
+# direction inherited the same defaults.
+#
+# A family is a coherent set of those tokens, not a bag of preferences: a deck
+# that drops its value axis has to label every bar, or the numbers are gone.
+# That pairing is why these are named sets rather than six independent
+# switches offered to a model.
+
+CHART_FAMILIES: dict[str, dict[str, Any]] = {
+    # The reference deck's own convention. No axis, no gridlines, a label at
+    # the end of every bar - the chart is read off the bars themselves.
+    "labelled": {
+        "chartValueAxis": False,
+        "chartValueGridlines": False,
+        "chartCategoryAxis": True,
+        "chartBaselineRule": True,
+        "chartLabelMode": "end",
+        "chartUnitConvention": "subtitle",
+        "chartLegend": "auto",
+        "chartBarThickness": 0.82,
+    },
+    # The analyst convention: a ruled grid, an axis carrying the unit, and
+    # labels only where a point matters. Denser, and it reads as a document
+    # rather than a presentation.
+    "gridded": {
+        "chartValueAxis": True,
+        "chartValueGridlines": True,
+        "chartCategoryAxis": True,
+        "chartBaselineRule": True,
+        "chartLabelMode": "terminal",
+        "chartUnitConvention": "axis",
+        "chartLegend": "auto",
+        "chartGridlineWeightPt": 0.5,
+        "chartBarThickness": 0.68,
+    },
+    # Editorial: the plot floats with no furniture at all except the numbers
+    # it needs. The most confident of the three and the least forgiving of a
+    # chart with a lot of points.
+    "minimal": {
+        "chartValueAxis": False,
+        "chartValueGridlines": False,
+        "chartCategoryAxis": False,
+        "chartBaselineRule": False,
+        "chartLabelMode": "all",
+        "chartUnitConvention": "subtitle",
+        "chartLegend": "inline",
+        "chartBarThickness": 0.9,
+    },
+}
+
+CHART_FAMILY_NAMES = tuple(CHART_FAMILIES)
+
+
+def apply_chart_family(data_viz: dict | None, family: str,
+                       wins: bool = False) -> dict:
+    """
+    Expand a family name into the tokens it stands for.
+
+    ``wins`` decides precedence, and both settings are needed because the two
+    callers are asking different questions.
+
+    ``compile_direction`` passes True. It has just built a dataViz block from
+    ``derive_data_viz_config``, which states every style token as the value the
+    renderer already used - defaults, made changeable, not authorial choices.
+    The family *is* the authorial choice there, so it overrides them; leaving
+    it under them is how a direction that named a family drew the default
+    chart anyway.
+
+    ``resolve_chart_style`` passes False. A design system arriving there has
+    tokens that were either measured off a real template or written by hand,
+    and both outrank a family name. There, a family is a starting point a deck
+    may depart from - the same relationship one chart has to its deck.
+
+    Returns a new dict either way: the caller's design system is often a
+    stored bundle.
+    """
+    tokens = CHART_FAMILIES.get(str(family or "").strip().lower())
+    if not tokens:
+        return dict(data_viz or {})
+    if wins:
+        return {**(data_viz or {}), **tokens}
+    return {**tokens, **(data_viz or {})}
 
 
 def font_chain(design_system: dict | None, font_name: str) -> list[str]:
@@ -228,6 +353,16 @@ def font_chain(design_system: dict | None, font_name: str) -> list[str]:
     if declared and str(body.get("typeface") or "").strip() == font_name.strip():
         return [str(face) for face in declared if str(face).strip()]
     return fallback_chain(font_name)
+
+
+def _hex(value: Any, default):
+    """A #RRGGBB token, or the default when it is absent or malformed."""
+    text = str(value or "").strip()
+    if not text:
+        return default
+    if not text.startswith("#"):
+        text = f"#{text}"
+    return text.upper() if len(text) == 7 else default
 
 
 def _flag(value: Any, default: bool) -> bool:

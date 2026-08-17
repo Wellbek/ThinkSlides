@@ -488,6 +488,7 @@ TOOL_PHASES = {
     "validate_slide_json": "validation",
     "select_source_image": "content_generation",
     "build_chart": "content_generation",
+    "build_chart_grid": "content_generation",
     "build_table": "content_generation",
     "build_key_metrics": "content_generation",
     "finalize_and_render_pptx": "rendering",
@@ -3551,6 +3552,7 @@ class AgentLoop:
             "more than one exhibit, when none of the template's own compositions fits. "
             "Returns the region ids to pass as build_* region_id",
             "build_chart — Build a validated chart for a slide from typed arguments (categories, series, axis titles). Use this rather than writing chart JSON yourself",
+            "build_chart_grid — Build a grid of small charts, one per segment, all on one shared scale. Use it to say whether a pattern holds everywhere or one segment is carrying it",
             "build_table — Build a validated table for a slide from typed columns and rows",
             "build_key_metrics — Build a row of 2-4 headline figures for a slide",
             "design_slide_content — Generate a slide's title and copy (visuals come from the build_* tools)",
@@ -3585,6 +3587,24 @@ class AgentLoop:
             "- Units belong in the series name or the axis title, never inside the "
             "numbers: \"Revenue (US$ billions)\" with values [29.1, 32.3], not "
             "[\"29.1B\", \"32.3B\"].",
+            "- Pick the chart type by the question the slide asks, not by habit. "
+            "A bar chart is the answer to \"how do these compare\" and to nothing "
+            "else, and a deck whose every exhibit is a bar chart has asked one "
+            "question of everything: "
+            "line for change over time; bar for comparison across categories, or "
+            "barh when the category names are long; stacked for what a total is "
+            "made of; stacked100 for what changed underneath a total that barely "
+            "moved; waterfall for where the movement between two totals came from "
+            "(the revenue or cost bridge); slope for who moved up and who moved "
+            "down between two dates; dumbbell for the size of a gap - plan against "
+            "actual, us against peers; bullet for whether a measure is hitting its "
+            "target; heatmap for the hot spots in a dense matrix; combo for a "
+            "volume and a rate that only mean something together; donut or pie for "
+            "parts of one whole; scatter for a relationship between two measures.",
+            "- Do not state a second axis, a target or a waterfall subtotal by "
+            "leaving it to be worked out from the numbers. Say which series is the "
+            "rate, what each target is, which bars are totals. A chart that "
+            "guesses is wrong in a way that looks fine.",
             "- A visual REPLACES the prose it shows. Once a chart is attached, the "
             "slide's bullets should interpret it, not repeat its figures.",
             "- Only ever chart or tabulate figures that genuinely appear in the source "
