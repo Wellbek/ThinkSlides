@@ -3,8 +3,8 @@ Defects a rendered deck showed that the unit tests could not.
 
 Every one of these passed its original test. That is the point of the file:
 "render_chart_to_png returned a valid PNG" is satisfied by a chart of entirely
-the wrong kind, so three real faults sat behind green tests until three decks
-were rendered and looked at.
+the wrong kind, so every fault below sat behind a green test until decks were
+rendered and looked at.
 
 * ``smallMultiples`` silently drew a grouped bar chart, because the renderer
   lowercases the requested type and the type was registered in camelCase - the
@@ -13,6 +13,13 @@ were rendered and looked at.
   was forced to zero while the anchors were 4,104 and the movements were 72.
 * A bullet row's bar was an invisible stub, because three measures in three
   units shared one axis.
+* A waterfall's anchors were then 8% stubs beside those movements, because
+  framing the axis to the movements went one step further than it should.
+* One of a bridge's connecting hairlines vanished, because they were drawn
+  behind the gridlines and that one coincided with a tick.
+
+So the assertions here are about which renderer ran and what share of the plot
+a bar occupies, not about whether bytes came back.
 """
 
 import matplotlib
@@ -113,6 +120,24 @@ class TestAWaterfallsMovementsAreVisible:
 
         assert low > 3000
 
+    def test_an_anchor_column_is_not_a_stub_beside_its_movements(self):
+        """
+        The other half of the same decision. Zooming to the movements is only
+        right up to the point where the two totals being bridged turn into
+        stubs shorter than the movements between them, which reads as though
+        the movements were the larger quantity.
+        """
+        low, high = _waterfall_frame(self.BRIDGE, {0, 5})
+
+        plot = high - low
+        anchor = (4104.0 - low) / plot
+        movement = 72.0 / plot
+
+        assert anchor > movement * 0.6, (
+            f"the opening total is {anchor:.0%} of the plot against a "
+            f"{movement:.0%} movement, so the bridge is upside down"
+        )
+
     def test_a_build_up_from_nothing_still_shows_zero(self):
         """Zooming a build-up would hide that it started at nothing."""
         build_up = [(0.0, 40.0), (40.0, 30.0), (70.0, 25.0), (0.0, 95.0)]
@@ -120,6 +145,45 @@ class TestAWaterfallsMovementsAreVisible:
         low, _high = _waterfall_frame(build_up, {0, 3})
 
         assert low <= 0.0
+
+    def test_the_connecting_hairlines_are_not_hidden_by_the_gridlines(self):
+        """
+        A build-up from 40 with ticks every 20 drew every connector but one:
+        the one at 40 sat behind the gridline at 40 and vanished. Behind the
+        grid is behind whichever connectors the tick spacing happens to land
+        on, which reads as a missing hairline rather than as an occlusion.
+        """
+        captured = []
+        real = plt.subplots
+
+        def spy(*args, **kwargs):
+            fig, axes = real(*args, **kwargs)
+            captured.append(axes)
+            return fig, axes
+
+        plt.subplots = spy
+        try:
+            render_chart_to_png({
+                "chartType": "waterfall",
+                "categories": ["Pilots", "Expansion", "New logos", "Total"],
+                "series": [{"name": "US$m", "values": [40.0, 30.0, 25.0, 95.0]}],
+            }, None, 6.4, 3.6)
+        finally:
+            plt.subplots = real
+
+        assert captured, "nothing was drawn"
+        ax = captured[0]
+        try:
+            grid = ax.yaxis.get_zorder()
+            dashed = [line for line in ax.lines if line.get_linestyle() != "None"]
+            assert dashed, "no connectors were drawn at all"
+            for line in dashed:
+                assert line.get_zorder() > grid, (
+                    f"a connector at zorder {line.get_zorder()} is behind the "
+                    f"gridlines at {grid}"
+                )
+        finally:
+            plt.close("all")
 
     def test_a_bridge_is_labelled_even_where_the_deck_says_no_labels(self):
         """
