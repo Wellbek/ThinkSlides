@@ -1,4 +1,15 @@
-from sqlalchemy import Column, String, Integer, Boolean, Text, BigInteger, ForeignKey, DateTime, ARRAY
+from sqlalchemy import (
+    ARRAY,
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
@@ -69,6 +80,67 @@ class OrganisationAISettings(Base):
 
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class OrganisationConnection(Base):
+    """One configured external connection: an MCP server, an image or figure
+    renderer, or a data source.
+
+    Unlike ``OrganisationAISettings`` this is a *list*, not a singleton row: an
+    organisation can have several MCP servers, and the nav rail's count is the
+    length of it. Hence a surrogate id, with ``(organisation_id, connection_id,
+    slug)`` unique.
+
+    ``slug`` is load-bearing, not decoration. It is the ``<server>`` in the
+    ``mcp__<server>__<tool>`` names the discovered tools are registered under,
+    so it has to be stable, unique within the organisation, and safe in an
+    identifier. Renaming what the user *calls* a connection changes ``label``
+    and leaves ``slug`` alone, because a tool name that moves breaks the
+    transcript of every past run.
+
+    ``config`` holds the fields the catalogue marks non-secret - an endpoint
+    URL, a preset id, a base URL - and is readable, because a value that cannot
+    be read back cannot be edited. ``secrets_encrypted`` holds one AES-256-GCM
+    envelope per secret field, keyed by field name; ``secret_hints`` holds the
+    last four characters of each so the UI can show *which* credential is set.
+
+    Why a JSONB blob rather than columns, when the precedent uses columns: the
+    field set is declared per connection kind in ``app/connections/catalog.py``
+    and differs between kinds, so columns would mean a column per field name
+    across every kind that will ever exist. The AAD binds each envelope to its
+    own JSONB key, which gives the same property the per-column binding gives -
+    a ciphertext cannot be moved to another field, another connection, or
+    another organisation and still open.
+    """
+
+    __tablename__ = "organisation_connections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organisation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organisations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # The catalogue's ConnectionSpec id: "mcp_http", "image_openai", ...
+    connection_id = Column(String(100), nullable=False)
+    slug = Column(String(64), nullable=False)
+    label = Column(String(200), nullable=False)
+
+    enabled = Column(Boolean, nullable=False, default=True)
+    config = Column(JSONB, nullable=False, default=dict)
+    secrets_encrypted = Column(JSONB, nullable=False, default=dict)
+    secret_hints = Column(JSONB, nullable=False, default=dict)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organisation_id", "connection_id", "slug",
+            name="uq_organisation_connections_slug",
+        ),
+    )
 
 
 class User(Base):
