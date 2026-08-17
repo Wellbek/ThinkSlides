@@ -206,9 +206,22 @@ function CollapsibleSection({
 }
 
 function WebSourceIcon({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  const faviconUrl = useMemo(() => {
+    try {
+      return `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=32`;
+    } catch {
+      return null;
+    }
+  }, [url]);
+
   return (
     <div className="s-ic web">
-      <Globe size={14} />
+      {faviconUrl && !failed ? (
+        <img src={faviconUrl} alt="" className="s-ic-fav" onError={() => setFailed(true)} />
+      ) : (
+        <Globe size={14} />
+      )}
     </div>
   );
 }
