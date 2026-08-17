@@ -377,12 +377,15 @@ class TestBlocksReachTheSlideThroughTheLoop:
                       "statCallouts": [{"value": "keep", "caption": "y"}]})
 
         # What the loop does when build_stat_callouts is called again for
-        # the left region.
+        # the left region. Read through the shared key rather than restating
+        # the tuple, so a widened key cannot leave this test asserting the
+        # old behaviour while the loop does something else.
+        from app.agent.tools._binding import slot_key
+
         replacement = {"type": "statCallout", "regionId": "left",
                        "statCallouts": [{"value": "new", "caption": "x"}]}
-        key = (replacement["type"], replacement["regionId"])
-        slots[:] = [s for s in slots
-                    if (s.get("type"), s.get("regionId")) != key]
+        key = slot_key(replacement)
+        slots[:] = [s for s in slots if slot_key(s) != key]
         slots.append(replacement)
 
         values = {c["regionId"]: c["statCallouts"][0]["value"] for c in slots}

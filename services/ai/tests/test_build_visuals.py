@@ -252,3 +252,78 @@ class TestTableSparsity:
         )
 
         assert result.success
+
+
+class TestPlacement:
+    """
+    Where an exhibit goes, and which of several it is.
+
+    A chart could previously only land in a placeholder, because it had no
+    way to name a region. That is what capped a slide at one exhibit, and
+    the cap was silent - the tool reported success either way.
+    """
+
+    async def test_a_chart_binds_to_a_region(self):
+        result = await _chart(region_id="exhibitMain")
+
+        assert result.success
+        assert result.data["content"]["regionId"] == "exhibitMain"
+
+    async def test_a_chart_carries_its_slot(self):
+        result = await _chart(slot="bridge")
+
+        assert result.success
+        assert result.data["content"]["slot"] == "bridge"
+
+    async def test_an_unplaced_chart_is_untouched(self):
+        """The region-free path stays exactly the block it always was."""
+        result = await _chart()
+
+        assert result.success
+        assert "regionId" not in result.data["content"]
+        assert "slot" not in result.data["content"]
+
+    async def test_whitespace_is_not_a_binding(self):
+        result = await _chart(region_id="   ", slot="  ")
+
+        assert result.success
+        assert "regionId" not in result.data["content"]
+        assert "slot" not in result.data["content"]
+
+    async def test_a_table_binds_too(self):
+        result = await BuildTableTool.run(
+            slide_index=0,
+            columns=["Segment", "Revenue"],
+            rows=[["North America", "26.8"], ["International", "7.6"]],
+            region_id="gridLeft", slot="revenue",
+        )
+
+        assert result.success
+        assert result.data["content"]["regionId"] == "gridLeft"
+        assert result.data["content"]["slot"] == "revenue"
+
+    async def test_a_metric_row_binds_too(self):
+        result = await BuildKeyMetricsTool.run(
+            slide_index=0,
+            metrics=[{"value": "$4.12B", "label": "Total revenue"},
+                     {"value": "+0.4%", "label": "Year on year"}],
+            region_id="strip", slot="headline",
+        )
+
+        assert result.success
+        assert result.data["content"]["regionId"] == "strip"
+        assert result.data["content"]["slot"] == "headline"
+
+    async def test_the_binding_arguments_are_offered_to_the_model(self):
+        """A parameter the schema does not declare is one the model cannot send."""
+        from app.agent.registry import ToolRegistry
+
+        registry = ToolRegistry()
+        BuildChartTool.register(registry)
+
+        parameters = registry.get_function_schemas()[0]["function"]["parameters"]
+        assert "region_id" in parameters["properties"]
+        assert "slot" in parameters["properties"]
+        # Optional: a slide with no region tree must not be forced to invent one.
+        assert "region_id" not in parameters["required"]
+        assert "slot" not in parameters["required"]
