@@ -31,8 +31,17 @@ from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-CHART_TYPES = ["bar", "barh", "line", "pie", "scatter", "area",
-               "stacked", "stacked100", "waterfall"]
+CHART_TYPES = ["bar", "barh", "line", "pie", "donut", "scatter", "area",
+               "stacked", "stacked100", "waterfall",
+               "slope", "dumbbell", "bullet", "heatmap", "combo"]
+
+# A slope chart compares moments, and two is the pair a reader can follow.
+# Past four the lines cross so often that the reordering - the whole content -
+# is unreadable, and the chart wanted to be a line chart.
+MAX_SLOPE_POINTS = 4
+# A heatmap's cells have to be big enough to hold their own figure.
+MAX_HEATMAP_ROWS = 10
+MAX_HEATMAP_COLUMNS = 12
 
 # Past roughly this, a category label cannot be printed under a vertical bar
 # without being rotated or truncated, and both read badly on a slide. The
@@ -147,9 +156,15 @@ class BuildChartTool:
                         "total, stacked for what a total is made of, stacked100 "
                         "for how a composition shifted when the total barely "
                         "moved, waterfall for where the movement between two "
-                        "totals came from (a revenue or cost bridge). Ask for bar "
-                        "and the tool switches to barh by itself when the labels "
-                        "need it."
+                        "totals came from (a revenue or cost bridge), slope for "
+                        "who moved up and who moved down between two dates, "
+                        "dumbbell for the size of the gap between two states, "
+                        "bullet for whether a measure is hitting its target, "
+                        "heatmap for the hot spots in a dense matrix, combo for a "
+                        "volume and a rate that only mean something together, "
+                        "donut for parts of one whole with the total in the "
+                        "middle. Ask for bar and the tool switches to barh by "
+                        "itself when the labels need it."
                     ),
                 ),
                 ToolParameter(
@@ -245,6 +260,31 @@ class BuildChartTool:
                     ),
                 ),
                 ToolParameter(
+                    name="targets", type="array", items={"type": "number"},
+                    required=False,
+                    description=(
+                        "bullet only: the target for each measure, one per "
+                        "category. A measure with no target still draws - a bar "
+                        "with no rule across it, which is honest - so give null "
+                        "where there genuinely is none rather than inventing one."
+                    ),
+                ),
+                ToolParameter(
+                    name="secondary_axis_series", type="array",
+                    items={"type": "string"}, required=False,
+                    description=(
+                        "combo only: the NAMES of the series belonging on the "
+                        "right-hand axis, drawn as lines. State it rather than "
+                        "leaving it to be guessed from magnitudes - guessing "
+                        "works until a rate happens to be larger than a volume, "
+                        "and the chart is then wrong in a way that looks fine."
+                    ),
+                ),
+                ToolParameter(
+                    name="secondary_axis_title", type="string", required=False,
+                    description="combo only: what the right-hand axis measures, with its unit",
+                ),
+                ToolParameter(
                     name="unit_line", type="string", required=False,
                     description=(
                         "The unit, as a second line under the title - \"thousands\", "
@@ -279,6 +319,9 @@ class BuildChartTool:
         unit_line: str = "",
         label_mode: str = "",
         total_indices=None,
+        targets=None,
+        secondary_axis_series=None,
+        secondary_axis_title: str = "",
     ) -> ToolResult:
         start = time.time()
         categories = [str(c) for c in _as_list(categories)]
@@ -308,7 +351,10 @@ class BuildChartTool:
                 "than their own labels. Group the smallest into an 'Other' series.",
                 start,
             )
-        if len(raw_series) > MAX_SERIES:
+        if chart_type != "heatmap" and len(raw_series) > MAX_SERIES:
+            # A heatmap's "series" are matrix rows, not overlaid lines a reader
+            # has to tell apart by colour, so the legibility limit is a
+            # different one - see MAX_HEATMAP_ROWS above.
             return cls._error(
                 f"{len(raw_series)} series is more than a slide-sized chart can "
                 f"distinguish (max {MAX_SERIES}).",
@@ -321,12 +367,49 @@ class BuildChartTool:
                 f"{', '.join(CHART_TYPES)}.",
                 start,
             )
-        if chart_type == "pie" and len(raw_series) > 1:
+        if chart_type in ("pie", "donut") and len(raw_series) > 1:
             return cls._error(
-                "A pie shows parts of ONE whole, so it takes exactly one series. "
-                "Use a bar chart to compare several series across categories.",
+                f"A {chart_type} shows parts of ONE whole, so it takes exactly "
+                "one series. Use a bar chart to compare several series across "
+                "categories, or stacked100 to compare compositions.",
                 start,
             )
+        if chart_type == "dumbbell" and len(raw_series) != 2:
+            return cls._error(
+                f"A dumbbell shows the gap between TWO states, so it takes "
+                f"exactly two series (got {len(raw_series)}) - plan and actual, "
+                "us and the peer group, this year and last.",
+                start,
+            )
+        if chart_type == "combo" and len(raw_series) < 2:
+            return cls._error(
+                "A combo chart pairs a volume with a rate on a second axis, so "
+                "it needs at least two series. With one, use a bar or line chart.",
+                start,
+            )
+        if chart_type == "slope" and not 2 <= len(categories) <= MAX_SLOPE_POINTS:
+            return cls._error(
+                f"A slope chart compares {len(categories)} moments; it wants 2 to "
+                f"{MAX_SLOPE_POINTS}. Two is the pair a reader can follow, and "
+                "past four the lines cross so often that the reordering - the "
+                "whole point of the chart - is unreadable. Use a line chart for a "
+                "longer series.",
+                start,
+            )
+        if chart_type == "heatmap":
+            if len(raw_series) > MAX_HEATMAP_ROWS:
+                return cls._error(
+                    f"{len(raw_series)} rows is more than a heatmap can show at "
+                    f"slide size (max {MAX_HEATMAP_ROWS}) - the cells come out "
+                    "smaller than the figures in them.",
+                    start,
+                )
+            if len(categories) > MAX_HEATMAP_COLUMNS:
+                return cls._error(
+                    f"{len(categories)} columns is more than a heatmap can show "
+                    f"at slide size (max {MAX_HEATMAP_COLUMNS}).",
+                    start,
+                )
         if chart_type == "waterfall" and len(raw_series) > 1:
             return cls._error(
                 "A waterfall bridges ONE running total, so it takes exactly one "
@@ -465,6 +548,26 @@ class BuildChartTool:
             chart["unitLine"] = unit_line.strip()
         if (label_mode or "").lower() in LABEL_MODES:
             chart["labelMode"] = label_mode.lower()
+        if chart_type == "bullet":
+            cleaned = [_as_number(v) for v in _as_list(targets)]
+            if any(v is not None for v in cleaned):
+                chart["targets"] = cleaned[:len(categories)]
+        if chart_type == "combo":
+            named = [str(n).strip() for n in _as_list(secondary_axis_series)
+                     if str(n or "").strip()]
+            known = {s["name"] for s in clean_series}
+            unknown = [n for n in named if n not in known]
+            if unknown:
+                return cls._error(
+                    f"secondary_axis_series names {unknown[0]!r}, which is not "
+                    f"one of this chart's series ({', '.join(sorted(known))}). "
+                    "Name them exactly as you gave them.",
+                    start,
+                )
+            if named:
+                chart["secondaryAxisSeries"] = named
+            if secondary_axis_title.strip():
+                chart["secondaryAxisTitle"] = secondary_axis_title.strip()
         if chart_type == "waterfall":
             marked = [int(i) for i in _as_list(total_indices)
                       if str(i).lstrip("-").isdigit()]
