@@ -54,7 +54,15 @@ SUPPORTED_CHART_TYPES = {
     #   heatmap - where the hot spots are in a dense matrix
     #   combo   - a volume and a rate that only mean something together
     "donut", "heatmap", "combo",
+    # And one that is a grid of charts rather than a chart: the same shape
+    # repeated per segment, on one shared scale, to say whether a pattern
+    # holds everywhere or one segment is carrying it.
+    "smallMultiples",
 }
+
+# Past this many panels nothing in any of them is legible at slide size, and
+# the grid has stopped being a comparison and become a contact sheet.
+MAX_PANELS = 6
 
 # A stack of more than this many segments is a stack nobody can read: the
 # middle bands are thinner than their own labels and the legend runs longer
@@ -280,6 +288,12 @@ def render_chart_to_png(
     # half-height chart does not render with type twice as large relative to
     # its own axes as a full-height one.
     base_pt = max(8.0, min(13.0, 3.6 * math.sqrt(width_in * height_in / 6.0) + 6.0))
+
+    if chart_type == "smallMultiples":
+        return _render_small_multiples(
+            chart_data, series, categories, style, font, unit_suffix,
+            width_in, height_in, dpi, slide_title,
+        )
 
     fig = None
     try:
@@ -1685,6 +1699,141 @@ def _secondary_series(chart_data: dict, series) -> set[str]:
 
 def _secondary_suffix(chart_data: dict) -> str:
     return str(chart_data.get("secondaryValueSuffix") or "").strip()
+
+
+def _render_small_multiples(
+    chart_data, series, categories, style, font, unit_suffix,
+    width_in, height_in, dpi, slide_title,
+) -> bytes | None:
+    """
+    The same chart repeated per segment, on one shared scale.
+
+    This is the exhibit that answers a question no single chart can: does the
+    pattern hold everywhere, or is one segment carrying it? Four regional
+    trend lines overlaid on one axes is a tangle; the same four as a row of
+    panels is readable at a glance.
+
+    **The shared scale is the whole thing, and it is enforced here rather than
+    offered.** Panels scaled independently are the classic small-multiple lie:
+    four charts that look alike and are not comparable, where the one with the
+    smallest numbers has the steepest-looking line. Nothing in this function
+    lets a caller opt out of it.
+
+    Its own figure rather than a branch inside the single-axes path, because a
+    grid is a grid of axes and everything below the dispatch assumes one.
+    """
+    panels = series[:MAX_PANELS]
+    if not panels:
+        return None
+
+    columns = min(len(panels), 2 if len(panels) <= 4 else 3)
+    rows = math.ceil(len(panels) / columns)
+    panel_type = str(chart_data.get("panelType") or "line").lower()
+    if panel_type not in ("line", "bar", "area"):
+        panel_type = "line"
+
+    # One domain across every panel. Computed before anything is drawn, so no
+    # panel can be autoscaled to its own data.
+    flat = [v for entry in panels for v in entry["values"] if v == v]
+    if not flat:
+        return None
+    low, high = min(flat), max(flat)
+    if panel_type in ("bar", "area"):
+        low = min(0.0, low)
+    pad = (high - low) * 0.12 or (abs(high) * 0.12 or 1.0)
+
+    # Panel type is sized against the panel, not the figure: a sixth of a
+    # chart's width cannot carry a chart's type size.
+    base_pt = max(6.5, min(11.0, 3.6 * math.sqrt(
+        (width_in / columns) * (height_in / rows) / 6.0
+    ) + 5.0))
+
+    fig = None
+    try:
+        fig, axes = plt.subplots(
+            rows, columns, figsize=(width_in, height_in), dpi=dpi,
+            sharex=True, sharey=True, squeeze=False,
+        )
+        fig.patch.set_alpha(0.0)
+        flat_axes = [a for row in axes for a in row]
+
+        for index, entry in enumerate(panels):
+            ax = flat_axes[index]
+            ax.set_facecolor("none")
+            values = list(entry["values"])
+            x = list(range(len(values)))
+            # Each panel gets its own colour so a reader can pair it with a
+            # legend elsewhere on the slide, but the *scale* never varies.
+            colour = style.color_sequence[index % len(style.color_sequence)]
+
+            if panel_type == "bar":
+                ax.bar(x, values, color=colour,
+                       width=max(0.05, min(1.0, style.bar_thickness)))
+            else:
+                ax.plot(x, values, color=colour, linewidth=2.0)
+                if panel_type == "area":
+                    ax.fill_between(x, values, color=colour, alpha=0.22)
+
+            ax.set_ylim(low - pad, high + pad)
+            _panel_furniture(ax, entry, categories, style, font, base_pt,
+                             unit_suffix, x,
+                             show_value_axis=index % columns == 0,
+                             show_categories=index >= len(panels) - columns)
+
+        # An empty cell is a hole in the grid, not a panel with nothing in it.
+        for ax in flat_axes[len(panels):]:
+            ax.set_visible(False)
+
+        _apply_title(fig, flat_axes[0], chart_data, slide_title, style, font,
+                     base_pt * 1.25)
+        fig.set_layout_engine("constrained")
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", transparent=True)
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning("chart_render_failed", chart_type="smallMultiples",
+                       error=str(e))
+        return None
+    finally:
+        if fig is not None:
+            plt.close(fig)
+
+
+def _panel_furniture(ax, entry, categories, style, font, base_pt, unit_suffix,
+                     x, *, show_value_axis: bool, show_categories: bool) -> None:
+    """
+    One panel's own furniture, which is deliberately less than a chart's.
+
+    Repeating the value axis on every panel spends a sixth of each one saying
+    the same numbers, and the axis is shared - so only the leftmost column
+    draws it, and only the bottom row draws the category labels. That is the
+    convention every published small-multiple grid uses, and it is what makes
+    the panels small enough to be worth having.
+    """
+    ax.set_title(str(entry.get("name") or ""), color=style.axis_color,
+                 fontname=font, fontsize=base_pt, loc="left", pad=base_pt * 0.4)
+
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    ax.spines["left"].set_visible(show_value_axis and style.show_value_axis)
+    ax.spines["bottom"].set_visible(style.show_category_axis or style.baseline_rule)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(style.axis_color)
+
+    ax.tick_params(colors=style.axis_color, labelsize=base_pt * 0.85, length=2)
+    if not (show_value_axis and style.show_value_axis):
+        ax.tick_params(axis="y", left=False, labelleft=False)
+    if show_categories and categories:
+        ax.set_xticks(x)
+        ax.set_xticklabels(categories[:len(x)], color=style.axis_color,
+                           fontname=font, fontsize=base_pt * 0.85)
+    else:
+        ax.tick_params(axis="x", bottom=False, labelbottom=False)
+
+    _set_grid(ax.yaxis, style.show_value_gridlines, style)
+    ax.set_axisbelow(True)
+    ax.yaxis.set_major_formatter(_axis_formatter(unit_suffix))
 
 
 def _draw_data_labels(
