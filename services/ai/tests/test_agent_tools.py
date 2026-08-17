@@ -2,8 +2,15 @@
 Tests for agent tool implementations.
 """
 
-import pytest
 import json
+
+import pytest
+
+from app.agent import run_context
+from app.agent.tools.ask_user_question import AskUserQuestionTool
+from app.agent.tools.design_slide_content import DesignSlideContentTool
+from app.agent.tools.plan_presentation_structure import PlanPresentationStructureTool
+from app.agent.tools.select_layout import SelectLayoutTool
 from app.agent.tools.validate_slide_json import ValidateSlideJsonTool
 
 
@@ -174,7 +181,6 @@ async def test_validate_table_ragged_rows_warns_not_errors():
 
 # ── select_layout ──────────────────────────────────────────────
 
-from app.agent.tools.select_layout import SelectLayoutTool
 
 LAYOUT_CATALOG = [
     {"layoutId": "1", "layoutName": "Title Slide", "masterId": "1",
@@ -234,10 +240,6 @@ async def test_select_layout_picks_conclusion_layout():
 # ── design_slide_content / plan_presentation_structure: fail loudly on ────
 # unparseable or empty LLM output, instead of silently succeeding with no
 # content (previously "right slide count, no content" in the rendered deck).
-
-from app.agent import run_context
-from app.agent.tools.design_slide_content import DesignSlideContentTool
-from app.agent.tools.plan_presentation_structure import PlanPresentationStructureTool
 
 
 class _ScriptedProvider:
@@ -322,8 +324,6 @@ async def test_plan_presentation_structure_fails_when_slides_is_empty():
 # "options" (matching its now-corrected "array" schema type) rather than a
 # JSON-encoded string, and the tool's old bare json.loads(options) raised
 # TypeError on it.
-
-from app.agent.tools.ask_user_question import AskUserQuestionTool
 
 
 @pytest.mark.asyncio
