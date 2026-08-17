@@ -39,7 +39,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from app import colors
-from app.renderer import apparatus, icons, primitives
+from app.renderer import apparatus, diagrams, icons, primitives
 from app.renderer.deck_theme import SlideStyle
 from app.renderer.layout import PositionConfig
 from app.renderer.primitives import Primitive, TextRunSpec
@@ -55,6 +55,7 @@ BLOCK_PAYLOAD_KEY = {
     "imageCardRow": "imageCardRow",
     "banner": "banner",
     "legend": "legend",
+    "diagram": "diagram",
 }
 BLOCK_TYPES = frozenset(BLOCK_PAYLOAD_KEY)
 
@@ -491,6 +492,48 @@ class BlockCompiler:
 
     # --------------------------------------------------------------- legend
 
+    # ------------------------------------------------------------ diagram
+
+    def _compile_diagram(self, item: dict, rect: PositionConfig,
+                         prefix: str) -> list[Primitive]:
+        """A structural graphic, drawn from the deck's own marks.
+
+        Delegated rather than inlined: eight kinds of geometry is a module, and
+        keeping it out of here means the diagram code can be read without
+        wading through seven other block types. What stays here is the part
+        that is this class's business - turning the deck's design system into
+        the colours and sizes the drawing uses, which is the same translation
+        every other block does.
+        """
+        return diagrams.compile_diagram(
+            item, rect,
+            palette=self._diagram_palette(),
+            label_pt=self._pt(self.type_scale.body_style(1).font_size_pt),
+            detail_pt=max(
+                diagrams.MIN_DETAIL_PT,
+                self._pt(self.type_scale.body_style(2).font_size_pt),
+            ),
+            prefix=prefix,
+        )
+
+    def _diagram_palette(self) -> "diagrams.DiagramPalette":
+        """The deck's colours, in the shape a diagram draws from."""
+        palette = ((self.design_system or {}).get("palette") or {}).get("colors") or []
+        sequence = [
+            entry.get("value") for entry in palette
+            if isinstance(entry, dict) and colors.parse_hex(entry.get("value"))
+            and entry.get("name") not in {"background", "text"}
+        ]
+        return diagrams.DiagramPalette(
+            ground=self.style.background,
+            ink=self.style.body_color,
+            heading=self.style.title_color,
+            accent=self.style.accent_color,
+            rule=colors.mix(self.style.background, self.style.body_color, 0.45),
+            sequence=sequence or [self.style.accent_color],
+            font=self.type_scale.body_font,
+        )
+
     def _compile_legend(self, item: dict, rect: PositionConfig,
                         prefix: str) -> list[Primitive]:
         entries = [e for e in _items(item, "legend")
@@ -758,6 +801,12 @@ def block_entry_count(item: dict) -> int:
     kind = str(item.get("type") or "")
     if kind == "banner":
         return 1 if _banner_text(item) else 0
+    if kind == "diagram":
+        # A diagram is one exhibit however many nodes it has. Counting the
+        # nodes would make a seven-step flow read as seven blocks and blow the
+        # slide's whole block budget on one graphic.
+        payload = item.get("diagram") or {}
+        return 1 if (payload.get("items") or []) else 0
     if kind == "imageCardRow":
         payload = item.get("imageCardRow") or {}
         return len([c for c in (payload.get("cards") or []) if isinstance(c, dict)])

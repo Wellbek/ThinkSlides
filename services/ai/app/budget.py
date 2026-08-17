@@ -105,6 +105,11 @@ CONTENT_TYPE_ARCHETYPE: dict[str, str] = {
     "conclusion": CLOSING,
 }
 
+# What counts as an exhibit for the dashboard gate. A diagram is one: a
+# five-step flow is the same kind of claim on the page as a chart, and it is
+# the same kind of work for a reader.
+EXHIBIT_CONTENT_TYPES = frozenset({"chart", "table", "image", "diagram"})
+
 # ── The budget's shape ────────────────────────────────────────────────
 
 # A slide may come in this far under its target before it is under budget, and
@@ -384,7 +389,7 @@ def measure_slide(slide: Optional[dict],
                                     hairline_tables=hairline)
         blocks += counted
         words += said
-        if kind in ("chart", "table", "image"):
+        if kind in EXHIBIT_CONTENT_TYPES:
             exhibits += 1
 
     for item in (slide or {}).get("primitives") or []:

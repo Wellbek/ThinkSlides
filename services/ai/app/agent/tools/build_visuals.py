@@ -1071,4 +1071,4 @@ class BuildChartGridTool:
 
 
 BUILD_VISUAL_TOOLS = ("build_chart", "build_chart_grid", "build_table",
-                      "build_key_metrics")
+                      "build_key_metrics", "build_diagram")
