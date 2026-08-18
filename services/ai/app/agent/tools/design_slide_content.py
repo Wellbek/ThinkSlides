@@ -522,13 +522,19 @@ def _density_guidance(design_system: dict, outline: dict, key_points: list,
     material = budget_model.material_score(
         key_points,
         has_exhibit=bool(attached),
+        exhibits=len(attached or []),
         figures=_figures_in(key_points),
         research_findings=len(run_context.get_research_findings() or []),
         source_words=_words_in(outline),
     )
     run_context.record_slide_material(slide_index, material)
 
-    archetype = budget_model.archetype_for(outline)
+    # What the slide has earned, not what the plan asked for. A dashboard the
+    # material does not support is written as an exhibit page rather than
+    # briefed for four exhibits it would have to invent.
+    archetype = budget_model.resolve_archetype(
+        outline, material, len(attached or [])
+    )
     budget = budget_model.budget_for(design_system, archetype, material)
     if not budget_model.density_brief_available(design_system):
         return ""
