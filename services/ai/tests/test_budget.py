@@ -685,3 +685,69 @@ class TestTheBundleKeepsTheMeasurement:
 
     def test_the_built_in_design_system_still_carries_one(self):
         assert budget.density_brief_available(get_default_design_system())
+
+
+class TestTheArchetypeSurvivesToTheDesignedSlide:
+    """
+    ``archetype_for`` reads ``archetype`` or ``contentType`` off a slide, and
+    ``design_slide_content`` used to emit neither - only slideIndex, layoutId,
+    layoutName, section, titleRegister and contents.
+
+    So every designed slide fell through to CONTENT, and the consequences were
+    not cosmetic. The cover/divider guard in ``validate_density`` was dead for
+    real slides. An exhibit slide was written to a 0.55 share and judged
+    against 1.0, while UNDER_TOLERANCE is also 0.55 - so a chart slide landing
+    exactly on the target it was given sat exactly on the validator's minimum,
+    and any shortfall reported "under its density budget". A cover with enough
+    material behind it was told to add a chart to it.
+    """
+
+    @staticmethod
+    def _designed(outline):
+        """
+        What design_slide_content does to its parsed response.
+
+        The real function, not a restatement of it - a test that reimplements
+        the thing it is testing passes forever.
+        """
+        from app.agent.tools.design_slide_content import carry_archetype
+
+        return carry_archetype({"slideIndex": 0, "layoutId": "1", "contents": []},
+                               outline)
+
+    def test_a_content_type_reaches_the_slide(self):
+        slide = self._designed({"contentType": "chart"})
+
+        assert budget.archetype_for(slide) == budget.EXHIBIT
+
+    def test_an_explicit_archetype_reaches_the_slide(self):
+        slide = self._designed({"archetype": "divider"})
+
+        assert budget.archetype_for(slide) == budget.DIVIDER
+
+    def test_a_cover_is_not_judged_as_a_content_page(self):
+        """The guard that was dead for every real slide."""
+        cover = self._designed({"contentType": "title"})
+        cover["contents"] = [
+            {"type": "text", "placeholderIdx": 0,
+             "runs": [{"text": "A deck about something"}]},
+        ]
+
+        errors, _ = budget.validate_density(cover, DENSE, 1.0)
+
+        assert errors == []
+
+    def test_an_outline_with_neither_field_still_designs(self):
+        """A plan that never typed its slides must not break."""
+        slide = self._designed({})
+
+        assert budget.archetype_for(slide) == budget.CONTENT
+        assert "contentType" not in slide
+
+    def test_a_slide_that_typed_itself_is_not_overruled(self):
+        """The outline did not know what the model worked out while writing."""
+        from app.agent.tools.design_slide_content import carry_archetype
+
+        slide = carry_archetype({"archetype": "divider"}, {"contentType": "chart"})
+
+        assert budget.archetype_for(slide) == budget.DIVIDER

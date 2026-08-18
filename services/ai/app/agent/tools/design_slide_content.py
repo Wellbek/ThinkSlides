@@ -391,6 +391,7 @@ Rules:
             slide_data.setdefault("layoutId", layout.get("layoutId", "1"))
             slide_data.setdefault("layoutName", layout_name)
             slide_data.setdefault("contents", [])
+            carry_archetype(slide_data, outline)
 
             if not slide_data["contents"]:
                 return ToolResult(
@@ -585,6 +586,32 @@ def _grammar_guidance(design_system: dict) -> str:
             f"{json.dumps(layout.regions, separators=(',', ':'))}"
         )
     return "\n".join(lines) + "\n"
+
+
+def carry_archetype(slide_data: dict, outline: dict | None) -> dict:
+    """
+    Carry what kind of page this is from the plan onto the designed slide.
+
+    ``archetype_for`` reads ``archetype`` or ``contentType`` off a slide, and
+    this tool used to emit neither - only slideIndex, layoutId, layoutName,
+    section, titleRegister and contents. So every designed slide fell through
+    to CONTENT, and the consequences were not cosmetic:
+
+    * the cover/divider guard in ``validate_density`` was dead for real slides,
+      so a cover with enough material behind it was told to add a chart to it;
+    * an exhibit slide was written to an EXHIBIT share of 0.55 and judged
+      against CONTENT's 1.0. ``UNDER_TOLERANCE`` is also 0.55, so a chart slide
+      landing exactly on the target it was given sat exactly on the validator's
+      minimum, and any shortfall at all reported "under its density budget".
+
+    Never overwrites a field the model set itself: a slide that states its own
+    archetype has said something the outline did not know.
+    """
+    for field in ("archetype", "contentType"):
+        value = (outline or {}).get(field)
+        if value and not slide_data.get(field):
+            slide_data[field] = value
+    return slide_data
 
 
 def _figures_in(key_points: list) -> int:
