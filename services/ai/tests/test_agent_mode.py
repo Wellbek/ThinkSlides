@@ -111,6 +111,22 @@ def test_simple_mode_prompt_tells_the_model_it_has_no_web_access():
     assert "web_search" not in prompt
 
 
+def test_simple_mode_prompt_demands_a_hedge_or_a_refusal_not_a_guess():
+    """Simple mode is deliberately just the base LLM - no search, by design.
+    With no way to check a fact, the only honest options for something it is
+    not certain of are to qualify it or leave it out; stating an unsourced
+    specific as plain fact reads exactly like a sourced one to the person
+    reading it. Live-observed failure without this: invented company names,
+    an invented dollar figure reused as two different totals, and a regional
+    funding split impossible for the real organisation being described - all
+    stated with full, unqualified confidence."""
+    prompt = _loop(MODE_SIMPLE)._build_system_prompt({})
+
+    assert "SolarCo" in prompt  # the concrete counter-example, named
+    assert "two options" in prompt
+    assert "qualify it" in prompt or "leave it out" in prompt
+
+
 def test_deep_mode_prompt_asks_the_model_to_research_first():
     prompt = _loop(MODE_DEEP)._build_system_prompt({})
 

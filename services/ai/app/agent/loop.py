@@ -3758,17 +3758,17 @@ class AgentLoop:
             prompt_parts.extend([
                 "## Sourcing Content (Deep Thinking is OFF)",
                 "",
-                "- You have no web access on this run. Write from the user's documents, the conversation, and your own knowledge.",
-                "- Do NOT invent precise statistics, dates, or quotations you are not confident in. Prefer qualitative statements over fabricated numbers.",
+                "- You have no web access on this run, and no research pass runs before you write. Everything on the deck has to come from the user's documents, the conversation, or what you already know - there is no fourth source, and inventing one is not an option this run has.",
+                "- A NAMED, SPECIFIC claim - a company, a person, a product, a dollar figure, a percentage, a date, a statistic - stated as plain fact is a claim you are telling the user is true. If it is not in the user's documents or the conversation, and you are not genuinely certain of it, you have exactly two options: qualify it in the text itself ('a figure on the order of...', 'this varies by source, but a commonly cited estimate is...', 'exact figures were not available; directionally...'), or leave it out and write the point qualitatively instead. There is no third option where you state a specific number or a specific name with no source and no hedge, because the sentence that resulted is indistinguishable from a properly sourced one to the person reading it - the same sentence you would use if you actually knew it.",
+                "- Concretely: 'partnerships with SolarCo and WindTech' invents companies that do not exist. '40% North America, 30% Europe, 30% Asia' invents a distribution nobody gave you. '$10 million' invents a figure with no source, then reused as a different slide's total. Every one of those reads as sourced, and not a single one actually was. This is not a hypothetical - it is what an unqualified run of this exact prompt has actually produced.",
                 "- This applies with full force to build_chart, build_table and "
-                "build_key_metrics. A chart makes a number look sourced, so charting a "
-                "figure you actually guessed is worse than writing no chart at all. "
+                "build_key_metrics. A chart is a stronger claim than a sentence, not a "
+                "weaker one - it tells the reader these numbers were measured, not typed. "
                 "Only build a visual from figures present in the user's documents, the "
-                "conversation, or facts you are genuinely confident of. If the request "
-                "needs current results you do not have, say so on the slide and in its "
-                "notes, and chart the shape of the question rather than inventing "
-                "values for it.",
-                "- If the request genuinely needs current or verifiable facts, say so in your slides' framing rather than guessing.",
+                "conversation, or facts you are genuinely confident of. If a slide's point "
+                "is numeric but you do not have real numbers for it, do not invent placeholder "
+                "ones to fill the chart shape - write the point as prose, qualified, or say "
+                "on the slide and in its notes that the figures were not available.",
                 "",
             ])
 
