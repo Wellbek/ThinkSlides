@@ -366,7 +366,7 @@ Rules:
 - {detail_guidance}
 - Only use "image" type when an image was supplied above - either a pre-vetted source image (source: "selected") or one built by generate_image. {image_rule}
 - Use "table" type for tbl placeholders (or any content placeholder, if no dedicated table placeholder exists) when the content is genuinely tabular (comparisons, structured data with 2+ rows and 2+ columns) - do not force prose bullet points into a table, and do not use a table for anything that reads better as bullets. Shape: {{type: "table", placeholderIdx: N, table: {{headerRow: true, rows: [["Column A", "Column B"], ["Row 1 value", "Row 1 value"], ["Row 2 value", "Row 2 value"]]}}}}. Every row must have the same number of cells as the header row. Keep cell text short (a few words) - tables are rendered at a fixed size, not auto-expanded.
-- Use "chart" type whenever the key points for this slide carry numbers that tell a story a reader would rather SEE than read: a trend over time, a comparison across categories, a breakdown of a whole, or a correlation. A slide whose points are mostly figures ("revenue rose from $11.7B to $37.2B across 2011-2025") should render that data as a chart, not as a list of sentences. Shape: {{type: "chart", placeholderIdx: N, chart: {{chartType: "bar"|"line"|"pie"|"scatter", categories: ["2011", "2020", "2025"], series: [{{name: "Revenue ($B)", values: [11.7, 23.5, 37.2]}}]}}}}. Pick chartType by intent - the build_chart tool carries the full vocabulary and its guidance, and you should prefer calling it over writing chart JSON here at all: "line" for change over time, "bar" for comparison across categories, "pie"/"donut" for parts of a single whole (one series, values summing to a meaningful total), "scatter" for relationships between two measures, "waterfall" for where the movement between two totals came from, "stacked100" for a mix that shifted under a flat total. Every series must have exactly as many values as there are categories, and values must be plain numbers - no units, no "%" or "$" inside the number (put those in the series name). Only chart figures that are actually present in the key points or key data; never invent or estimate values to fill a chart.
+- Whenever the key points for this slide carry numbers that tell a story a reader would rather SEE than read (a trend over time, a comparison across categories, a breakdown of a whole, a correlation), that is a chart, not a list of sentences - but do not write chart JSON here yourself. Stop and call build_chart for this slide_index first: it carries the full chart vocabulary, picks the right type from the same intent (trend, comparison, whole, correlation, movement between totals), and validates the shape against the type you chose. A "chart" content item written directly in this response is rejected - the placeholder stays whatever build_chart's own {{type: "chart", ...}} block produced when you attach it here.
 - A chart or a table REPLACES the prose it visualizes - do not emit a chart and then also restate the same figures as bullets in the same body placeholder. A short bullet or two of interpretation ("growth flattened after 2023") alongside a chart is good; a duplicate of the chart's own numbers is not.
 - Each content item must have a placeholderIdx matching one of the available placeholders.
 {citation_guidance}"""
@@ -405,6 +405,31 @@ Rules:
             slide_data.setdefault("layoutName", layout_name)
             slide_data.setdefault("contents", [])
             carry_archetype(slide_data, outline)
+
+            # A "chart" content item is never legitimate here, whether a
+            # visual was already attached (the guidance above says it is
+            # placed automatically - do not also write it) or nothing was
+            # built yet (the guidance says to call build_chart first). Either
+            # way the model was told not to, in prose it could ignore. This
+            # makes ignoring it fail loudly instead of quietly rendering the
+            # 4-type shape below build_chart's own validated vocabulary.
+            inline_charts = [
+                c.get("placeholderIdx") for c in slide_data["contents"]
+                if isinstance(c, dict) and c.get("type") == "chart"
+            ]
+            if inline_charts:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "This slide's contents include a chart written directly as "
+                        f"JSON (placeholderIdx {inline_charts}), which is not allowed. "
+                        "Call build_chart for this slide_index instead - it picks the "
+                        "right chart type from your intent and validates the data "
+                        "against it. Once built, do not restate it as chart JSON "
+                        "here; it is attached to the slide automatically."
+                    ),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
 
             if not slide_data["contents"]:
                 return ToolResult(

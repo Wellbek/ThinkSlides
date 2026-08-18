@@ -281,6 +281,35 @@ async def test_design_slide_content_fails_when_contents_is_empty():
 
 
 @pytest.mark.asyncio
+async def test_design_slide_content_rejects_an_inline_chart():
+    """The prompt has always said to call build_chart instead of writing
+    chart JSON here - as prose the model could, and did, ignore. This is
+    that instruction enforced: a "chart" content item is refused outright,
+    with build_chart's real chart-type guidance and validation named as the
+    only path, rather than quietly rendering through the 4-type shape below
+    it."""
+    content = json.dumps({
+        "slideIndex": 0,
+        "contents": [
+            {"type": "text", "placeholderIdx": 0, "runs": [{"text": "Revenue"}]},
+            {"type": "chart", "placeholderIdx": 1, "chart": {
+                "chartType": "bar", "categories": ["2024"], "series": [{"name": "R", "values": [1]}],
+            }},
+        ],
+    })
+    token = run_context.set_chat_provider(_ScriptedProvider(content))
+    try:
+        result = await DesignSlideContentTool.run(
+            slide_outline="{}", layout_info="{}", slide_index=0,
+        )
+    finally:
+        run_context.reset_chat_provider(token)
+
+    assert result.success is False
+    assert "build_chart" in result.error
+
+
+@pytest.mark.asyncio
 async def test_design_slide_content_recovers_json_wrapped_in_prose():
     content = 'Sure, here you go:\n\n{"slideIndex": 0, "contents": [{"type": "text", "placeholderIdx": 0, "runs": [{"text": "Hi"}]}]}\n\nHope that helps!'
     token = run_context.set_chat_provider(_ScriptedProvider(content))
