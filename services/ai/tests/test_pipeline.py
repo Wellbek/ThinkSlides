@@ -415,6 +415,15 @@ class TestTheLoopCallsToolsWithArgumentsTheyHave:
                 "scouted": phase_name != "scout",
                 "consulted_before_planning": phase_name not in ("scout", "consult"),
                 "offered_directions": phase_name not in ("scout", "consult", "design"),
+                # offered_directions=True models a run past that pause, which
+                # only makes sense with an answer on record - finalize refuses
+                # to render an unsettled look (no chosen direction, no
+                # template, no confirmed autonomy).
+                "chosen_direction": (
+                    {"id": "default"}
+                    if phase_name not in ("scout", "consult", "design")
+                    else None
+                ),
                 "presentation_structure": TOOL_RESULTS["plan_presentation_structure"],
                 # The planner refuses to replan a deck that has slides, so the
                 # one phase that must run without them gets none.

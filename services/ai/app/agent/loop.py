@@ -2635,6 +2635,27 @@ class AgentLoop:
                     "design_slide_content for each missing slide first."
                 )
 
+            # The look is "settled" three ways: a direction was chosen, a real
+            # uploaded template answers the question on its own, or the user
+            # handed the remaining decisions to the agent. Absent all three,
+            # finalizing renders the same built-in default every time and the
+            # user never finds out a choice existed - propose_design_directions
+            # is registered and works, it just was not required. This mirrors
+            # the settledness check _answer_from_context already uses for a
+            # re-requested colour, so a template or a chosen direction is
+            # never re-litigated here either.
+            design_system = self.context.get("design_system") or {}
+            template_supplied = str(design_system.get("sourceType") or "default") != "default"
+            if not (ws.chosen_direction or template_supplied or ws.autonomy_confirmed):
+                return (
+                    "No design direction has been chosen and no template was supplied - "
+                    "finalizing now would render the built-in default look, which the user "
+                    "was never asked about. Call propose_design_directions first and let "
+                    "them pick (or accept the default via that same question). If they have "
+                    "already said to decide everything yourself, that autonomy has not been "
+                    "recorded yet for this run - ask once, plainly, before finalizing."
+                )
+
         if fn_name == "validate_rendered_output":
             if not ws.has_called_finalize:
                 return (

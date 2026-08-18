@@ -207,6 +207,52 @@ class TestTheChosenDirectionSurvives:
         ) is not None
 
 
+class TestFinalizeRequiresTheLookToBeSettled:
+    """propose_design_directions is registered and works - the run just never
+    had to call it. Absent a direction, a template, or explicit autonomy,
+    finalizing rendered the same built-in default every time and nobody found
+    out a choice had existed."""
+
+    def _ready_to_finalize(self, **state):
+        loop = _loop(presentation_structure={"totalSlides": 0}, **state)
+        return loop
+
+    def test_neither_a_direction_nor_a_template_blocks_finalize(self):
+        loop = self._ready_to_finalize()
+        loop.context = {"design_system": {"palette": {}}}
+
+        refusal = loop._check_precondition("finalize_and_render_pptx", {})
+
+        assert refusal is not None
+        assert "propose_design_directions" in refusal
+
+    def test_a_chosen_direction_allows_it(self):
+        loop = self._ready_to_finalize(chosen_direction={"id": "dark-analyst"})
+        loop.context = {"design_system": {"sourceType": "default"}}
+
+        assert loop._check_precondition("finalize_and_render_pptx", {}) is None
+
+    def test_a_real_template_allows_it_without_ever_asking(self):
+        """A template the user uploaded already answers the question a
+        direction choice would be re-asking."""
+        loop = self._ready_to_finalize()
+        loop.context = {"design_system": {"sourceType": "template"}}
+
+        assert loop._check_precondition("finalize_and_render_pptx", {}) is None
+
+    def test_confirmed_autonomy_allows_it_too(self):
+        loop = self._ready_to_finalize(autonomy_confirmed=True)
+        loop.context = {"design_system": {"palette": {}}}
+
+        assert loop._check_precondition("finalize_and_render_pptx", {}) is None
+
+    def test_no_design_system_loaded_yet_still_blocks(self):
+        loop = self._ready_to_finalize()
+        loop.context = {}
+
+        assert loop._check_precondition("finalize_and_render_pptx", {}) is not None
+
+
 class TestASuccessfulExtractionIsReportedAsOne:
     @pytest.mark.asyncio
     async def test_fenced_json_is_read(self, monkeypatch):
