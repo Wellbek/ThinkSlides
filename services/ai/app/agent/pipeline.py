@@ -49,6 +49,7 @@ MODEL_DRIVEN = "model"
 # the one being drafted.
 SLIDE_TOOLS = frozenset({
     "select_layout",
+    "compose_slide_regions",
     "select_source_image",
     "design_slide_content",
     "validate_slide_json",

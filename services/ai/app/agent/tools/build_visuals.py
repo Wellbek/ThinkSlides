@@ -20,12 +20,18 @@ disagreeing.
 
 Failures come back as a tool error naming the specific problem, because
 that is a message the model can act on.
+
+Each of these also says *where* it goes and *which one it is* - ``region_id``
+and ``slot``, shared with the block builders through ``_binding``. Without
+them a chart could only ever land in a placeholder, so a page could never put
+a bridge beside a mix chart however much the material wanted it.
 """
 
 from __future__ import annotations
 import time
 
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.tools._binding import bind, region_param, slot_param
 from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
 
@@ -302,6 +308,8 @@ class BuildChartTool:
                         "relies on the axis. Defaults to the deck's own convention."
                     ),
                 ),
+                region_param(),
+                slot_param('"bridge" and "mix" on one financial page'),
             ],
         )
 
@@ -322,6 +330,8 @@ class BuildChartTool:
         targets=None,
         secondary_axis_series=None,
         secondary_axis_title: str = "",
+        region_id: str = "",
+        slot: str = "",
     ) -> ToolResult:
         start = time.time()
         categories = [str(c) for c in _as_list(categories)]
@@ -588,7 +598,7 @@ class BuildChartTool:
             success=True,
             data={
                 "slideIndex": slide_index,
-                "content": {"type": "chart", "chart": chart},
+                "content": bind({"type": "chart", "chart": chart}, region_id, slot),
                 "summary": (
                     f"{chart_type} chart with {len(clean_series)} series over "
                     f"{len(categories)} categories, attached to slide "
@@ -642,11 +652,14 @@ class BuildTableTool:
                         "automatically."
                     ),
                 ),
+                region_param(),
+                slot_param('"revenue" and "headcount" on one comparison page'),
             ],
         )
 
     @classmethod
-    async def run(cls, slide_index: int, columns, rows) -> ToolResult:
+    async def run(cls, slide_index: int, columns, rows,
+                  region_id: str = "", slot: str = "") -> ToolResult:
         start = time.time()
         columns = [str(c).strip() for c in _as_list(columns)]
         raw_rows = _as_list(rows)
@@ -699,10 +712,13 @@ class BuildTableTool:
             success=True,
             data={
                 "slideIndex": slide_index,
-                "content": {
-                    "type": "table",
-                    "table": {"headerRow": True, "rows": [columns, *body]},
-                },
+                "content": bind(
+                    {
+                        "type": "table",
+                        "table": {"headerRow": True, "rows": [columns, *body]},
+                    },
+                    region_id, slot,
+                ),
                 "summary": (
                     f"{len(body)}-row table across {len(columns)} columns, "
                     f"attached to slide {slide_index + 1}"
@@ -789,11 +805,14 @@ class BuildKeyMetricsTool:
                     },
                     description="2-4 figures. More than four stop reading as headlines.",
                 ),
+                region_param(),
+                slot_param('"headline" and "risk" on one scorecard page'),
             ],
         )
 
     @classmethod
-    async def run(cls, slide_index: int, metrics) -> ToolResult:
+    async def run(cls, slide_index: int, metrics,
+                  region_id: str = "", slot: str = "") -> ToolResult:
         start = time.time()
         raw = _as_list(metrics)
 
@@ -834,7 +853,9 @@ class BuildKeyMetricsTool:
             success=True,
             data={
                 "slideIndex": slide_index,
-                "content": {"type": "metrics", "metrics": {"items": clean}},
+                "content": bind(
+                    {"type": "metrics", "metrics": {"items": clean}}, region_id, slot
+                ),
                 "summary": (
                     f"{len(clean)} headline figures attached to slide {slide_index + 1}"
                 ),
