@@ -92,6 +92,20 @@ class ToolRegistry:
         self._functions[name] = fn
         logger.info("tool_registered", tool_name=name)
 
+    def fork(self) -> "ToolRegistry":
+        """A copy this run may add to without touching the global registry.
+
+        The registry returned by ``get_registry`` is a process-wide singleton,
+        and this service is shared and multi-tenant. Tools discovered from one
+        organisation's MCP server must not still be registered when the next
+        organisation's run starts - so run-scoped tools go on a fork, and the
+        built-ins are shared by reference because nothing ever mutates them.
+        """
+        copy = ToolRegistry()
+        copy._tools = dict(self._tools)
+        copy._functions = dict(self._functions)
+        return copy
+
     def get(self, name: str) -> tuple[ToolDefinition, ToolFunction] | None:
         """Look up a tool by name."""
         if name in self._tools:

@@ -197,6 +197,8 @@ def _validate(spec: ConnectionSpec, config: dict, secrets: dict, *,
             raise ConnectionConfigError(reason)
 
     for f in spec.fields:
+        if f.options and not f.secret:
+            _check_options(f, config.get(f.name))
         if not f.required:
             continue
         if f.secret:
@@ -206,6 +208,25 @@ def _validate(spec: ConnectionSpec, config: dict, secrets: dict, *,
                 raise ConnectionConfigError(f"{f.label} is required.")
         elif not str(config.get(f.name) or "").strip():
             raise ConnectionConfigError(f"{f.label} is required.")
+
+
+def _check_options(f, value) -> None:
+    """A field with a closed set of values must not accept one outside it.
+
+    Refused at save time rather than shrugged off at read time. A phase name
+    nobody recognises would otherwise fall back to the default silently, and the
+    user would be left believing they had scoped a server somewhere it never
+    appears.
+    """
+    if value in (None, "", []):
+        return
+    supplied = value if isinstance(value, list) else [value]
+    unknown = [str(v) for v in supplied if str(v) not in f.options]
+    if unknown:
+        raise ConnectionConfigError(
+            f"{f.label}: '{unknown[0]}' is not one of "
+            f"{', '.join(f.options)}."
+        )
 
 
 def _apply_preset(config: dict) -> dict:
