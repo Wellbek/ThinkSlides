@@ -47,12 +47,22 @@ MODEL_DRIVEN = "model"
 
 # Everything a single slide can be built from. Offered only while that slide is
 # the one being drafted.
+#
+# web_search belongs here too, not only in the dedicated "research" phase
+# below: that phase is Deep-mode-only (_wants_research), so a Simple-mode run
+# had no way to check a specific fact even mid-slide, and the model filled the
+# gap with an invented one instead - a chart of numbers nobody sourced reads
+# as authoritative regardless of which mode built it. Offering it here is
+# deliberately not the same thing as the research phase: there is no minimum
+# call count and no corroboration requirement, just a tool available for the
+# one claim a slide turns out to need and does not already have.
 SLIDE_TOOLS = frozenset({
     "select_layout",
     "compose_slide_regions",
     "select_source_image",
     "design_slide_content",
     "validate_slide_json",
+    "web_search",
     *BUILD_VISUAL_TOOLS,
     *BLOCK_BUILDER_TOOLS,
 })
