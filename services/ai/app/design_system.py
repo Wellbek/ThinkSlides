@@ -197,6 +197,19 @@ def derive_data_viz_config(palette_colors: list[dict], body_font: str = "Arial")
         "chartUnitConvention": "axis",
         "chartBarThickness": 0.78,
         "chartBarGroupGap": 0.0,
+        # A waterfall's anchor bars and a heatmap's hot end are the deck's own
+        # colours, derived here rather than left to the renderer's defaults.
+        # The default navy belongs to no deck, which is the same objection this
+        # function exists to answer for the series sequence - a purple deck
+        # whose bridge totals came out navy is a chart that visibly did not
+        # come from it.
+        #
+        # Rise and fall are deliberately NOT derived. They are semantic: the
+        # sign of a movement must not depend on where a deck happened to put
+        # its accent colours.
+        "chartTotalColor": by_name.get("dark") or color_sequence[0],
+        "chartHeatmapHighColor": by_name.get("primary") or color_sequence[0],
+        "chartHeatmapLowColor": by_name.get("light", "#F4F6F8"),
         "tableTreatment": "filled",
         "tableRuleWeightPt": 0.75,
         "tableHeaderRuleWeightPt": 1.25,
