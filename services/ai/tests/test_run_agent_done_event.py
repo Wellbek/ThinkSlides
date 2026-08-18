@@ -116,3 +116,36 @@ async def test_a_finished_run_publishes_an_unpaused_terminal_done(monkeypatch):
 
     assert dones, "no done event was published"
     assert dones[-1].get("paused") is False
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_errors_out_does_not_report_success(monkeypatch):
+    """
+    The loop can end on a ``type: "error"`` event without raising - a
+    provider failure or a stalled phase yields one and returns rather than
+    propagating an exception. Nothing else sets the reply text for that case,
+    so without explicit handling the trailing "ensure we have text to show"
+    fallback used to claim "Presentation generation completed" for a run that
+    had just failed outright.
+    """
+    dones = await _run(
+        monkeypatch,
+        [
+            {"type": "thought", "phase": "content_generation", "content": "designing"},
+            {
+                "type": "error",
+                "phase": "content_generation",
+                "message": "Rate limited by openai after 6 attempts.",
+                "code": "provider_unavailable",
+            },
+            {"type": "done", "phase": "content_generation", "paused": False},
+        ],
+    )
+
+    assert dones, "no done event was published"
+    final = dones[-1]
+    assert final.get("paused") is False
+    assert "completed" not in final.get("content", "").lower(), (
+        f"a run that errored out must not report success: {final}"
+    )
+    assert "Rate limited by openai" in final.get("content", "")

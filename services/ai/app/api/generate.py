@@ -332,6 +332,20 @@ async def _run_agent(
                     if event.get("type") == "message_complete":
                         final_content = event.get("content", "")
 
+                    # A run can end on an "error" event without raising - the
+                    # loop yields one and returns rather than propagating an
+                    # exception (provider failures, a stalled phase, ...). If
+                    # nothing else has set final_content by the time the loop
+                    # exits, the generic "generation completed" fallback below
+                    # would otherwise claim success for a run that failed.
+                    if event.get("type") == "error":
+                        error_message = event.get("message", "")
+                        final_content = (
+                            f"The run couldn't finish: {error_message}"
+                            if error_message
+                            else "The run couldn't finish because of an unexpected error. Please try again."
+                        )
+
                     # Capture question event for user-facing assistant message
                     if event.get("type") == "question":
                         question_text = event.get("question", "")
@@ -461,13 +475,20 @@ async def _run_agent(
                     event_count, session_id
                 )
 
-                # FALLBACK: ensure we have text to show
+                # FALLBACK: ensure we have text to show. By this point a
+                # question, an error, or a real file should already have set
+                # final_content - reaching this branch means the loop ended
+                # without any of those, which is itself unexpected and must
+                # not be reported as a success it did not confirm.
                 if not final_content:
                     if generated_files:
                         file_names = ", ".join(f["fileName"] for f in generated_files)
                         final_content = f"Presentation generated: {file_names}"
                     else:
-                        final_content = "Presentation generation completed. Check the preview panel for your slides."
+                        final_content = (
+                            "The run ended without producing a deck or a clear "
+                            "reason why. Please try again."
+                        )
 
                 # Save directly into the assistant placeholder
                 await db.execute(

@@ -61,7 +61,7 @@ type Processor struct {
 	hub         *sse.Hub
 	aiClient    *client.AIServiceClient
 	redisClient *redis.Client // needed to listen for job completion
-	dbPool      *pgxpool.Pool // database connection pool for saving assistant messages
+	dbPool      *pgxpool.Pool // reserved for future orchestrator-side DB access
 
 	mu      sync.Mutex
 	waiters map[string]*sessionWaiter
@@ -215,9 +215,21 @@ func (p *Processor) processJobAsync(ctx context.Context, job *queue.Job) {
 	}
 }
 
-// waitForCompletion subscribes to Redis for the session's events, captures the
-// final assistant reply, saves it to the database, and closes the waiter's
-// done channel on the first done event that is not a pause.
+// waitForCompletion subscribes to Redis for the session's events and closes
+// the waiter's done channel on the first done event that is not a pause.
+//
+// It used to also reconstruct "the assistant's final reply" from the raw
+// event stream and write its own guess to chat_messages - a second,
+// independent implementation of message persistence that the AI service
+// already owns and gets right (it updates the placeholder in place with the
+// real question text, the real error, or the real render result, as each
+// happens). That guess could only see slide_finalized, a
+// finalize_and_render_pptx result, or a "thought" at phase "complete" - a
+// paused question or a failed run matched none of those, so it fell through
+// to a hardcoded "Presentation generation completed" and inserted a second,
+// wrong, extra message next to the correct one the AI service had already
+// written. This waiter now only tracks liveness and pause state, which is
+// the part the job queue actually needs from it.
 //
 // Exactly one of these runs per session, however many jobs are waiting on it.
 func (p *Processor) waitForCompletion(ctx context.Context, sessionID string, w *sessionWaiter) {
@@ -226,7 +238,6 @@ func (p *Processor) waitForCompletion(ctx context.Context, sessionID string, w *
 	defer pubsub.Close()
 
 	ch := pubsub.Channel()
-	var assistantContent string
 	var paused bool = false
 
 	log.Printf("Session %s waiting for completion", sessionID)
@@ -248,55 +259,10 @@ func (p *Processor) waitForCompletion(ctx context.Context, sessionID string, w *
 			// deadline is measured against.
 			w.noteActivity(false)
 
-			// DEBUG: Log all events to see what's coming
-			// log.Printf("DEBUG - Event type: %v, keys: %v", event["type"], getKeys(event))
-
 			eventType, _ := event["type"].(string)
-
-			// Capture from slide_finalized event
-			if eventType == "slide_finalized" {
-				if content, ok := event["content"].(string); ok && content != "" {
-					assistantContent = content
-					// log.Printf("Captured content from slide_finalized: %s", content[:min(100, len(content))])
-				}
-				if result, ok := event["result"].(string); ok && result != "" {
-					assistantContent = result
-				}
-				if presentation, ok := event["presentation"].(string); ok && presentation != "" {
-					assistantContent = presentation
-				}
-			}
-
-			if eventType == "tool_result" {
-				if toolName, ok := event["tool_name"].(string); ok && toolName == "finalize_and_render_pptx" {
-					if result, ok := event["result"].(string); ok && result != "" {
-						assistantContent = result
-						// log.Printf("Captured content from tool_result: %s", result[:min(100, len(result))])
-					}
-				}
-			}
-
-			if eventType == "thought" && assistantContent == "" {
-				if phase, ok := event["phase"].(string); ok && phase == "complete" {
-					if content, ok := event["content"].(string); ok && content != "" {
-						assistantContent = content
-					}
-				}
-			}
 
 			if eventType == "done" {
 				paused, _ = event["paused"].(bool)
-				if assistantContent != "" {
-					if err := p.saveAssistantMessage(sessionID, assistantContent); err != nil {
-						// log.Printf("Failed to save assistant message for session %s: %v", sessionID, err)
-					} else {
-						// log.Printf("Saved assistant message for session %s (length: %d)", sessionID, len(assistantContent))
-					}
-				} else {
-					// log.Printf("Warning: done event with no assistant content for session %s", sessionID)
-					// Save a fallback message
-					p.saveAssistantMessage(sessionID, "Presentation generation completed. Check the preview panel for your slides.")
-				}
 
 				if !paused {
 					// Only close done channel if not paused
@@ -311,65 +277,6 @@ func (p *Processor) waitForCompletion(ctx context.Context, sessionID string, w *
 			}
 		}
 	}
-}
-
-// Helper function for debugging
-func getKeys(m map[string]interface{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func (p *Processor) saveAssistantMessage(sessionID, content string) error {
-	if p.dbPool == nil {
-		log.Printf("saveAssistantMessage: database pool is nil for session %s", sessionID)
-		return fmt.Errorf("database pool not initialized")
-	}
-	ctx := context.Background()
-
-	result, err := p.dbPool.Exec(ctx,
-		`UPDATE chat_messages
-		 SET content = $1, created_at = NOW()
-		 WHERE id = (
-		     SELECT id FROM chat_messages
-		     WHERE session_id = $2
-		       AND role = 'assistant'
-		       AND (content = '' OR content IS NULL)
-		     ORDER BY created_at DESC
-		     LIMIT 1
-		 )`,
-		content, sessionID,
-	)
-	if err != nil {
-		log.Printf("saveAssistantMessage: update failed for session %s: %v", sessionID, err)
-		return fmt.Errorf("update failed: %w", err)
-	}
-
-	if result.RowsAffected() == 0 {
-		// No placeholder found – insert a new message
-		_, err = p.dbPool.Exec(ctx,
-			`INSERT INTO chat_messages (session_id, role, content, created_at)
-			 VALUES ($1, 'assistant', $2, NOW())`,
-			sessionID, content,
-		)
-		if err != nil {
-			log.Printf("saveAssistantMessage: insert failed for session %s: %v", sessionID, err)
-			return fmt.Errorf("insert failed: %w", err)
-		}
-		log.Printf("saveAssistantMessage: inserted new assistant message for session %s", sessionID)
-	} else {
-		log.Printf("saveAssistantMessage: updated assistant message for session %s, rows affected: %d", sessionID, result.RowsAffected())
-	}
-	return nil
 }
 
 // processJob now only starts the AI job and does NOT mark it completed.
