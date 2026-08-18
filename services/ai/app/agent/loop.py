@@ -19,6 +19,7 @@ from app.agent.event_types import ALL_EVENT_TYPES
 from app.agent.registry import get_registry, ToolResult
 from app.agent import pipeline
 from app.agent.summaries import summarize_tool_result
+from app.agent.tools._binding import slot_key
 from app.agent.tools._json_extract import extract_json_object
 from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
 from app.agent.tools.build_blocks import BLOCK_BUILDER_TOOLS
@@ -729,17 +730,16 @@ class WorkingState:
         # carrying the same figures twice.
         prepared = self.prepared_visuals.get(slide_index)
         if prepared:
-            # Keyed by (type, region), not by type alone: a composed slide
-            # legitimately carries three stat-callout blocks bound to three
-            # different regions, and keying on type would collapse them into
-            # one and silently drop the other two.
-            prepared_slots = {
-                (block.get("type"), block.get("regionId")) for block in prepared
-            }
+            # Keyed by type, region *and* slot, not by type alone: a composed
+            # slide legitimately carries three stat-callout blocks bound to
+            # three different regions, and a dashboard page carries two charts
+            # in two panels. Keying on anything coarser collapses them into one
+            # and silently drops the rest. Read from _binding so this and the
+            # store the blocks came from cannot drift apart.
+            prepared_slots = {slot_key(block) for block in prepared}
             kept = [
                 item for item in slide_data.get("contents", [])
-                if not (isinstance(item, dict)
-                        and (item.get("type"), item.get("regionId")) in prepared_slots)
+                if not (isinstance(item, dict) and slot_key(item) in prepared_slots)
             ]
             slide_data = {**slide_data, "contents": [*kept, *prepared]}
 
@@ -2948,14 +2948,18 @@ class AgentLoop:
                 block = tool_result.data.get("content")
                 if target is not None and block:
                     slots = self.working_state.prepared_visuals.setdefault(target, [])
-                    # One block per type *per region*: rebuilding the
-                    # stat callouts in the right rail must not discard
-                    # the ones in the left.
-                    slot_key = (block.get("type"), block.get("regionId"))
+                    # One block per type, per region, *per slot*: rebuilding
+                    # the stat callouts in the right rail must not discard the
+                    # ones in the left, and a dashboard's bridge chart must not
+                    # discard the mix chart beside it. Region alone was enough
+                    # while a slide carried one chart; on a page with no region
+                    # tree two charts both bind to the same nothing, and the
+                    # second silently replaced the first - the tool reported
+                    # success and the exhibit never reached the page.
+                    key = slot_key(block)
                     slots[:] = [
                         existing for existing in slots
-                        if (existing.get("type"),
-                            existing.get("regionId")) != slot_key
+                        if slot_key(existing) != key
                     ]
                     slots.append(block)
 
