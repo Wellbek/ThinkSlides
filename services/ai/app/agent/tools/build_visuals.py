@@ -37,7 +37,13 @@ from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-CHART_TYPES = ["bar", "line", "pie", "scatter", "area"]
+CHART_TYPES = ["bar", "barh", "line", "pie", "scatter", "area"]
+
+# Past roughly this, a category label cannot be printed under a vertical bar
+# without being rotated or truncated, and both read badly on a slide. The
+# figure is the label length the axis can carry at slide size, divided among
+# the categories - so six long names trip it and twelve short ones do not.
+HORIZONTAL_LABEL_BUDGET = 90
 LABEL_MODES = ["auto", "none", "all", "terminal", "end"]
 VALUE_FORMATS = ["number", "percent", "currency"]
 
@@ -76,6 +82,36 @@ def _as_list(value) -> list:
     return []
 
 
+def _orient(chart_type: str, categories: list[str]) -> tuple[str, str]:
+    """
+    Turn a bar chart on its side when its labels need the room.
+
+    "Enterprise software and services" under a vertical bar is either rotated
+    forty-five degrees or truncated, and both read badly on a slide. Which of
+    the two happens is a matplotlib detail; that the chart is worse either way
+    is not.
+
+    Decided here rather than asked of the model, for the same reason the rest
+    of this module validates rather than trusts: label geometry is arithmetic,
+    and a tool that already normalises its input should not make the caller
+    reason about pixel widths. A caller that explicitly asked for barh, or for
+    anything that is not a bar, is left alone.
+    """
+    if chart_type != "bar" or not categories:
+        return chart_type, ""
+
+    total = sum(len(str(c)) for c in categories)
+    if total <= HORIZONTAL_LABEL_BUDGET:
+        return chart_type, ""
+
+    longest = max(categories, key=lambda c: len(str(c)))
+    return "barh", (
+        f". Drawn as horizontal bars: the category labels total {total} "
+        f"characters (longest {str(longest)!r}), which will not print under "
+        "vertical bars without being rotated or truncated"
+    )
+
+
 class BuildChartTool:
     """Validate and normalise a chart before it reaches a slide."""
 
@@ -103,8 +139,12 @@ class BuildChartTool:
                     name="chart_type", type="string", enum=CHART_TYPES,
                     description=(
                         "line for change over time, bar for comparison across "
-                        "categories, pie for parts of one whole, scatter for a "
-                        "relationship between two measures, area for a cumulative total"
+                        "categories, barh for the same comparison when the "
+                        "category names are long (a ranked list of companies or "
+                        "sectors), pie for parts of one whole, scatter for a "
+                        "relationship between two measures, area for a cumulative "
+                        "total. Ask for bar and the tool switches to barh by "
+                        "itself when the labels need it."
                     ),
                 ),
                 ToolParameter(
@@ -347,6 +387,8 @@ class BuildChartTool:
                 "The pie's values sum to zero, so there are no shares to draw.", start
             )
 
+        chart_type, orientation_note = _orient(chart_type, categories)
+
         chart: dict = {
             "chartType": chart_type,
             "categories": categories,
@@ -382,7 +424,7 @@ class BuildChartTool:
                 "summary": (
                     f"{chart_type} chart with {len(clean_series)} series over "
                     f"{len(categories)} categories, attached to slide "
-                    f"{slide_index + 1}"
+                    f"{slide_index + 1}{orientation_note}"
                 ),
             },
             duration_ms=int((time.time() - start) * 1000),
