@@ -332,6 +332,20 @@ async def _run_agent(
                     if event.get("type") == "message_complete":
                         final_content = event.get("content", "")
 
+                    # A run can end on an "error" event without raising - the
+                    # loop yields one and returns rather than propagating an
+                    # exception (provider failures, a stalled phase, ...). If
+                    # nothing else has set final_content by the time the loop
+                    # exits, the generic "generation completed" fallback below
+                    # would otherwise claim success for a run that failed.
+                    if event.get("type") == "error":
+                        error_message = event.get("message", "")
+                        final_content = (
+                            f"The run couldn't finish: {error_message}"
+                            if error_message
+                            else "The run couldn't finish because of an unexpected error. Please try again."
+                        )
+
                     # Capture question event for user-facing assistant message
                     if event.get("type") == "question":
                         question_text = event.get("question", "")
@@ -434,6 +448,7 @@ async def _run_agent(
                                 file_event = {
                                     "type": "file_generated",
                                     "phase": "rendering",
+                                    "step": "render",
                                     "fileId": file_id,
                                     "fileName": file_name,
                                     "fileUrl": f"/api/files/{file_id}",
@@ -461,13 +476,39 @@ async def _run_agent(
                     event_count, session_id
                 )
 
-                # FALLBACK: ensure we have text to show
+                # A question sets working_state:{session_id} so a resume can
+                # rebuild context and continue. It's only ever cleared on a
+                # genuine finish (AgentLoop._clear_working_state, called once
+                # validation settles) - never on an error termination. Left
+                # stale, that key is what the orchestrator's /messages
+                # handler checks to decide a new message is actually an
+                # answer to the old question, so an unrelated message sent
+                # after a failed run gets silently routed as one. Whenever
+                # this run ends without still being paused, the key must not
+                # outlive it, success or not.
+                if not run_paused:
+                    try:
+                        await redis_client.delete(f"working_state:{session_id}")
+                    except Exception as redis_err:
+                        logger.error(
+                            "_run_agent: failed to clear working_state for session %s: %s",
+                            session_id, str(redis_err),
+                        )
+
+                # FALLBACK: ensure we have text to show. By this point a
+                # question, an error, or a real file should already have set
+                # final_content - reaching this branch means the loop ended
+                # without any of those, which is itself unexpected and must
+                # not be reported as a success it did not confirm.
                 if not final_content:
                     if generated_files:
                         file_names = ", ".join(f["fileName"] for f in generated_files)
                         final_content = f"Presentation generated: {file_names}"
                     else:
-                        final_content = "Presentation generation completed. Check the preview panel for your slides."
+                        final_content = (
+                            "The run ended without producing a deck or a clear "
+                            "reason why. Please try again."
+                        )
 
                 # Save directly into the assistant placeholder
                 await db.execute(
@@ -537,6 +578,15 @@ async def _run_agent(
                     f"agent:events:{session_id}", json.dumps(done_event)
                 )
                 logger.info("_run_agent: published ERROR done event for %s", session_id)
+
+                # This run is not paused - an unhandled exception ended it,
+                # same as the handled-error case above. Don't leave a stale
+                # working_state behind for the next message to be silently
+                # routed against as if it were answering an old question.
+                try:
+                    await redis_client.delete(f"working_state:{session_id}")
+                except Exception:
+                    pass
         except Exception as final_e:
             logger.error(
                 "_run_agent: CRITICAL - couldn't even save fallback: %s", str(final_e)
@@ -639,6 +689,7 @@ async def simple_fallback(
     file_event = {
         "type": "file_generated",
         "phase": "rendering",
+        "step": "render",
         "fileId": file_id,
         "fileName": f"{req.title}.pptx",
         "fileUrl": f"/api/files/{file_id}",

@@ -26,9 +26,16 @@ def _loop(mode: str | None = MODE_SIMPLE, *, consult_user: bool = False) -> Agen
     AgentLoop._check_precondition) otherwise block planning and drafting, which
     is exactly what almost every test in this file is exercising. The
     checkpoints themselves are covered by TestConsultationCheckpoints below.
+
+    autonomy_confirmed follows the same flag: it is what actually lets
+    finalize_and_render_pptx through without a chosen direction or a
+    template, so a run that declined consultation has to carry it too, or
+    every finalize-reaching test would need its own design system fixture
+    for a question this run was never going to ask in the first place.
     """
     loop = AgentLoop(db=None, mode=mode)
     loop.questions_declined = not consult_user
+    loop.working_state.autonomy_confirmed = not consult_user
     return loop
 
 
@@ -87,6 +94,10 @@ def _ready_state(**overrides) -> str:
         "scouted": True,
         "consulted_before_planning": True,
         "offered_directions": True,
+        # offered_directions=True means the run already paused on the choice -
+        # "ready to draft" only makes sense past that pause with an answer on
+        # record, same as reviewed_outline_with_user below it.
+        "chosen_direction": {"id": "default", "designSystem": {"sourceType": "direction"}},
         "reviewed_outline_with_user": True,
         "mode": "simple",
         "detail_level": "detailed",

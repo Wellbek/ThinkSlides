@@ -347,10 +347,12 @@ Return a JSON object with this structure:
       "chapterOf": "The subject this slide belongs to, when the deck repeats a chapter per subject - otherwise omit",
       "notes": "Any additional notes for content generation"
     }}
-  ]
+  ],
+  "deviations": ["Only when this plan does not do exactly what was asked - see the rule below. Omit or leave empty otherwise."]
 }}
 
 Rules:
+- Before anything else, check this plan against every explicit, checkable instruction above (a stated count, "one per X", a specific list of items to cover, an explicit exclusion) - not the general topic, the concrete asks. If the plan cannot satisfy one (the content summary does not actually contain enough distinct items for the count asked), or you are deliberately adding slides or scope nobody asked for, name it plainly in "deviations": what was asked, what you planned instead, and why. An empty list is a claim that the plan matches what was asked, not a default - leave it empty only when that is actually true. This is shown to the user before the deck is built, so a real mismatch named here is a redirect; the same mismatch unsaid is the user finding out only once it is rendered.
 - First slide should be a title slide (contentType "title") - it carries only a title and an optional subtitle, no body bullets, so give it 0-1 key points.
 - Last slide should be a conclusion/summary slide. If it recaps points (3-5 key points), give it contentType "content" so the points render in a body placeholder - only use contentType "conclusion" (title-only) for a slide with no body content.
 - Every slide that has key points MUST use a contentType whose layout has a body placeholder: "content" (one body), "twoColumn" (two bodies), "chart", "table", or "image". Never assign 3-5 key points to a "title" or "conclusion" slide - those layouts have no body placeholder and the points would be dropped.

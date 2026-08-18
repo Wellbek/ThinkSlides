@@ -10,14 +10,13 @@ import { buildDownloadUrl, formatFileSize } from "@/lib/download";
 import { PanelRightClose, Download, ExternalLink, Presentation, FileDown } from "lucide-react";
 
 export function ChatFlow({ onCollapse }: { collapsed: boolean; onCollapse: () => void }) {
-  const [tab, setTab] = useState<"activity" | "messages" | "files">("activity");
+  const [tab, setTab] = useState<"activity" | "files">("activity");
   const activeFiles = useChatStore((s) => s.activeFiles);
 
   return (
     <>
       <div className="ws-tabs">
         <div className={`ws-tab ${tab === "activity" ? "active" : ""}`} onClick={() => setTab("activity")}>Activity</div>
-        <div className={`ws-tab ${tab === "messages" ? "active" : ""}`} onClick={() => setTab("messages")}>Messages</div>
         <div className={`ws-tab ${tab === "files" ? "active" : ""}`} onClick={() => setTab("files")}>
           Files{activeFiles.length > 0 && <span className="ws-tab-count">{activeFiles.length}</span>}
         </div>
@@ -33,11 +32,6 @@ export function ChatFlow({ onCollapse }: { collapsed: boolean; onCollapse: () =>
           content the user is reading, twice per wait. */}
       <div className="ws-flow-body">
         {tab === "activity" && <ActivityFeed />}
-        {tab === "messages" && (
-          <div className="ws-feed">
-            <div className="ws-empty-note">The full transcript lives in the Activity tab. This view will list raw messages.</div>
-          </div>
-        )}
         {tab === "files" && (
           <div className="ws-feed">
             {activeFiles.length === 0 && (

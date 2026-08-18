@@ -186,8 +186,20 @@ class TestValidationAndOutput:
             "warnings": [],
         })
 
-        assert summary.startswith("Rejected: 1 error")
+        assert "rejected - 1 error" in summary
         assert "layoutId" in summary
+
+    def test_validation_is_labelled_by_slide_like_every_other_per_slide_tool(self):
+        """Ten validation calls in a row were indistinguishable from each
+        other - _design_slide and _select_image both name the slide they
+        acted on, this did not."""
+        summary = _summary("validate_slide_json", {
+            "slideIndex": 3,
+            "errors": ["Missing required field: layoutId"],
+            "warnings": [],
+        })
+
+        assert summary.startswith("Slide 4: rejected")
 
 
 class TestConsultation:

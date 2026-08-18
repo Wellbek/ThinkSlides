@@ -42,7 +42,6 @@ func processorForTest(t *testing.T) (*Processor, *redis.Client) {
 	t.Helper()
 	client := redisForTest(t)
 	// queue/hub/aiClient/dbPool are not exercised by the waiter lifecycle.
-	// A nil dbPool makes saveAssistantMessage a logged no-op.
 	p := NewProcessor(nil, nil, nil, client, nil)
 	return p, client
 }

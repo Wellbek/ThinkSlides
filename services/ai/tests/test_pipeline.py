@@ -325,6 +325,11 @@ class TestTheRunResumesWhereItStopped:
         loop, session_id, seen = _loop(
             [_calls(("web_search", {"query": "q"}))],
             state=self._after_consult(
+                # INTAKE's slideCount (5) would otherwise disagree with
+                # TOOL_RESULTS["plan_presentation_structure"]'s fixed 2 slides
+                # and turn this into the deviations path this test is not
+                # about - see test_a_slide_count_mismatch_is_flagged_as_a_deviation.
+                brief={**json.loads(INTAKE), "slideCount": 0},
                 offered_directions=True,
                 web_search_calls=9,
                 researched_urls=[f"https://s/{i}" for i in range(8)],
@@ -338,6 +343,60 @@ class TestTheRunResumesWhereItStopped:
         question = next(e for e in events if e["type"] == "question")
         assert question["question"] == "Shall I build this outline?"
         assert "1. Origins" in question["context"]
+
+    @pytest.mark.asyncio
+    async def test_a_slide_count_mismatch_is_flagged_as_a_deviation(self, monkeypatch):
+        """INTAKE asks for five slides; the mocked plan has two. A prompt line
+        asking for a count is a request, not an enforcement - the model can
+        and does plan a different one without saying so, and the review
+        question is where a real user finds out, before anything is drafted."""
+        loop, session_id, seen = _loop(
+            [_calls(("web_search", {"query": "q"}))],
+            state=self._after_consult(
+                offered_directions=True,
+                web_search_calls=9,
+                researched_urls=[f"https://s/{i}" for i in range(8)],
+            ),
+            messages=[{"role": "user", "content": "All 32 recognised"}],
+            monkeypatch=monkeypatch,
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        question = next(e for e in events if e["type"] == "question")
+        assert "doesn't fully match" in question["question"]
+        assert "asked for 5 slides" in question["context"]
+        assert "has 2" in question["context"]
+        # The outline itself is still there, past the deviation note.
+        assert "1. Origins" in question["context"]
+
+    @pytest.mark.asyncio
+    async def test_a_model_reported_deviation_is_shown_the_same_way(self, monkeypatch):
+        """Not every deviation is a count the loop can check mechanically -
+        "cover only 2026 approvals" or "one project per slide" are free text,
+        and only the model planning the deck can tell whether it held. Its
+        self-report is shown exactly like the mechanical one: leading the
+        review message, not buried in the outline."""
+        loop, session_id, seen = _loop(
+            [],
+            state=self._after_consult(
+                brief={**json.loads(INTAKE), "slideCount": 2},
+                offered_directions=True,
+                presentation_structure={
+                    **TOOL_RESULTS["plan_presentation_structure"],
+                    "deviations": ["Only 2 of the 3 breeds you named turned up material - the third is omitted."],
+                },
+                reviewed_outline_with_user=False,
+            ),
+            messages=[{"role": "user", "content": "All 32 recognised"}],
+            monkeypatch=monkeypatch,
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        question = next(e for e in events if e["type"] == "question")
+        assert "doesn't fully match" in question["question"]
+        assert "Only 2 of the 3 breeds" in question["context"]
 
 
 class TestRevisionWalksBackwards:
@@ -390,6 +449,59 @@ class TestRevisionWalksBackwards:
         assert pipeline.next_phase(loop).name == "render"
 
 
+class TestARevisionIsLabelledAsOne:
+    """A first-pass design_slide_content and a fix-up one look identical in
+    the feed - same tool name, same-shaped summary - which is what makes
+    legitimate, bounded self-correction read as pointless repetition."""
+
+    @pytest.mark.asyncio
+    async def test_a_flagged_slide_is_marked_as_a_revision_with_its_reason(self, monkeypatch):
+        loop, session_id, _seen = _loop([], monkeypatch=monkeypatch)
+        loop.working_state.presentation_structure = TOOL_RESULTS["plan_presentation_structure"]
+        loop.working_state.slides_needing_revision = [1]
+        loop.working_state.validation_issues = [
+            {"slideIndex": 1, "detail": "chart has no data"},
+        ]
+        loop.working_state.selected_layouts[1] = {"layoutId": "content"}
+
+        events = [
+            payload async for kind, payload in loop._call_tool(
+                "design_slide_content", {"slide_index": 1},
+                context={}, session_id=session_id,
+                phase=pipeline.PHASES_BY_NAME["draft"],
+            )
+            if kind == "event"
+        ]
+
+        call = next(e for e in events if e["type"] == "tool_call")
+        assert call["isRevision"] is True
+        assert call["revisionReason"] == "chart has no data"
+
+        result = next(e for e in events if e["type"] == "tool_result")
+        assert result["summary"].startswith("Fixing Slide 2 (chart has no data):")
+
+    @pytest.mark.asyncio
+    async def test_a_first_pass_carries_no_revision_marker(self, monkeypatch):
+        loop, session_id, _seen = _loop([], monkeypatch=monkeypatch)
+        loop.working_state.presentation_structure = TOOL_RESULTS["plan_presentation_structure"]
+        loop.working_state.selected_layouts[0] = {"layoutId": "content"}
+
+        events = [
+            payload async for kind, payload in loop._call_tool(
+                "design_slide_content", {"slide_index": 0},
+                context={}, session_id=session_id,
+                phase=pipeline.PHASES_BY_NAME["draft"],
+            )
+            if kind == "event"
+        ]
+
+        call = next(e for e in events if e["type"] == "tool_call")
+        assert "isRevision" not in call
+
+        result = next(e for e in events if e["type"] == "tool_result")
+        assert not result["summary"].startswith("Fixing")
+
+
 class TestTheLoopCallsToolsWithArgumentsTheyHave:
     """The loop is the caller now, so a parameter-name mismatch is not a model
     that tries again differently - it is a stalled run. One shipped: the
@@ -415,6 +527,15 @@ class TestTheLoopCallsToolsWithArgumentsTheyHave:
                 "scouted": phase_name != "scout",
                 "consulted_before_planning": phase_name not in ("scout", "consult"),
                 "offered_directions": phase_name not in ("scout", "consult", "design"),
+                # offered_directions=True models a run past that pause, which
+                # only makes sense with an answer on record - finalize refuses
+                # to render an unsettled look (no chosen direction, no
+                # template, no confirmed autonomy).
+                "chosen_direction": (
+                    {"id": "default"}
+                    if phase_name not in ("scout", "consult", "design")
+                    else None
+                ),
                 "presentation_structure": TOOL_RESULTS["plan_presentation_structure"],
                 # The planner refuses to replan a deck that has slides, so the
                 # one phase that must run without them gets none.

@@ -227,15 +227,16 @@ def _build_visual(args: dict, data: dict) -> str:
 
 
 def _validate_slide(args: dict, data: dict) -> str:
+    where = _slide_label(data.get("slideIndex"))
     errors = data.get("errors") or []
     warnings = data.get("warnings") or []
     if errors:
-        return "Rejected: " + _join([_plural(len(errors), "error")] + (
+        return f"{where}: rejected - " + _join([_plural(len(errors), "error")] + (
             [_plural(len(warnings), "warning")] if warnings else []
         )) + f" - {_clip(str(errors[0]), 90)}"
     if warnings:
-        return f"Valid, with {_plural(len(warnings), 'warning')}: {_clip(str(warnings[0]), 90)}"
-    return "The slide matches the schema."
+        return f"{where}: valid, with {_plural(len(warnings), 'warning')}: {_clip(str(warnings[0]), 90)}"
+    return f"{where} matches the schema."
 
 
 def _select_image(args: dict, data: dict) -> str:

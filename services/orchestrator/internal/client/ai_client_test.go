@@ -154,9 +154,8 @@ func TestErrorResponseIsSurfacedWithItsBody(t *testing.T) {
 
 // The orchestrator writes the user message and the empty assistant placeholder
 // before it queues the job. It has to tell the AI service which rows those
-// are, or the AI service writes its own pair and the exchange ends up with two
-// user rows and two placeholders - the second of which saveAssistantMessage
-// can then fill instead of the right one.
+// are, or the AI service writes its own pair and the exchange ends up with
+// two user rows and two placeholders, one of which never gets filled.
 
 func TestSendMessageForwardsTheRowsItAlreadyWrote(t *testing.T) {
 	var got capture

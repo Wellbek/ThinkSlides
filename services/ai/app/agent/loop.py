@@ -1496,7 +1496,7 @@ class AgentLoop:
             yield _event("thought", "content_analysis", {
                 "content": "Loading session context and design system...",
                 "timestamp": import_timestamp,
-            })
+            }, step="intake")
 
         context = await self._load_context(session_id)
 
@@ -1554,7 +1554,7 @@ class AgentLoop:
                        if recoloured else "")
                 ),
                 "timestamp": _iso_now(),
-            })
+            }, step="design")
 
         # A request to change the outline, read before the walk for the same
         # reason the direction is: the walker decides where to resume from the
@@ -1579,7 +1579,7 @@ class AgentLoop:
                         "figures this deck needs and cite what I find."
                     ),
                     "timestamp": _iso_now(),
-                })
+                }, step="research")
             else:
                 # Nothing to search with. Say so rather than silently carrying
                 # on as though the user's answer had been honoured.
@@ -1590,7 +1590,7 @@ class AgentLoop:
                         "figures I cannot verify and say so on the slides."
                     ),
                     "timestamp": _iso_now(),
-                })
+                }, step="research")
 
         # Publish the citation settings for the tools, after the research
         # answer has been read - a run that just switched to deep research is
@@ -1676,7 +1676,7 @@ class AgentLoop:
                         ),
                         "code": "phase_stalled",
                         "timestamp": _iso_now(),
-                    })
+                    }, step=phase.name)
                     return
 
         # Every phase is finished, so the deck is rendered and checked. The
@@ -1703,7 +1703,9 @@ class AgentLoop:
             {"template_path": ""},
             context=context,
             session_id=session_id,
-            phase=pipeline.PHASES_BY_NAME["intake"],
+            # Both callers (_phase_design, _phase_plan) are design-phase work;
+            # "intake" here would tag the read under the wrong phase box.
+            phase=pipeline.PHASES_BY_NAME["design"],
         ):
             if kind == "event":
                 yield payload
@@ -1721,7 +1723,7 @@ class AgentLoop:
         yield "event", _event("thought", "content_analysis", {
             "content": "Reading the request...",
             "timestamp": _iso_now(),
-        })
+        }, step="intake")
 
         documents = "yes" if self._session_has_documents else "no"
         prompt = _INTAKE_PROMPT.format(
@@ -1759,7 +1761,7 @@ class AgentLoop:
             yield "event", _event("thought", "content_analysis", {
                 "content": summary,
                 "timestamp": _iso_now(),
-            })
+            }, step="intake")
 
     async def _phase_scout(
         self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
@@ -1930,7 +1932,7 @@ class AgentLoop:
                 f"{chosen.get('rationale')}"
             ),
             "timestamp": _iso_now(),
-        })
+        }, step="design")
 
     async def _phase_plan(
         self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
@@ -1970,6 +1972,13 @@ class AgentLoop:
         The one pause that happens even when the user handed over every other
         decision: seeing the slide titles before they are written is the
         cheapest moment to redirect a deck.
+
+        plan_presentation_structure self-reports into "deviations" whenever
+        the plan does not do exactly what was asked (a stated count it could
+        not reach, scope it added on its own). That is only worth having if
+        it is put in front of the person who asked, not left in the plan for
+        nobody to read - so it leads this message rather than being folded
+        into the outline as one more line among many.
         """
         structure = self.working_state.presentation_structure or {}
         slides = structure.get("slides") or []
@@ -1977,15 +1986,27 @@ class AgentLoop:
             f"{i + 1}. {s.get('title') or s.get('heading') or 'Untitled'}"
             for i, s in enumerate(slides)
         )
+        deviations = [str(d).strip() for d in (structure.get("deviations") or []) if str(d or "").strip()]
+        if deviations:
+            noted = "\n".join(f"- {d}" for d in deviations)
+            context_text = (
+                f"Before you approve this, here is where the plan does not do "
+                f"exactly what you asked:\n{noted}\n\nThe rest of the outline:\n{outline}"
+            )
+            question = "This plan doesn't fully match what you asked for - shall I build it anyway?"
+        else:
+            context_text = f"Here is the outline I have planned:\n{outline}"
+            question = "Shall I build this outline?"
+
         async for item in self._ask_and_pause(
             [{
-                "question": "Shall I build this outline?",
+                "question": question,
                 "options": [
                     "Go ahead as planned",
                     "Change something - I'll say what",
                 ],
             }],
-            context=f"Here is the outline I have planned:\n{outline}",
+            context=context_text,
             phase=pipeline.PHASES_BY_NAME["review"],
             run_context_=context,
             session_id=session_id,
@@ -2169,7 +2190,7 @@ class AgentLoop:
                     "message": _provider_failure_message(e),
                     "code": "provider_unavailable",
                     "timestamp": _iso_now(),
-                })
+                }, step=phase.name)
                 yield "provider_failed", True
                 return
 
@@ -2180,7 +2201,7 @@ class AgentLoop:
                 yield "event", _event("thought", phase.label, {
                     "content": assistant_message["content"],
                     "timestamp": _iso_now(),
-                })
+                }, step=phase.name)
 
             if not tool_calls:
                 # Nothing was called and the phase is unfinished. Say what is
@@ -2215,6 +2236,7 @@ class AgentLoop:
                     context=context,
                     session_id=session_id,
                     current_phase=phase.label,
+                    step=phase.name,
                 ):
                     if kind == "event":
                         yield "event", payload
@@ -2257,7 +2279,7 @@ class AgentLoop:
                 yield _event("thought", "complete", {
                     "content": str(payload).strip(),
                     "timestamp": _iso_now(),
-                })
+                }, step="complete")
 
     # ── Running one phase ─────────────────────────────────────────────────
 
@@ -2325,6 +2347,7 @@ class AgentLoop:
             context=context,
             session_id=session_id,
             current_phase=phase.label,
+            step=phase.name,
         ):
             yield kind, payload
 
@@ -2635,6 +2658,27 @@ class AgentLoop:
                     "design_slide_content for each missing slide first."
                 )
 
+            # The look is "settled" three ways: a direction was chosen, a real
+            # uploaded template answers the question on its own, or the user
+            # handed the remaining decisions to the agent. Absent all three,
+            # finalizing renders the same built-in default every time and the
+            # user never finds out a choice existed - propose_design_directions
+            # is registered and works, it just was not required. This mirrors
+            # the settledness check _answer_from_context already uses for a
+            # re-requested colour, so a template or a chosen direction is
+            # never re-litigated here either.
+            design_system = self.context.get("design_system") or {}
+            template_supplied = str(design_system.get("sourceType") or "default") != "default"
+            if not (ws.chosen_direction or template_supplied or ws.autonomy_confirmed):
+                return (
+                    "No design direction has been chosen and no template was supplied - "
+                    "finalizing now would render the built-in default look, which the user "
+                    "was never asked about. Call propose_design_directions first and let "
+                    "them pick (or accept the default via that same question). If they have "
+                    "already said to decide everything yourself, that autonomy has not been "
+                    "recorded yet for this run - ask once, plainly, before finalizing."
+                )
+
         if fn_name == "validate_rendered_output":
             if not ws.has_called_finalize:
                 return (
@@ -2747,6 +2791,7 @@ class AgentLoop:
         context: dict,
         session_id: uuid.UUID,
         current_phase: str,
+        step: str | None = None,
     ) -> AsyncIterator[tuple[str, object]]:
         """Run one tool call and record everything it changes about the run.
 
@@ -2863,15 +2908,17 @@ class AgentLoop:
             yield "event", _event("thought", "validation", {
                 "content": narration,
                 "timestamp": _iso_now(),
-            })
+            }, step=step)
 
         # Yield tool_call event
+        is_revision, revision_reason = self._revision_context(fn_name, fn_args)
         yield "event", _event("tool_call", current_phase, {
             "toolName": fn_name,
             "toolArgs": fn_args,
             "callId": call_id,
             "timestamp": _iso_now(),
-        })
+            **({"isRevision": True, "revisionReason": revision_reason} if is_revision else {}),
+        }, step=step)
 
         # Execute tool
         tool_start = time.time()
@@ -2935,19 +2982,26 @@ class AgentLoop:
 
         # Yield tool_result event. The summary is what the feed leads
         # with; the raw result stays on the event behind a disclosure.
+        summary = summarize_tool_result(
+            fn_name, fn_args, tool_result.data, tool_result.success
+        )
+        if is_revision and summary:
+            where = f"Slide {fn_args.get('slide_index') + 1}"
+            summary = (
+                f"Fixing {where} ({revision_reason}): {summary}" if revision_reason
+                else f"Fixing {where}: {summary}"
+            )
         yield "event", _event("tool_result", current_phase, {
             "toolName": fn_name,
             "callId": call_id,
             "result": tool_result.data if tool_result.success else tool_result.error,
-            "summary": summarize_tool_result(
-                fn_name, fn_args, tool_result.data, tool_result.success
-            ),
+            "summary": summary,
             "durationMs": tool_duration,
             "success": tool_result.success,
             "tokenCount": tool_result.token_count,
             "timestamp": _iso_now(),
             "sources": sources if sources else None,
-        })
+        }, step=step)
 
         # Stage the per-slide previews produced by this render. They are
         # NOT published yet: validate_rendered_output runs next and may
@@ -3039,7 +3093,26 @@ class AgentLoop:
             # Designed" prompt recap never appeared.
             if fn_name == "plan_presentation_structure":
                 if tool_result.data and "totalSlides" in tool_result.data:
-                    self.working_state.presentation_structure = tool_result.data
+                    structure = tool_result.data
+                    # The one explicit numeric constraint this tool already
+                    # takes as a parameter, checked here because a prompt line
+                    # ("Target Slide Count: 5") is a request, not an
+                    # enforcement - the model can and does plan a different
+                    # count without saying so. Folded into the same
+                    # self-reported "deviations" list the tool's own prompt
+                    # asks it to keep, so the review step (see _phase_review)
+                    # surfaces both kinds the same way rather than needing a
+                    # second, parallel mechanism.
+                    target_count = int(fn_args.get("target_slide_count") or 0)
+                    actual_count = int(structure.get("totalSlides") or 0)
+                    if target_count > 0 and actual_count != target_count:
+                        deviations = list(structure.get("deviations") or [])
+                        deviations.append(
+                            f"You asked for {target_count} slides; the plan has "
+                            f"{actual_count}."
+                        )
+                        structure["deviations"] = deviations
+                    self.working_state.presentation_structure = structure
 
             if fn_name == "design_slide_content":
                 if tool_result.data and "slideIndex" in tool_result.data:
@@ -3230,16 +3303,20 @@ class AgentLoop:
                 d for d in (data.get("directions") or []) if isinstance(d, dict)
             ]
             waiting = "Waiting for the user to choose a design direction"
+            step = "design"
         else:
             # Which checkpoint this satisfied is decided by where the run is,
             # not by what the model says it is doing: before a plan exists the
             # question is the consultation, after it the outline review.
             if ws.presentation_structure:
                 ws.reviewed_outline_with_user = True
-            elif records_consultation:
-                # The offer to take over is not the consultation: answering
-                # "no" to it leaves every real question still unasked.
-                ws.consulted_before_planning = True
+                step = "review"
+            else:
+                if records_consultation:
+                    # The offer to take over is not the consultation: answering
+                    # "no" to it leaves every real question still unasked.
+                    ws.consulted_before_planning = True
+                step = "consult"
             waiting = f"Waiting for user input: {data.get('question')}"
 
         yield _event("question", "user_input", {
@@ -3248,7 +3325,7 @@ class AgentLoop:
             "questions": data.get("questions", []),
             "context": data.get("context", ""),
             "timestamp": _iso_now(),
-        })
+        }, step=step)
         await self._save_working_state(session_id)
         # The caller returns on seeing this: the run is over until the answer
         # arrives as a new request. A `break` here once left the just-appended
@@ -3259,7 +3336,7 @@ class AgentLoop:
             "content": waiting,
             "paused": True,
             "timestamp": _iso_now(),
-        })
+        }, step=step)
 
     async def _execute_tool(self, name: str, args: dict) -> ToolResult:
         """Execute a registered tool by name."""
@@ -3383,7 +3460,7 @@ class AgentLoop:
         yield _event("thought", "structure_planning", {
             "content": "Replanning the outline around what you asked to change.",
             "timestamp": _iso_now(),
-        })
+        }, step="plan")
 
     def _resolve_direction_choice(self, chat_messages: list[dict]) -> dict | None:
         """
@@ -3690,17 +3767,17 @@ class AgentLoop:
             prompt_parts.extend([
                 "## Sourcing Content (Deep Thinking is OFF)",
                 "",
-                "- You have no web access on this run. Write from the user's documents, the conversation, and your own knowledge.",
-                "- Do NOT invent precise statistics, dates, or quotations you are not confident in. Prefer qualitative statements over fabricated numbers.",
+                "- You have no web access on this run, and no research pass runs before you write. Everything on the deck has to come from the user's documents, the conversation, or what you already know - there is no fourth source, and inventing one is not an option this run has.",
+                "- A NAMED, SPECIFIC claim - a company, a person, a product, a dollar figure, a percentage, a date, a statistic - stated as plain fact is a claim you are telling the user is true. If it is not in the user's documents or the conversation, and you are not genuinely certain of it, you have exactly two options: qualify it in the text itself ('a figure on the order of...', 'this varies by source, but a commonly cited estimate is...', 'exact figures were not available; directionally...'), or leave it out and write the point qualitatively instead. There is no third option where you state a specific number or a specific name with no source and no hedge, because the sentence that resulted is indistinguishable from a properly sourced one to the person reading it - the same sentence you would use if you actually knew it.",
+                "- Concretely: 'partnerships with SolarCo and WindTech' invents companies that do not exist. '40% North America, 30% Europe, 30% Asia' invents a distribution nobody gave you. '$10 million' invents a figure with no source, then reused as a different slide's total. Every one of those reads as sourced, and not a single one actually was. This is not a hypothetical - it is what an unqualified run of this exact prompt has actually produced.",
                 "- This applies with full force to build_chart, build_table and "
-                "build_key_metrics. A chart makes a number look sourced, so charting a "
-                "figure you actually guessed is worse than writing no chart at all. "
+                "build_key_metrics. A chart is a stronger claim than a sentence, not a "
+                "weaker one - it tells the reader these numbers were measured, not typed. "
                 "Only build a visual from figures present in the user's documents, the "
-                "conversation, or facts you are genuinely confident of. If the request "
-                "needs current results you do not have, say so on the slide and in its "
-                "notes, and chart the shape of the question rather than inventing "
-                "values for it.",
-                "- If the request genuinely needs current or verifiable facts, say so in your slides' framing rather than guessing.",
+                "conversation, or facts you are genuinely confident of. If a slide's point "
+                "is numeric but you do not have real numbers for it, do not invent placeholder "
+                "ones to fill the chart shape - write the point as prose, qualified, or say "
+                "on the slide and in its notes that the figures were not available.",
                 "",
             ])
 
@@ -3866,6 +3943,25 @@ class AgentLoop:
 
         return "\n".join(prompt_parts)
 
+    def _revision_context(self, fn_name: str, fn_args: dict) -> tuple[bool, str]:
+        """Whether this design_slide_content call is fixing a flagged slide,
+        and why - the same information slide_directive already puts in front
+        of the model, surfaced on the event too so the activity feed can show
+        "Fixing slide 4 (validation: missing chart data)" instead of a bare
+        repeated "Design slide content" indistinguishable from the first pass.
+        """
+        if fn_name != "design_slide_content":
+            return False, ""
+        slide_index = fn_args.get("slide_index")
+        if not isinstance(slide_index, int) or slide_index not in self.working_state.slides_needing_revision:
+            return False, ""
+        reasons = [
+            str(issue.get("detail") or issue.get("type") or "").strip()
+            for issue in self.working_state.validation_issues
+            if issue.get("slideIndex") == slide_index and (issue.get("detail") or issue.get("type"))
+        ]
+        return True, "; ".join(dict.fromkeys(r for r in reasons if r))
+
     def _describe_validation_issues(self, limit: int = 8) -> str:
         """Render the last validation run's issues as a slide-numbered list."""
         issues = self.working_state.validation_issues
@@ -3894,7 +3990,7 @@ class AgentLoop:
             return []
 
         events = [
-            _event("slide_finalized", "rendering", {**preview, "timestamp": _iso_now()})
+            _event("slide_finalized", "rendering", {**preview, "timestamp": _iso_now()}, step="render")
             for preview in self.working_state.pending_slide_previews
         ]
 
@@ -3909,7 +4005,7 @@ class AgentLoop:
                     "renderResult": render_result,
                     "validationClean": True,
                     "timestamp": _iso_now(),
-                }))
+                }, step="validate"))
             else:
                 # Exhausted the revision budget with defects still present.
                 # The deck IS still handed over - once the agent has stopped
@@ -3923,13 +4019,13 @@ class AgentLoop:
                     "issueCount": len(self.working_state.validation_issues),
                     "attempts": self.working_state.validation_attempts,
                     "timestamp": _iso_now(),
-                }))
+                }, step="validate"))
                 events.append(_event("deck_finalized", "validation", {
                     "renderResult": render_result,
                     "validationClean": False,
                     "issues": self.working_state.validation_issues,
                     "timestamp": _iso_now(),
-                }))
+                }, step="validate"))
 
         if events:
             self.working_state.previews_published = True
@@ -4119,7 +4215,7 @@ def _credit_generated_images(slide_data: dict) -> dict:
     return {**slide_data, "footnotes": [*existing, *added]}
 
 
-def _event(event_type: str, phase: str, data: dict) -> dict:
+def _event(event_type: str, phase: str, data: dict, *, step: str | None = None) -> dict:
     """
     Create a typed agent event dict.
 
@@ -4127,6 +4223,13 @@ def _event(event_type: str, phase: str, data: dict) -> dict:
     unrecognised name is not a harmless typo: every event is published to
     Redis, and one the browser was never told to listen for is dropped in
     silence. Failing here is how that gets noticed.
+
+    ``phase`` is the coarse label several pipeline phases share (intake,
+    scout and research are all "content_analysis"), which is all the model's
+    system prompt and the older grouping ever needed. ``step`` is the actual
+    pipeline phase name underneath it - the thing the interface's phase
+    timeline groups by, so "Understand" and "Research" render as the two
+    different things they are instead of folding into one box.
     """
     if event_type not in ALL_EVENT_TYPES:
         raise ValueError(
@@ -4138,6 +4241,7 @@ def _event(event_type: str, phase: str, data: dict) -> dict:
     return {
         "type": event_type,
         "phase": phase,
+        "step": step,
         **data,
     }
 

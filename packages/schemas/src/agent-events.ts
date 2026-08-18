@@ -13,6 +13,30 @@ export type AgentEventPhase =
   | "complete";
 
 /**
+ * The actual pipeline step behind an event's coarser `phase` label.
+ *
+ * `phase` is what several steps share (intake, scout and research are all
+ * "content_analysis"), which is all a prompt ever needed. `step` is what the
+ * interface's phase timeline groups by, so steps that share a `phase` still
+ * render as the distinct things they are - "Understand" and "Research" do not
+ * fold into one box just because the model sees them as the same phase.
+ * Optional and may be absent on events from before this field existed, or on
+ * ones (like a session-load failure) that happen outside any pipeline step.
+ */
+export type PipelineStep =
+  | "intake"
+  | "scout"
+  | "consult"
+  | "design"
+  | "research"
+  | "plan"
+  | "review"
+  | "draft"
+  | "render"
+  | "validate"
+  | "complete";
+
+/**
  * Every event name the browser subscribes to, in one place.
  *
  * This is the list, not a copy of it: `AgentEventType` is derived from it and
@@ -66,6 +90,7 @@ export type InternalAgentEventType = (typeof INTERNAL_AGENT_EVENT_TYPES)[number]
 export interface ThoughtEvent {
   type: "thought";
   phase: AgentEventPhase;
+  step?: PipelineStep;
   content: string;
   durationMs?: number;   // optional, for timing
   timestamp: string;
@@ -74,10 +99,16 @@ export interface ThoughtEvent {
 export interface ToolCallEvent {
   type: "tool_call";
   phase: AgentEventPhase;
+  step?: PipelineStep;
   toolName: string;
   toolArgs: Record<string, unknown>;
   callId: string;
   timestamp: string;
+  // Present only for a design_slide_content call redesigning a slide
+  // validation flagged - distinguishes a fix-up pass from an original one,
+  // which otherwise look identical in the activity feed.
+  isRevision?: boolean;
+  revisionReason?: string;
 }
 
 export interface SourceInfo {
@@ -89,6 +120,7 @@ export interface SourceInfo {
 export interface ToolResultEvent {
   type: "tool_result";
   phase: AgentEventPhase;
+  step?: PipelineStep;
   toolName: string;
   callId: string;
   result: unknown;
@@ -106,6 +138,7 @@ export interface ToolResultEvent {
 export interface SlideFinalizedEvent {
   type: "slide_finalized";
   phase: "content_generation";
+  step?: PipelineStep;
   slideIndex: number;
   slideData: unknown;
   previewUrl?: string;
@@ -115,6 +148,7 @@ export interface SlideFinalizedEvent {
 export interface ErrorEvent {
   type: "error";
   phase: AgentEventPhase;
+  step?: PipelineStep;
   message: string;
   code?: string;
   timestamp: string;
@@ -132,6 +166,7 @@ export interface ProgressEvent {
 export interface FileGeneratedEvent {
   type: "file_generated";
   phase: "rendering";
+  step?: PipelineStep;
   fileId: string;
   fileName: string;
   fileUrl: string;
@@ -176,6 +211,10 @@ export interface AgentQuestion {
 export interface QuestionEvent {
   type: "question";
   phase: "user_input";
+  /** Which pipeline step raised this pause: "consult" for the intake
+   *  clarifying question, "design" for choosing a direction, "review" for
+   *  the outline check. */
+  step?: PipelineStep;
   /** Every question asked in this pause. */
   questions: AgentQuestion[];
   /** The first question, also sent flat for consumers written before a
@@ -213,6 +252,7 @@ export interface RateLimitEvent {
 export interface ValidationUnresolvedEvent {
   type: "validation_unresolved";
   phase: "validation";
+  step?: PipelineStep;
   attempts: number;
   issueCount: number;
   issues: { slideIndex?: number; type?: string; detail?: string }[];
@@ -252,6 +292,7 @@ export interface SessionTitleUpdatedEvent {
 export interface DoneEvent {
   type: "done";
   phase?: "complete";
+  step?: PipelineStep;
   message_id: string;
   content: string;
   files?: FileGeneratedEvent[];

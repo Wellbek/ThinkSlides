@@ -8,16 +8,66 @@ import { buildDownloadUrl, formatFileSize } from "@/lib/download";
 import { ChevronDown, Download, ExternalLink, Globe } from "lucide-react";
 import type { AgentEvent, SourceInfo } from "@thinkslides/schemas";
 
-const PHASE_LABEL: Record<string, string> = {
-  content_analysis: "Analyzing",
-  structure_planning: "Planning structure",
-  layout_selection: "Selecting layout",
-  content_generation: "Designing content",
-  validation: "Validating",
-  rendering: "Rendering",
-  complete: "Complete",
-  user_input: "Awaiting input",
+// ──────────────────────────────────────────────
+// The phase timeline groups the flat event stream into the five things a
+// deck actually goes through - Understand, Research, Design, Draft, Render &
+// check - rather than the ten-odd pipeline steps underneath, several of which
+// (a clarifying question and the brief that prompted it; a render and the
+// check that follows it) only make sense read together.
+//
+// `step` is the fine pipeline phase name the backend now carries on every
+// event (see loop.py's `_event`); `phase` is the coarser label several steps
+// share and is kept only as a fallback for sessions recorded before `step`
+// existed.
+// ──────────────────────────────────────────────
+
+type PhaseGroupKey = "understand" | "research" | "design" | "draft" | "render";
+
+const GROUP_LABEL: Record<PhaseGroupKey, string> = {
+  understand: "Understand",
+  research: "Research",
+  design: "Design",
+  draft: "Draft",
+  render: "Render & check",
 };
+
+const STEP_TO_GROUP: Record<string, PhaseGroupKey> = {
+  intake: "understand",
+  consult: "understand",
+  scout: "research",
+  research: "research",
+  design: "design",
+  plan: "design",
+  review: "design",
+  draft: "draft",
+  render: "render",
+  validate: "render",
+};
+
+/** Coarse `phase` → best-guess fine step, for events recorded before `step`
+ *  existed. Degrades gracefully: Understand and Research fold into one box
+ *  rather than crashing on an unrecognised value. */
+const PHASE_FALLBACK_STEP: Record<string, string> = {
+  content_analysis: "intake",
+  user_input: "consult",
+  structure_planning: "plan",
+  layout_selection: "design",
+  content_generation: "draft",
+  validation: "validate",
+  rendering: "render",
+  complete: "complete",
+};
+
+function stepOf(ev: any): string {
+  return ev.step || PHASE_FALLBACK_STEP[ev.phase] || "intake";
+}
+
+/** null for a step that does not belong on the timeline (the closing word). */
+function groupOf(ev: any): PhaseGroupKey | null {
+  const step = stepOf(ev);
+  if (step === "complete") return null;
+  return STEP_TO_GROUP[step] ?? null;
+}
 
 function toolLabel(toolName: string): string {
   const map: Record<string, string> = {
@@ -49,7 +99,7 @@ function toolLabel(toolName: string): string {
   return map[toolName] ?? toolName.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function fmtTime(ts?: string): string {
+export function fmtTime(ts?: string): string {
   if (!ts) return "";
   try {
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -72,130 +122,129 @@ function fmtDuration(ms?: number): string {
 }
 
 // ──────────────────────────────────────────────
-// Step grouping: collapse the flat event stream
-// into per-tool "steps" (thoughts → call → result)
-// plus standalone event nodes, preserving order.
+// Building phase blocks: the flat event stream, folded into one block per
+// run of consecutive events that share a phase group. A group reappearing
+// later - Draft, after Render & check already ran - starts a new block
+// rather than merging into the old one, which is what makes a revisit
+// visible instead of silently rewriting history.
 // ──────────────────────────────────────────────
 
-interface StepNode {
-  kind: "step";
+interface SubStep {
   key: string;
   callId: string;
   toolName: string;
-  phase?: string;
-  thoughts: any[];
-  progress: any[];
   args: Record<string, unknown>;
-  startTs: string;
-  endTs?: string;
   result?: unknown;
   summary?: string;
   success?: boolean;
   error?: string;
+  startTs: string;
+  endTs?: string;
   durationMs?: number;
-  tokenCount?: number;
   running: boolean;
+  isRevision?: boolean;
+  revisionReason?: string;
+  slideIndex?: number;
   sources?: SourceInfo[];
 }
-interface ThoughtsNode {
-  kind: "thoughts";
+
+interface PhaseBlock {
   key: string;
-  thoughts: any[];
+  group: PhaseGroupKey;
+  revisit: boolean;
+  startTs: string;
+  endTs: string;
+  subSteps: SubStep[];
+  thoughts: { content: string; timestamp: string }[];
   progress: any[];
+  slideFinalized: any[];
+  questionEvent?: any;
+  validationUnresolvedEvent?: any;
+  errorEvent?: any;
+  fileGeneratedEvent?: any;
 }
-interface EventNode {
-  kind: "event";
-  key: string;
-  ev: any;
-  /** How many identical-type events this node stands for (1 = not merged). */
-  merged: any[];
-}
-/** A run of consecutive calls to the same tool, shown as one line. */
-interface StepGroupNode {
-  kind: "group";
-  key: string;
-  toolName: string;
-  steps: StepNode[];
-}
-type FeedNode = StepNode | ThoughtsNode | EventNode | StepGroupNode;
 
-/** Event types where a run of them in a row says nothing more than one does. */
-const MERGEABLE_EVENTS = new Set(["slide_finalized"]);
+function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closingText: string } {
+  const blocks: PhaseBlock[] = [];
+  const seenGroups = new Set<PhaseGroupKey>();
+  const openSubSteps = new Map<string, SubStep>();
+  let closingText = "";
+  let blockCounter = 0;
 
-function buildNodes(events: AgentEvent[]): FeedNode[] {
-  const nodes: FeedNode[] = [];
-  let pendingThoughts: any[] = [];
-  let pendingProgress: any[] = [];
-  let stepCounter = 0;
-  const openSteps = new Map<string, StepNode>();
-
-  const flushThoughts = () => {
-    if (pendingThoughts.length || pendingProgress.length) {
-      nodes.push({
-        kind: "thoughts",
-        key: `th-${nodes.length}`,
-        thoughts: pendingThoughts,
-        progress: pendingProgress,
-      });
-      pendingThoughts = [];
-      pendingProgress = [];
+  const currentBlock = (group: PhaseGroupKey, ts: string): PhaseBlock => {
+    const last = blocks[blocks.length - 1];
+    if (last && last.group === group) {
+      last.endTs = ts;
+      return last;
     }
+    blockCounter++;
+    const revisit = seenGroups.has(group);
+    seenGroups.add(group);
+    const block: PhaseBlock = {
+      key: `phase-${blockCounter}-${group}`,
+      group,
+      revisit,
+      startTs: ts,
+      endTs: ts,
+      subSteps: [],
+      thoughts: [],
+      progress: [],
+      slideFinalized: [],
+    };
+    blocks.push(block);
+    return block;
   };
 
   for (const ev of events as any[]) {
+    const step = stepOf(ev);
+    if (step === "complete") {
+      if (ev.type === "thought" && ev.content) closingText = ev.content;
+      continue;
+    }
+    const group = groupOf(ev);
+    if (!group) continue;
+    const block = currentBlock(group, ev.timestamp || blocks[blocks.length - 1]?.endTs || "");
+
     switch (ev.type) {
       case "thought":
-        pendingThoughts.push(ev);
+        if (ev.content) block.thoughts.push({ content: ev.content, timestamp: ev.timestamp });
         break;
       case "progress":
-        pendingProgress.push(ev);
+        block.progress.push(ev);
         break;
       case "tool_call": {
-        stepCounter++;
-        const step: StepNode = {
-          kind: "step",
-          key: `step-${stepCounter}-${ev.callId}`,
+        const sub: SubStep = {
+          key: `sub-${block.key}-${ev.callId}`,
           callId: ev.callId,
           toolName: ev.toolName,
-          phase: ev.phase,
-          thoughts: pendingThoughts,
-          progress: pendingProgress,
           args: ev.toolArgs || {},
           startTs: ev.timestamp,
           running: true,
+          isRevision: ev.isRevision,
+          revisionReason: ev.revisionReason,
+          slideIndex: typeof ev.toolArgs?.slide_index === "number" ? ev.toolArgs.slide_index : undefined,
         };
-        pendingThoughts = [];
-        pendingProgress = [];
-        nodes.push(step);
-        openSteps.set(ev.callId, step);
+        block.subSteps.push(sub);
+        openSubSteps.set(ev.callId, sub);
         break;
       }
       case "tool_result": {
-        const step = openSteps.get(ev.callId);
-        if (step) {
-          step.running = false;
-          step.endTs = ev.timestamp;
-          step.result = ev.result;
-          step.summary = ev.summary;
-          step.success = ev.success;
-          step.error = ev.error;
-          step.durationMs = ev.durationMs;
-          step.tokenCount = ev.tokenCount;
-          step.sources = Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined;
-          openSteps.delete(ev.callId);
+        const sub = openSubSteps.get(ev.callId);
+        if (sub) {
+          sub.running = false;
+          sub.endTs = ev.timestamp;
+          sub.result = ev.result;
+          sub.summary = ev.summary;
+          sub.success = ev.success;
+          sub.error = ev.error;
+          sub.durationMs = ev.durationMs;
+          sub.sources = Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined;
+          openSubSteps.delete(ev.callId);
         } else {
-          // Orphan result (e.g. a reloaded session where the call event was
-          // not persisted): synthesize a completed step so the detail still
-          // renders.
-          stepCounter++;
-          nodes.push({
-            kind: "step",
-            key: `step-${stepCounter}-orphan-${ev.callId}`,
+          block.subSteps.push({
+            key: `sub-${block.key}-orphan-${ev.callId}`,
             callId: ev.callId,
             toolName: ev.toolName,
-            phase: ev.phase,
-            thoughts: [],
-            progress: [],
             args: {},
             startTs: ev.timestamp,
             endTs: ev.timestamp,
@@ -204,7 +253,6 @@ function buildNodes(events: AgentEvent[]): FeedNode[] {
             success: ev.success,
             error: ev.error,
             durationMs: ev.durationMs,
-            tokenCount: ev.tokenCount,
             running: false,
             sources: Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined,
           });
@@ -212,97 +260,26 @@ function buildNodes(events: AgentEvent[]): FeedNode[] {
         break;
       }
       case "slide_finalized":
-      case "file_generated":
+        block.slideFinalized.push(ev);
+        break;
       case "question":
-      case "error":
+        block.questionEvent = ev;
+        break;
       case "validation_unresolved":
-      case "done":
-        flushThoughts();
-        nodes.push({ kind: "event", key: `ev-${nodes.length}-${ev.type}`, ev, merged: [ev] });
+        block.validationUnresolvedEvent = ev;
+        break;
+      case "error":
+        block.errorEvent = ev;
+        break;
+      case "file_generated":
+        block.fileGeneratedEvent = ev;
         break;
       default:
-        // rate_limit lands here on purpose. It is persisted like every other
-        // event, so a reloaded session still carries every wait it hit - but a
-        // wait is state, not history: it is shown live by RetryStrip while it
-        // is true, and replaying it afterwards would fill the transcript with
-        // the pauses instead of the work.
         break;
     }
   }
 
-  if (pendingThoughts.length || pendingProgress.length) {
-    nodes.push({
-      kind: "thoughts",
-      key: `th-trailing`,
-      thoughts: pendingThoughts,
-      progress: pendingProgress,
-    });
-  }
-  return collapseRepeats(nodes);
-}
-
-/**
- * Fold runs of the same thing into one line.
- *
- * A ten-slide deck produced ten identical "Design slide content" entries and
- * ten "Slide N finalized" entries in a row, which reads as noise and buries
- * the steps that are actually different. A run of the same tool becomes one
- * expandable group; a run of the same mergeable event becomes one entry that
- * says how many. Nothing is dropped - the individual steps are one click away.
- */
-function collapseRepeats(nodes: FeedNode[]): FeedNode[] {
-  const out: FeedNode[] = [];
-  let i = 0;
-
-  while (i < nodes.length) {
-    const node = nodes[i];
-
-    if (node.kind === "step") {
-      let end = i + 1;
-      while (
-        end < nodes.length &&
-        nodes[end].kind === "step" &&
-        (nodes[end] as StepNode).toolName === node.toolName
-      ) {
-        end++;
-      }
-      if (end - i > 1) {
-        const steps = nodes.slice(i, end) as StepNode[];
-        out.push({
-          kind: "group",
-          key: `grp-${node.key}`,
-          toolName: node.toolName,
-          steps,
-        });
-        i = end;
-        continue;
-      }
-    }
-
-    if (node.kind === "event" && MERGEABLE_EVENTS.has(node.ev.type)) {
-      let end = i + 1;
-      while (
-        end < nodes.length &&
-        nodes[end].kind === "event" &&
-        (nodes[end] as EventNode).ev.type === node.ev.type
-      ) {
-        end++;
-      }
-      if (end - i > 1) {
-        const merged = (nodes.slice(i, end) as EventNode[]).map((n) => n.ev);
-        // The last one is the current state of the thing being reported (the
-        // latest retry attempt, the last slide finalized).
-        out.push({ ...node, ev: merged[merged.length - 1], merged });
-        i = end;
-        continue;
-      }
-    }
-
-    out.push(node);
-    i++;
-  }
-
-  return out;
+  return { blocks, closingText };
 }
 
 // ──────────────────────────────────────────────
@@ -327,16 +304,33 @@ export function ActivityFeed() {
     return `${messages.length}:${events}:${last?.id ?? ""}`;
   }, [messages]);
 
+  // A fresh question is worth interrupting a scrolled-up read for: staying
+  // where you scrolled is right for a passing thought, wrong for something
+  // that is now waiting on you and easy to miss below the fold.
+  const latestQuestionId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const stream = messages[i].agentEventStream ?? [];
+      for (let j = stream.length - 1; j >= 0; j--) {
+        if (stream[j]?.type === "question") return `${messages[i].id}:${j}`;
+      }
+    }
+    return null;
+  }, [messages]);
+  const seenQuestionRef = useRef<string | null>(null);
+
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (atBottomRef.current) {
+    const isNewQuestion = latestQuestionId !== null && latestQuestionId !== seenQuestionRef.current;
+    seenQuestionRef.current = latestQuestionId;
+    if (atBottomRef.current || isNewQuestion) {
       el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
       setShowJump(false);
     } else {
       setShowJump(true);
     }
-  }, [signature]);
+  }, [signature, latestQuestionId]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -365,13 +359,19 @@ export function ActivityFeed() {
           const isAnswered = idx < messages.length - 1 && messages[idx + 1].role === 'user';
           const userAnswer = isAnswered && messages[idx + 1].role === 'user' ? messages[idx + 1].content : undefined;
 
-          return m.role === "user" ? (
-            <FeedItem key={m.id} dot={<span className="ws-av indigo">WK</span>} dotClass="ws-dot-user">
-              <div className="ws-feed-header"><span className="lbl">You</span><span className="ts">{fmtTime(m.created_at)}</span></div>
-              <div className="ws-feed-text">{m.content}</div>
-            </FeedItem>
-          ) : (
-            <AssistantBlock key={m.id} message={m} isAnswered={isAnswered} answerText={userAnswer} />
+          if (m.role === "user") {
+            return (
+              <FeedItem key={m.id} dot={<span className="ws-av indigo">WK</span>} dotClass="ws-dot-user">
+                <div className="ws-feed-header"><span className="lbl">You</span><span className="ts">{fmtTime(m.created_at)}</span></div>
+                <div className="ws-feed-text">{m.content}</div>
+              </FeedItem>
+            );
+          }
+          if (m.role === "system") {
+            return <div key={m.id} className="ws-run-complete">{m.content}</div>;
+          }
+          return (
+            <AssistantTimeline key={m.id} message={m} isAnswered={isAnswered} answerText={userAnswer} />
           );
         })}
       </div>
@@ -391,96 +391,39 @@ export function ActivityFeed() {
   );
 }
 
-function AssistantBlock({ message, isAnswered, answerText }: { message: any; isAnswered?: boolean; answerText?: string }) {
+function AssistantTimeline({ message, isAnswered, answerText }: { message: any; isAnswered?: boolean; answerText?: string }) {
   const events: AgentEvent[] = useMemo(
     () => message.agentEventStream || [],
     [message.agentEventStream]
   );
   const isLive = message.isComplete === false;
 
-  const nodes = useMemo(() => buildNodes(events), [events]);
+  const { blocks, closingText } = useMemo(() => buildPhaseBlocks(events), [events]);
 
-  // Which step is auto-expanded: a running step wins, else the most recent
-  // completed step. Everything else auto-collapses to a one-line summary so
-  // the feed keeps only the latest step in full detail. Manual toggles
-  // override the auto behaviour. Steps inside a group count too, so the group
-  // holding the live step opens itself.
-  const autoKey = useMemo(() => {
-    const steps: StepNode[] = [];
-    for (const n of nodes) {
-      if (n.kind === "step") steps.push(n);
-      else if (n.kind === "group") steps.push(...n.steps);
-    }
-    for (let i = steps.length - 1; i >= 0; i--) {
-      if (steps[i].running) return steps[i].key;
-    }
-    for (let i = steps.length - 1; i >= 0; i--) {
-      if (!steps[i].running) return steps[i].key;
-    }
-    return null;
-  }, [nodes]);
+  const lastBlock = blocks[blocks.length - 1];
+  // A block that ended on a question is not "running" any more - the run
+  // genuinely stopped there to wait on a human, so nothing downstream of it
+  // should read as still in flight.
+  const activeIndex = isLive && blocks.length && !lastBlock.questionEvent ? blocks.length - 1 : -1;
 
-  const [manual, setManual] = useState<Record<string, boolean>>({});
-  const isExpanded = (key: string) => (key in manual ? manual[key] : key === autoKey);
-  const toggle = (key: string, currentlyOpen?: boolean) =>
-    setManual((m) => ({ ...m, [key]: !(currentlyOpen ?? isExpanded(key)) }));
+  // Nothing has happened yet: the very first event has not arrived.
+  const showStartShimmer = isLive && blocks.length === 0;
 
-  // Live "working" shimmer: shown when the agent is live but there is no open
-  // tool step to render the timer against (it is still reasoning).
-  const showLiveShimmer =
-    isLive && (nodes.length === 0 || nodes[nodes.length - 1].kind !== "step" || (nodes[nodes.length - 1] as StepNode).running === false);
-  const liveThought = useMemo(() => {
-    const last = nodes[nodes.length - 1];
-    if (last && last.kind === "thoughts") {
-      return [...last.thoughts].reverse()[0];
-    }
-    return null;
-  }, [nodes]);
+  const finalText = !isLive ? message.content : (message.content || (activeIndex === -1 ? closingText : ""));
 
   return (
     <>
-      {nodes.map((node) => {
-        if (node.kind === "step") {
-          return (
-            <StepItem
-              key={node.key}
-              step={node}
-              expanded={isExpanded(node.key)}
-              onToggle={() => toggle(node.key)}
-            />
-          );
-        }
-        if (node.kind === "group") {
-          const holdsAuto = node.steps.some((s) => s.key === autoKey);
-          return (
-            <StepGroup
-              key={node.key}
-              group={node}
-              expanded={node.key in manual ? manual[node.key] : holdsAuto}
-              onToggle={() => toggle(node.key, holdsAuto)}
-              isExpanded={isExpanded}
-              onToggleStep={toggle}
-              runLive={isLive}
-            />
-          );
-        }
-        if (node.kind === "thoughts") {
-          // Trailing thoughts while live → shimmer working block.
-          if (node === nodes[nodes.length - 1] && isLive) return null; // rendered via shimmer below
-          return <ThoughtsBlock key={node.key} node={node} />;
-        }
-        return (
-          <EventItem
-            key={node.key}
-            ev={node.ev}
-            merged={node.merged}
-            isAnswered={isAnswered}
-            answerText={answerText}
-          />
-        );
-      })}
+      {blocks.map((block, i) => (
+        <PhaseBlockItem
+          key={block.key}
+          block={block}
+          active={i === activeIndex}
+          isAnswered={isAnswered}
+          answerText={answerText}
+        />
+      ))}
 
-      {showLiveShimmer && (
+      {showStartShimmer && (
         <FeedItem
           dot={
             <span className="ws-ai-dot">
@@ -490,254 +433,343 @@ function AssistantBlock({ message, isAnswered, answerText }: { message: any; isA
             </span>
           }
         >
-          <div className="ws-feed-header">
-            <span className="ws-shimmer-headline">
-              {liveThought ? PHASE_LABEL[liveThought.phase] ?? "Working" : "Working..."}
-            </span>
-          </div>
+          <div className="ws-feed-header"><span className="ws-shimmer-headline">Starting</span></div>
           <div className="ws-shimmer-body">
-            <MarkdownText className="ws-md-inline">
-              {liveThought ? liveThought.content : "The agent is reasoning through the next step."}
-            </MarkdownText>
+            Reading the request
             <span className="ws-ai-cursor" />
           </div>
         </FeedItem>
       )}
-    </>
-  );
-}
 
-function ThoughtsBlock({ node }: { node: ThoughtsNode }) {
-  return (
-    <>
-      {node.thoughts.map((t: any, i: number) => (
-        <FeedItem key={`th-${i}`} dot="◆" dotClass="ws-dot-fact">
-          <div className="ws-feed-header"><span className="lbl">{PHASE_LABEL[t.phase] ?? "Thinking"}</span><span className="ts">{fmtTime(t.timestamp)}</span></div>
-          {t.content && <MarkdownText className="ws-feed-text">{t.content}</MarkdownText>}
+      {finalText && (
+        <FeedItem dot="◆" dotClass="ws-dot-fact">
+          <div className="ws-feed-header"><span className="lbl">Assistant</span><span className="ts">{fmtTime(message.created_at)}</span></div>
+          <MarkdownText className="ws-feed-text">{finalText}</MarkdownText>
         </FeedItem>
-      ))}
-      {node.progress.map((p: any, i: number) => (
-        <FeedItem key={`pg-${i}`} dot="◆" dotClass="ws-dot-fact">
-          <div className="ws-feed-header"><span className="lbl">Progress</span><span className="ts">{fmtTime(p.timestamp)}</span></div>
-          <div className="ws-feed-text">{p.message}</div>
-          <ProgressBar current={p.current} total={p.total} />
-        </FeedItem>
-      ))}
-    </>
-  );
-}
-
-/**
- * A run of consecutive calls to the same tool, as one line.
- *
- * Designing ten slides is ten calls to design_slide_content; listing them
- * individually says the same thing ten times. Collapsed, this reports what
- * the run as a whole did; expanded, the individual steps are all still there.
- */
-function StepGroup({
-  group,
-  expanded,
-  onToggle,
-  isExpanded,
-  onToggleStep,
-  runLive,
-}: {
-  group: StepGroupNode;
-  expanded: boolean;
-  onToggle: () => void;
-  isExpanded: (key: string) => boolean;
-  onToggleStep: (key: string) => void;
-  /** Whether the run as a whole is still going, which the group's own steps
-   *  cannot tell it - they can all be finished while the run waits on a
-   *  provider back-off with no open step to hang a timer on. */
-  runLive: boolean;
-}) {
-  const running = group.steps.some((s) => s.running);
-  const failed = group.steps.filter((s) => s.success === false).length;
-  const totalMs = group.steps.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
-  const dotClass = failed ? "ws-dot-error" : running ? "ws-dot-status" : "ws-dot-fact";
-  const dot = failed ? "●" : running ? "↺" : "✓";
-
-  // Everything the run cited, gathered onto the one line that represents it -
-  // collapsing three searches into a group must not hide the sources they
-  // found, which are the whole reason those searches happened.
-  const sources = useMemo(() => {
-    const byUrl = new Map<string, SourceInfo>();
-    for (const step of group.steps) {
-      for (const source of step.sources ?? []) {
-        if (!byUrl.has(source.url)) byUrl.set(source.url, source);
-      }
-    }
-    return [...byUrl.values()];
-  }, [group.steps]);
-
-  return (
-    <>
-      <FeedItem dot={dot} dotClass={dotClass}>
-        <div
-          className="ws-step-summary ws-step-group"
-          onClick={onToggle}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
-        >
-          <span className="lbl">{toolLabel(group.toolName)}</span>
-          <span className="ws-step-count">×{group.steps.length}</span>
-          <span className="ws-step-group-note">
-            {running
-              ? `${group.steps.filter((s) => !s.running).length} of ${group.steps.length} done`
-              : failed
-                ? `${failed} failed`
-                : runLive
-                  // The group's own steps really have all finished, but while
-                  // the run continues elsewhere "all complete" reads as a
-                  // verdict on the whole run. A completed group sat there
-                  // saying it through a 25s rate-limit wait, and the run
-                  // looked finished-but-hung. A count is the same fact
-                  // without the finality.
-                  ? `${group.steps.length} of ${group.steps.length} done`
-                  : "all complete"}
-          </span>
-          <span className="ws-spacer-sm" />
-          <span className="ws-step-dur">{fmtDuration(totalMs)}</span>
-          {!!sources.length && (
-            <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-              <SourcesInline sources={sources} />
-            </span>
-          )}
-          <span className="ws-step-toggle">{expanded ? "▴ collapse" : `▾ show ${group.steps.length} steps`}</span>
-        </div>
-      </FeedItem>
-      {expanded && (
-        <div className="ws-step-group-body">
-          {group.steps.map((step) => (
-            <StepItem
-              key={step.key}
-              step={step}
-              expanded={isExpanded(step.key)}
-              onToggle={() => onToggleStep(step.key)}
-            />
-          ))}
-        </div>
       )}
     </>
   );
 }
 
-function StepItem({ step, expanded, onToggle }: { step: StepNode; expanded: boolean; onToggle: () => void }) {
-  const failed = step.success === false;
-  const ok = step.success === true;
-  const dotClass = failed ? "ws-dot-error" : ok ? "ws-dot-fact" : "ws-dot-status";
-  const dot = failed ? "●" : ok ? "✓" : "↺";
+/** One phase group's box on the timeline: dot, name, takeaway, boxed
+ *  substeps, and whatever it paused or failed on. */
+function PhaseBlockItem({
+  block,
+  active,
+  isAnswered,
+  answerText,
+}: {
+  block: PhaseBlock;
+  active: boolean;
+  isAnswered?: boolean;
+  answerText?: string;
+}) {
+  const failed = !!block.errorEvent;
+  const icon = failed ? "●" : active ? "↻" : block.revisit ? "↺" : "✓";
+  const dotClass = failed ? "ws-dot-error" : active ? "ws-dot-status" : block.revisit ? "ws-dot-revisit" : "ws-dot-fact";
 
-  if (!expanded) {
-    return (
-      <FeedItem dot={dot} dotClass={dotClass}>
-        <div className="ws-step-summary" onClick={onToggle} role="button" tabIndex={0}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}>
-          <span className="lbl">{toolLabel(step.toolName)}</span>
-          {/* What it did, in words - the collapsed line is where most steps
-              are read, so it carries the finding rather than the phase tag. */}
-          {step.summary
-            ? <span className="ws-step-said one-line">{step.summary}</span>
-            : step.phase && <span className="ws-step-phase">{PHASE_LABEL[step.phase] ?? step.phase}</span>}
-          <span className="ws-spacer-sm" />
-          <StepTimer startTs={step.startTs} endTs={step.endTs} durationMs={step.durationMs} running={step.running} />
-          {/* Sources stay visible and independently expandable even while the
-              step itself is collapsed - previously this was a static icon
-              with no way to open it, so cited sources effectively vanished
-              the moment the next step became the auto-expanded one. */}
-          {!!step.sources?.length && (
-            <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-              <SourcesInline sources={step.sources} />
-            </span>
-          )}
-          <span className="ws-step-toggle">▾ expand</span>
-        </div>
-      </FeedItem>
-    );
-  }
+  const lastThought = block.thoughts[block.thoughts.length - 1];
+  const lastStep = block.subSteps[block.subSteps.length - 1];
+  const takeawayText = lastThought?.content || (!active ? lastStep?.summary || "" : "");
 
-  const lastThought = [...step.thoughts].reverse()[0];
+  const rows = useMemo(
+    () => (block.group === "draft" ? groupDraftRows(block.subSteps) : block.subSteps.map(toRow)),
+    [block.subSteps, block.group]
+  );
+
+  const rawExtra = block.thoughts.length > 1
+    ? block.thoughts.slice(0, -1).map((t) => t.content).join("\n\n")
+    : "";
+
   return (
-    <FeedItem dot={dot} dotClass={dotClass}>
-      <div className="ws-step">
-        <div className="ws-feed-header ws-step-head" onClick={onToggle} role="button" tabIndex={0}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}>
-          <span className="lbl">{toolLabel(step.toolName)}</span>
-          {step.phase && <span className="ws-step-phase">{PHASE_LABEL[step.phase] ?? step.phase}</span>}
+    <>
+      {block.revisit && <BacktrackBanner block={block} />}
+      <FeedItem dot={icon} dotClass={dotClass}>
+        <div className="ws-phase-head">
+          <span className="ws-phase-name">{GROUP_LABEL[block.group]}</span>
+          {block.revisit && <span className="ws-phase-tag">revisit</span>}
           <span className="ws-spacer-sm" />
-          <StepTimer startTs={step.startTs} endTs={step.endTs} durationMs={step.durationMs} running={step.running} />
-          <span className={`ws-step-mark ${failed ? "bad" : ok ? "ok" : "run"}`}>
-            {step.running ? "running" : failed ? "failed" : "complete"}
-          </span>
-          <span className="ws-step-toggle">▴ collapse</span>
+          <PhaseTimer block={block} active={active} />
         </div>
 
-        {/* Reasoning - full detail, no truncation. */}
-        {step.thoughts.map((t: any, i: number) => (
-          <MarkdownText className="ws-feed-text ws-step-thought" key={`th-${i}`}>
-            {t.content}
-          </MarkdownText>
-        ))}
+        {(takeawayText || active) && (
+          <div className="ws-phase-takeaway">
+            {active ? (
+              takeawayText ? (
+                <TypewriterText text={takeawayText} />
+              ) : (
+                <span className="ws-shimmer-body">Reasoning through this step<span className="ws-ai-cursor" /></span>
+              )
+            ) : (
+              <MarkdownText className="ws-md-inline">{takeawayText}</MarkdownText>
+            )}
+            {active && takeawayText && <span className="ws-ai-cursor" />}
+            {rawExtra && <PhaseRawLink content={rawExtra} />}
+          </div>
+        )}
 
-        {/* What the step actually did, in a sentence. */}
-        {step.summary && <div className="ws-step-said">{step.summary}</div>}
+        {!!rows.length && (
+          <div className="ws-phase-checklist">
+            {rows.map((row) => <CheckRow key={row.key} row={row} />)}
+          </div>
+        )}
 
-        {step.progress.map((p: any, i: number) => (
-          <div className="ws-step-progress" key={`pg-${i}`}>
+        {block.progress.map((p: any, i: number) => (
+          <div key={`pg-${i}`} className="ws-step-progress">
             <div className="ws-feed-text">{p.message}</div>
             <ProgressBar current={p.current} total={p.total} />
           </div>
         ))}
 
-        {/* A failure is never hidden - the error is the point of the step. */}
-        {!step.running && step.error && (
-          <DetailBlock label="Error" content={String(step.error)} error />
-        )}
-
-        {/* Everything the step was given and returned, verbatim, one more
-            click away. It is here for when the summary is not enough, not as
-            the default way to read the feed. */}
-        <RawDetails args={step.args} result={step.running ? undefined : step.result} />
-
-        {/* Cited sources that this step produced (web_search). Sits right
-            under the step that fetched them: a compact overlapping-circles
-            icon by default, expanding downward to the titled links. */}
-        {!!step.sources?.length && <SourcesInline sources={step.sources} />}
-
-        {lastThought?.phase && step.running && (
-          <div className="ws-shimmer-body ws-step-live">
-            <MarkdownText className="ws-md-inline">
-              {lastThought.content || "Working..."}
-            </MarkdownText>
-            <span className="ws-ai-cursor" />
+        {!!block.slideFinalized.length && (
+          <div className="ws-feed-text">
+            {block.slideFinalized.length === 1
+              ? `Slide ${(block.slideFinalized[0].slideIndex ?? 0) + 1} finalized.`
+              : `${block.slideFinalized.length} slides finalized.`}
           </div>
         )}
-      </div>
-    </FeedItem>
+
+        {block.questionEvent && (
+          <QuestionCard
+            questions={
+              Array.isArray(block.questionEvent.questions) && block.questionEvent.questions.length
+                ? block.questionEvent.questions
+                : [{ question: block.questionEvent.question, options: block.questionEvent.options || [] }]
+            }
+            context={block.questionEvent.context}
+            answered={isAnswered}
+            answerText={answerText}
+          />
+        )}
+
+        {block.validationUnresolvedEvent && (
+          <ValidationUnresolvedNote ev={block.validationUnresolvedEvent} />
+        )}
+
+        {block.errorEvent && (
+          <div className="ws-feed-text" style={{ color: "#F87171" }}>
+            {block.errorEvent.message}
+            {block.errorEvent.code ? <code> ({block.errorEvent.code})</code> : null}
+          </div>
+        )}
+
+        {block.fileGeneratedEvent && <FileGeneratedNote ev={block.fileGeneratedEvent} />}
+      </FeedItem>
+    </>
   );
 }
 
-/** The step's raw arguments and result, behind one disclosure. */
-function RawDetails({ args, result }: { args?: Record<string, unknown>; result?: unknown }) {
-  const [open, setOpen] = useState(false);
-  const hasArgs = Object.keys(args || {}).length > 0;
-  const hasResult = result !== undefined && result !== null && result !== "";
-  if (!hasArgs && !hasResult) return null;
-
+function BacktrackBanner({ block }: { block: PhaseBlock }) {
+  const reason = block.subSteps.find((s) => s.revisionReason)?.revisionReason;
+  const fallback: Record<PhaseGroupKey, string> = {
+    understand: "The plan changed - going back to reconsider the brief",
+    research: "More was needed - going back to research further",
+    design: "The design needs another look - going back to adjust it",
+    draft: "Validation flagged an issue - going back to fix it",
+    render: "Going back to render and check again",
+  };
   return (
-    <div className="ws-raw">
+    <div className="ws-backtrack">
+      <span className="ws-backtrack-icon">↩</span>
+      {reason || fallback[block.group]}
+    </div>
+  );
+}
+
+function PhaseTimer({ block, active }: { block: PhaseBlock; active: boolean }) {
+  const totalFromSteps = block.subSteps.reduce((s, x) => s + (x.durationMs || 0), 0);
+  const wallMs = block.endTs && block.startTs
+    ? new Date(block.endTs).getTime() - new Date(block.startTs).getTime()
+    : undefined;
+  return (
+    <StepTimer
+      startTs={block.startTs}
+      endTs={block.endTs}
+      durationMs={totalFromSteps || wallMs}
+      running={active}
+    />
+  );
+}
+
+/** A short, cheap approximation of live token streaming: what the model
+ *  actually said arrives whole over SSE, so this types it out on the client
+ *  rather than pasting it in - not real per-token streaming (that needs the
+ *  provider call itself to stream), but visually honest about being in
+ *  progress rather than static. */
+function TypewriterText({ text }: { text: string }) {
+  const [shown, setShown] = useState("");
+  const prevTextRef = useRef<string>("");
+
+  useEffect(() => {
+    if (text === prevTextRef.current) return;
+    prevTextRef.current = text;
+    setShown("");
+    let i = 0;
+    const id = setInterval(() => {
+      i++;
+      setShown(text.slice(0, i));
+      if (i >= text.length) clearInterval(id);
+    }, 18);
+    return () => clearInterval(id);
+  }, [text]);
+
+  return <MarkdownText className="ws-md-inline">{shown}</MarkdownText>;
+}
+
+function PhaseRawLink({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="ws-raw ws-phase-raw">
       <button type="button" className="ws-raw-toggle" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <ChevronDown size={11} className={`ws-raw-chev ${open ? "open" : ""}`} />
         Raw
       </button>
-      {open && (
-        <>
-          {hasArgs && <DetailBlock label="Args" content={stringify(args)} />}
-          {hasResult && <DetailBlock label="Result" content={stringify(result)} />}
-        </>
+      {open && <DetailBlock label="Narration" content={content} />}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Boxed substep checklist rows
+// ──────────────────────────────────────────────
+
+interface Row {
+  key: string;
+  icon: "✓" | "●" | "↻";
+  label: string;
+  note: string;
+  durationMs?: number;
+  running?: boolean;
+  startTs?: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
+  revisit?: boolean;
+  sources?: SourceInfo[];
+}
+
+function toRow(s: SubStep): Row {
+  return {
+    key: s.key,
+    icon: s.success === false ? "●" : s.running ? "↻" : "✓",
+    label: toolLabel(s.toolName),
+    note: s.summary || (s.running ? "" : s.error || ""),
+    durationMs: s.durationMs,
+    running: s.running,
+    startTs: s.startTs,
+    args: s.args,
+    result: s.result,
+    revisit: s.isRevision,
+    sources: s.sources,
+  };
+}
+
+/** Every tool call a slide took, folded into one checklist row for that
+ *  slide - a slide is drafted through several calls (layout, a chart, the
+ *  copy itself), and listing each separately says less than "Slide 3" does. */
+function groupDraftRows(subSteps: SubStep[]): Row[] {
+  const rows: Row[] = [];
+  let i = 0;
+  while (i < subSteps.length) {
+    const idx = subSteps[i].slideIndex;
+    let end = i + 1;
+    if (idx != null) {
+      while (end < subSteps.length && subSteps[end].slideIndex === idx) end++;
+    }
+    const group = subSteps.slice(i, end);
+    const last = group[group.length - 1];
+    const anyRunning = group.some((s) => s.running);
+    const anyFailed = group.some((s) => s.success === false);
+    const anyRevision = group.some((s) => s.isRevision);
+    const sources = group.flatMap((s) => s.sources || []);
+    rows.push({
+      key: `slide-${idx ?? i}`,
+      icon: anyFailed ? "●" : anyRunning ? "↻" : "✓",
+      label: idx != null ? `Slide ${idx + 1}` : toolLabel(last.toolName),
+      note: last.summary || (anyRunning ? "" : last.error || ""),
+      durationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
+      running: anyRunning,
+      startTs: group.find((s) => s.running)?.startTs || group[0].startTs,
+      args: last.args,
+      result: last.result,
+      revisit: anyRevision,
+      sources: sources.length ? sources : undefined,
+    });
+    i = end;
+  }
+  return rows;
+}
+
+function CheckRow({ row }: { row: Row }) {
+  const [open, setOpen] = useState(false);
+  const hasArgs = Object.keys(row.args || {}).length > 0;
+  const hasResult = row.result !== undefined && row.result !== null && row.result !== "";
+  const hasRaw = hasArgs || hasResult;
+  const iconClass = row.icon === "●" ? "bad" : row.icon === "↻" ? "run" : "ok";
+
+  return (
+    <>
+      <div className="ws-phase-check-row">
+        <div className="ws-check-top">
+          <span className={`ws-check-icon ${iconClass}`}>{row.icon}</span>
+          <span className="ws-check-label">{row.label}</span>
+          {row.revisit && <span className="ws-phase-tag sm">revisit</span>}
+          {!!row.sources?.length && <SourcesInline sources={row.sources} />}
+          <span className="ws-spacer-sm" />
+          {row.running ? (
+            <StepTimer startTs={row.startTs || ""} running durationMs={undefined} />
+          ) : (
+            <span className="ws-step-dur">{fmtDuration(row.durationMs)}</span>
+          )}
+          {hasRaw && (
+            <button type="button" className="ws-check-raw" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+              Raw
+            </button>
+          )}
+        </div>
+        {row.note && <div className="ws-check-note">{row.note}</div>}
+      </div>
+      {open && hasRaw && (
+        <div className="ws-phase-check-raw-body">
+          {hasArgs && <DetailBlock label="Args" content={stringify(row.args)} />}
+          {hasResult && <DetailBlock label="Result" content={stringify(row.result)} />}
+        </div>
       )}
+    </>
+  );
+}
+
+function ValidationUnresolvedNote({ ev }: { ev: any }) {
+  const issues: any[] = Array.isArray(ev.issues) ? ev.issues : [];
+  return (
+    <div className="ws-feed-text">
+      The deck is available to download, but after {ev.attempts} revision
+      {ev.attempts === 1 ? "" : "s"} it still has {ev.issueCount ?? issues.length} layout
+      {(ev.issueCount ?? issues.length) === 1 ? " problem" : " problems"}. Ask the agent
+      to simplify the affected slides, or adjust them yourself.
+      <ul className="ws-md-issues">
+        {issues.slice(0, 6).map((issue: any, i: number) => (
+          <li key={i}>
+            {typeof issue.slideIndex === "number" ? `Slide ${issue.slideIndex + 1}: ` : ""}
+            {issue.detail || issue.type}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function FileGeneratedNote({ ev }: { ev: any }) {
+  const url = buildDownloadUrl(`/api/orchestrator/files/${ev.fileId}`);
+  return (
+    <div className="ws-file-dl-row">
+      <span className="ws-feed-text">
+        <b>{ev.fileName}</b>
+        {ev.slideCount ? ` - ${ev.slideCount} slides` : ""}
+        {ev.fileSizeBytes ? ` - ${formatFileSize(ev.fileSizeBytes)}` : ""}
+      </span>
+      <a className="ws-tb-btn primary ws-file-dl" href={url} download>
+        <Download size={13} /> Download
+      </a>
     </div>
   );
 }
@@ -821,7 +853,7 @@ function SourceLink({ source }: { source: SourceInfo }) {
   );
 }
 
-/** Timer that ticks while a step is running, freezing on its duration once done. */
+/** Timer that ticks while running, freezing on its duration once done. */
 function StepTimer({ startTs, endTs, durationMs, running }: {
   startTs: string; endTs?: string; durationMs?: number; running: boolean;
 }) {
@@ -871,120 +903,7 @@ function ProgressBar({ current, total }: { current?: number; total?: number }) {
   );
 }
 
-function EventItem({
-  ev,
-  merged,
-  isAnswered,
-  answerText,
-}: { ev: any; merged?: any[]; isAnswered?: boolean; answerText?: string }) {
-  const repeats = merged && merged.length > 1 ? merged : null;
-
-  switch (ev.type) {
-    case "slide_finalized": {
-      // A whole deck's worth of these arrive in a row; one line covers them.
-      if (repeats) {
-        const indices = repeats
-          .map((e: any) => (e.slideIndex ?? 0) + 1)
-          .sort((a: number, b: number) => a - b);
-        const contiguous = indices[indices.length - 1] - indices[0] === indices.length - 1;
-        return (
-          <FeedItem dot="↺" dotClass="ws-dot-status">
-            <div className="ws-feed-header sys">
-              <b>{indices.length}</b> slides finalized
-              <span className="ts">{fmtTime(ev.timestamp)}</span>
-            </div>
-            <div className="ws-feed-text">
-              {contiguous ? `Slides ${indices[0]}-${indices[indices.length - 1]}` : `Slides ${indices.join(", ")}`}
-              {" - previews ready."}
-            </div>
-          </FeedItem>
-        );
-      }
-      return (
-        <FeedItem dot="↺" dotClass="ws-dot-status">
-          <div className="ws-feed-header sys">Slide <b>{(ev.slideIndex ?? 0) + 1}</b> finalized<span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          <div className="ws-feed-text">{ev.previewUrl ? <code>preview ready</code> : "Layout cloned from template; placeholders filled."}</div>
-        </FeedItem>
-      );
-    }
-    case "file_generated": {
-      const url = buildDownloadUrl(`/api/orchestrator/files/${ev.fileId}`);
-      return (
-        <FeedItem dot="↺" dotClass="ws-dot-status">
-          <div className="ws-feed-header sys">File generated - <b>{ev.fileName}</b><span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          <div className="ws-feed-text">
-            {ev.slideCount ? `${ev.slideCount} slides` : "ready to download"}
-            {ev.fileSizeBytes ? ` - ${formatFileSize(ev.fileSizeBytes)}` : ""}
-          </div>
-          <a className="ws-tb-btn primary ws-file-dl" href={url} download>
-            <Download size={13} /> Download
-          </a>
-        </FeedItem>
-      );
-    }
-    case "question": {
-      // A single pause can carry several questions; events from before that
-      // was possible only have the flat pair.
-      const questions = Array.isArray(ev.questions) && ev.questions.length
-        ? ev.questions
-        : [{ question: ev.question, options: ev.options || [] }];
-      const label = questions.length > 1 ? `${questions.length} questions for you` : "Agent question";
-      return (
-        <FeedItem dot={isAnswered ? "✓" : "?"} dotClass={isAnswered ? "ws-dot-success" : "ws-dot-q"}>
-          <div className="ws-feed-header"><span className="lbl">{label}</span>{isAnswered ? <span className="ws-qbadge answered">answered</span> : <span className="ws-qbadge">needs your input</span>}<span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          <QuestionCard questions={questions} context={ev.context} answered={isAnswered} answerText={answerText} />
-        </FeedItem>
-      );
-    }
-    case "error":
-      return (
-        <FeedItem dot="●" dotClass="ws-dot-error">
-          <div className="ws-feed-header"><span className="lbl" style={{ color: "#F87171" }}>Error</span><span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          <div className="ws-feed-text">{ev.message}{ev.code ? <code> ({ev.code})</code> : null}</div>
-        </FeedItem>
-      );
-    case "validation_unresolved": {
-      // The deck ran out of revision attempts with defects still in it. It is
-      // still downloadable - withholding it would leave the user with nothing
-      // - but it must not read as clean, so the specific defects are listed.
-      const issues: any[] = Array.isArray(ev.issues) ? ev.issues : [];
-      return (
-        <FeedItem dot="●" dotClass="ws-dot-error">
-          <div className="ws-feed-header">
-            <span className="lbl" style={{ color: "#FBBF24" }}>Known layout issues</span>
-            <span className="ts">{fmtTime(ev.timestamp)}</span>
-          </div>
-          <div className="ws-feed-text">
-            The deck is available to download, but after {ev.attempts} revision
-            {ev.attempts === 1 ? "" : "s"} it still has {ev.issueCount ?? issues.length} layout
-            {(ev.issueCount ?? issues.length) === 1 ? " problem" : " problems"}. Ask the agent
-            to simplify the affected slides, or adjust them yourself.
-            <ul className="ws-md-issues">
-              {issues.slice(0, 6).map((issue: any, i: number) => (
-                <li key={i}>
-                  {typeof issue.slideIndex === "number" ? `Slide ${issue.slideIndex + 1}: ` : ""}
-                  {issue.detail || issue.type}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </FeedItem>
-      );
-    }
-    case "done":
-      if (ev.paused) return null;
-      return (
-        <FeedItem dot="↺" dotClass="ws-dot-status">
-          <div className="ws-feed-header sys">Done<span className="ts">{fmtTime(ev.timestamp)}</span></div>
-          {ev.content && <MarkdownText className="ws-feed-text">{ev.content}</MarkdownText>}
-        </FeedItem>
-      );
-    default:
-      return null;
-  }
-}
-
-function FeedItem({
+export function FeedItem({
   dot,
   dotClass,
   children,
