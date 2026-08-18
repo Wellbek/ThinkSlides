@@ -1123,6 +1123,28 @@ class AgentLoop:
         self.mcp_servers = await mcp_tools.discover(connections)
         self.mcp_tools_by_phase = mcp_tools.register(self.registry, self.mcp_servers)
 
+        by_slug = {server.slug: server for server in self.mcp_servers}
+        await connection_store.record_health(self.db, self.org_id, {
+            connection.id: (
+                by_slug[connection.slug].error,
+                len(by_slug[connection.slug].tools),
+            )
+            for connection in connections
+            if connection.slug in by_slug
+        })
+
+    def _degraded_connections(self) -> list[dict]:
+        """The servers this run could not reach, for the one warning it sends.
+
+        Named rather than counted. "One connection is degraded" tells a user
+        nothing they can act on; "Company wiki: the server refused the
+        credential" tells them which credential to go and fix.
+        """
+        return [
+            {"label": server.label, "reason": server.error}
+            for server in self.mcp_servers if not server.ok
+        ]
+
     async def _get_redis_client(self) -> redis.Redis:
         """Get or create Redis client."""
         if self.redis_client is None:
@@ -1360,6 +1382,18 @@ class AgentLoop:
         # Resolve models, search backend, and the effective mode. Must run
         # after the working state load, which can supply the mode on a resume.
         await self._configure()
+
+        # Said once, at the top, and never again for this run. A connection that
+        # would not answer is not retried mid-run - retrying is how a six-second
+        # timeout becomes a minute of them - but it must not vanish silently
+        # either. A user who cannot tell "no relevant results" from "the tool
+        # was never there" is worse off than one told the tool is down.
+        degraded = self._degraded_connections()
+        if degraded:
+            yield _event("connection_degraded", "content_analysis", {
+                "connections": degraded,
+                "timestamp": import_timestamp,
+            })
 
         # ── Phase 1: Load context ────────────────────
         # Narrated only on a fresh run. On a resume the user has just answered
