@@ -114,6 +114,14 @@ class ChartStyle:
     waterfall_fall_color: str = "#C0553B"
     waterfall_total_color: str = "#12233F"
 
+    # A heatmap's ramp runs between these. Built from the deck's own accent
+    # rather than a library colormap: matplotlib's defaults are excellent and
+    # belong to no deck, and a heatmap in someone else's palette is the most
+    # obvious way a generated exhibit announces that it was generated.
+    # heatmap_high_color of None means "use the palette's first colour".
+    heatmap_low_color: str = "#F4F6F8"
+    heatmap_high_color: str | None = None
+
     # The stack to try when ``font_name`` is not installed where we render.
     # A chart is rasterised on this host, so unlike the PPTX's own text it
     # cannot leave the substitution to the machine that opens the deck - and
