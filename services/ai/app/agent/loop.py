@@ -527,6 +527,11 @@ class WorkingState:
         # prepared_visuals because they are not content blocks - they attach to
         # the slide's ``primitives`` list, not to its ``contents``.
         self.prepared_primitives: dict[int, list[dict]] = {}
+        # slide_index -> the region tree compose_slide_regions resolved for it.
+        # Held here for the same reason the visuals are: the geometry was
+        # validated once, and routing it back through a model's JSON output to
+        # be restated is how a validated tree acquires a typo.
+        self.prepared_regions: dict[int, list[dict]] = {}
         self.current_step_index: int = 0
         self.pending_question: dict | None = None
         self.is_paused_for_user: bool = False
@@ -723,6 +728,15 @@ class WorkingState:
                     continue
                 new_contents.append(item)
             slide_data = {**slide_data, "contents": new_contents}
+
+        # A composed page's geometry, if compose_slide_regions resolved one.
+        # It wins over any regions the model copied from the grammar into its
+        # own output: the composed tree is the one whose parts the exhibits
+        # were actually bound to, and two trees on one slide would leave every
+        # binding pointing at whichever survived.
+        composed = self.prepared_regions.get(slide_index)
+        if composed:
+            slide_data = {**slide_data, "regions": composed}
 
         # Attach anything build_chart/build_table/build_key_metrics prepared
         # for this slide. Any chart or table the model wrote inline is
@@ -2963,6 +2977,16 @@ class AgentLoop:
                     ]
                     slots.append(block)
 
+            # compose_slide_regions resolves geometry rather than content,
+            # so it attaches to the slide's own regions list. Recomposing
+            # replaces the tree outright: two compositions on one slide is
+            # the model changing its mind, not adding to the page.
+            if fn_name == "compose_slide_regions" and tool_result.data:
+                target = tool_result.data.get("slideIndex")
+                tree = tool_result.data.get("regions")
+                if target is not None and tree:
+                    self.working_state.prepared_regions[target] = list(tree)
+
             # draw_primitives places marks rather than content blocks,
             # so they attach to the slide's own primitives list.
             if fn_name == "draw_primitives" and tool_result.data:
@@ -3523,6 +3547,9 @@ class AgentLoop:
             "workflow; this is how the deck's look is decided)",
             "plan_presentation_structure — Plan the slide structure and outline",
             "select_layout — Choose the best layout for each slide based on content",
+            "compose_slide_regions — Divide one slide into named areas so it can carry "
+            "more than one exhibit, when none of the template's own compositions fits. "
+            "Returns the region ids to pass as build_* region_id",
             "build_chart — Build a validated chart for a slide from typed arguments (categories, series, axis titles). Use this rather than writing chart JSON yourself",
             "build_table — Build a validated table for a slide from typed columns and rows",
             "build_key_metrics — Build a row of 2-4 headline figures for a slide",
@@ -3545,6 +3572,16 @@ class AgentLoop:
             "dropped at render time.",
             "- Call build_chart/build_table/build_key_metrics with the slide_index "
             "BEFORE calling design_slide_content for that slide.",
+            "- A slide showing ONE thing needs no regions: build the exhibit and "
+            "let it take the page. A slide with two or more genuinely different "
+            "things to show, and no template composition that fits, is composed "
+            "first with compose_slide_regions and then each exhibit is built with "
+            "the region_id it belongs in. Give two exhibits of the same type "
+            "different slot names so both survive.",
+            "- Composing a page is not a reason to fill it. Four exhibits "
+            "answering the same question read worse than one answering it once, "
+            "and an exhibit built from figures the material does not have is the "
+            "worst outcome available. Compose because the content needs the room.",
             "- Units belong in the series name or the axis title, never inside the "
             "numbers: \"Revenue (US$ billions)\" with values [29.1, 32.3], not "
             "[\"29.1B\", \"32.3B\"].",
