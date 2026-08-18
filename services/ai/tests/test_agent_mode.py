@@ -129,28 +129,79 @@ def _numbered_tools(prompt: str) -> list[int]:
     return numbers
 
 
+def _tool_prompt(mode, has_documents: bool) -> tuple[str, list[int]]:
+    loop = _loop(mode)
+    loop._session_has_documents = has_documents
+    prompt = loop._build_system_prompt({})
+    return prompt, _numbered_tools(prompt)
+
+
 def test_the_tool_list_stays_contiguously_numbered_in_simple_mode():
     """Dropping a tool must renumber the list, not leave a gap."""
-    loop = _loop(MODE_SIMPLE)
-    loop._session_has_documents = True
-    numbers = _numbered_tools(loop._build_system_prompt({}))
+    _prompt, numbers = _tool_prompt(MODE_SIMPLE, has_documents=True)
 
+    assert numbers
     assert numbers == list(range(1, len(numbers) + 1))
-    assert len(numbers) == 15  # 16 in deep mode, minus web_search
+
+
+def test_simple_mode_describes_exactly_one_tool_fewer_than_deep():
+    """
+    The one it drops is web_search, and the count is asserted as a
+    *relationship* rather than a literal.
+
+    It used to be a literal, and that made every branch adding a tool edit the
+    same number - so two branches doing it in parallel merged cleanly into a
+    test that was wrong, because a merge takes one side of a changed line and
+    neither side was right for the union. The relationship holds however many
+    tools exist.
+    """
+    _deep, deep_numbers = _tool_prompt(MODE_DEEP, has_documents=True)
+    _simple, simple_numbers = _tool_prompt(MODE_SIMPLE, has_documents=True)
+
+    assert len(deep_numbers) - len(simple_numbers) == 1
 
 
 def test_the_document_tools_are_described_only_when_there_are_documents():
     """The prompt describing a tool the run withholds is the two disagreeing,
     and the model resolves that by trying it anyway."""
-    loop = _loop(MODE_SIMPLE)
-    loop._session_has_documents = False
-    prompt = loop._build_system_prompt({})
-    numbers = _numbered_tools(prompt)
+    with_docs, with_numbers = _tool_prompt(MODE_SIMPLE, has_documents=True)
+    without, without_numbers = _tool_prompt(MODE_SIMPLE, has_documents=False)
 
-    assert numbers == list(range(1, len(numbers) + 1))
-    assert len(numbers) == 13
-    assert "extract_key_data" not in prompt
-    assert "analyze_document" not in prompt
+    assert without_numbers == list(range(1, len(without_numbers) + 1))
+    # analyze_document and extract_key_data, and nothing else.
+    assert len(with_numbers) - len(without_numbers) == 2
+    assert "extract_key_data" not in without
+    assert "analyze_document" not in without
+    assert "extract_key_data" in with_docs
+
+
+def test_every_described_tool_is_one_the_run_can_actually_call():
+    """
+    The guard the literal counts were really standing in for.
+
+    A prompt naming a tool the registry does not have is the prompt and the
+    loop disagreeing, and a model resolves that by trying it anyway - which is
+    the failure the pipeline's own docstring describes. Checking against the
+    registry catches a tool vanishing *and* a tool being described but never
+    registered, neither of which a count can see.
+    """
+    from app.agent.registry import ToolRegistry, _register_default_tools
+
+    registry = ToolRegistry()
+    _register_default_tools(registry)
+    registered = {tool.name for tool in registry.list_tools()}
+
+    prompt, _numbers = _tool_prompt(MODE_DEEP, has_documents=True)
+    lines = prompt.splitlines()
+    start = lines.index("## Tools") + 2
+    described = []
+    for line in lines[start:]:
+        if not line or not line[0].isdigit():
+            break
+        described.append(line.split(". ", 1)[1].split(" —")[0].strip())
+
+    assert described
+    assert set(described) <= registered, set(described) - registered
 
 
 # ── Mode resolution and persistence ────────────────────────────────────

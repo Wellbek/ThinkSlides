@@ -24,6 +24,7 @@ from __future__ import annotations
 import time
 
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
+from app.agent.tools._binding import bind as _bind, region_param as _region_param
 from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
 from app.renderer.blocks import TONES
@@ -89,22 +90,6 @@ def _slide_param() -> ToolParameter:
         name="slide_index", type="integer",
         description="0-based index of the slide this block belongs to",
     )
-
-
-def _region_param() -> ToolParameter:
-    return ToolParameter(
-        name="region_id", type="string", required=False,
-        description=(
-            "The id of the slide region this block is bound to, when the slide "
-            "declares a region tree. Omit on a slide that does not."
-        ),
-    )
-
-
-def _bind(content: dict, region_id: str) -> dict:
-    if (region_id or "").strip():
-        content["regionId"] = region_id.strip()
-    return content
 
 
 class BuildStatCalloutsTool:
