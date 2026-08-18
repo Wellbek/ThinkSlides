@@ -143,10 +143,20 @@ class ValidateRenderedOutputTool:
                     # The builder's bar stops a request for a data-bearing
                     # image; this reads what the provider actually returned.
                     issues.extend(output_qa.check_generated_images(slides))
+                    # A composed page can be entirely correct and completely
+                    # unreadable. This is the floor under the thinning the
+                    # chart renderer does.
+                    issues.extend(output_qa.check_exhibit_legibility(slides))
                 # Sparse slides are reported but never gate the deck: a
                 # spacious cover is a legitimate design, and sending the deck
                 # back for it would spend the revision budget on taste.
                 advisories = output_qa.check_density(pdf_path)
+                # The only check in this pass that looks at the deck rather
+                # than at a slide. Advisory for the same reason density is:
+                # a uniform deck is weaker, not broken, and gating on it
+                # would spend the revision budget on taste.
+                if isinstance(slides, list):
+                    advisories.extend(output_qa.check_deck(slides))
                 issues.extend(await cls._check_aesthetics(pdf_path))
             finally:
                 if cleanup_dir:

@@ -291,7 +291,7 @@ Design System Context:
             # is attached to the slide server-side. Telling the model it exists
             # (but not what is in it) is what keeps the copy from restating the
             # same figures next to the chart that already shows them.
-            visual_info = _prepared_visual_guidance(attached)
+            visual_info = _prepared_visual_guidance(attached, outline)
             # Carried through from the plan rather than re-invented per slide:
             # the eyebrow only means anything if every slide in a part names
             # that part identically.
@@ -650,7 +650,8 @@ def _words_in(outline: dict) -> int:
     return len(text.split())
 
 
-def _prepared_visual_guidance(attached: list[dict]) -> str:
+def _prepared_visual_guidance(attached: list[dict],
+                              outline: dict | None = None) -> str:
     """What to tell the model about visuals already attached to this slide."""
     if not attached:
         return (
@@ -661,7 +662,7 @@ def _prepared_visual_guidance(attached: list[dict]) -> str:
         )
 
     described = "\n".join(f"  - {_describe_visual(block)}" for block in attached)
-    return (
+    guidance = (
         "\nThe following has ALREADY been built for this slide and will be placed "
         f"on it automatically:\n{described}\n"
         "Do NOT emit chart, table or metrics content yourself. Write the title and "
@@ -670,4 +671,48 @@ def _prepared_visual_guidance(attached: list[dict]) -> str:
         "these categories: naming any other subject, segment or figure would "
         "contradict the visual sitting next to it. Do not list its numbers back; "
         "the reader can already see them."
+    )
+    return guidance + _exhibit_plan_guidance(attached, outline)
+
+
+def _exhibit_plan_guidance(attached: list[dict], outline: dict | None) -> str:
+    """The questions this page's exhibits were planned to answer.
+
+    The one-chart rule - a chart REPLACES the prose it visualises - has to hold
+    as many times as there are exhibits, and on a composed page it needs one more
+    thing: the copy has to know which exhibit answers which question, or it
+    captions them interchangeably. "Revenue held flat" written next to the
+    regional trends and "it holds across regions" written next to the bridge is
+    a page whose captions have been shuffled.
+
+    The plan already carries exactly that - one question per intended exhibit,
+    from plan_presentation_structure - so it is threaded in rather than
+    re-derived. Nothing is said on a single-exhibit page, where there is no
+    mapping to get wrong.
+    """
+    if len(attached) < 2:
+        return ""
+
+    questions = [
+        str(q).strip() for q in ((outline or {}).get("exhibitPlan") or [])
+        if str(q or "").strip()
+    ]
+    if not questions:
+        return (
+            "\nThis page carries several exhibits. Frame what they establish "
+            "TOGETHER - the finding the reader should leave with - rather than "
+            "describing each one in turn. A page of captions is a page with no "
+            "argument."
+        )
+
+    listed = "\n".join(f"  {i}. {q}" for i, q in enumerate(questions, start=1))
+    return (
+        f"\nThis page's exhibits were planned to answer these questions, in "
+        f"order:\n{listed}\n"
+        "Your copy frames what the exhibits establish TOGETHER - one line saying "
+        "the finding the reader should leave with. Where you caption an "
+        "individual exhibit, the caption answers THAT exhibit's question rather "
+        "than restating its numbers, and the captions stay in this order so they "
+        "map onto the exhibits as laid out. Do not write a caption for a question "
+        "the exhibits do not actually answer."
     )

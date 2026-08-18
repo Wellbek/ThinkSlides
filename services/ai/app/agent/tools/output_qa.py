@@ -520,3 +520,251 @@ def _longest_run(values: list[bool]) -> int:
         current = current + 1 if value else 0
         longest = max(longest, current)
     return longest
+
+
+# ── Exhibits too small to read ─────────────────────────────────────────
+
+# A chart's box, in square inches, below which no amount of thinning makes it
+# legible on a projected slide. A deck-width exhibit is around 40 square inches
+# and a quarter of a composed page is 6, so this is the floor under the quarter -
+# a page divided further than four ways is not a dashboard, it is a mosaic.
+MIN_EXHIBIT_AREA_IN2 = 3.2
+
+# And a shape below which it is not a chart whatever its area. A band two inches
+# by a third of an inch has no room for a value axis, and a column that narrow
+# cannot carry a category label.
+MIN_EXHIBIT_SIDE_IN = 1.1
+
+# The canvas a slide is measured against when nothing says otherwise. 16:9 at
+# the size this renderer uses.
+DEFAULT_CANVAS_IN = (13.333, 7.5)
+
+EXHIBIT_TYPES = frozenset({"chart", "table", "diagram"})
+
+
+def check_exhibit_legibility(
+    slides: list[dict],
+    canvas_in: tuple[float, float] = DEFAULT_CANVAS_IN,
+) -> list[dict]:
+    """Exhibits bound to a region too small to read them in.
+
+    The renderer thins a small chart's furniture - fewer labels, no legend,
+    coarser ticks - which is what makes a four-exhibit page work. Past a point
+    thinning runs out: there is no version of a chart that is legible in a band
+    an inch tall, and a page divided that far has stopped being a dashboard.
+
+    Checked against the region tree rather than the rendered PDF, because a
+    chart's type is rasterised into its PNG and the converted page has no text
+    spans to measure inside it. The geometry is the honest thing to check: it is
+    what decided the size in the first place.
+    """
+    from app.renderer.regions import RegionTree
+
+    issues: list[dict] = []
+    for position, slide in enumerate(slides or []):
+        if not isinstance(slide, dict):
+            continue
+        index = slide.get("slideIndex")
+        index = index if isinstance(index, int) else position
+
+        tree = RegionTree.from_slide(slide, canvas_in[0], canvas_in[1])
+        if tree is None:
+            # No region tree means every exhibit has the slide's body to itself,
+            # which is never too small.
+            continue
+
+        for item in slide.get("contents") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "") not in EXHIBIT_TYPES:
+                continue
+            region_id = str(item.get("regionId") or "").strip()
+            if not region_id:
+                continue
+            resolved = tree.resolved.get(region_id)
+            if resolved is None:
+                continue
+            rect = resolved.rect
+            reason = _too_small_to_read(rect.width, rect.height)
+            if reason:
+                issues.append({
+                    "slideIndex": index,
+                    "type": "exhibit_too_small_to_read",
+                    "detail": (
+                        f"The {item['type']} bound to region '{region_id}' is "
+                        f"{rect.width:.1f}in by {rect.height:.1f}in. {reason} "
+                        "Give this page fewer exhibits, or move this one to a "
+                        "slide of its own."
+                    ),
+                })
+    return issues
+
+
+def _too_small_to_read(width_in: float, height_in: float) -> str:
+    """Why an exhibit this size cannot be read, or "" if it can."""
+    if min(width_in, height_in) < MIN_EXHIBIT_SIDE_IN:
+        return (
+            f"Neither side may be under {MIN_EXHIBIT_SIDE_IN}in - there is no "
+            "room for an axis, and a column that narrow cannot carry a category "
+            "label."
+        )
+    if width_in * height_in < MIN_EXHIBIT_AREA_IN2:
+        return (
+            f"That is under {MIN_EXHIBIT_AREA_IN2}in2, which is smaller than a "
+            "quarter of a composed page - past the point where dropping labels "
+            "and legends makes it legible."
+        )
+    return ""
+
+
+# ── The deck, as a whole ───────────────────────────────────────────────
+#
+# Every other check in this module looks at one slide. None of them can see the
+# smell this one exists for: a deck where every visual page carries exactly one
+# bar chart. Each slide is individually fine, and the deck is a template.
+#
+# **It flags sameness, not sparseness.** That distinction is the whole design.
+# A deck with three text slides, five one-chart slides and one dashboard passes.
+# A deck of nine identical bar charts does not. A thin deck with few exhibits
+# passes, because the material did not go further - and pushing it to go further
+# would produce fabricated exhibits, which is exactly the trap budget.py was
+# written to prevent. Get this backwards and the check becomes a filler quota.
+
+# Below this many exhibits there is not enough of a deck to have a pattern. Two
+# bar charts is not a habit.
+MIN_EXHIBITS_TO_JUDGE = 5
+
+# What share of a deck's exhibits may be the same kind before it reads as a
+# template rather than as a set of decisions. Generous on purpose: a financial
+# review legitimately leans on bars, and a deck that is 70% one type is only
+# suspicious once there is a lot of it.
+MAX_ONE_TYPE_SHARE = 0.8
+
+# How many distinct exhibit kinds a deck with plenty of exhibits should manage.
+# Not a quota on count - a quota on variety, which is a different thing.
+MIN_DISTINCT_TYPES = 2
+
+# Above this many exhibits, one type carrying all of them is a stronger signal
+# than the share alone: nine of one thing is a habit whatever the percentage.
+MANY_EXHIBITS = 8
+
+
+def _exhibit_kinds(slide: dict) -> list[str]:
+    """What kinds of exhibit one slide carries.
+
+    A chart's type counts as its kind, not "chart": nine bar charts and a deck
+    with a bridge, a mix, a ranked list and a trend are the two cases this whole
+    check is trying to tell apart, and at the level of "chart" they are
+    identical.
+    """
+    kinds: list[str] = []
+    for item in (slide or {}).get("contents") or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "")
+        if kind == "chart":
+            chart = item.get("chart") if isinstance(item.get("chart"), dict) else {}
+            kinds.append("chart:" + str(chart.get("chartType") or "bar").lower())
+        elif kind == "diagram":
+            payload = item.get("diagram") if isinstance(item.get("diagram"), dict) else {}
+            kinds.append("diagram:" + str(payload.get("kind") or "flow"))
+        elif kind in ("table", "metrics", "image"):
+            kinds.append(kind)
+    return kinds
+
+
+def check_deck(slides: list[dict]) -> list[dict]:
+    """Advisories about the deck as a whole. Sameness, never sparseness.
+
+    Returned as advisories rather than as issues: a uniform deck is a weaker
+    deck, not a broken one, and sending it back would spend the revision budget
+    on taste. What it buys is that the uniformity is *said* - by the time a
+    reviewer notices nine identical bar charts, the deck has already been sent.
+    """
+    advisories: list[dict] = []
+    per_slide = [
+        _exhibit_kinds(slide) for slide in (slides or [])
+        if isinstance(slide, dict)
+    ]
+    all_kinds = [kind for kinds in per_slide for kind in kinds]
+    total = len(all_kinds)
+
+    if total < MIN_EXHIBITS_TO_JUDGE:
+        # Not enough of a deck to have a pattern, and a thin deck passing is the
+        # point rather than an omission.
+        return advisories
+
+    counts: dict[str, int] = {}
+    for kind in all_kinds:
+        counts[kind] = counts.get(kind, 0) + 1
+    dominant, dominant_count = max(counts.items(), key=lambda pair: pair[1])
+    share = dominant_count / total
+
+    if len(counts) < MIN_DISTINCT_TYPES or share >= MAX_ONE_TYPE_SHARE:
+        advisories.append({
+            "type": "deck_exhibits_are_uniform",
+            "detail": (
+                f"{dominant_count} of this deck's {total} exhibits are the same "
+                f"kind ({dominant}). A deck of one exhibit type reads as a "
+                "template rather than as a set of decisions - a bridge, a mix, a "
+                "ranked comparison and a trend answer different questions, and "
+                "the chart vocabulary carries all of them. This is only worth "
+                "changing where a different exhibit would answer the slide's "
+                "question better; do not add exhibits the material does not "
+                "support."
+            ),
+        })
+    elif dominant_count >= MANY_EXHIBITS and len(counts) <= 2:
+        advisories.append({
+            "type": "deck_exhibits_are_uniform",
+            "detail": (
+                f"{dominant_count} exhibits of this deck are {dominant}, across "
+                f"only {len(counts)} kinds in total. Worth checking whether some "
+                "of those slides are asking a different question than the one a "
+                f"{dominant} answers."
+            ),
+        })
+
+    spread = _exhibit_spread(per_slide)
+    if spread:
+        advisories.append(spread)
+    return advisories
+
+
+def _exhibit_spread(per_slide: list[list[str]]) -> dict | None:
+    """Whether every visual page carries exactly the same number of exhibits.
+
+    Uniform at one is the failure this workstream exists to prevent. Uniform at
+    four is the opposite failure and just as suspicious: a page's exhibit count
+    follows its material, and material does not come in equal portions.
+
+    A deck with few visual pages is not judged - three pages carrying one
+    exhibit each is a small deck, not a pattern.
+    """
+    counts = [len(kinds) for kinds in per_slide if kinds]
+    if len(counts) < 4:
+        return None
+    if len(set(counts)) > 1:
+        return None
+
+    only = counts[0]
+    if only == 1:
+        return {
+            "type": "deck_exhibit_counts_are_uniform",
+            "detail": (
+                f"Every one of this deck's {len(counts)} visual slides carries "
+                "exactly one exhibit. Some pages carry a finding that needs two "
+                "or three exhibits side by side, and compose_slide_regions "
+                "exists for those. Where the material genuinely supports one, "
+                "one is right - this is worth a look, not an automatic change."
+            ),
+        }
+    return {
+        "type": "deck_exhibit_counts_are_uniform",
+        "detail": (
+            f"Every one of this deck's {len(counts)} visual slides carries "
+            f"exactly {only} exhibits. An exhibit count follows the material, "
+            "and material does not come in equal portions - a page whose "
+            f"finding is one number does not need {only} charts."
+        ),
+    }
