@@ -78,6 +78,11 @@ export interface ToolCallEvent {
   toolArgs: Record<string, unknown>;
   callId: string;
   timestamp: string;
+  // Present only for a design_slide_content call redesigning a slide
+  // validation flagged - distinguishes a fix-up pass from an original one,
+  // which otherwise look identical in the activity feed.
+  isRevision?: boolean;
+  revisionReason?: string;
 }
 
 export interface SourceInfo {

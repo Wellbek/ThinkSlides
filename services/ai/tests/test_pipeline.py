@@ -449,6 +449,59 @@ class TestRevisionWalksBackwards:
         assert pipeline.next_phase(loop).name == "render"
 
 
+class TestARevisionIsLabelledAsOne:
+    """A first-pass design_slide_content and a fix-up one look identical in
+    the feed - same tool name, same-shaped summary - which is what makes
+    legitimate, bounded self-correction read as pointless repetition."""
+
+    @pytest.mark.asyncio
+    async def test_a_flagged_slide_is_marked_as_a_revision_with_its_reason(self, monkeypatch):
+        loop, session_id, _seen = _loop([], monkeypatch=monkeypatch)
+        loop.working_state.presentation_structure = TOOL_RESULTS["plan_presentation_structure"]
+        loop.working_state.slides_needing_revision = [1]
+        loop.working_state.validation_issues = [
+            {"slideIndex": 1, "detail": "chart has no data"},
+        ]
+        loop.working_state.selected_layouts[1] = {"layoutId": "content"}
+
+        events = [
+            payload async for kind, payload in loop._call_tool(
+                "design_slide_content", {"slide_index": 1},
+                context={}, session_id=session_id,
+                phase=pipeline.PHASES_BY_NAME["draft"],
+            )
+            if kind == "event"
+        ]
+
+        call = next(e for e in events if e["type"] == "tool_call")
+        assert call["isRevision"] is True
+        assert call["revisionReason"] == "chart has no data"
+
+        result = next(e for e in events if e["type"] == "tool_result")
+        assert result["summary"].startswith("Fixing Slide 2 (chart has no data):")
+
+    @pytest.mark.asyncio
+    async def test_a_first_pass_carries_no_revision_marker(self, monkeypatch):
+        loop, session_id, _seen = _loop([], monkeypatch=monkeypatch)
+        loop.working_state.presentation_structure = TOOL_RESULTS["plan_presentation_structure"]
+        loop.working_state.selected_layouts[0] = {"layoutId": "content"}
+
+        events = [
+            payload async for kind, payload in loop._call_tool(
+                "design_slide_content", {"slide_index": 0},
+                context={}, session_id=session_id,
+                phase=pipeline.PHASES_BY_NAME["draft"],
+            )
+            if kind == "event"
+        ]
+
+        call = next(e for e in events if e["type"] == "tool_call")
+        assert "isRevision" not in call
+
+        result = next(e for e in events if e["type"] == "tool_result")
+        assert not result["summary"].startswith("Fixing")
+
+
 class TestTheLoopCallsToolsWithArgumentsTheyHave:
     """The loop is the caller now, so a parameter-name mismatch is not a model
     that tries again differently - it is a stalled run. One shipped: the

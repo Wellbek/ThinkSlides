@@ -327,16 +327,36 @@ export function ActivityFeed() {
     return `${messages.length}:${events}:${last?.id ?? ""}`;
   }, [messages]);
 
+  // A fresh question is worth interrupting a scrolled-up read for: staying
+  // where you scrolled is right for a passing thought, wrong for something
+  // that is now waiting on you and easy to miss below the fold. Confirmed
+  // live: after 13 minutes and several rounds, the feed was found still
+  // scrolled to the very first question, several rounds stale, with only the
+  // small "New messages" pill hinting anything newer existed.
+  const latestQuestionId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const stream = messages[i].agentEventStream ?? [];
+      for (let j = stream.length - 1; j >= 0; j--) {
+        if (stream[j]?.type === "question") return `${messages[i].id}:${j}`;
+      }
+    }
+    return null;
+  }, [messages]);
+  const seenQuestionRef = useRef<string | null>(null);
+
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (atBottomRef.current) {
+    const isNewQuestion = latestQuestionId !== null && latestQuestionId !== seenQuestionRef.current;
+    seenQuestionRef.current = latestQuestionId;
+    if (atBottomRef.current || isNewQuestion) {
       el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
       setShowJump(false);
     } else {
       setShowJump(true);
     }
-  }, [signature]);
+  }, [signature, latestQuestionId]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -427,8 +447,18 @@ function AssistantBlock({ message, isAnswered, answerText }: { message: any; isA
 
   // Live "working" shimmer: shown when the agent is live but there is no open
   // tool step to render the timer against (it is still reasoning).
+  //
+  // Not shown once the last thing on the feed is a question: the run
+  // genuinely stopped there to wait on a human, and "reasoning through the
+  // next step" is false in exactly that state. Confirmed live: the shimmer
+  // was found still animating 6+ minutes after server logs showed the
+  // backend had gone idle waiting for an answer - nothing left to imply is
+  // happening.
+  const lastNode = nodes[nodes.length - 1];
+  const isAwaitingAnswer = lastNode?.kind === "event" && lastNode.ev.type === "question";
   const showLiveShimmer =
-    isLive && (nodes.length === 0 || nodes[nodes.length - 1].kind !== "step" || (nodes[nodes.length - 1] as StepNode).running === false);
+    isLive && !isAwaitingAnswer &&
+    (nodes.length === 0 || lastNode.kind !== "step" || (lastNode as StepNode).running === false);
   const liveThought = useMemo(() => {
     const last = nodes[nodes.length - 1];
     if (last && last.kind === "thoughts") {

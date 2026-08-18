@@ -2906,11 +2906,13 @@ class AgentLoop:
             })
 
         # Yield tool_call event
+        is_revision, revision_reason = self._revision_context(fn_name, fn_args)
         yield "event", _event("tool_call", current_phase, {
             "toolName": fn_name,
             "toolArgs": fn_args,
             "callId": call_id,
             "timestamp": _iso_now(),
+            **({"isRevision": True, "revisionReason": revision_reason} if is_revision else {}),
         })
 
         # Execute tool
@@ -2975,13 +2977,20 @@ class AgentLoop:
 
         # Yield tool_result event. The summary is what the feed leads
         # with; the raw result stays on the event behind a disclosure.
+        summary = summarize_tool_result(
+            fn_name, fn_args, tool_result.data, tool_result.success
+        )
+        if is_revision and summary:
+            where = f"Slide {fn_args.get('slide_index') + 1}"
+            summary = (
+                f"Fixing {where} ({revision_reason}): {summary}" if revision_reason
+                else f"Fixing {where}: {summary}"
+            )
         yield "event", _event("tool_result", current_phase, {
             "toolName": fn_name,
             "callId": call_id,
             "result": tool_result.data if tool_result.success else tool_result.error,
-            "summary": summarize_tool_result(
-                fn_name, fn_args, tool_result.data, tool_result.success
-            ),
+            "summary": summary,
             "durationMs": tool_duration,
             "success": tool_result.success,
             "tokenCount": tool_result.token_count,
@@ -3931,6 +3940,25 @@ class AgentLoop:
         ])
 
         return "\n".join(prompt_parts)
+
+    def _revision_context(self, fn_name: str, fn_args: dict) -> tuple[bool, str]:
+        """Whether this design_slide_content call is fixing a flagged slide,
+        and why - the same information slide_directive already puts in front
+        of the model, surfaced on the event too so the activity feed can show
+        "Fixing slide 4 (validation: missing chart data)" instead of a bare
+        repeated "Design slide content" indistinguishable from the first pass.
+        """
+        if fn_name != "design_slide_content":
+            return False, ""
+        slide_index = fn_args.get("slide_index")
+        if not isinstance(slide_index, int) or slide_index not in self.working_state.slides_needing_revision:
+            return False, ""
+        reasons = [
+            str(issue.get("detail") or issue.get("type") or "").strip()
+            for issue in self.working_state.validation_issues
+            if issue.get("slideIndex") == slide_index and (issue.get("detail") or issue.get("type"))
+        ]
+        return True, "; ".join(dict.fromkeys(r for r in reasons if r))
 
     def _describe_validation_issues(self, limit: int = 8) -> str:
         """Render the last validation run's issues as a slide-numbered list."""
