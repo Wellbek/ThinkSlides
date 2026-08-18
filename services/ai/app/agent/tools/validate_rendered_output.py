@@ -140,6 +140,9 @@ class ValidateRenderedOutputTool:
                 slides = coerce_json_arg(slides_json, []) or []
                 if isinstance(slides, list):
                     issues.extend(output_qa.check_content(slides))
+                    # The builder's bar stops a request for a data-bearing
+                    # image; this reads what the provider actually returned.
+                    issues.extend(output_qa.check_generated_images(slides))
                 # Sparse slides are reported but never gate the deck: a
                 # spacious cover is a legitimate design, and sending the deck
                 # back for it would spend the revision budget on taste.
