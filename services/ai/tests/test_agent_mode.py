@@ -92,12 +92,7 @@ def test_every_phase_offers_only_its_own_tools():
 
     drafting = pipeline.PHASES_BY_NAME["draft"].tools
     assert "design_slide_content" in drafting
-    # web_search belongs here deliberately, in both modes - see
-    # test_simple_mode_can_still_check_a_specific_fact_while_drafting. The
-    # dedicated Deep-only research phase is a different thing entirely: a
-    # mandatory multi-query pass before planning, not "the only place
-    # web_search exists".
-    assert "web_search" in drafting
+    assert "web_search" not in drafting
     assert "plan_presentation_structure" not in drafting
     # The loop makes its own calls in the loop-driven phases, so they offer
     # the model nothing at all.
@@ -107,22 +102,13 @@ def test_every_phase_offers_only_its_own_tools():
 # ── System prompt ──────────────────────────────────────────────────────
 
 
-def test_simple_mode_prompt_tells_the_model_it_can_still_check_one_fact():
-    """Simple mode has no dedicated research pass, but web_search is offered
-    during drafting - a mode with no way to check a fact does not write fewer
-    facts, it writes invented ones with the same confidence as sourced ones.
-    Live-observed: a Simple-mode run with this tool truly absent fabricated
-    company names, an inconsistent dollar figure, and a regional funding
-    split impossible for the real organisation it was describing, all stated
-    as plain fact."""
+def test_simple_mode_prompt_tells_the_model_it_has_no_web_access():
     prompt = _loop(MODE_SIMPLE)._build_system_prompt({})
 
     assert "Deep Thinking is OFF" in prompt
-    assert "web_search" in prompt
-    assert "not a full research pass" in prompt
-    # The hedging guardrail still matters for whatever one search does not
-    # settle.
-    assert "Do NOT invent precise statistics" in prompt
+    assert "no web access" in prompt
+    # web_search must not appear in the tool list or the workflow.
+    assert "web_search" not in prompt
 
 
 def test_deep_mode_prompt_asks_the_model_to_research_first():
@@ -130,18 +116,6 @@ def test_deep_mode_prompt_asks_the_model_to_research_first():
 
     assert "Deep Thinking is ON" in prompt
     assert "call web_search FIRST" in prompt
-
-
-def test_simple_mode_can_still_check_a_specific_fact_while_drafting():
-    """The dedicated research phase (mandatory, multi-query, corroborated) is
-    Deep-only - that part of the mode split is real and stays. What must not
-    be true is a Simple-mode run having no way to check a fact at all: the
-    schema web_search is offered under during drafting is what a Simple run
-    actually gets, not just prompt text describing it."""
-    from app.agent import pipeline
-
-    assert "web_search" in pipeline.SLIDE_TOOLS
-    assert not pipeline._wants_research(_loop(MODE_SIMPLE))
 
 
 def _numbered_tools(prompt: str) -> list[int]:
@@ -170,18 +144,21 @@ def test_the_tool_list_stays_contiguously_numbered_in_simple_mode():
     assert numbers == list(range(1, len(numbers) + 1))
 
 
-def test_simple_and_deep_describe_the_same_tool_catalogue():
+def test_simple_mode_describes_exactly_one_tool_fewer_than_deep():
     """
-    Both modes offer web_search now - Deep as a mandatory research pass
-    described in its own section, Simple as one available during drafting for
-    a specific fact. The catalogue entry count is asserted as a *relationship*
-    rather than a literal, on purpose (see git history for why a literal count
-    here caused real merge conflicts).
+    The one it drops is web_search, and the count is asserted as a
+    *relationship* rather than a literal.
+
+    It used to be a literal, and that made every branch adding a tool edit the
+    same number - so two branches doing it in parallel merged cleanly into a
+    test that was wrong, because a merge takes one side of a changed line and
+    neither side was right for the union. The relationship holds however many
+    tools exist.
     """
     _deep, deep_numbers = _tool_prompt(MODE_DEEP, has_documents=True)
     _simple, simple_numbers = _tool_prompt(MODE_SIMPLE, has_documents=True)
 
-    assert len(deep_numbers) == len(simple_numbers)
+    assert len(deep_numbers) - len(simple_numbers) == 1
 
 
 def test_the_document_tools_are_described_only_when_there_are_documents():

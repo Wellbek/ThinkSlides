@@ -3724,13 +3724,9 @@ class AgentLoop:
             "",
         ]
 
-        # The two effort levels differ in how much research happens, not in
-        # whether web_search exists at all: Deep runs a dedicated, mandatory
-        # multi-query pass before planning; Simple has no such phase, but the
-        # tool stays available while drafting for the one specific claim a
-        # slide turns out to need. A mode with no way to check a fact does not
-        # write fewer facts - it writes invented ones with the same confidence
-        # as sourced ones, which is worse than not knowing.
+        # The two effort levels differ in whether the agent may research the
+        # topic on the web. Describing only the tools it actually has keeps the
+        # prompt honest - in simple mode web_search is not in the schema list.
         if self.mode == MODE_DEEP:
             min_searches, max_searches = self._research_budget()
             prompt_parts.extend([
@@ -3762,25 +3758,22 @@ class AgentLoop:
             prompt_parts.extend([
                 "## Sourcing Content (Deep Thinking is OFF)",
                 "",
-                "- There is no dedicated research pass on this run - plan mainly from the user's documents, the conversation, and your own knowledge.",
-                "- web_search is still available while you are drafting a slide. Use it for a specific fact you are about to state and are not confident in - a figure, a date, a named detail - rather than guessing. It is not a full research pass: one targeted search for the one claim that needs it, not several angles on the whole topic.",
-                "- Do NOT invent precise statistics, dates, or quotations you are not confident in and have not checked. Prefer qualitative statements over fabricated numbers.",
+                "- You have no web access on this run. Write from the user's documents, the conversation, and your own knowledge.",
+                "- Do NOT invent precise statistics, dates, or quotations you are not confident in. Prefer qualitative statements over fabricated numbers.",
                 "- This applies with full force to build_chart, build_table and "
                 "build_key_metrics. A chart makes a number look sourced, so charting a "
                 "figure you actually guessed is worse than writing no chart at all. "
                 "Only build a visual from figures present in the user's documents, the "
-                "conversation, a web_search result, or facts you are genuinely confident "
-                "of. If the request needs current results you still do not have after "
-                "checking, say so on the slide and in its notes, and chart the shape of "
-                "the question rather than inventing values for it.",
-                "- If the request genuinely needs current or verifiable facts beyond what one search settles, say so in your slides' framing rather than guessing.",
+                "conversation, or facts you are genuinely confident of. If the request "
+                "needs current results you do not have, say so on the slide and in its "
+                "notes, and chart the shape of the question rather than inventing "
+                "values for it.",
+                "- If the request genuinely needs current or verifiable facts, say so in your slides' framing rather than guessing.",
                 "",
             ])
 
-        research_tool = [
-            "web_search — Search the web for real facts and return cited sources"
-            + ("" if self.mode == MODE_DEEP else " (available while drafting, for a specific fact - not a full research pass)")
-        ]
+        research_tool = ["web_search — Search the web for real facts and return cited sources"] \
+            if self.mode == MODE_DEEP else []
         # Described only when the session actually has something to read - a
         # tool list that names a tool the run has withheld is the prompt and
         # the loop disagreeing, which the model resolves by trying it anyway.
