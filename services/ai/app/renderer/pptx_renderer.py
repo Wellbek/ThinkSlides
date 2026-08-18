@@ -7,6 +7,7 @@ Never recreates design from scratch — always clones and fills.
 """
 
 from __future__ import annotations
+import base64
 import os
 import re
 import copy
@@ -479,6 +480,26 @@ def _default_namespace(uri: str):
             ET._namespace_map[uri] = previous
         # "" belongs to the relationships namespace for everything else.
         ET.register_namespace("", "http://schemas.openxmlformats.org/package/2006/relationships")
+
+
+def _pre_rendered_figure(chart_data: dict) -> Optional[bytes]:
+    """A figure a provider already drew, if one did.
+
+    build_chart routes to a figure provider at build time rather than here, for
+    two reasons that both matter: the fallback is then reported in a tool result
+    the model can see, and this render path stays synchronous and offline. The
+    cost is that the provider is asked for a full-width exhibit and the PNG is
+    placed to fit, which is what happens to a matplotlib render sharing a page
+    anyway.
+    """
+    encoded = str((chart_data or {}).get("renderedPng") or "")
+    if not encoded:
+        return None
+    try:
+        return base64.b64decode(encoded)
+    except (ValueError, TypeError):
+        # Fall through to matplotlib rather than dropping the exhibit.
+        return None
 
 
 class PPTXRenderer:
@@ -1724,7 +1745,7 @@ class PPTXRenderer:
         ground: Optional[str] = None,
     ) -> None:
         """Render chart_data to a design-system-styled PNG and place it on the slide."""
-        chart_bytes = chart_renderer.render_chart_to_png(
+        chart_bytes = _pre_rendered_figure(chart_data) or chart_renderer.render_chart_to_png(
             chart_data, self.design_system, pos.width, pos.height,
             slide_title=slide_title,
             # A chart PNG is transparent, so what it is drawn *on* decides
@@ -2335,7 +2356,9 @@ class PPTXRenderer:
         )
         width_in = emu_to_inches(pos["cx"])
         height_in = emu_to_inches(pos["cy"])
-        chart_bytes = chart_renderer.render_chart_to_png(chart_data, self.design_system, width_in, height_in)
+        chart_bytes = _pre_rendered_figure(chart_data) or \
+            chart_renderer.render_chart_to_png(chart_data, self.design_system,
+                                               width_in, height_in)
         if not chart_bytes:
             return None
         return self._insert_picture_xml(

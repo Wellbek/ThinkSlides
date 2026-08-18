@@ -28,12 +28,15 @@ a bridge beside a mix chart however much the material wanted it.
 """
 
 from __future__ import annotations
+import base64
 import time
 
+from app.agent import run_context
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._binding import bind, region_param, slot_param
 from app.agent.tools._json_extract import coerce_json_arg
 from app.observability.logging import get_logger
+from app.renderer.figure_provider import RENDERERS as FIGURE_RENDERERS
 
 logger = get_logger(__name__)
 
@@ -313,6 +316,18 @@ class BuildChartTool:
                         "relies on the axis. Defaults to the deck's own convention."
                     ),
                 ),
+                ToolParameter(
+                    name="renderer", type="string", required=False,
+                    enum=list(FIGURE_RENDERERS),
+                    description=(
+                        "Which rasteriser draws it. Leave empty for matplotlib, "
+                        "which is the default and always available. 'figure' "
+                        "routes to a publication-grade figure provider if this "
+                        "workspace configured one, and falls back to matplotlib "
+                        "if it cannot be reached. The DATA is identical either "
+                        "way - only the drawing differs."
+                    ),
+                ),
                 region_param(),
                 slot_param('"bridge" and "mix" on one financial page'),
             ],
@@ -335,6 +350,7 @@ class BuildChartTool:
         targets=None,
         secondary_axis_series=None,
         secondary_axis_title: str = "",
+        renderer: str = "",
         region_id: str = "",
         slot: str = "",
     ) -> ToolResult:
@@ -594,6 +610,8 @@ class BuildChartTool:
                for s in clean_series):
             chart["marksAProjection"] = True
 
+        routed = await _route_to_figure_provider(chart, renderer)
+
         logger.info(
             "chart_built",
             slide_index=slide_index, chart_type=chart_type,
@@ -607,7 +625,7 @@ class BuildChartTool:
                 "summary": (
                     f"{chart_type} chart with {len(clean_series)} series over "
                     f"{len(categories)} categories, attached to slide "
-                    f"{slide_index + 1}{orientation_note}"
+                    f"{slide_index + 1}{orientation_note}{routed}"
                 ),
             },
             duration_ms=int((time.time() - start) * 1000),
@@ -1068,6 +1086,55 @@ class BuildChartGridTool:
         return ToolResult(
             success=False, error=message, duration_ms=int((time.time() - start) * 1000)
         )
+
+
+# The size a figure is requested at. A chart's real box is decided at layout
+# time, after this tool has run, so the provider is asked for a full-width
+# exhibit and the PNG is placed to fit - the same thing that happens to a
+# matplotlib render that turns out to be sharing a page.
+FIGURE_REQUEST_IN = (9.0, 5.0)
+
+
+async def _route_to_figure_provider(chart: dict, renderer: str) -> str:
+    """Draw this chart through a figure provider, if it asked for one.
+
+    Returns a note for the tool summary, empty when nothing happened. The chart
+    is mutated in place with the returned PNG, so the renderer uses it instead of
+    calling matplotlib.
+
+    **Falls back rather than fails.** A missing exhibit is a worse outcome than a
+    less beautiful one, and the fallback is reported in the summary rather than
+    logged quietly - a deck that silently stopped using the provider it was
+    configured with is a deck whose owner has no way to find out.
+    """
+    from app.renderer import figure_provider
+
+    wanted = str(renderer or "").strip().lower()
+    if wanted != "figure":
+        return ""
+
+    connection = run_context.get_figure_connection()
+    if connection is None:
+        return (
+            " - drawn with matplotlib: no figure provider is configured for "
+            "this workspace"
+        )
+
+    try:
+        png = await figure_provider.render(
+            connection, chart, run_context.get_design_system(),
+            FIGURE_REQUEST_IN[0], FIGURE_REQUEST_IN[1],
+        )
+    except figure_provider.FigureError as exc:
+        logger.warning("figure_provider_fallback", error=str(exc))
+        return f" - drawn with matplotlib instead: {exc}"
+
+    if not png:
+        return " - drawn with matplotlib instead: the provider returned no image"
+
+    chart["renderedPng"] = base64.b64encode(png).decode("ascii")
+    chart["renderer"] = "figure"
+    return f" - drawn by {connection.label}"
 
 
 BUILD_VISUAL_TOOLS = ("build_chart", "build_chart_grid", "build_table",
