@@ -1496,7 +1496,7 @@ class AgentLoop:
             yield _event("thought", "content_analysis", {
                 "content": "Loading session context and design system...",
                 "timestamp": import_timestamp,
-            })
+            }, step="intake")
 
         context = await self._load_context(session_id)
 
@@ -1554,7 +1554,7 @@ class AgentLoop:
                        if recoloured else "")
                 ),
                 "timestamp": _iso_now(),
-            })
+            }, step="design")
 
         # A request to change the outline, read before the walk for the same
         # reason the direction is: the walker decides where to resume from the
@@ -1579,7 +1579,7 @@ class AgentLoop:
                         "figures this deck needs and cite what I find."
                     ),
                     "timestamp": _iso_now(),
-                })
+                }, step="research")
             else:
                 # Nothing to search with. Say so rather than silently carrying
                 # on as though the user's answer had been honoured.
@@ -1590,7 +1590,7 @@ class AgentLoop:
                         "figures I cannot verify and say so on the slides."
                     ),
                     "timestamp": _iso_now(),
-                })
+                }, step="research")
 
         # Publish the citation settings for the tools, after the research
         # answer has been read - a run that just switched to deep research is
@@ -1676,7 +1676,7 @@ class AgentLoop:
                         ),
                         "code": "phase_stalled",
                         "timestamp": _iso_now(),
-                    })
+                    }, step=phase.name)
                     return
 
         # Every phase is finished, so the deck is rendered and checked. The
@@ -1703,7 +1703,9 @@ class AgentLoop:
             {"template_path": ""},
             context=context,
             session_id=session_id,
-            phase=pipeline.PHASES_BY_NAME["intake"],
+            # Both callers (_phase_design, _phase_plan) are design-phase work;
+            # "intake" here would tag the read under the wrong phase box.
+            phase=pipeline.PHASES_BY_NAME["design"],
         ):
             if kind == "event":
                 yield payload
@@ -1721,7 +1723,7 @@ class AgentLoop:
         yield "event", _event("thought", "content_analysis", {
             "content": "Reading the request...",
             "timestamp": _iso_now(),
-        })
+        }, step="intake")
 
         documents = "yes" if self._session_has_documents else "no"
         prompt = _INTAKE_PROMPT.format(
@@ -1759,7 +1761,7 @@ class AgentLoop:
             yield "event", _event("thought", "content_analysis", {
                 "content": summary,
                 "timestamp": _iso_now(),
-            })
+            }, step="intake")
 
     async def _phase_scout(
         self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
@@ -1930,7 +1932,7 @@ class AgentLoop:
                 f"{chosen.get('rationale')}"
             ),
             "timestamp": _iso_now(),
-        })
+        }, step="design")
 
     async def _phase_plan(
         self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
@@ -2188,7 +2190,7 @@ class AgentLoop:
                     "message": _provider_failure_message(e),
                     "code": "provider_unavailable",
                     "timestamp": _iso_now(),
-                })
+                }, step=phase.name)
                 yield "provider_failed", True
                 return
 
@@ -2199,7 +2201,7 @@ class AgentLoop:
                 yield "event", _event("thought", phase.label, {
                     "content": assistant_message["content"],
                     "timestamp": _iso_now(),
-                })
+                }, step=phase.name)
 
             if not tool_calls:
                 # Nothing was called and the phase is unfinished. Say what is
@@ -2234,6 +2236,7 @@ class AgentLoop:
                     context=context,
                     session_id=session_id,
                     current_phase=phase.label,
+                    step=phase.name,
                 ):
                     if kind == "event":
                         yield "event", payload
@@ -2276,7 +2279,7 @@ class AgentLoop:
                 yield _event("thought", "complete", {
                     "content": str(payload).strip(),
                     "timestamp": _iso_now(),
-                })
+                }, step="complete")
 
     # ── Running one phase ─────────────────────────────────────────────────
 
@@ -2344,6 +2347,7 @@ class AgentLoop:
             context=context,
             session_id=session_id,
             current_phase=phase.label,
+            step=phase.name,
         ):
             yield kind, payload
 
@@ -2787,6 +2791,7 @@ class AgentLoop:
         context: dict,
         session_id: uuid.UUID,
         current_phase: str,
+        step: str | None = None,
     ) -> AsyncIterator[tuple[str, object]]:
         """Run one tool call and record everything it changes about the run.
 
@@ -2903,7 +2908,7 @@ class AgentLoop:
             yield "event", _event("thought", "validation", {
                 "content": narration,
                 "timestamp": _iso_now(),
-            })
+            }, step=step)
 
         # Yield tool_call event
         is_revision, revision_reason = self._revision_context(fn_name, fn_args)
@@ -2913,7 +2918,7 @@ class AgentLoop:
             "callId": call_id,
             "timestamp": _iso_now(),
             **({"isRevision": True, "revisionReason": revision_reason} if is_revision else {}),
-        })
+        }, step=step)
 
         # Execute tool
         tool_start = time.time()
@@ -2996,7 +3001,7 @@ class AgentLoop:
             "tokenCount": tool_result.token_count,
             "timestamp": _iso_now(),
             "sources": sources if sources else None,
-        })
+        }, step=step)
 
         # Stage the per-slide previews produced by this render. They are
         # NOT published yet: validate_rendered_output runs next and may
@@ -3298,16 +3303,20 @@ class AgentLoop:
                 d for d in (data.get("directions") or []) if isinstance(d, dict)
             ]
             waiting = "Waiting for the user to choose a design direction"
+            step = "design"
         else:
             # Which checkpoint this satisfied is decided by where the run is,
             # not by what the model says it is doing: before a plan exists the
             # question is the consultation, after it the outline review.
             if ws.presentation_structure:
                 ws.reviewed_outline_with_user = True
-            elif records_consultation:
-                # The offer to take over is not the consultation: answering
-                # "no" to it leaves every real question still unasked.
-                ws.consulted_before_planning = True
+                step = "review"
+            else:
+                if records_consultation:
+                    # The offer to take over is not the consultation: answering
+                    # "no" to it leaves every real question still unasked.
+                    ws.consulted_before_planning = True
+                step = "consult"
             waiting = f"Waiting for user input: {data.get('question')}"
 
         yield _event("question", "user_input", {
@@ -3316,7 +3325,7 @@ class AgentLoop:
             "questions": data.get("questions", []),
             "context": data.get("context", ""),
             "timestamp": _iso_now(),
-        })
+        }, step=step)
         await self._save_working_state(session_id)
         # The caller returns on seeing this: the run is over until the answer
         # arrives as a new request. A `break` here once left the just-appended
@@ -3327,7 +3336,7 @@ class AgentLoop:
             "content": waiting,
             "paused": True,
             "timestamp": _iso_now(),
-        })
+        }, step=step)
 
     async def _execute_tool(self, name: str, args: dict) -> ToolResult:
         """Execute a registered tool by name."""
@@ -3451,7 +3460,7 @@ class AgentLoop:
         yield _event("thought", "structure_planning", {
             "content": "Replanning the outline around what you asked to change.",
             "timestamp": _iso_now(),
-        })
+        }, step="plan")
 
     def _resolve_direction_choice(self, chat_messages: list[dict]) -> dict | None:
         """
@@ -3981,7 +3990,7 @@ class AgentLoop:
             return []
 
         events = [
-            _event("slide_finalized", "rendering", {**preview, "timestamp": _iso_now()})
+            _event("slide_finalized", "rendering", {**preview, "timestamp": _iso_now()}, step="render")
             for preview in self.working_state.pending_slide_previews
         ]
 
@@ -3996,7 +4005,7 @@ class AgentLoop:
                     "renderResult": render_result,
                     "validationClean": True,
                     "timestamp": _iso_now(),
-                }))
+                }, step="validate"))
             else:
                 # Exhausted the revision budget with defects still present.
                 # The deck IS still handed over - once the agent has stopped
@@ -4010,13 +4019,13 @@ class AgentLoop:
                     "issueCount": len(self.working_state.validation_issues),
                     "attempts": self.working_state.validation_attempts,
                     "timestamp": _iso_now(),
-                }))
+                }, step="validate"))
                 events.append(_event("deck_finalized", "validation", {
                     "renderResult": render_result,
                     "validationClean": False,
                     "issues": self.working_state.validation_issues,
                     "timestamp": _iso_now(),
-                }))
+                }, step="validate"))
 
         if events:
             self.working_state.previews_published = True
@@ -4206,7 +4215,7 @@ def _credit_generated_images(slide_data: dict) -> dict:
     return {**slide_data, "footnotes": [*existing, *added]}
 
 
-def _event(event_type: str, phase: str, data: dict) -> dict:
+def _event(event_type: str, phase: str, data: dict, *, step: str | None = None) -> dict:
     """
     Create a typed agent event dict.
 
@@ -4214,6 +4223,13 @@ def _event(event_type: str, phase: str, data: dict) -> dict:
     unrecognised name is not a harmless typo: every event is published to
     Redis, and one the browser was never told to listen for is dropped in
     silence. Failing here is how that gets noticed.
+
+    ``phase`` is the coarse label several pipeline phases share (intake,
+    scout and research are all "content_analysis"), which is all the model's
+    system prompt and the older grouping ever needed. ``step`` is the actual
+    pipeline phase name underneath it - the thing the interface's phase
+    timeline groups by, so "Understand" and "Research" render as the two
+    different things they are instead of folding into one box.
     """
     if event_type not in ALL_EVENT_TYPES:
         raise ValueError(
@@ -4225,6 +4241,7 @@ def _event(event_type: str, phase: str, data: dict) -> dict:
     return {
         "type": event_type,
         "phase": phase,
+        "step": step,
         **data,
     }
 

@@ -448,6 +448,7 @@ async def _run_agent(
                                 file_event = {
                                     "type": "file_generated",
                                     "phase": "rendering",
+                                    "step": "render",
                                     "fileId": file_id,
                                     "fileName": file_name,
                                     "fileUrl": f"/api/files/{file_id}",
@@ -688,6 +689,7 @@ async def simple_fallback(
     file_event = {
         "type": "file_generated",
         "phase": "rendering",
+        "step": "render",
         "fileId": file_id,
         "fileName": f"{req.title}.pptx",
         "fileUrl": f"/api/files/{file_id}",

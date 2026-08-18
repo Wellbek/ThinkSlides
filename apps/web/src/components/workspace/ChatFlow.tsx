@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ActivityFeed, FeedItem, fmtTime } from "./ActivityFeed";
-import { MarkdownText } from "./MarkdownText";
+import { ActivityFeed } from "./ActivityFeed";
 import { Composer } from "./Composer";
 import { TimerHeader } from "@/components/chat/TimerHeader";
 import { RetryStrip } from "@/components/chat/RetryStrip";
@@ -11,15 +10,13 @@ import { buildDownloadUrl, formatFileSize } from "@/lib/download";
 import { PanelRightClose, Download, ExternalLink, Presentation, FileDown } from "lucide-react";
 
 export function ChatFlow({ onCollapse }: { collapsed: boolean; onCollapse: () => void }) {
-  const [tab, setTab] = useState<"activity" | "messages" | "files">("activity");
+  const [tab, setTab] = useState<"activity" | "files">("activity");
   const activeFiles = useChatStore((s) => s.activeFiles);
-  const activeMessages = useChatStore((s) => s.activeMessages);
 
   return (
     <>
       <div className="ws-tabs">
         <div className={`ws-tab ${tab === "activity" ? "active" : ""}`} onClick={() => setTab("activity")}>Activity</div>
-        <div className={`ws-tab ${tab === "messages" ? "active" : ""}`} onClick={() => setTab("messages")}>Messages</div>
         <div className={`ws-tab ${tab === "files" ? "active" : ""}`} onClick={() => setTab("files")}>
           Files{activeFiles.length > 0 && <span className="ws-tab-count">{activeFiles.length}</span>}
         </div>
@@ -35,30 +32,6 @@ export function ChatFlow({ onCollapse }: { collapsed: boolean; onCollapse: () =>
           content the user is reading, twice per wait. */}
       <div className="ws-flow-body">
         {tab === "activity" && <ActivityFeed />}
-        {tab === "messages" && (
-          <div className="ws-feed">
-            {activeMessages.length === 0 && (
-              <div className="ws-empty-note">Send a message to start the agent workflow.</div>
-            )}
-            {activeMessages.map((m) =>
-              m.role === "user" ? (
-                <FeedItem key={m.id} dot={<span className="ws-av indigo">WK</span>} dotClass="ws-dot-user">
-                  <div className="ws-feed-header"><span className="lbl">You</span><span className="ts">{fmtTime(m.created_at)}</span></div>
-                  <div className="ws-feed-text">{m.content}</div>
-                </FeedItem>
-              ) : (
-                <FeedItem key={m.id} dot="◆" dotClass="ws-dot-fact">
-                  <div className="ws-feed-header"><span className="lbl">Assistant</span><span className="ts">{fmtTime(m.created_at)}</span></div>
-                  {m.content ? (
-                    <MarkdownText className="ws-feed-text">{m.content}</MarkdownText>
-                  ) : (
-                    <div className="ws-empty-note">Working…</div>
-                  )}
-                </FeedItem>
-              )
-            )}
-          </div>
-        )}
         {tab === "files" && (
           <div className="ws-feed">
             {activeFiles.length === 0 && (

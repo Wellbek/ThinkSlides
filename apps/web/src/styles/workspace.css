@@ -1007,3 +1007,71 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
 }
 .ws-src-toggle.on:hover { background: #161630; }
 .ws-src-toggle:focus-visible { outline: 2px solid var(--ws-ai-border); outline-offset: 1px; }
+
+/* ============================================================
+   Phase timeline: Understand / Research / Design / Draft /
+   Render & check, each its own box on the same rail the older
+   flat feed used. Reuses .ws-feed-item's dot+connector so a
+   revisited phase sits in the same visual language as the rest,
+   just tagged and coloured differently.
+   ============================================================ */
+.ws-dot-revisit { background: var(--ws-orange-bg); border: 1px solid var(--ws-orange-border); color: var(--ws-orange-text); }
+
+.ws-phase-head { display: flex; align-items: center; gap: 8px; }
+.ws-phase-name { font-size: 13.5px; font-weight: 600; color: #DDD; }
+.ws-phase-tag {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--ws-orange-text); background: var(--ws-orange-bg); border: 1px solid var(--ws-orange-border);
+  padding: 1px 7px; border-radius: 999px;
+}
+.ws-phase-tag.sm { padding: 0 5px; font-size: 9px; margin-left: 2px; }
+
+.ws-phase-takeaway { color: #999; font-size: 13px; line-height: 1.55; margin-top: 5px; }
+.ws-phase-raw { display: inline-block; margin-left: 8px; vertical-align: middle; }
+
+/* Boxed substep checklist - "as in A", per the approved concept: substeps
+   live inside a bordered card rather than floating loose on the timeline. */
+.ws-phase-checklist {
+  margin-top: 9px; border: 1px solid var(--ws-border); border-radius: var(--ws-radius-sm);
+  background: #0A0A0A; overflow: hidden;
+}
+.ws-phase-check-row {
+  padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--ws-border);
+}
+.ws-phase-check-row:last-child { border-bottom: none; }
+.ws-check-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ws-check-icon { width: 14px; flex-shrink: 0; text-align: center; font-size: 11px; }
+.ws-check-icon.ok { color: var(--ws-green-text); }
+.ws-check-icon.bad { color: var(--ws-red-text); }
+.ws-check-icon.run { color: var(--ws-ai-text); }
+.ws-check-label { color: #CCC; flex-shrink: 0; }
+/* Wraps rather than truncating: the chat panel is narrow enough that a
+   one-line ellipsis was cutting "Slide 2 drafted: Why Cats Sleep So Much."
+   down to "Slide 2 dr...", losing the one thing the row exists to say. */
+.ws-check-note {
+  color: #666; font-size: 11.5px; margin-top: 3px; margin-left: 22px;
+  line-height: 1.4; word-break: break-word;
+}
+.ws-check-raw {
+  font-family: var(--ws-font-code); font-size: 10px; color: var(--ws-ai-text); cursor: pointer;
+  flex-shrink: 0; padding: 1px 7px; border: 1px solid var(--ws-ai-border); border-radius: 4px;
+  background: var(--ws-ai-bg);
+}
+.ws-check-raw:hover { background: #14143a; }
+.ws-phase-check-raw-body { padding: 0 10px 8px; background: #0A0A0A; }
+.ws-phase-check-raw-body .ws-step-detail { margin-top: 6px; }
+
+/* Backtrack banner: sits above a revisited phase, dashed to read as a jump
+   rather than a normal step in sequence. */
+.ws-backtrack {
+  display: flex; align-items: center; gap: 7px; margin: 2px 0 10px 8px; padding: 6px 10px;
+  border: 1px dashed var(--ws-orange-border); border-radius: var(--ws-radius-sm);
+  background: var(--ws-orange-bg); color: var(--ws-orange-text); font-size: 12px;
+}
+.ws-backtrack-icon { flex-shrink: 0; }
+
+.ws-file-dl-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+.ws-file-dl-row .ws-feed-text { margin-top: 0; }
+
+/* "Finished in Xs" - a quiet footnote, not another turn in the timeline. */
+.ws-run-complete { margin: 2px 0 18px 30px; font-size: 11px; color: #444; }
