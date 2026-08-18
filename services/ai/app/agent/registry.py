@@ -192,6 +192,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     )
     from app.agent.tools.design_slide_content import DesignSlideContentTool
     from app.agent.tools.validate_slide_json import ValidateSlideJsonTool
+    from app.agent.tools.build_diagram import BuildDiagramTool
     from app.agent.tools.compose_regions import ComposeSlideRegionsTool
     from app.agent.tools.select_source_image import SelectSourceImageTool
     from app.agent.tools.finalize_and_render_pptx import FinalizeAndRenderPptxTool
@@ -210,6 +211,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     ComposeSlideRegionsTool.register(registry)
     BuildChartTool.register(registry)
     BuildChartGridTool.register(registry)
+    BuildDiagramTool.register(registry)
     BuildTableTool.register(registry)
     BuildKeyMetricsTool.register(registry)
     BuildStatCalloutsTool.register(registry)

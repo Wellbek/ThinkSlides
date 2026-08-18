@@ -334,7 +334,7 @@ class TestTheToolsAreRegistered:
             assert expected in names, f"{expected} is not registered"
 
     def test_the_vocabulary_and_the_builders_line_up(self):
-        assert len(BLOCK_TYPES) == 7
+        assert len(BLOCK_TYPES) == 8
 
 
 class TestBlocksReachTheSlideThroughTheLoop:
