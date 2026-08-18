@@ -475,6 +475,25 @@ async def _run_agent(
                     event_count, session_id
                 )
 
+                # A question sets working_state:{session_id} so a resume can
+                # rebuild context and continue. It's only ever cleared on a
+                # genuine finish (AgentLoop._clear_working_state, called once
+                # validation settles) - never on an error termination. Left
+                # stale, that key is what the orchestrator's /messages
+                # handler checks to decide a new message is actually an
+                # answer to the old question, so an unrelated message sent
+                # after a failed run gets silently routed as one. Whenever
+                # this run ends without still being paused, the key must not
+                # outlive it, success or not.
+                if not run_paused:
+                    try:
+                        await redis_client.delete(f"working_state:{session_id}")
+                    except Exception as redis_err:
+                        logger.error(
+                            "_run_agent: failed to clear working_state for session %s: %s",
+                            session_id, str(redis_err),
+                        )
+
                 # FALLBACK: ensure we have text to show. By this point a
                 # question, an error, or a real file should already have set
                 # final_content - reaching this branch means the loop ended
@@ -558,6 +577,15 @@ async def _run_agent(
                     f"agent:events:{session_id}", json.dumps(done_event)
                 )
                 logger.info("_run_agent: published ERROR done event for %s", session_id)
+
+                # This run is not paused - an unhandled exception ended it,
+                # same as the handled-error case above. Don't leave a stale
+                # working_state behind for the next message to be silently
+                # routed against as if it were answering an old question.
+                try:
+                    await redis_client.delete(f"working_state:{session_id}")
+                except Exception:
+                    pass
         except Exception as final_e:
             logger.error(
                 "_run_agent: CRITICAL - couldn't even save fallback: %s", str(final_e)

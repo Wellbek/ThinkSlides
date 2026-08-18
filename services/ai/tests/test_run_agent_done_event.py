@@ -49,6 +49,7 @@ class _FakeSessionFactory:
 class _FakeRedis:
     def __init__(self):
         self.published: list[dict] = []
+        self.deleted: list[str] = []
 
     async def get(self, _key):
         return None
@@ -58,6 +59,10 @@ class _FakeRedis:
 
     async def publish(self, _channel, payload):
         self.published.append(json.loads(payload))
+        return 1
+
+    async def delete(self, key):
+        self.deleted.append(key)
         return 1
 
 
@@ -73,7 +78,7 @@ def _fake_loop(events: list[dict]):
     return _Loop
 
 
-async def _run(monkeypatch, events: list[dict]) -> list[dict]:
+async def _run(monkeypatch, events: list[dict]) -> tuple[list[dict], _FakeRedis]:
     import app.db.session as db_session
 
     fake_redis = _FakeRedis()
@@ -81,14 +86,16 @@ async def _run(monkeypatch, events: list[dict]) -> list[dict]:
     monkeypatch.setattr(generate_api, "redis_client", fake_redis)
     monkeypatch.setattr(generate_api, "AgentLoop", _fake_loop(events))
 
-    await generate_api._run_agent(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+    session_id = uuid.uuid4()
+    await generate_api._run_agent(session_id, uuid.uuid4(), uuid.uuid4())
 
-    return [e for e in fake_redis.published if e.get("type") == "done"]
+    dones = [e for e in fake_redis.published if e.get("type") == "done"]
+    return dones, fake_redis, session_id
 
 
 @pytest.mark.asyncio
 async def test_a_paused_run_publishes_a_paused_terminal_done(monkeypatch):
-    dones = await _run(
+    dones, fake_redis, _session_id = await _run(
         monkeypatch,
         [
             {"type": "thought", "phase": "content_analysis", "content": "thinking"},
@@ -102,11 +109,15 @@ async def test_a_paused_run_publishes_a_paused_terminal_done(monkeypatch):
         "a terminal done without paused=True tells the SSE hub and the browser "
         f"to tear down mid-question: {dones}"
     )
+    assert not fake_redis.deleted, (
+        "a genuinely paused run must not clear working_state - the next "
+        "message needs it to resume"
+    )
 
 
 @pytest.mark.asyncio
 async def test_a_finished_run_publishes_an_unpaused_terminal_done(monkeypatch):
-    dones = await _run(
+    dones, fake_redis, session_id = await _run(
         monkeypatch,
         [
             {"type": "thought", "phase": "rendering", "content": "rendering"},
@@ -116,6 +127,7 @@ async def test_a_finished_run_publishes_an_unpaused_terminal_done(monkeypatch):
 
     assert dones, "no done event was published"
     assert dones[-1].get("paused") is False
+    assert f"working_state:{session_id}" in fake_redis.deleted
 
 
 @pytest.mark.asyncio
@@ -128,7 +140,7 @@ async def test_a_run_that_errors_out_does_not_report_success(monkeypatch):
     fallback used to claim "Presentation generation completed" for a run that
     had just failed outright.
     """
-    dones = await _run(
+    dones, fake_redis, session_id = await _run(
         monkeypatch,
         [
             {"type": "thought", "phase": "content_generation", "content": "designing"},
@@ -149,3 +161,24 @@ async def test_a_run_that_errors_out_does_not_report_success(monkeypatch):
         f"a run that errored out must not report success: {final}"
     )
     assert "Rate limited by openai" in final.get("content", "")
+
+
+@pytest.mark.asyncio
+async def test_an_errored_run_clears_working_state_so_the_next_message_is_not_misread(monkeypatch):
+    """
+    working_state:{session_id} is what the orchestrator's /messages handler
+    checks to decide a new message is actually the answer to an old question.
+    It used to be cleared only on a genuine finish - never on error - so a
+    run that failed left it behind, and the next, completely unrelated
+    message a user sent got silently routed as an answer to a question that
+    was several turns stale by then.
+    """
+    _dones, fake_redis, session_id = await _run(
+        monkeypatch,
+        [
+            {"type": "error", "phase": "content_generation", "message": "boom"},
+            {"type": "done", "phase": "content_generation", "paused": False},
+        ],
+    )
+
+    assert f"working_state:{session_id}" in fake_redis.deleted

@@ -544,8 +544,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content: string, files?: File[]) => {
-    const { activeSessionId, mode, detailLevel, includeSources } = get();
+    const { activeSessionId, mode, detailLevel, includeSources, sseClient } = get();
     if (!activeSessionId) return;
+
+    // The SSE client auto-closes after an unpaused "done" (see sse.ts) and
+    // nothing else reopens it. Without this, a message sent after an earlier
+    // turn already finished enqueues a real job that runs to completion on
+    // the server while nothing is listening for its events: the UI never
+    // shows the result, and isGenerating never clears, since that only
+    // happens inside the SSE "done" handler.
+    if (sseClient && !sseClient.isConnected()) {
+      sseClient.connect();
+    }
 
     // Deep Thinking needs a configured search backend. The selector is already
     // disabled without one, but settings can change (or be cleared) between

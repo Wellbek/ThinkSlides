@@ -108,6 +108,17 @@ export class SSEClient {
     }
   }
 
+  /**
+   * Whether there is a live EventSource right now. `connect()` auto-closes on
+   * an unpaused `done` (see the listener below), and nothing else in this
+   * client ever reopens it - a caller that wants to keep receiving events for
+   * a session that has already finished a turn needs to check this and call
+   * `connect()` again itself before sending the next message.
+   */
+  isConnected(): boolean {
+    return this.eventSource !== null && this.eventSource.readyState !== EventSource.CLOSED;
+  }
+
   on(eventType: SSEEventType, handler: SSEEventHandler): void {
     const existing = this.handlers.get(eventType) || [];
     existing.push(handler);
