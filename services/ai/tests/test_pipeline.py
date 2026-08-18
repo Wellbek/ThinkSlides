@@ -325,6 +325,11 @@ class TestTheRunResumesWhereItStopped:
         loop, session_id, seen = _loop(
             [_calls(("web_search", {"query": "q"}))],
             state=self._after_consult(
+                # INTAKE's slideCount (5) would otherwise disagree with
+                # TOOL_RESULTS["plan_presentation_structure"]'s fixed 2 slides
+                # and turn this into the deviations path this test is not
+                # about - see test_a_slide_count_mismatch_is_flagged_as_a_deviation.
+                brief={**json.loads(INTAKE), "slideCount": 0},
                 offered_directions=True,
                 web_search_calls=9,
                 researched_urls=[f"https://s/{i}" for i in range(8)],
@@ -338,6 +343,60 @@ class TestTheRunResumesWhereItStopped:
         question = next(e for e in events if e["type"] == "question")
         assert question["question"] == "Shall I build this outline?"
         assert "1. Origins" in question["context"]
+
+    @pytest.mark.asyncio
+    async def test_a_slide_count_mismatch_is_flagged_as_a_deviation(self, monkeypatch):
+        """INTAKE asks for five slides; the mocked plan has two. A prompt line
+        asking for a count is a request, not an enforcement - the model can
+        and does plan a different one without saying so, and the review
+        question is where a real user finds out, before anything is drafted."""
+        loop, session_id, seen = _loop(
+            [_calls(("web_search", {"query": "q"}))],
+            state=self._after_consult(
+                offered_directions=True,
+                web_search_calls=9,
+                researched_urls=[f"https://s/{i}" for i in range(8)],
+            ),
+            messages=[{"role": "user", "content": "All 32 recognised"}],
+            monkeypatch=monkeypatch,
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        question = next(e for e in events if e["type"] == "question")
+        assert "doesn't fully match" in question["question"]
+        assert "asked for 5 slides" in question["context"]
+        assert "has 2" in question["context"]
+        # The outline itself is still there, past the deviation note.
+        assert "1. Origins" in question["context"]
+
+    @pytest.mark.asyncio
+    async def test_a_model_reported_deviation_is_shown_the_same_way(self, monkeypatch):
+        """Not every deviation is a count the loop can check mechanically -
+        "cover only 2026 approvals" or "one project per slide" are free text,
+        and only the model planning the deck can tell whether it held. Its
+        self-report is shown exactly like the mechanical one: leading the
+        review message, not buried in the outline."""
+        loop, session_id, seen = _loop(
+            [],
+            state=self._after_consult(
+                brief={**json.loads(INTAKE), "slideCount": 2},
+                offered_directions=True,
+                presentation_structure={
+                    **TOOL_RESULTS["plan_presentation_structure"],
+                    "deviations": ["Only 2 of the 3 breeds you named turned up material - the third is omitted."],
+                },
+                reviewed_outline_with_user=False,
+            ),
+            messages=[{"role": "user", "content": "All 32 recognised"}],
+            monkeypatch=monkeypatch,
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        question = next(e for e in events if e["type"] == "question")
+        assert "doesn't fully match" in question["question"]
+        assert "Only 2 of the 3 breeds" in question["context"]
 
 
 class TestRevisionWalksBackwards:

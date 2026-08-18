@@ -1970,6 +1970,13 @@ class AgentLoop:
         The one pause that happens even when the user handed over every other
         decision: seeing the slide titles before they are written is the
         cheapest moment to redirect a deck.
+
+        plan_presentation_structure self-reports into "deviations" whenever
+        the plan does not do exactly what was asked (a stated count it could
+        not reach, scope it added on its own). That is only worth having if
+        it is put in front of the person who asked, not left in the plan for
+        nobody to read - so it leads this message rather than being folded
+        into the outline as one more line among many.
         """
         structure = self.working_state.presentation_structure or {}
         slides = structure.get("slides") or []
@@ -1977,15 +1984,27 @@ class AgentLoop:
             f"{i + 1}. {s.get('title') or s.get('heading') or 'Untitled'}"
             for i, s in enumerate(slides)
         )
+        deviations = [str(d).strip() for d in (structure.get("deviations") or []) if str(d or "").strip()]
+        if deviations:
+            noted = "\n".join(f"- {d}" for d in deviations)
+            context_text = (
+                f"Before you approve this, here is where the plan does not do "
+                f"exactly what you asked:\n{noted}\n\nThe rest of the outline:\n{outline}"
+            )
+            question = "This plan doesn't fully match what you asked for - shall I build it anyway?"
+        else:
+            context_text = f"Here is the outline I have planned:\n{outline}"
+            question = "Shall I build this outline?"
+
         async for item in self._ask_and_pause(
             [{
-                "question": "Shall I build this outline?",
+                "question": question,
                 "options": [
                     "Go ahead as planned",
                     "Change something - I'll say what",
                 ],
             }],
-            context=f"Here is the outline I have planned:\n{outline}",
+            context=context_text,
             phase=pipeline.PHASES_BY_NAME["review"],
             run_context_=context,
             session_id=session_id,
@@ -3060,7 +3079,26 @@ class AgentLoop:
             # Designed" prompt recap never appeared.
             if fn_name == "plan_presentation_structure":
                 if tool_result.data and "totalSlides" in tool_result.data:
-                    self.working_state.presentation_structure = tool_result.data
+                    structure = tool_result.data
+                    # The one explicit numeric constraint this tool already
+                    # takes as a parameter, checked here because a prompt line
+                    # ("Target Slide Count: 5") is a request, not an
+                    # enforcement - the model can and does plan a different
+                    # count without saying so. Folded into the same
+                    # self-reported "deviations" list the tool's own prompt
+                    # asks it to keep, so the review step (see _phase_review)
+                    # surfaces both kinds the same way rather than needing a
+                    # second, parallel mechanism.
+                    target_count = int(fn_args.get("target_slide_count") or 0)
+                    actual_count = int(structure.get("totalSlides") or 0)
+                    if target_count > 0 and actual_count != target_count:
+                        deviations = list(structure.get("deviations") or [])
+                        deviations.append(
+                            f"You asked for {target_count} slides; the plan has "
+                            f"{actual_count}."
+                        )
+                        structure["deviations"] = deviations
+                    self.working_state.presentation_structure = structure
 
             if fn_name == "design_slide_content":
                 if tool_result.data and "slideIndex" in tool_result.data:
