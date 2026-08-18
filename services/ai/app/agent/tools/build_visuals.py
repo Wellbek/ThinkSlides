@@ -48,6 +48,11 @@ MAX_SLOPE_POINTS = 4
 # A heatmap's cells have to be big enough to hold their own figure.
 MAX_HEATMAP_ROWS = 10
 MAX_HEATMAP_COLUMNS = 12
+# Past this many panels nothing in any of them is legible at slide size, and
+# the grid has stopped being a comparison and become a contact sheet.
+MAX_PANELS = 6
+MIN_PANELS = 2
+PANEL_TYPES = ["line", "bar", "area"]
 
 # Past roughly this, a category label cannot be printed under a vertical bar
 # without being rotated or truncated, and both read badly on a slide. The
@@ -870,4 +875,200 @@ class BuildKeyMetricsTool:
         )
 
 
-BUILD_VISUAL_TOOLS = ("build_chart", "build_table", "build_key_metrics")
+class BuildChartGridTool:
+    """Small multiples: the same shape per segment, on one shared scale."""
+
+    @classmethod
+    def register(cls, registry: ToolRegistry) -> None:
+        registry.register_tool(
+            name="build_chart_grid",
+            description=(
+                "Build a grid of small charts for one slide - the same shape "
+                "repeated once per segment, all on ONE shared scale. Use this to "
+                "answer a question no single chart can: does this pattern hold "
+                "everywhere, or is one segment carrying it? Four regional trends "
+                "overlaid on one axes is a tangle; the same four as a row of "
+                "panels is readable at a glance. Every panel is scaled "
+                "identically, which is not optional - independently scaled panels "
+                "look alike and are not comparable, and the one with the smallest "
+                "numbers gets the steepest-looking line."
+            ),
+            fn=cls.run,
+            parameters=[
+                ToolParameter(
+                    name="slide_index", type="integer",
+                    description="0-based index of the slide this grid belongs to",
+                ),
+                ToolParameter(
+                    name="categories", type="array", items={"type": "string"},
+                    description=(
+                        "The x-axis labels, shared by every panel - that sharing "
+                        'is what makes the panels comparable, e.g. ["Q1", "Q2"]'
+                    ),
+                ),
+                ToolParameter(
+                    name="panels", type="array",
+                    items={
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": (
+                                    "What this panel is - the segment, region or "
+                                    'cohort, e.g. "Americas"'
+                                ),
+                            },
+                            "values": {
+                                "type": "array", "items": {"type": "number"},
+                                "description": (
+                                    "One plain number per category, in the same "
+                                    "order. No units inside the numbers."
+                                ),
+                            },
+                        },
+                        "required": ["name", "values"],
+                    },
+                    description=(
+                        f"{MIN_PANELS}-{MAX_PANELS} panels. One is not a "
+                        "comparison; past six nothing in any panel is legible."
+                    ),
+                ),
+                ToolParameter(
+                    name="panel_type", type="string", enum=PANEL_TYPES,
+                    required=False,
+                    description=(
+                        "The shape each panel takes: line for a trajectory "
+                        "(default), bar for a comparison, area for a cumulative "
+                        "total"
+                    ),
+                ),
+                ToolParameter(
+                    name="value_label", type="string", required=False,
+                    description=(
+                        "What every panel measures, with its unit. Stated once "
+                        "for the grid, because it is the same in all of them."
+                    ),
+                ),
+                ToolParameter(
+                    name="title", type="string", required=False,
+                    description=(
+                        "A title for the grid. Omit it when the slide's own "
+                        "heading already says the same thing."
+                    ),
+                ),
+                ToolParameter(
+                    name="unit_line", type="string", required=False,
+                    description='The unit, as a second line under the title - "$ billion"',
+                ),
+                region_param(),
+                slot_param('"regions" and "cohorts" on one page'),
+            ],
+        )
+
+    @classmethod
+    async def run(cls, slide_index: int, categories, panels,
+                  panel_type: str = "line", value_label: str = "",
+                  title: str = "", unit_line: str = "",
+                  region_id: str = "", slot: str = "") -> ToolResult:
+        start = time.time()
+        categories = [str(c) for c in _as_list(categories)]
+        raw_panels = _as_list(panels)
+
+        if not categories:
+            return cls._error(
+                "categories is empty. Every panel shares them, and that sharing "
+                "is what makes the panels comparable.",
+                start,
+            )
+        if len(raw_panels) < MIN_PANELS:
+            return cls._error(
+                f"{len(raw_panels)} panel(s) is not a comparison - a grid of one "
+                "is a chart. Use build_chart for a single series.",
+                start,
+            )
+        if len(raw_panels) > MAX_PANELS:
+            return cls._error(
+                f"{len(raw_panels)} panels is more than a slide-sized grid can "
+                f"show (max {MAX_PANELS}); past that nothing in any panel is "
+                "legible. Chart the segments that carry the finding.",
+                start,
+            )
+
+        clean = []
+        for position, entry in enumerate(raw_panels):
+            entry = coerce_json_arg(entry, entry)
+            if not isinstance(entry, dict):
+                return cls._error(
+                    f"panels[{position}] is not an object. Each is "
+                    '{"name": "...", "values": [...]}.',
+                    start,
+                )
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                return cls._error(
+                    f"panels[{position}] has no name. The name is the only thing "
+                    "saying which segment the panel is.",
+                    start,
+                )
+            raw_values = _as_list(entry.get("values"))
+            values = [_as_number(v) for v in raw_values]
+            if any(v is None for v in values):
+                bad = next(r for r, v in zip(raw_values, values) if v is None)
+                return cls._error(
+                    f"panel {name!r} has a value that is not a plain number: "
+                    f"{bad!r}. Put units in value_label, not in the values.",
+                    start,
+                )
+            if len(values) != len(categories):
+                return cls._error(
+                    f"panel {name!r} has {len(values)} values but there are "
+                    f"{len(categories)} categories. Every panel needs exactly one "
+                    "value per category - a panel measured over a different span "
+                    "is not comparable with the others, which is the whole point "
+                    "of the grid.",
+                    start,
+                )
+            clean.append({"name": name, "values": values})
+
+        panel_type = (panel_type or "line").lower()
+        if panel_type not in PANEL_TYPES:
+            panel_type = "line"
+
+        chart: dict = {
+            "chartType": "smallMultiples",
+            "panelType": panel_type,
+            "categories": categories,
+            "series": clean,
+        }
+        if value_label.strip():
+            chart["yAxisTitle"] = value_label.strip()
+        if title.strip():
+            chart["title"] = title.strip()
+        if unit_line.strip():
+            chart["unitLine"] = unit_line.strip()
+
+        logger.info("chart_grid_built", slide_index=slide_index,
+                    panels=len(clean), panel_type=panel_type)
+        return ToolResult(
+            success=True,
+            data={
+                "slideIndex": slide_index,
+                "content": bind({"type": "chart", "chart": chart}, region_id, slot),
+                "summary": (
+                    f"{len(clean)}-panel {panel_type} grid over "
+                    f"{len(categories)} categories on one shared scale, attached "
+                    f"to slide {slide_index + 1}"
+                ),
+            },
+            duration_ms=int((time.time() - start) * 1000),
+        )
+
+    @staticmethod
+    def _error(message: str, start: float) -> ToolResult:
+        return ToolResult(
+            success=False, error=message, duration_ms=int((time.time() - start) * 1000)
+        )
+
+
+BUILD_VISUAL_TOOLS = ("build_chart", "build_chart_grid", "build_table",
+                      "build_key_metrics")

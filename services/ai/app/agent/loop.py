@@ -488,6 +488,7 @@ TOOL_PHASES = {
     "validate_slide_json": "validation",
     "select_source_image": "content_generation",
     "build_chart": "content_generation",
+    "build_chart_grid": "content_generation",
     "build_table": "content_generation",
     "build_key_metrics": "content_generation",
     "finalize_and_render_pptx": "rendering",
@@ -3551,6 +3552,7 @@ class AgentLoop:
             "more than one exhibit, when none of the template's own compositions fits. "
             "Returns the region ids to pass as build_* region_id",
             "build_chart — Build a validated chart for a slide from typed arguments (categories, series, axis titles). Use this rather than writing chart JSON yourself",
+            "build_chart_grid — Build a grid of small charts, one per segment, all on one shared scale. Use it to say whether a pattern holds everywhere or one segment is carrying it",
             "build_table — Build a validated table for a slide from typed columns and rows",
             "build_key_metrics — Build a row of 2-4 headline figures for a slide",
             "design_slide_content — Generate a slide's title and copy (visuals come from the build_* tools)",
