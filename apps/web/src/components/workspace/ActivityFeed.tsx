@@ -49,7 +49,7 @@ function toolLabel(toolName: string): string {
   return map[toolName] ?? toolName.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function fmtTime(ts?: string): string {
+export function fmtTime(ts?: string): string {
   if (!ts) return "";
   try {
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1014,7 +1014,7 @@ function EventItem({
   }
 }
 
-function FeedItem({
+export function FeedItem({
   dot,
   dotClass,
   children,
