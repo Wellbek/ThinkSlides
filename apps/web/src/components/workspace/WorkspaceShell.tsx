@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
-import { NavRail } from "./NavRail";
+import { NavRail, type RailPanel } from "./NavRail";
 import { HomeView } from "./HomeView";
 import { DetailsPanel } from "./DetailsPanel";
 import { SlideStage } from "./SlideStage";
@@ -28,6 +28,10 @@ export function WorkspaceShell() {
 
   const [view, setView] = useState<View>("home");
   const [navExt, setNavExt] = useState(false);
+  // Which extended panel the rail shows. Clicking the icon of the panel
+  // already open closes it; clicking the other one switches to it, rather
+  // than closing and making the user click again.
+  const [navPanel, setNavPanel] = useState<RailPanel>("history");
   const [panes, setPanes] = useState<Panes>({ left: true, center: true, right: true });
   const [leftW, setLeftW] = useState(248);
   const [rightW, setRightW] = useState(392);
@@ -169,7 +173,15 @@ export function WorkspaceShell() {
       <div className="ws-app-row">
         <NavRail
           extended={navExt}
-          onToggleExtend={() => setNavExt((v) => !v)}
+          panel={navPanel}
+          onOpenPanel={(panel) => {
+            if (navExt && navPanel === panel) {
+              setNavExt(false);
+              return;
+            }
+            setNavPanel(panel);
+            setNavExt(true);
+          }}
           view={view}
           onHome={() => setView("home")}
           onPickSession={(id) => {

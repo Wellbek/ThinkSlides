@@ -10,30 +10,48 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Roles allowed to change the organisation's AI settings or spend its API
-// quota on a credential test. Everyone else may still read the redacted
-// settings, because the composer needs the readiness summary to know whether
-// Deep Thinking can be offered.
+// Roles allowed to change the organisation's AI settings and connections, or
+// spend its API quota on a credential test. Everyone else may still read the
+// redacted settings, because the composer needs the readiness summary to know
+// whether Deep Thinking can be offered.
 var settingsWriteRoles = map[string]bool{
 	"owner": true,
 	"admin": true,
 }
 
-// SettingsHandler proxies the AI service's settings API.
+// SettingsHandler proxies one of the AI service's credential-holding APIs.
 //
 // The frontend never talks to the AI service directly - the orchestrator owns
 // authentication, and this is where the caller's verified identity becomes the
 // X-Org-Id / X-User-Id headers the AI service trusts. Proxying rather than
 // reimplementing also keeps the credential handling (encryption, redaction) in
 // exactly one service.
+//
+// upstreamPath is the AI service prefix this instance forwards to. Settings and
+// connections are separate APIs but the same proxy, because the reason the
+// proxy exists - identity translation and one home for credentials - is
+// identical for both, and a second copy would be a second place for the
+// "never forward the caller's bearer token" rule to be forgotten.
 type SettingsHandler struct {
-	aiBaseURL  string
-	httpClient *http.Client
+	aiBaseURL    string
+	upstreamPath string
+	httpClient   *http.Client
 }
 
 func NewSettingsHandler(aiBaseURL string) *SettingsHandler {
+	return newProxyHandler(aiBaseURL, "/api/v1/settings")
+}
+
+// NewConnectionsHandler proxies the AI service's connections API, which holds
+// MCP endpoints and their credentials.
+func NewConnectionsHandler(aiBaseURL string) *SettingsHandler {
+	return newProxyHandler(aiBaseURL, "/api/v1/connections")
+}
+
+func newProxyHandler(aiBaseURL, upstreamPath string) *SettingsHandler {
 	return &SettingsHandler{
-		aiBaseURL: strings.TrimSuffix(aiBaseURL, "/"),
+		aiBaseURL:    strings.TrimSuffix(aiBaseURL, "/"),
+		upstreamPath: upstreamPath,
 		httpClient: &http.Client{
 			// Credential tests call out to a third-party provider, so allow
 			// noticeably longer than a database-backed request would need.
@@ -59,7 +77,7 @@ func (h *SettingsHandler) Proxy(c *gin.Context) {
 		return
 	}
 
-	url := h.aiBaseURL + "/api/v1/settings" + c.Param("path")
+	url := h.aiBaseURL + h.upstreamPath + strings.TrimSuffix(c.Param("path"), "/")
 	if raw := c.Request.URL.RawQuery; raw != "" {
 		url += "?" + raw
 	}
