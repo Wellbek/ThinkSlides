@@ -391,6 +391,7 @@ Rules:
             slide_data.setdefault("layoutId", layout.get("layoutId", "1"))
             slide_data.setdefault("layoutName", layout_name)
             slide_data.setdefault("contents", [])
+            carry_archetype(slide_data, outline)
 
             if not slide_data["contents"]:
                 return ToolResult(
@@ -521,13 +522,19 @@ def _density_guidance(design_system: dict, outline: dict, key_points: list,
     material = budget_model.material_score(
         key_points,
         has_exhibit=bool(attached),
+        exhibits=len(attached or []),
         figures=_figures_in(key_points),
         research_findings=len(run_context.get_research_findings() or []),
         source_words=_words_in(outline),
     )
     run_context.record_slide_material(slide_index, material)
 
-    archetype = budget_model.archetype_for(outline)
+    # What the slide has earned, not what the plan asked for. A dashboard the
+    # material does not support is written as an exhibit page rather than
+    # briefed for four exhibits it would have to invent.
+    archetype = budget_model.resolve_archetype(
+        outline, material, len(attached or [])
+    )
     budget = budget_model.budget_for(design_system, archetype, material)
     if not budget_model.density_brief_available(design_system):
         return ""
@@ -585,6 +592,32 @@ def _grammar_guidance(design_system: dict) -> str:
             f"{json.dumps(layout.regions, separators=(',', ':'))}"
         )
     return "\n".join(lines) + "\n"
+
+
+def carry_archetype(slide_data: dict, outline: dict | None) -> dict:
+    """
+    Carry what kind of page this is from the plan onto the designed slide.
+
+    ``archetype_for`` reads ``archetype`` or ``contentType`` off a slide, and
+    this tool used to emit neither - only slideIndex, layoutId, layoutName,
+    section, titleRegister and contents. So every designed slide fell through
+    to CONTENT, and the consequences were not cosmetic:
+
+    * the cover/divider guard in ``validate_density`` was dead for real slides,
+      so a cover with enough material behind it was told to add a chart to it;
+    * an exhibit slide was written to an EXHIBIT share of 0.55 and judged
+      against CONTENT's 1.0. ``UNDER_TOLERANCE`` is also 0.55, so a chart slide
+      landing exactly on the target it was given sat exactly on the validator's
+      minimum, and any shortfall at all reported "under its density budget".
+
+    Never overwrites a field the model set itself: a slide that states its own
+    archetype has said something the outline did not know.
+    """
+    for field in ("archetype", "contentType"):
+        value = (outline or {}).get(field)
+        if value and not slide_data.get(field):
+            slide_data[field] = value
+    return slide_data
 
 
 def _figures_in(key_points: list) -> int:
