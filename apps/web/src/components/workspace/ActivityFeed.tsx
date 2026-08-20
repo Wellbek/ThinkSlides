@@ -140,7 +140,17 @@ interface SubStep {
   error?: string;
   startTs: string;
   endTs?: string;
+  /** Raw tool-execution time, as reported by the backend - excludes the
+   *  model's reasoning/decision time that preceded the call. Kept around
+   *  as a secondary value once `processDurationMs` takes over as the
+   *  headline duration. */
   durationMs?: number;
+  /** This step's full process span: from the moment the previous step in
+   *  this phase finished (or the phase itself started, for the first
+   *  step) to this step's own completion. Reasoning time between calls
+   *  lands on the step it precedes instead of going unaccounted for, so
+   *  step durations sum to the phase's wall-clock total by construction. */
+  processDurationMs?: number;
   running: boolean;
   isRevision?: boolean;
   revisionReason?: string;
@@ -168,6 +178,10 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
   const blocks: PhaseBlock[] = [];
   const seenGroups = new Set<PhaseGroupKey>();
   const openSubSteps = new Map<string, SubStep>();
+  // Per-block cursor for `processDurationMs`: seeded at the block's own
+  // start, then advanced to each step's own end as steps complete - so the
+  // next step's process span picks up exactly where the last one left off.
+  const cursorByBlock = new Map<string, string>();
   let closingText = "";
   let blockCounter = 0;
 
@@ -192,6 +206,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
       slideFinalized: [],
     };
     blocks.push(block);
+    cursorByBlock.set(block.key, ts);
     return block;
   };
 
@@ -229,6 +244,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
         break;
       }
       case "tool_result": {
+        const cursor = cursorByBlock.get(block.key) ?? block.startTs;
         const sub = openSubSteps.get(ev.callId);
         if (sub) {
           sub.running = false;
@@ -238,6 +254,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
           sub.success = ev.success;
           sub.error = ev.error;
           sub.durationMs = ev.durationMs;
+          sub.processDurationMs = new Date(ev.timestamp).getTime() - new Date(cursor).getTime();
           sub.sources = Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined;
           openSubSteps.delete(ev.callId);
         } else {
@@ -253,10 +270,12 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
             success: ev.success,
             error: ev.error,
             durationMs: ev.durationMs,
+            processDurationMs: new Date(ev.timestamp).getTime() - new Date(cursor).getTime(),
             running: false,
             sources: Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined,
           });
         }
+        cursorByBlock.set(block.key, ev.timestamp);
         break;
       }
       case "slide_finalized":
@@ -639,6 +658,9 @@ interface Row {
   label: string;
   note: string;
   durationMs?: number;
+  /** Raw tool-execution time, kept as a secondary/tooltip value once
+   *  `durationMs` carries the fuller process span instead. */
+  toolDurationMs?: number;
   running?: boolean;
   startTs?: string;
   args?: Record<string, unknown>;
@@ -653,7 +675,8 @@ function toRow(s: SubStep): Row {
     icon: s.success === false ? "●" : s.running ? "↻" : "✓",
     label: toolLabel(s.toolName),
     note: s.summary || (s.running ? "" : s.error || ""),
-    durationMs: s.durationMs,
+    durationMs: s.processDurationMs ?? s.durationMs,
+    toolDurationMs: s.durationMs,
     running: s.running,
     startTs: s.startTs,
     args: s.args,
@@ -686,7 +709,8 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
       icon: anyFailed ? "●" : anyRunning ? "↻" : "✓",
       label: idx != null ? `Slide ${idx + 1}` : toolLabel(last.toolName),
       note: last.summary || (anyRunning ? "" : last.error || ""),
-      durationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
+      durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
+      toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
       running: anyRunning,
       startTs: group.find((s) => s.running)?.startTs || group[0].startTs,
       args: last.args,
@@ -718,7 +742,16 @@ function CheckRow({ row }: { row: Row }) {
           {row.running ? (
             <StepTimer startTs={row.startTs || ""} running durationMs={undefined} />
           ) : (
-            <span className="ws-step-dur">{fmtDuration(row.durationMs)}</span>
+            <span
+              className="ws-step-dur"
+              title={
+                row.toolDurationMs != null && row.toolDurationMs !== row.durationMs
+                  ? `tool call: ${fmtDuration(row.toolDurationMs)}`
+                  : undefined
+              }
+            >
+              {fmtDuration(row.durationMs)}
+            </span>
           )}
           {hasRaw && (
             <button type="button" className="ws-check-raw" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
