@@ -155,6 +155,8 @@ interface SubStep {
   isRevision?: boolean;
   revisionReason?: string;
   revisitKind?: "error" | "adjustment";
+  revisitAttempt?: number;
+  revisitMaxAttempts?: number;
   slideIndex?: number;
   sources?: SourceInfo[];
 }
@@ -239,6 +241,8 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
           isRevision: ev.isRevision,
           revisionReason: ev.revisionReason,
           revisitKind: ev.revisitKind,
+          revisitAttempt: ev.revisitAttempt,
+          revisitMaxAttempts: ev.revisitMaxAttempts,
           slideIndex: typeof ev.toolArgs?.slide_index === "number" ? ev.toolArgs.slide_index : undefined,
         };
         block.subSteps.push(sub);
@@ -519,6 +523,7 @@ function PhaseBlockItem({
         {revisit && (
           <span className="ws-revisit-pill" style={revisitStyleVars(revisit.kind)}>
             {revisit.label}
+            {revisit.attempt && <span className="attempt-count">({revisit.attempt})</span>}
           </span>
         )}
         <span className="ws-spacer-sm" />
@@ -602,8 +607,9 @@ function PhaseBlockItem({
  *  or honoring something the user asked for ("adjustment"), plus any
  *  validator detail as a subordinate list - never swapped in as the
  *  entire message the way the old backtrack banner did. */
-function revisitInfo(block: PhaseBlock): { kind: "error" | "adjustment"; label: string; detail: string[] } {
-  const kind: "error" | "adjustment" = block.subSteps.find((s) => s.revisitKind)?.revisitKind ?? "error";
+function revisitInfo(block: PhaseBlock): { kind: "error" | "adjustment"; label: string; attempt?: string; detail: string[] } {
+  const withKind = block.subSteps.find((s) => s.revisitKind);
+  const kind: "error" | "adjustment" = withKind?.revisitKind ?? "error";
   const verb = kind === "adjustment" ? "adjusting" : "fixing";
   const noun: Record<PhaseGroupKey, string> = {
     understand: "the brief",
@@ -614,7 +620,10 @@ function revisitInfo(block: PhaseBlock): { kind: "error" | "adjustment"; label: 
   };
   const reason = block.subSteps.find((s) => s.revisionReason)?.revisionReason;
   const detail = reason ? reason.split(";").map((r) => r.trim()).filter(Boolean) : [];
-  return { kind, label: `${verb} — ${noun[block.group]}`, detail };
+  const attempt = withKind?.revisitAttempt && withKind?.revisitMaxAttempts
+    ? `${withKind.revisitAttempt}/${withKind.revisitMaxAttempts}`
+    : undefined;
+  return { kind, label: `${verb} — ${noun[block.group]}`, attempt, detail };
 }
 
 function revisitStyleVars(kind: "error" | "adjustment"): React.CSSProperties {
@@ -795,15 +804,18 @@ function CheckRow({ row }: { row: Row }) {
   );
 }
 
+/** Quiet, single-color note for "gave up after the retry cap" - a fact
+ *  worth noticing, not an alarm. Colored with the same adjustment-driven
+ *  yellow the revisit badges use, not a bordered red alert box. */
 function ValidationUnresolvedNote({ ev }: { ev: any }) {
   const issues: any[] = Array.isArray(ev.issues) ? ev.issues : [];
   return (
-    <div className="ws-feed-text">
-      The deck is available to download, but after {ev.attempts} revision
-      {ev.attempts === 1 ? "" : "s"} it still has {ev.issueCount ?? issues.length} layout
-      {(ev.issueCount ?? issues.length) === 1 ? " problem" : " problems"}. Ask the agent
-      to simplify the affected slides, or adjust them yourself.
-      <ul className="ws-md-issues">
+    <div className="ws-feed-text" style={{ color: "var(--ws-yellow-text)" }}>
+      Wasn&apos;t able to fully resolve {ev.issueCount ?? issues.length} layout
+      {(ev.issueCount ?? issues.length) === 1 ? " issue" : " issues"} after {ev.attempts} attempt
+      {ev.attempts === 1 ? "" : "s"}. Continuing with the presentation - you may want to review
+      the affected slides manually.
+      <ul className="ws-md-issues" style={{ color: "var(--ws-text-muted)" }}>
         {issues.slice(0, 6).map((issue: any, i: number) => (
           <li key={i}>
             {typeof issue.slideIndex === "number" ? `Slide ${issue.slideIndex + 1}: ` : ""}

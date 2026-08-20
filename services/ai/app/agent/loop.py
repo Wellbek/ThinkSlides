@@ -2270,6 +2270,25 @@ class AgentLoop:
     ) -> AsyncIterator[dict]:
         """The model's own account of what it built, once everything is done."""
         prompt = self._build_system_prompt(context, self.working_state)
+        ws = self.working_state
+        if ws.has_called_validate and not ws.validation_clean and ws.validation_issues:
+            # The mid-run validation_unresolved note can scroll out of view
+            # long before the run ends - the one place a user reliably sees
+            # is this closing message, so the unresolved issue has to be
+            # said again here, not just once further up the feed.
+            issue_count = len(ws.validation_issues)
+            prompt += (
+                "\n\n## Closing note - unresolved validation issue\n"
+                f"After {ws.validation_attempts} attempt"
+                + ("" if ws.validation_attempts == 1 else "s")
+                + f", validation still found {issue_count} layout issue"
+                + ("" if issue_count == 1 else "s")
+                + " that could not be automatically fixed:\n"
+                + self._describe_validation_issues()
+                + "\nThe deck is still being handed over as-is. Your closing summary MUST "
+                "say so plainly - name the affected slide(s) and suggest reviewing them "
+                "manually - rather than describing the deck as simply finished or ready."
+            )
         async for kind, payload in self._ask_model(
             prompt, chat_messages, phase_label="complete"
         ):
@@ -2922,7 +2941,17 @@ class AgentLoop:
             # trigger for a user-requested change (e.g. issue #187's image
             # replace flow) sets "adjustment" instead, so the activity feed
             # can tell "fixing a mistake" apart from "honoring an edit".
-            **({"isRevision": True, "revisionReason": revision_reason, "revisitKind": "error"} if is_revision else {}),
+            # revisitAttempt is the validation pass that flagged this fix,
+            # against the same MAX_VALIDATION_ATTEMPTS cap enforced below -
+            # lets the UI show a rising "(2/3)" while the retry budget is
+            # still being spent.
+            **({
+                "isRevision": True,
+                "revisionReason": revision_reason,
+                "revisitKind": "error",
+                "revisitAttempt": self.working_state.validation_attempts,
+                "revisitMaxAttempts": self.working_state.MAX_VALIDATION_ATTEMPTS,
+            } if is_revision else {}),
         }, step=step)
 
         # Execute tool

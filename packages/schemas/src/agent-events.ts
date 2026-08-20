@@ -114,6 +114,10 @@ export interface ToolCallEvent {
    *  mistake" apart from "honoring an edit" instead of treating every
    *  revision the same way. */
   revisitKind?: "error" | "adjustment";
+  /** Which validation pass (of MAX_VALIDATION_ATTEMPTS) flagged this fix -
+   *  lets the UI show a rising "(2/3)" while the retry budget is spent. */
+  revisitAttempt?: number;
+  revisitMaxAttempts?: number;
 }
 
 export interface SourceInfo {
