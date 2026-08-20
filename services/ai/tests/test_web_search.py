@@ -520,3 +520,140 @@ def test_firecrawl_without_metadata_claims_no_date():
         "data": {"web": [{"url": "https://a.com", "title": "A", "description": "x"}]}
     })
     assert parsed[0]["published"] == ""
+
+
+# ── Recency filter ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_recency_is_forwarded_into_the_zhipu_request_body():
+    """The whole point of the argument: a recency-qualified query must
+    actually ask Zhipu for fresher results, not just say so in the prompt."""
+    _use(ZHIPU)
+    mock_post = AsyncMock(return_value={"search_result": []})
+
+    with patch.object(search_backends, "post_json", new=mock_post):
+        await WebSearchTool.run(query="Green Climate Fund board meetings", recency="year")
+
+    body = mock_post.call_args.args[2]
+    assert body["search_recency_filter"] == "year"
+
+
+@pytest.mark.asyncio
+async def test_recency_is_forwarded_into_the_tavily_request_body():
+    _use(TAVILY)
+    mock_post = AsyncMock(return_value={"results": []})
+
+    with patch.object(search_backends, "post_json", new=mock_post):
+        await WebSearchTool.run(query="Green Climate Fund board meetings", recency="month")
+
+    body = mock_post.call_args.args[2]
+    assert body["time_range"] == "month"
+
+
+@pytest.mark.asyncio
+async def test_omitting_recency_sends_no_filter():
+    """Unfiltered is still the default - the argument only narrows on request."""
+    _use(ZHIPU)
+    mock_post = AsyncMock(return_value={"search_result": []})
+
+    with patch.object(search_backends, "post_json", new=mock_post):
+        await WebSearchTool.run(query="anything")
+
+    body = mock_post.call_args.args[2]
+    assert "search_recency_filter" not in body
+
+
+@pytest.mark.asyncio
+async def test_an_off_schema_recency_value_is_dropped_not_sent_upstream():
+    """A model can emit anything as a string argument - 'recent', '2026', a
+    typo'd enum value. It must never reach Zhipu/Tavily's request body, and
+    the call must still succeed rather than fail on an upstream 400."""
+    _use(ZHIPU)
+    mock_post = AsyncMock(return_value={"search_result": []})
+
+    with patch.object(search_backends, "post_json", new=mock_post):
+        result = await WebSearchTool.run(query="anything", recency="recent")
+
+    body = mock_post.call_args.args[2]
+    assert "search_recency_filter" not in body
+    assert result.success is True
+    assert result.data["recency"] == ""
+
+
+@pytest.mark.asyncio
+async def test_recency_requested_against_an_unsupporting_backend_is_flagged():
+    """Firecrawl has no recency filter. Silently dropping the argument with
+    no signal would look like the feature is broken rather than unsupported
+    on this config."""
+    _use(FIRECRAWL)
+    response = {"data": {"web": [{"url": "https://a.com", "title": "A", "description": "x"}]}}
+
+    with patch.object(search_backends, "post_json", new=AsyncMock(return_value=response)):
+        result = await WebSearchTool.run(query="anything", recency="week")
+
+    assert result.success is True
+    assert "does not support filtering by recency" in result.data["note"]
+
+
+class TestRecencyIsPartOfTheAlreadyRunCacheKey:
+    """loop._search_already_run must not hand back an earlier UNFILTERED
+    search's results when the model deliberately re-issues the same query
+    text WITH a recency filter to get fresher results - the exact move the
+    Deep-mode research prompt instructs for a 'most recent' style request.
+    Matching on query text alone would silently defeat that instruction by
+    serving the stale cached answer instead of running the filtered search.
+    """
+
+    RESEARCH = [
+        {"query": "Green Climate Fund recent projects", "recency": "",
+         "title": "GCF portfolio (2023)", "url": "https://gcf.example/2023",
+         "snippet": "2023 approved projects", "published": "2023-11-02"},
+    ]
+
+    def _loop(self):
+        from app.agent.loop import AgentLoop
+
+        return AgentLoop.__new__(AgentLoop)
+
+    def test_an_unfiltered_repeat_is_still_served_from_cache(self):
+        """Unchanged baseline behaviour: same query, no recency either time."""
+        cached = self._loop()._answer_from_context(
+            "web_search",
+            {"query": "Green Climate Fund recent projects"},
+            {"research": self.RESEARCH},
+        )
+
+        assert cached is not None
+        assert [r["url"] for r in cached.data["results"]] == ["https://gcf.example/2023"]
+
+    def test_a_recency_qualified_requery_is_not_served_the_stale_cache(self):
+        """The bug: same query text, now WITH recency='year'. Before the fix
+        this matched on text alone and handed back the 2023-only results
+        without ever calling the backend with the filter applied."""
+        cached = self._loop()._answer_from_context(
+            "web_search",
+            {"query": "Green Climate Fund recent projects", "recency": "year"},
+            {"research": self.RESEARCH},
+        )
+
+        assert cached is None
+
+    def test_a_second_search_with_the_same_recency_is_still_cached(self):
+        """The fix narrows the match, it doesn't turn it off: once a
+        recency-filtered search has actually run and been recorded, asking
+        the identical question again should still be answered from it."""
+        research = [
+            {"query": "Green Climate Fund recent projects", "recency": "year",
+             "title": "GCF Board 45", "url": "https://gcf.example/board-45",
+             "snippet": "Summer 2026 approvals", "published": "2026-06-01"},
+        ]
+
+        cached = self._loop()._answer_from_context(
+            "web_search",
+            {"query": "Green Climate Fund recent projects", "recency": "year"},
+            {"research": research},
+        )
+
+        assert cached is not None
+        assert [r["url"] for r in cached.data["results"]] == ["https://gcf.example/board-45"]
