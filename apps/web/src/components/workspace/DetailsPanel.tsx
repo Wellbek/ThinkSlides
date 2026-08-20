@@ -4,7 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useChatStore } from "@/stores/chat-store";
 import { collectPreviewSlides } from "@/lib/slides";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
-import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download, ExternalLink, ChevronDown } from "lucide-react";
+import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download, ExternalLink, ChevronDown, Image as ImageIcon } from "lucide-react";
 
 export function DetailsPanel() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -22,9 +22,13 @@ export function DetailsPanel() {
   const documents = useMemo(() => collectDocuments(activeMessages), [activeMessages]);
   const webSources = useMemo(() => collectWebSources(activeMessages), [activeMessages]);
   const generatedFiles = useMemo(
-    () => activeFiles.map((f) => ({ ...f, downloadUrl: buildDownloadUrl(f.file_url) })),
+    () =>
+      activeFiles
+        .filter((f) => !f.file_type || f.file_type === "pptx")
+        .map((f) => ({ ...f, downloadUrl: buildDownloadUrl(f.file_url) })),
     [activeFiles]
   );
+  const assets = useMemo(() => collectAssets(activeFiles), [activeFiles]);
 
   const created = session?.created_at ? new Date(session.created_at).toISOString().slice(0, 10) : "-";
 
@@ -92,6 +96,27 @@ export function DetailsPanel() {
       </CollapsibleSection>
 
       <div className="ws-divider" />
+      <CollapsibleSection title="Assets" count={assets.length}>
+        <div className="ws-sources">
+          {assets.length === 0 && <div className="ws-empty-note">Charts and images will appear here as they're generated.</div>}
+          {assets.map((a) => (
+            <a className="ws-src ws-src-dl" key={a.id} href={a.downloadUrl} download title={`Download ${a.filename}`}>
+              <div className="s-ic img"><ImageIcon size={14} /></div>
+              <div className="s-body">
+                <div className="s-name">{a.filename}</div>
+                <div className="s-meta">
+                  {typeof a.slide_index === "number" ? `Slide ${a.slide_index + 1} - ` : ""}
+                  {a.file_type}
+                  {a.file_size ? ` - ${formatFileSize(a.file_size)}` : ""}
+                </div>
+              </div>
+              <span className="s-tag"><Download size={13} /></span>
+            </a>
+          ))}
+        </div>
+      </CollapsibleSection>
+
+      <div className="ws-divider" />
       <CollapsibleSection title="Documents" count={documents.length}>
         <div className="ws-sources">
           {documents.length === 0 && <div className="ws-empty-note">No documents attached yet.</div>}
@@ -149,6 +174,15 @@ function collectDocuments(messages: any[]): DocumentRow[] {
     }
   }
   return rows;
+}
+
+function collectAssets(files: any[]): (any & { downloadUrl: string })[] {
+  // Individual chart/image assets (#187) share the generated_files table
+  // with the whole-deck pptx row - anything that isn't "pptx" belongs here,
+  // not in Output.
+  return files
+    .filter((f) => f.file_type === "image" || f.file_type === "chart")
+    .map((f) => ({ ...f, downloadUrl: buildDownloadUrl(f.file_url) }));
 }
 
 function collectWebSources(messages: any[]): WebSourceRow[] {

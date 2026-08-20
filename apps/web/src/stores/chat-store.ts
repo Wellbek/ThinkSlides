@@ -51,6 +51,9 @@ export interface GeneratedFile {
   file_size?: number;
   file_type?: string;
   slide_count?: number;
+  // Set on individual chart/image assets (#187), unset on the whole-deck
+  // pptx row - which slide the asset was rendered onto.
+  slide_index?: number;
   created_at: string;
 }
 
