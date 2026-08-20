@@ -491,6 +491,9 @@ async def _run_agent(
                             for asset in generated_file_info.get("assets", []) or []:
                                 try:
                                     asset_id = str(uuid.uuid4())
+                                    asset_file_type = asset.get("fileType", "image")
+                                    asset_file_name = asset.get("fileName")
+                                    asset_file_size = asset.get("fileSizeBytes", 0)
                                     await db.execute(
                                         text(
                                             """INSERT INTO generated_files
@@ -503,14 +506,41 @@ async def _run_agent(
                                         {
                                             "fid": asset_id,
                                             "sid": str(session_id),
-                                            "ftype": asset.get("fileType", "image"),
+                                            "ftype": asset_file_type,
                                             "fpath": asset.get("filePath", ""),
-                                            "fname": asset.get("fileName"),
-                                            "fsize": asset.get("fileSizeBytes", 0),
+                                            "fname": asset_file_name,
+                                            "fsize": asset_file_size,
                                             "fmeta": json.dumps({"slideIndex": asset.get("slideIndex")}),
                                         },
                                     )
                                     await db.commit()
+
+                                    # Same event the pptx row gets a few
+                                    # lines up - without it the Assets panel
+                                    # (which chat-store only ever populates
+                                    # from file_generated/done, never a
+                                    # mid-run poll) stays empty until the
+                                    # page is reloaded.
+                                    asset_event = {
+                                        "type": "file_generated",
+                                        "phase": "rendering",
+                                        "step": "render",
+                                        "fileId": asset_id,
+                                        "fileName": asset_file_name,
+                                        "fileUrl": f"/api/files/{asset_id}",
+                                        "fileSizeBytes": asset_file_size,
+                                        "fileType": asset_file_type,
+                                        "slideIndex": asset.get("slideIndex"),
+                                        "timestamp": datetime.datetime.utcnow().isoformat(),
+                                    }
+                                    pub_result = await redis_client.publish(
+                                        f"agent:events:{session_id}", json.dumps(asset_event, default=str)
+                                    )
+                                    logger.info(
+                                        "_run_agent: published file_generated event for asset, session %s, file_id=%s, subscribers=%d",
+                                        session_id, asset_id, pub_result,
+                                    )
+                                    generated_files.append(asset_event)
                                 except Exception as asset_db_err:
                                     logger.error(
                                         "_run_agent: failed to save generated asset for session %s: %s",
@@ -881,6 +911,13 @@ async def replace_image_in_slide(
     )
     session = result.scalar_one_or_none()
     if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # The orchestrator already checks ownership before it ever calls this,
+    # but /api/ai/ is reachable directly (see apps/web/src/middleware.ts) -
+    # without this, a caller who skips the orchestrator and knows/guesses
+    # another org's session_id could resume that org's agent and regenerate
+    # its slide content with an image they supplied.
+    if session.organisation_id != org_id:
         raise HTTPException(status_code=404, detail="Session not found")
 
     state_json = await redis_client.get(f"working_state:{session_id}")
