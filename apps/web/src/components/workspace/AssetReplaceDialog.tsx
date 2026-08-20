@@ -29,6 +29,7 @@ export function AssetReplaceDialog({
 }) {
   const [scope, setScope] = useState<ReplaceScope>("asset_only");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -37,8 +38,13 @@ export function AssetReplaceDialog({
 
   const handleConfirm = async () => {
     setBusy(true);
+    setError(null);
     try {
       await onConfirm(scope);
+      // A successful confirm is expected to close the dialog itself
+      // (it owns pendingReplace); nothing left to do here.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to replace the asset.");
     } finally {
       setBusy(false);
     }
@@ -92,6 +98,8 @@ export function AssetReplaceDialog({
           <div className="opt-desc">Adds the dropped file as a new asset instead of overwriting. Slide unaffected.</div>
         </div>
       </label>
+
+      {error && <p className="ws-modal-error">{error}</p>}
 
       <div className="ws-modal-actions">
         <button type="button" className="ws-btn" onClick={onCancel} disabled={busy}>

@@ -47,25 +47,26 @@ export function DetailsPanel() {
   const handleReplaceConfirm = async (scope: ReplaceScope) => {
     if (!pendingReplace || !activeSessionId) return;
     const { asset, file } = pendingReplace;
-    if (scope === "in_slide") {
-      // Wired to the agent-resume flow once that endpoint lands - the
-      // dialog is present now so the UI/interaction is reviewable as a
-      // whole, this branch fills in with the actual call shortly after.
-      console.warn("Replace-in-slide is not wired up yet.");
-      setPendingReplace(null);
-      return;
-    }
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("scope", scope);
-    try {
-      await apiUpload(`/api/orchestrator/sessions/${activeSessionId}/assets/${asset.id}/replace`, formData);
-      await useChatStore.getState().setActiveSession(activeSessionId);
-    } catch (err) {
-      console.error("Failed to replace asset", err);
-    } finally {
+
+    // "in_slide" hits a different endpoint - it resumes the agent rather
+    // than just swapping a file, so it can fail in ways the other two
+    // scopes can't (most notably: the session's editing state expired -
+    // see the AI service's replace-in-slide endpoint). Left uncaught here
+    // deliberately: AssetReplaceDialog catches it and keeps itself open
+    // with the message shown, instead of the drop silently vanishing.
+    if (scope === "in_slide") {
+      await apiUpload(`/api/orchestrator/sessions/${activeSessionId}/assets/${asset.id}/replace-in-slide`, formData);
       setPendingReplace(null);
+      await useChatStore.getState().setActiveSession(activeSessionId);
+      return;
     }
+
+    formData.append("scope", scope);
+    await apiUpload(`/api/orchestrator/sessions/${activeSessionId}/assets/${asset.id}/replace`, formData);
+    setPendingReplace(null);
+    await useChatStore.getState().setActiveSession(activeSessionId);
   };
 
   return (
