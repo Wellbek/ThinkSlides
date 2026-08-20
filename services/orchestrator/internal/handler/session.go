@@ -1112,6 +1112,105 @@ func (h *SessionHandler) ReplaceAsset(c *gin.Context) {
 	})
 }
 
+// ImageReplaceInSlide saves a drag-dropped replacement image and asks the AI
+// service to resume the agent so the slide using this asset is regenerated
+// with it (#187's third dialog option). The heavier logic - reusing the
+// image_catalog/slides_needing_revision resume machinery - lives entirely in
+// the AI service, since only it has the agent loop and Redis working state;
+// this handler's job is just the multipart upload and identity forwarding,
+// the same division of labour SendMessage/AnswerQuestion already use.
+func (h *SessionHandler) ImageReplaceInSlide(c *gin.Context) {
+	sessionID := c.Param("id")
+	assetID := c.Param("assetId")
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
+		return
+	}
+	defer file.Close()
+
+	ctx := c.Request.Context()
+
+	var fileType string
+	var metadataRaw []byte
+	err = h.pool.QueryRow(ctx,
+		`SELECT file_type, metadata FROM generated_files WHERE id = $1 AND session_id = $2`,
+		assetID, sessionID,
+	).Scan(&fileType, &metadataRaw)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
+		return
+	}
+	if fileType != "image" && fileType != "chart" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only individual chart/image assets can be replaced this way"})
+		return
+	}
+	var metadata map[string]interface{}
+	if len(metadataRaw) > 0 {
+		json.Unmarshal(metadataRaw, &metadata)
+	}
+	slideIndexFloat, ok := metadata["slideIndex"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "This asset isn't tied to a slide"})
+		return
+	}
+	slideIndex := int(slideIndexFloat)
+
+	outputDir := os.Getenv("OUTPUT_DIR")
+	if outputDir == "" {
+		outputDir = "/app/output"
+	}
+	assetsDir := filepath.Join(outputDir, sessionID, "assets")
+	if err := os.MkdirAll(assetsDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not prepare asset storage"})
+		return
+	}
+	ext := filepath.Ext(header.Filename)
+	newPath := filepath.Join(assetsDir, uuid.New().String()+ext)
+	if err := c.SaveUploadedFile(header, newPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save uploaded file"})
+		return
+	}
+
+	identity := client.Identity{OrgID: c.GetString("org_id"), UserID: c.GetString("user_id")}
+	result, err := h.aiClient.ReplaceImageInSlide(
+		sessionID, assetID, newPath, header.Filename, header.Size, slideIndex, identity,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "AI service error 409") {
+			c.JSON(http.StatusConflict, gin.H{"error": extractDetail(err.Error())})
+			return
+		}
+		log.Printf("ImageReplaceInSlide: AI service call failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resume the agent for this slide"})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// extractDetail pulls a FastAPI-style {"detail": "..."} message out of the
+// raw "AI service error <code>: <body>" text postJSON wraps errors in, so
+// the browser sees the actual explanation instead of a generic failure.
+func extractDetail(errText string) string {
+	idx := strings.Index(errText, "{")
+	if idx < 0 {
+		return errText
+	}
+	var body struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(errText[idx:]), &body); err != nil || body.Detail == "" {
+		return errText
+	}
+	return body.Detail
+}
+
 // nextDuplicateName finds a filename like the given one that isn't already
 // used by another asset in this session, numbering it the way a filesystem
 // numbers a duplicate: "chart.png", then "chart (1).png", "chart (2).png".

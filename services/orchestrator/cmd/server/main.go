@@ -172,6 +172,7 @@ func main() {
 		protected.GET("/sessions/:id/messages", sessionHandler.GetSessionMessages)
 		protected.GET("/sessions/:id/files", sessionHandler.GetSessionFiles)
 		protected.POST("/sessions/:id/assets/:assetId/replace", sessionHandler.ReplaceAsset)
+		protected.POST("/sessions/:id/assets/:assetId/replace-in-slide", sessionHandler.ImageReplaceInSlide)
 		protected.GET("/sessions/:id/events", sessionHandler.StreamEvents)
 		protected.GET("/templates", sessionHandler.ListTemplates)
 		protected.GET("/files/:id", sessionHandler.DownloadFile)

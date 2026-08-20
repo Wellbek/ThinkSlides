@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import uuid
 import json
 import asyncio
+import base64
 import redis.asyncio as redis
 import datetime
 import time
@@ -56,6 +57,16 @@ class SimplePresentationRequest(BaseModel):
     slide2_title: str = "Conclusion"
     slide2_content: list[str] = []
     template_path: str = ""
+
+
+class ReplaceImageInSlideRequest(BaseModel):
+    # Path on the shared output volume the orchestrator already saved the
+    # replacement image to - the file itself never travels through this
+    # request, only where to find it (#187).
+    file_path: str
+    original_filename: str
+    file_size_bytes: int = 0
+    slide_index: int
 
 
 class AnswerQuestionRequest(BaseModel):
@@ -830,4 +841,156 @@ async def answer_question(
         "message_id": str(assistant_message_id),
         "session_id": str(sid),
         "answer": answer_content,
+    }
+
+
+@router.post("/sessions/{session_id}/assets/{asset_id}/replace-in-slide")
+async def replace_image_in_slide(
+    session_id: str,
+    asset_id: str,
+    req: ReplaceImageInSlideRequest,
+    org_id: uuid.UUID = Depends(resolve_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Replace a chart/image asset AND update the slide that uses it (#187).
+
+    Reuses the same pause/resume machinery ask_user_question already relies
+    on, rather than inventing a new mechanism: the new image is added to the
+    session's image_catalog, the slide is marked in slides_needing_revision
+    the same way a validation failure marks one, and the run is resumed
+    exactly like answering a question resumes it.
+
+    That machinery assumes a working state still exists in Redis - true
+    whenever a run is paused or mid-flight, but not once a deck has
+    finished rendering: _clear_working_state deletes it the moment
+    validation settles, and there is currently nowhere else the full deck
+    content is persisted. Since the whole point of this endpoint is
+    editing a deck you already finished and came back to later, that is
+    the common case, not an edge case - so this fails with a clear,
+    actionable error instead of silently no-oping or resuming into an
+    empty deck.
+    """
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session_id")
+
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == sid)
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    state_json = await redis_client.get(f"working_state:{session_id}")
+    if not state_json:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This session's editing state has expired, so the agent can't "
+                "resume it to update just this slide. Ask it in chat to make "
+                "the change instead - describe the new image and which slide "
+                "it belongs on."
+            ),
+        )
+
+    try:
+        state_dict = json.loads(state_json)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(status_code=500, detail="Working state was corrupted")
+
+    # New asset row for the replacement image, same shape as the ones
+    # finalize_and_render_pptx writes.
+    new_asset_id = str(uuid.uuid4())
+    try:
+        await db.execute(
+            text(
+                """INSERT INTO generated_files
+                   (id, organisation_id, session_id, file_type, file_path,
+                    original_filename, file_size_bytes, metadata, created_at)
+                   SELECT :fid, organisation_id, :sid, :ftype, :fpath,
+                          :fname, :fsize, :fmeta, NOW()
+                   FROM chat_sessions WHERE id = :sid"""
+            ),
+            {
+                "fid": new_asset_id,
+                "sid": session_id,
+                "ftype": "image",
+                "fpath": req.file_path,
+                "fname": req.original_filename,
+                "fsize": req.file_size_bytes,
+                "fmeta": json.dumps({"slideIndex": req.slide_index}),
+            },
+        )
+        await db.commit()
+    except Exception as db_err:
+        logger.error(
+            "replace_image_in_slide: failed to save new asset for session %s: %s",
+            session_id, str(db_err),
+        )
+        raise HTTPException(status_code=500, detail="Failed to save the replacement image")
+
+    try:
+        with open(req.file_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+    except OSError as read_err:
+        raise HTTPException(status_code=500, detail=f"Could not read the replacement image: {read_err}")
+
+    catalog_id = f"replace-{new_asset_id}"
+    image_catalog = state_dict.get("image_catalog") or []
+    image_catalog.append({
+        "id": catalog_id,
+        "sourceType": "upload",
+        "data": encoded,
+        "context": (
+            f"The user just replaced the image on slide {req.slide_index + 1} "
+            f"with this one - use it for that slide instead of whatever was "
+            f"there before."
+        ),
+    })
+    state_dict["image_catalog"] = image_catalog
+    state_dict["slides_needing_revision"] = sorted(
+        set(state_dict.get("slides_needing_revision") or []) | {req.slide_index}
+    )
+    await redis_client.set(
+        f"working_state:{session_id}",
+        json.dumps(state_dict),
+        ex=3600,
+    )
+
+    instruction = (
+        f"Replaced the image on slide {req.slide_index + 1} with a new one "
+        f"(catalog id {catalog_id}) - please update that slide to use it."
+    )
+    user_message_id, assistant_message_id = await _exchange_rows(
+        db,
+        sid,
+        content=instruction,
+        attachments=[],
+        user_message_id=None,
+        assistant_message_id=None,
+    )
+
+    asyncio.create_task(
+        _run_agent(
+            sid,
+            user_message_id,
+            assistant_message_id,
+            instruction,
+            "",
+            mode=None,
+            org_id=org_id,
+        )
+    )
+
+    logger.info(
+        "replace_image_in_slide: resumed session %s for slide %d with new asset %s",
+        session_id, req.slide_index, new_asset_id,
+    )
+
+    return {
+        "message_id": str(assistant_message_id),
+        "session_id": str(sid),
+        "new_asset_id": new_asset_id,
     }
