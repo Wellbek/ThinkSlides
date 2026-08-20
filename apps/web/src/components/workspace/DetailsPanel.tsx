@@ -56,17 +56,24 @@ export function DetailsPanel() {
     // see the AI service's replace-in-slide endpoint). Left uncaught here
     // deliberately: AssetReplaceDialog catches it and keeps itself open
     // with the message shown, instead of the drop silently vanishing.
+    //
+    // The dialog is still awaiting this same call while it runs, so it
+    // must not be torn down (setPendingReplace(null) unmounts it) until
+    // everything below has actually settled - closing it early meant a
+    // failure in setActiveSession threw into an already-unmounted
+    // component: the error never reached the user, and React logged a
+    // set-state-on-unmounted warning.
     if (scope === "in_slide") {
       await apiUpload(`/api/orchestrator/sessions/${activeSessionId}/assets/${asset.id}/replace-in-slide`, formData);
-      setPendingReplace(null);
       await useChatStore.getState().setActiveSession(activeSessionId);
+      setPendingReplace(null);
       return;
     }
 
     formData.append("scope", scope);
     await apiUpload(`/api/orchestrator/sessions/${activeSessionId}/assets/${asset.id}/replace`, formData);
-    setPendingReplace(null);
     await useChatStore.getState().setActiveSession(activeSessionId);
+    setPendingReplace(null);
   };
 
   return (
