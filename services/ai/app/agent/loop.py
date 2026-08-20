@@ -22,6 +22,7 @@ from app.agent.summaries import summarize_tool_result
 from app.agent.tools._binding import slot_key
 from app.agent.tools._json_extract import extract_json_object
 from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
+from app.agent.tools.search_backends import normalize_recency
 from app.agent.tools.build_blocks import BLOCK_BUILDER_TOOLS
 from app.connections import mcp_tools
 from app.connections import store as connection_store
@@ -2743,16 +2744,24 @@ class AgentLoop:
         return ToolResult(success=True, data=design_system, duration_ms=0)
 
     def _search_already_run(self, fn_args: dict, context: dict) -> ToolResult | None:
-        """This run's findings for a query it has already asked.
+        """This run's findings for a query it has already asked with the same recency filter.
 
         Returned rather than re-fetched, and it does not spend a search from the
         budget: the backend would hand back the same pages, several seconds
         later, for a slot the run is supposed to spend on a different facet of
         the topic.
+
+        Recency is part of the match on purpose: the research prompt tells the
+        model to re-run a query WITH a recency filter to get fresher results
+        than an earlier, unfiltered search of the same text found. Matching on
+        query text alone would hand back that stale cached answer instead of
+        actually running the filtered search - silently defeating the exact
+        thing the model was just told to do.
         """
         query = _normalize_query(fn_args.get("query"))
         if not query:
             return None
+        recency = normalize_recency(fn_args.get("recency"))
 
         found = [
             {
@@ -2763,6 +2772,7 @@ class AgentLoop:
             }
             for entry in context.get("research") or []
             if _normalize_query(entry.get("query")) == query
+            and entry.get("recency", "") == recency
         ]
         if not found:
             return None
@@ -2771,6 +2781,7 @@ class AgentLoop:
             success=True,
             data={
                 "query": fn_args.get("query", ""),
+                "recency": recency,
                 "results": found,
                 "result_count": len(found),
                 "note": (
@@ -3157,6 +3168,12 @@ class AgentLoop:
                         self.working_state.researched_urls.add(item["url"])
                     research.append({
                         "query": tool_result.data.get("query", ""),
+                        # The recency filter actually applied to this search
+                        # (already normalized by the tool - see
+                        # search_backends.normalize_recency) - part of what
+                        # makes this a *different* search from the same query
+                        # text without it. See _search_already_run.
+                        "recency": tool_result.data.get("recency", ""),
                         "title": item.get("title", ""),
                         "url": item.get("url", ""),
                         "snippet": item.get("snippet", ""),
