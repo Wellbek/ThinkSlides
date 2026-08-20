@@ -937,6 +937,16 @@ async def replace_image_in_slide(
     except (json.JSONDecodeError, TypeError):
         raise HTTPException(status_code=500, detail="Working state was corrupted")
 
+    # Confirm the upload is actually readable before writing anything about
+    # it to the DB - inserting the generated_files row first and checking
+    # readability after left an orphaned row pointing at nothing whenever
+    # the read failed.
+    try:
+        with open(req.file_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+    except OSError as read_err:
+        raise HTTPException(status_code=500, detail=f"Could not read the replacement image: {read_err}")
+
     # New asset row for the replacement image, same shape as the ones
     # finalize_and_render_pptx writes.
     new_asset_id = str(uuid.uuid4())
@@ -968,33 +978,62 @@ async def replace_image_in_slide(
         )
         raise HTTPException(status_code=500, detail="Failed to save the replacement image")
 
-    try:
-        with open(req.file_path, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode("ascii")
-    except OSError as read_err:
-        raise HTTPException(status_code=500, detail=f"Could not read the replacement image: {read_err}")
-
+    # Optimistic-locked read-modify-write: two near-concurrent replace
+    # requests on the same session both read, mutate, and set with no
+    # coordination otherwise, and the second SET silently overwrites the
+    # first's changes even though both requests return 200. WATCH the key
+    # and re-read it fresh right before merging in - not the stale
+    # state_dict from the initial existence check above, since the DB
+    # insert and file read that happened in between only widen that
+    # window - so a change that landed in the meantime is merged against
+    # instead of clobbered, and a genuine collision (both sides watching
+    # the same version) aborts the transaction and fails loudly rather
+    # than silently dropping one side's update.
+    working_state_key = f"working_state:{session_id}"
     catalog_id = f"replace-{new_asset_id}"
-    image_catalog = state_dict.get("image_catalog") or []
-    image_catalog.append({
-        "id": catalog_id,
-        "sourceType": "upload",
-        "data": encoded,
-        "context": (
-            f"The user just replaced the image on slide {req.slide_index + 1} "
-            f"with this one - use it for that slide instead of whatever was "
-            f"there before."
-        ),
-    })
-    state_dict["image_catalog"] = image_catalog
-    state_dict["slides_needing_revision"] = sorted(
-        set(state_dict.get("slides_needing_revision") or []) | {req.slide_index}
-    )
-    await redis_client.set(
-        f"working_state:{session_id}",
-        json.dumps(state_dict),
-        ex=3600,
-    )
+    pipe = redis_client.pipeline(transaction=True)
+    try:
+        await pipe.watch(working_state_key)
+        fresh_json = await pipe.get(working_state_key)
+        if not fresh_json:
+            raise HTTPException(
+                status_code=409,
+                detail="This session's editing state expired while the replacement was being saved. Please try again.",
+            )
+        try:
+            fresh_state = json.loads(fresh_json)
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(status_code=500, detail="Working state was corrupted")
+
+        image_catalog = fresh_state.get("image_catalog") or []
+        image_catalog.append({
+            "id": catalog_id,
+            "sourceType": "upload",
+            "data": encoded,
+            "context": (
+                f"The user just replaced the image on slide {req.slide_index + 1} "
+                f"with this one - use it for that slide instead of whatever was "
+                f"there before."
+            ),
+        })
+        fresh_state["image_catalog"] = image_catalog
+        fresh_state["slides_needing_revision"] = sorted(
+            set(fresh_state.get("slides_needing_revision") or []) | {req.slide_index}
+        )
+
+        pipe.multi()
+        pipe.set(working_state_key, json.dumps(fresh_state), ex=3600)
+        await pipe.execute()
+    except redis.WatchError:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Another change to this session landed at the same time as this one. "
+                "Please try the replacement again."
+            ),
+        )
+    finally:
+        await pipe.reset()
 
     instruction = (
         f"Replaced the image on slide {req.slide_index + 1} with a new one "
