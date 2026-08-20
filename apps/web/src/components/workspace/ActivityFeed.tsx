@@ -502,99 +502,126 @@ function PhaseBlockItem({
     ? block.thoughts.slice(0, -1).map((t) => t.content).join("\n\n")
     : "";
 
+  const revisit = block.revisit ? revisitInfo(block) : null;
+
   return (
-    <>
-      {block.revisit && <BacktrackBanner block={block} />}
-      <FeedItem dot={icon} dotClass={dotClass}>
-        <div className="ws-phase-head">
-          <span className="ws-phase-name">{GROUP_LABEL[block.group]}</span>
-          {block.revisit && <span className="ws-phase-tag">revisit</span>}
-          <span className="ws-spacer-sm" />
-          <PhaseTimer block={block} active={active} />
-        </div>
+    <FeedItem
+      dot={icon}
+      dotClass={dotClass}
+      dotBadge={revisit && (
+        <span className="ws-revisit-badge" style={revisitStyleVars(revisit.kind)}>
+          {revisit.kind === "adjustment" ? "✎" : "⚠"}
+        </span>
+      )}
+    >
+      <div className="ws-phase-head">
+        <span className="ws-phase-name">{GROUP_LABEL[block.group]}</span>
+        {revisit && (
+          <span className="ws-revisit-pill" style={revisitStyleVars(revisit.kind)}>
+            {revisit.label}
+          </span>
+        )}
+        <span className="ws-spacer-sm" />
+        <PhaseTimer block={block} active={active} />
+      </div>
 
-        {(takeawayText || active) && (
-          <div className="ws-phase-takeaway">
-            {active ? (
-              takeawayText ? (
-                <TypewriterText text={takeawayText} />
-              ) : (
-                <span className="ws-shimmer-body">Reasoning through this step<span className="ws-ai-cursor" /></span>
-              )
+      {revisit && !!revisit.detail.length && (
+        <ul className="ws-revisit-detail">
+          {revisit.detail.map((d, i) => <li key={i}>{d}</li>)}
+        </ul>
+      )}
+
+      {(takeawayText || active) && (
+        <div className="ws-phase-takeaway">
+          {active ? (
+            takeawayText ? (
+              <TypewriterText text={takeawayText} />
             ) : (
-              <MarkdownText className="ws-md-inline">{takeawayText}</MarkdownText>
-            )}
-            {active && takeawayText && <span className="ws-ai-cursor" />}
-            {rawExtra && <PhaseRawLink content={rawExtra} />}
-          </div>
-        )}
+              <span className="ws-shimmer-body">Reasoning through this step<span className="ws-ai-cursor" /></span>
+            )
+          ) : (
+            <MarkdownText className="ws-md-inline">{takeawayText}</MarkdownText>
+          )}
+          {active && takeawayText && <span className="ws-ai-cursor" />}
+          {rawExtra && <PhaseRawLink content={rawExtra} />}
+        </div>
+      )}
 
-        {!!rows.length && (
-          <div className="ws-phase-checklist">
-            {rows.map((row) => <CheckRow key={row.key} row={row} />)}
-          </div>
-        )}
+      {!!rows.length && (
+        <div className="ws-phase-checklist">
+          {rows.map((row) => <CheckRow key={row.key} row={row} />)}
+        </div>
+      )}
 
-        {block.progress.map((p: any, i: number) => (
-          <div key={`pg-${i}`} className="ws-step-progress">
-            <div className="ws-feed-text">{p.message}</div>
-            <ProgressBar current={p.current} total={p.total} />
-          </div>
-        ))}
+      {block.progress.map((p: any, i: number) => (
+        <div key={`pg-${i}`} className="ws-step-progress">
+          <div className="ws-feed-text">{p.message}</div>
+          <ProgressBar current={p.current} total={p.total} />
+        </div>
+      ))}
 
-        {!!block.slideFinalized.length && (
-          <div className="ws-feed-text">
-            {block.slideFinalized.length === 1
-              ? `Slide ${(block.slideFinalized[0].slideIndex ?? 0) + 1} finalized.`
-              : `${block.slideFinalized.length} slides finalized.`}
-          </div>
-        )}
+      {!!block.slideFinalized.length && (
+        <div className="ws-feed-text">
+          {block.slideFinalized.length === 1
+            ? `Slide ${(block.slideFinalized[0].slideIndex ?? 0) + 1} finalized.`
+            : `${block.slideFinalized.length} slides finalized.`}
+        </div>
+      )}
 
-        {block.questionEvent && (
-          <QuestionCard
-            questions={
-              Array.isArray(block.questionEvent.questions) && block.questionEvent.questions.length
-                ? block.questionEvent.questions
-                : [{ question: block.questionEvent.question, options: block.questionEvent.options || [] }]
-            }
-            context={block.questionEvent.context}
-            answered={isAnswered}
-            answerText={answerText}
-          />
-        )}
+      {block.questionEvent && (
+        <QuestionCard
+          questions={
+            Array.isArray(block.questionEvent.questions) && block.questionEvent.questions.length
+              ? block.questionEvent.questions
+              : [{ question: block.questionEvent.question, options: block.questionEvent.options || [] }]
+          }
+          context={block.questionEvent.context}
+          answered={isAnswered}
+          answerText={answerText}
+        />
+      )}
 
-        {block.validationUnresolvedEvent && (
-          <ValidationUnresolvedNote ev={block.validationUnresolvedEvent} />
-        )}
+      {block.validationUnresolvedEvent && (
+        <ValidationUnresolvedNote ev={block.validationUnresolvedEvent} />
+      )}
 
-        {block.errorEvent && (
-          <div className="ws-feed-text" style={{ color: "#F87171" }}>
-            {block.errorEvent.message}
-            {block.errorEvent.code ? <code> ({block.errorEvent.code})</code> : null}
-          </div>
-        )}
+      {block.errorEvent && (
+        <div className="ws-feed-text" style={{ color: "#F87171" }}>
+          {block.errorEvent.message}
+          {block.errorEvent.code ? <code> ({block.errorEvent.code})</code> : null}
+        </div>
+      )}
 
-        {block.fileGeneratedEvent && <FileGeneratedNote ev={block.fileGeneratedEvent} />}
-      </FeedItem>
-    </>
+      {block.fileGeneratedEvent && <FileGeneratedNote ev={block.fileGeneratedEvent} />}
+    </FeedItem>
   );
 }
 
-function BacktrackBanner({ block }: { block: PhaseBlock }) {
-  const reason = block.subSteps.find((s) => s.revisionReason)?.revisionReason;
-  const fallback: Record<PhaseGroupKey, string> = {
-    understand: "The plan changed - going back to reconsider the brief",
-    research: "More was needed - going back to research further",
-    design: "The design needs another look - going back to adjust it",
-    draft: "Validation flagged an issue - going back to fix it",
-    render: "Going back to render and check again",
+/** What a revisited phase's badge/pill/detail should say: a short label
+ *  colored by whether this is the agent fixing its own mistake ("error")
+ *  or honoring something the user asked for ("adjustment"), plus any
+ *  validator detail as a subordinate list - never swapped in as the
+ *  entire message the way the old backtrack banner did. */
+function revisitInfo(block: PhaseBlock): { kind: "error" | "adjustment"; label: string; detail: string[] } {
+  const kind: "error" | "adjustment" = block.subSteps.find((s) => s.revisitKind)?.revisitKind ?? "error";
+  const verb = kind === "adjustment" ? "adjusting" : "fixing";
+  const noun: Record<PhaseGroupKey, string> = {
+    understand: "the brief",
+    research: "the research",
+    design: "the design",
+    draft: "content",
+    render: "the render",
   };
-  return (
-    <div className="ws-backtrack">
-      <span className="ws-backtrack-icon">↩</span>
-      {reason || fallback[block.group]}
-    </div>
-  );
+  const reason = block.subSteps.find((s) => s.revisionReason)?.revisionReason;
+  const detail = reason ? reason.split(";").map((r) => r.trim()).filter(Boolean) : [];
+  return { kind, label: `${verb} — ${noun[block.group]}`, detail };
+}
+
+function revisitStyleVars(kind: "error" | "adjustment"): React.CSSProperties {
+  return {
+    ["--ws-revisit-c" as string]: kind === "adjustment" ? "var(--ws-yellow-text)" : "var(--ws-red-text)",
+    ["--ws-revisit-c-bg" as string]: kind === "adjustment" ? "var(--ws-yellow-bg)" : "var(--ws-red-bg)",
+  } as React.CSSProperties;
 }
 
 function PhaseTimer({ block, active }: { block: PhaseBlock; active: boolean }) {
@@ -667,7 +694,6 @@ interface Row {
   startTs?: string;
   args?: Record<string, unknown>;
   result?: unknown;
-  revisit?: boolean;
   sources?: SourceInfo[];
 }
 
@@ -683,7 +709,6 @@ function toRow(s: SubStep): Row {
     startTs: s.startTs,
     args: s.args,
     result: s.result,
-    revisit: s.isRevision,
     sources: s.sources,
   };
 }
@@ -704,7 +729,6 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
     const last = group[group.length - 1];
     const anyRunning = group.some((s) => s.running);
     const anyFailed = group.some((s) => s.success === false);
-    const anyRevision = group.some((s) => s.isRevision);
     const sources = group.flatMap((s) => s.sources || []);
     rows.push({
       key: `slide-${idx ?? i}`,
@@ -717,7 +741,6 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
       startTs: group.find((s) => s.running)?.startTs || group[0].startTs,
       args: last.args,
       result: last.result,
-      revisit: anyRevision,
       sources: sources.length ? sources : undefined,
     });
     i = end;
@@ -738,7 +761,6 @@ function CheckRow({ row }: { row: Row }) {
         <div className="ws-check-top">
           <span className={`ws-check-icon ${iconClass}`}>{row.icon}</span>
           <span className="ws-check-label">{row.label}</span>
-          {row.revisit && <span className="ws-phase-tag sm">revisit</span>}
           {!!row.sources?.length && <SourcesInline sources={row.sources} />}
           <span className="ws-spacer-sm" />
           {row.running ? (
@@ -941,15 +963,22 @@ function ProgressBar({ current, total }: { current?: number; total?: number }) {
 export function FeedItem({
   dot,
   dotClass,
+  dotBadge,
   children,
 }: {
   dot: React.ReactNode;
   dotClass?: string;
+  /** A small self-contained badge anchored to this item's own dot, e.g.
+   *  the revisit-kind marker - never a line reaching for another element. */
+  dotBadge?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="ws-feed-item">
-      <div className={`ws-feed-dot ${dotClass ?? ""}`}>{dot}</div>
+      <div className="ws-feed-dot-wrap">
+        <div className={`ws-feed-dot ${dotClass ?? ""}`}>{dot}</div>
+        {dotBadge}
+      </div>
       <div className="ws-feed-body">{children}</div>
     </div>
   );

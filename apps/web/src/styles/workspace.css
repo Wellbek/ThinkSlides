@@ -37,6 +37,13 @@
   --ws-orange-border:rgba(249, 115, 22, 0.20);
   --ws-orange-text: #F97316;
 
+  /* Adjustment-driven revisits (a change the user asked for, not a
+     mistake being fixed) get their own color so they never read as an
+     error - see .ws-revisit-badge / .ws-revisit-pill below. */
+  --ws-yellow-bg:   rgba(251, 191, 36, 0.10);
+  --ws-yellow-border:rgba(251, 191, 36, 0.40);
+  --ws-yellow-text: #FBBF24;
+
   --ws-blue-bg:     rgba(29, 78, 137, 0.20);
   --ws-blue-border: rgba(30, 58, 95, 0.60);
   --ws-blue-text:   #60A5FA;
@@ -1019,12 +1026,44 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
 
 .ws-phase-head { display: flex; align-items: center; gap: 8px; }
 .ws-phase-name { font-size: 13.5px; font-weight: 600; color: #DDD; }
-.ws-phase-tag {
-  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--ws-orange-text); background: var(--ws-orange-bg); border: 1px solid var(--ws-orange-border);
-  padding: 1px 7px; border-radius: 999px;
+
+/* A revisited phase's dot carries a small badge naming what kind of
+   revisit it is - self-contained and anchored only to its own dot, not a
+   line trying to reach some other element on the timeline. Color and icon
+   (⚠ vs ✎) come from `--ws-revisit-c`, set inline per revisitKind. */
+.ws-feed-dot-wrap { position: relative; flex-shrink: 0; }
+.ws-revisit-badge {
+  position: absolute; top: -5px; left: -5px; width: 13px; height: 13px;
+  border-radius: 50%; background: var(--ws-revisit-c-bg, var(--ws-red-bg));
+  border: 1px solid var(--ws-revisit-c, var(--ws-red-text));
+  color: var(--ws-revisit-c, var(--ws-red-text));
+  display: flex; align-items: center; justify-content: center;
+  font-size: 8px; z-index: 2;
 }
-.ws-phase-tag.sm { padding: 0 5px; font-size: 9px; margin-left: 2px; }
+
+/* The inline pill replaces the old boxed backtrack banner: it sits right
+   in the phase header next to the name, colored by revisitKind, and says
+   what's happening in a few words - "fixing - overlapping content" or
+   "adjusting - image replaced" - instead of a separate dashed box above
+   the phase. */
+.ws-revisit-pill {
+  font-size: 10px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--ws-revisit-c, var(--ws-red-text));
+  color: var(--ws-revisit-c, var(--ws-red-text));
+  background: var(--ws-revisit-c-bg, var(--ws-red-bg));
+  white-space: nowrap;
+}
+.ws-revisit-pill .attempt-count { font-family: var(--ws-font-code); opacity: 0.75; margin-left: 3px; }
+
+/* Validator detail, when there is any: a subordinate line under the
+   header, not swapped in as the whole message the way the old backtrack
+   banner did. */
+.ws-revisit-detail {
+  margin: 3px 0 0 0; padding: 0; list-style: none; font-size: 10.5px;
+  color: var(--ws-text-muted); line-height: 1.5;
+}
+.ws-revisit-detail li { position: relative; padding-left: 11px; }
+.ws-revisit-detail li::before { content: "\00b7"; position: absolute; left: 0; }
 
 .ws-phase-takeaway { color: #999; font-size: 13px; line-height: 1.55; margin-top: 5px; }
 .ws-phase-raw { display: inline-block; margin-left: 8px; vertical-align: middle; }
@@ -1060,15 +1099,6 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
 .ws-check-raw:hover { background: #14143a; }
 .ws-phase-check-raw-body { padding: 0 10px 8px; background: #0A0A0A; }
 .ws-phase-check-raw-body .ws-step-detail { margin-top: 6px; }
-
-/* Backtrack banner: sits above a revisited phase, dashed to read as a jump
-   rather than a normal step in sequence. */
-.ws-backtrack {
-  display: flex; align-items: center; gap: 7px; margin: 2px 0 10px 8px; padding: 6px 10px;
-  border: 1px dashed var(--ws-orange-border); border-radius: var(--ws-radius-sm);
-  background: var(--ws-orange-bg); color: var(--ws-orange-text); font-size: 12px;
-}
-.ws-backtrack-icon { flex-shrink: 0; }
 
 .ws-file-dl-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
 .ws-file-dl-row .ws-feed-text { margin-top: 0; }
