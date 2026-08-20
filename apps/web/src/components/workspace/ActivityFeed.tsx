@@ -193,6 +193,15 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
   // start, then advanced to each step's own end as steps complete - so the
   // next step's process span picks up exactly where the last one left off.
   const cursorByBlock = new Map<string, string>();
+  // A retry loop's Render block and its Fixing block are visually two
+  // blocks, but they're one continuous timeline - the fix happens in the
+  // gap between two validate attempts. Once the first fix block is
+  // created right after its Render block, they share ONE cursor entry
+  // (keyed by the Render block's key) instead of two independent ones, or
+  // the fix cycle's wall time gets counted once on each side and the
+  // phase's substeps would sum to more than its own wall-clock total.
+  const cursorGroupKey = new Map<string, string>();
+  const resolveCursorKey = (key: string): string => cursorGroupKey.get(key) ?? key;
   let closingText = "";
   let blockCounter = 0;
 
@@ -236,7 +245,13 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
       slideFinalized: [],
     };
     blocks.push(block);
-    cursorByBlock.set(block.key, ts);
+    if (group === "draft" && revisit && last?.group === "render") {
+      // This fix block continues the render block's timeline rather than
+      // starting its own - see cursorGroupKey above.
+      cursorGroupKey.set(block.key, resolveCursorKey(last.key));
+    } else {
+      cursorByBlock.set(block.key, ts);
+    }
     return block;
   };
 
@@ -277,7 +292,8 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
         break;
       }
       case "tool_result": {
-        const cursor = cursorByBlock.get(block.key) ?? block.startTs;
+        const cursorKey = resolveCursorKey(block.key);
+        const cursor = cursorByBlock.get(cursorKey) ?? block.startTs;
         const sub = openSubSteps.get(ev.callId);
         if (sub) {
           sub.running = false;
@@ -308,7 +324,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
             sources: Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined,
           });
         }
-        cursorByBlock.set(block.key, ev.timestamp);
+        cursorByBlock.set(cursorKey, ev.timestamp);
         break;
       }
       case "slide_finalized":
@@ -526,19 +542,8 @@ function PhaseBlockItem({
 
   const rows = useMemo(() => {
     if (block.group === "draft") return groupDraftRows(block.subSteps);
-    const plain = block.subSteps.map(toRow);
-    // A merged "Validate" block (see `currentBlock`'s retry-loop reuse)
-    // repeats the same tool once per attempt - "Attempt 1", "Attempt 2",
-    // ... reads better than that tool's name printed N times. A single
-    // pass's normal render-then-validate sequence uses two different
-    // tools, so it's left as-is.
-    const sameToolThroughout = plain.length > 1 && block.subSteps.every(
-      (s) => s.toolName === block.subSteps[0].toolName
-    );
-    if (sameToolThroughout) {
-      return plain.map((row, i) => ({ ...row, label: `Attempt ${i + 1}` }));
-    }
-    return plain;
+    if (block.group === "render") return groupRenderRows(block.subSteps);
+    return block.subSteps.map(toRow);
   }, [block.subSteps, block.group]);
 
   const rawExtra = block.thoughts.length > 1
@@ -646,8 +651,18 @@ function PhaseBlockItem({
  *  or honoring something the user asked for ("adjustment"), plus any
  *  validator detail as a subordinate list - never swapped in as the
  *  entire message the way the old backtrack banner did. */
+/** Last array element matching `pred`, not the first - a merged retry
+ *  block's subSteps span every attempt, and the header should reflect
+ *  the current (most recent) one, not stay frozen on the first. */
+function findLastMatch<T>(arr: T[], pred: (item: T) => boolean): T | undefined {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (pred(arr[i])) return arr[i];
+  }
+  return undefined;
+}
+
 function revisitInfo(block: PhaseBlock): { kind: "error" | "adjustment"; label: string; attempt?: string; detail: string[] } {
-  const withKind = block.subSteps.find((s) => s.revisitKind);
+  const withKind = findLastMatch(block.subSteps, (s) => !!s.revisitKind);
   const kind: "error" | "adjustment" = withKind?.revisitKind ?? "error";
   const verb = kind === "adjustment" ? "adjusting" : "fixing";
   const noun: Record<PhaseGroupKey, string> = {
@@ -657,7 +672,7 @@ function revisitInfo(block: PhaseBlock): { kind: "error" | "adjustment"; label: 
     draft: "content",
     render: "the render",
   };
-  const reason = block.subSteps.find((s) => s.revisionReason)?.revisionReason;
+  const reason = findLastMatch(block.subSteps, (s) => !!s.revisionReason)?.revisionReason;
   const detail = reason ? reason.split(";").map((r) => r.trim()).filter(Boolean) : [];
   const attempt = withKind?.revisitAttempt && withKind?.revisitMaxAttempts
     ? `${withKind.revisitAttempt}/${withKind.revisitMaxAttempts}`
@@ -765,15 +780,24 @@ function toRow(s: SubStep): Row {
  *  slide - a slide is drafted through several calls (layout, a chart, the
  *  copy itself), and listing each separately says less than "Slide 3" does. */
 function groupDraftRows(subSteps: SubStep[]): Row[] {
+  // A merged "Fixing" block (see `currentBlock`'s retry-loop reuse) can
+  // cover more than one slide in the same pass - slides_needing_revision
+  // isn't always a single index. Once that's true, "Attempt 2" alone is
+  // ambiguous between rows, so the slide number has to be in every label,
+  // not just implied by a phase header that doesn't name a slide either.
+  const distinctSlides = new Set(
+    subSteps.map((s) => s.slideIndex).filter((idx): idx is number => idx != null)
+  );
+  const disambiguateSlide = distinctSlides.size > 1;
+
   const rows: Row[] = [];
   let i = 0;
   while (i < subSteps.length) {
     const idx = subSteps[i].slideIndex;
-    // A merged "Fixing Slide N" block (see `currentBlock`'s retry-loop
-    // reuse) accumulates one design_slide_content call per attempt, all
-    // for the same slide - group consecutive calls only within the same
-    // attempt, or every attempt would collapse into one row and the retry
-    // count would disappear from the checklist.
+    // A merged "Fixing" block accumulates one design_slide_content call
+    // per attempt, all for the same slide - group consecutive calls only
+    // within the same attempt, or every attempt would collapse into one
+    // row and the retry count would disappear from the checklist.
     const attempt = subSteps[i].revisitAttempt;
     let end = i + 1;
     if (idx != null) {
@@ -789,12 +813,55 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
     const anyFailed = group.some((s) => s.success === false);
     const sources = group.flatMap((s) => s.sources || []);
     const maxAttempts = group[0].revisitMaxAttempts;
+    const slideLabel = idx != null ? `Slide ${idx + 1}` : undefined;
+    const attemptLabel = attempt != null ? `Attempt ${attempt}${maxAttempts ? `/${maxAttempts}` : ""}` : undefined;
+    const label = attemptLabel
+      ? (disambiguateSlide && slideLabel ? `${slideLabel} — ${attemptLabel}` : attemptLabel)
+      : slideLabel ?? toolLabel(last.toolName);
     rows.push({
       key: `slide-${idx ?? i}-${attempt ?? 0}`,
       icon: anyFailed ? "●" : anyRunning ? "↻" : "✓",
-      label: attempt != null
-        ? `Attempt ${attempt}${maxAttempts ? `/${maxAttempts}` : ""}`
-        : idx != null ? `Slide ${idx + 1}` : toolLabel(last.toolName),
+      label,
+      note: last.summary || (anyRunning ? "" : last.error || ""),
+      durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
+      toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
+      running: anyRunning,
+      startTs: group.find((s) => s.running)?.startTs || group[0].startTs,
+      args: last.args,
+      result: last.result,
+      sources: sources.length ? sources : undefined,
+    });
+    i = end;
+  }
+  return rows;
+}
+
+/** A merged "Validate" block (see `currentBlock`'s retry-loop reuse) runs
+ *  one finalize_and_render_pptx + validate_rendered_output pair per
+ *  attempt (confirmed against pipeline.py: a redesign invalidates
+ *  render_is_current, so every attempt re-renders before re-validating) -
+ *  group each pair into one "Attempt N" row instead of listing every call
+ *  under its own tool name, N times over. */
+function groupRenderRows(subSteps: SubStep[]): Row[] {
+  const attemptCount = subSteps.filter((s) => s.toolName === "finalize_and_render_pptx").length;
+  if (attemptCount <= 1) return subSteps.map(toRow);
+
+  const rows: Row[] = [];
+  let i = 0;
+  let attempt = 0;
+  while (i < subSteps.length) {
+    attempt++;
+    let end = i + 1;
+    while (end < subSteps.length && subSteps[end].toolName !== "finalize_and_render_pptx") end++;
+    const group = subSteps.slice(i, end);
+    const last = group[group.length - 1];
+    const anyRunning = group.some((s) => s.running);
+    const anyFailed = group.some((s) => s.success === false);
+    const sources = group.flatMap((s) => s.sources || []);
+    rows.push({
+      key: `render-attempt-${attempt}`,
+      icon: anyFailed ? "●" : anyRunning ? "↻" : "✓",
+      label: `Attempt ${attempt}`,
       note: last.summary || (anyRunning ? "" : last.error || ""),
       durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
       toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
