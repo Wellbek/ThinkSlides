@@ -1008,3 +1008,139 @@ func (h *SessionHandler) DownloadFile(c *gin.Context) {
 
 	c.FileAttachment(filePath, fileName)
 }
+
+// ReplaceAsset handles a drag-dropped replacement for one generated chart or
+// image asset (#187). Two of the confirmation dialog's three options land
+// here directly - "asset_only" overwrites the existing row in place,
+// "keep_both" adds the drop as a new, distinctly-named asset alongside it.
+// The third option, replacing the asset in its slide too, goes through the
+// agent-resume endpoint instead (see the image-replace-in-slide handler) -
+// updating a slide is a job for the agent, not a plain file swap.
+func (h *SessionHandler) ReplaceAsset(c *gin.Context) {
+	sessionID := c.Param("id")
+	assetID := c.Param("assetId")
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	scope := c.PostForm("scope")
+	if scope != "asset_only" && scope != "keep_both" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "scope must be asset_only or keep_both"})
+		return
+	}
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
+		return
+	}
+	defer file.Close()
+
+	ctx := c.Request.Context()
+
+	var fileType, originalFilename string
+	var metadataRaw []byte
+	err = h.pool.QueryRow(ctx,
+		`SELECT file_type, original_filename, metadata FROM generated_files
+		 WHERE id = $1 AND session_id = $2`, assetID, sessionID,
+	).Scan(&fileType, &originalFilename, &metadataRaw)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
+		return
+	}
+	if fileType != "image" && fileType != "chart" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only individual chart/image assets can be replaced this way"})
+		return
+	}
+
+	outputDir := os.Getenv("OUTPUT_DIR")
+	if outputDir == "" {
+		outputDir = "/app/output"
+	}
+	assetsDir := filepath.Join(outputDir, sessionID, "assets")
+	if err := os.MkdirAll(assetsDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not prepare asset storage"})
+		return
+	}
+
+	ext := filepath.Ext(header.Filename)
+	newID := uuid.New().String()
+	newPath := filepath.Join(assetsDir, newID+ext)
+	if err := c.SaveUploadedFile(header, newPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save uploaded file"})
+		return
+	}
+	fileSize := header.Size
+
+	if scope == "asset_only" {
+		_, err = h.pool.Exec(ctx,
+			`UPDATE generated_files SET file_path = $1, original_filename = $2, file_size_bytes = $3
+			 WHERE id = $4`,
+			newPath, header.Filename, fileSize, assetID,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update asset"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"id": assetID, "file_url": fmt.Sprintf("/api/files/%s", assetID),
+			"filename": header.Filename, "file_size": fileSize, "file_type": fileType,
+		})
+		return
+	}
+
+	// keep_both: name the new asset like a filesystem duplicate, numbered
+	// against every other asset already sharing this base name in the
+	// session, not just the one that was just dropped on.
+	newFilename := nextDuplicateName(ctx, h.pool, sessionID, header.Filename)
+	newFileID := uuid.New().String()
+	_, err = h.pool.Exec(ctx,
+		`INSERT INTO generated_files
+		   (id, organisation_id, session_id, file_type, file_path, original_filename, file_size_bytes, metadata, created_at)
+		 SELECT $1, organisation_id, $2, $3, $4, $5, $6, $7, NOW()
+		 FROM chat_sessions WHERE id = $2`,
+		newFileID, sessionID, fileType, newPath, newFilename, fileSize, metadataRaw,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save new asset"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id": newFileID, "file_url": fmt.Sprintf("/api/files/%s", newFileID),
+		"filename": newFilename, "file_size": fileSize, "file_type": fileType,
+	})
+}
+
+// nextDuplicateName finds a filename like the given one that isn't already
+// used by another asset in this session, numbering it the way a filesystem
+// numbers a duplicate: "chart.png", then "chart (1).png", "chart (2).png".
+func nextDuplicateName(ctx context.Context, pool *pgxpool.Pool, sessionID, filename string) string {
+	base := strings.TrimSuffix(filename, filepath.Ext(filename))
+	ext := filepath.Ext(filename)
+
+	existing := map[string]bool{}
+	rows, err := pool.Query(ctx,
+		`SELECT original_filename FROM generated_files WHERE session_id = $1 AND original_filename IS NOT NULL`,
+		sessionID,
+	)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			if rows.Scan(&name) == nil {
+				existing[name] = true
+			}
+		}
+	}
+
+	if !existing[filename] {
+		return filename
+	}
+	for n := 1; ; n++ {
+		candidate := fmt.Sprintf("%s (%d)%s", base, n, ext)
+		if !existing[candidate] {
+			return candidate
+		}
+	}
+}

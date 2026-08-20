@@ -4,6 +4,8 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useChatStore } from "@/stores/chat-store";
 import { collectPreviewSlides } from "@/lib/slides";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
+import { apiUpload } from "@/lib/api";
+import { AssetReplaceDialog, type ReplaceScope } from "./AssetReplaceDialog";
 import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download, ExternalLink, ChevronDown, Image as ImageIcon } from "lucide-react";
 
 export function DetailsPanel() {
@@ -31,6 +33,40 @@ export function DetailsPanel() {
   const assets = useMemo(() => collectAssets(activeFiles), [activeFiles]);
 
   const created = session?.created_at ? new Date(session.created_at).toISOString().slice(0, 10) : "-";
+
+  const [dragOverAssetId, setDragOverAssetId] = useState<string | null>(null);
+  const [pendingReplace, setPendingReplace] = useState<{ asset: any; file: File } | null>(null);
+
+  const handleAssetDrop = (asset: any, e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOverAssetId(null);
+    const file = e.dataTransfer.files?.[0];
+    if (file) setPendingReplace({ asset, file });
+  };
+
+  const handleReplaceConfirm = async (scope: ReplaceScope) => {
+    if (!pendingReplace || !activeSessionId) return;
+    const { asset, file } = pendingReplace;
+    if (scope === "in_slide") {
+      // Wired to the agent-resume flow once that endpoint lands - the
+      // dialog is present now so the UI/interaction is reviewable as a
+      // whole, this branch fills in with the actual call shortly after.
+      console.warn("Replace-in-slide is not wired up yet.");
+      setPendingReplace(null);
+      return;
+    }
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("scope", scope);
+    try {
+      await apiUpload(`/api/orchestrator/sessions/${activeSessionId}/assets/${asset.id}/replace`, formData);
+      await useChatStore.getState().setActiveSession(activeSessionId);
+    } catch (err) {
+      console.error("Failed to replace asset", err);
+    } finally {
+      setPendingReplace(null);
+    }
+  };
 
   return (
     <div className="ws-scroll ws-left-pad">
@@ -98,9 +134,18 @@ export function DetailsPanel() {
       <div className="ws-divider" />
       <CollapsibleSection title="Assets" count={assets.length}>
         <div className="ws-sources">
-          {assets.length === 0 && <div className="ws-empty-note">Charts and images will appear here as they're generated.</div>}
+          {assets.length === 0 && <div className="ws-empty-note">Charts and images will appear here as they&apos;re generated. Drag a file onto one to replace it.</div>}
           {assets.map((a) => (
-            <a className="ws-src ws-src-dl" key={a.id} href={a.downloadUrl} download title={`Download ${a.filename}`}>
+            <a
+              className={`ws-src ws-src-dl ${dragOverAssetId === a.id ? "dragging" : ""}`}
+              key={a.id}
+              href={a.downloadUrl}
+              download
+              title={`Download ${a.filename}`}
+              onDragOver={(e) => { e.preventDefault(); setDragOverAssetId(a.id); }}
+              onDragLeave={() => setDragOverAssetId((id) => (id === a.id ? null : id))}
+              onDrop={(e) => handleAssetDrop(a, e)}
+            >
               <div className="s-ic img"><ImageIcon size={14} /></div>
               <div className="s-body">
                 <div className="s-name">{a.filename}</div>
@@ -111,10 +156,20 @@ export function DetailsPanel() {
                 </div>
               </div>
               <span className="s-tag"><Download size={13} /></span>
+              {dragOverAssetId === a.id && <span className="drop-overlay">Drop to replace</span>}
             </a>
           ))}
         </div>
       </CollapsibleSection>
+
+      {pendingReplace && (
+        <AssetReplaceDialog
+          asset={pendingReplace.asset}
+          file={pendingReplace.file}
+          onConfirm={handleReplaceConfirm}
+          onCancel={() => setPendingReplace(null)}
+        />
+      )}
 
       <div className="ws-divider" />
       <CollapsibleSection title="Documents" count={documents.length}>
