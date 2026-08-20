@@ -44,6 +44,14 @@ const STEP_TO_GROUP: Record<string, PhaseGroupKey> = {
   validate: "render",
 };
 
+/** The two groups a validation-retry loop alternates between - see
+ *  `currentBlock`'s reuse logic below. No other group pair loops this
+ *  way, so this stays deliberately narrow rather than a general rule. */
+const RETRY_PAIR: Partial<Record<PhaseGroupKey, PhaseGroupKey>> = {
+  render: "draft",
+  draft: "render",
+};
+
 /** Coarse `phase` → best-guess fine step, for events recorded before `step`
  *  existed. Degrades gracefully: Understand and Research fold into one box
  *  rather than crashing on an unrecognised value. */
@@ -193,6 +201,25 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
     if (last && last.group === group) {
       last.endTs = ts;
       return last;
+    }
+    // A validate/fix retry loop alternates strictly between "render" and
+    // "draft" - reuse the most recent block of this group instead of
+    // starting a new one each time it comes back around, so N attempts
+    // read as one "Validate" block and one "Fixing" block, each with an
+    // attempt checklist, rather than N near-duplicate blocks. A fix block
+    // never absorbs the original (non-revisit) draft pass - only a prior
+    // fix attempt - so "Draft" and "Fixing Slide 2" stay visually distinct.
+    const pairGroup = RETRY_PAIR[group];
+    if (pairGroup) {
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const b = blocks[i];
+        if (b.group === group) {
+          if (group === "draft" && !b.revisit) break;
+          b.endTs = ts;
+          return b;
+        }
+        if (b.group !== pairGroup) break;
+      }
     }
     blockCounter++;
     const revisit = seenGroups.has(group);
@@ -497,10 +524,22 @@ function PhaseBlockItem({
   const lastStep = block.subSteps[block.subSteps.length - 1];
   const takeawayText = lastThought?.content || (!active ? lastStep?.summary || "" : "");
 
-  const rows = useMemo(
-    () => (block.group === "draft" ? groupDraftRows(block.subSteps) : block.subSteps.map(toRow)),
-    [block.subSteps, block.group]
-  );
+  const rows = useMemo(() => {
+    if (block.group === "draft") return groupDraftRows(block.subSteps);
+    const plain = block.subSteps.map(toRow);
+    // A merged "Validate" block (see `currentBlock`'s retry-loop reuse)
+    // repeats the same tool once per attempt - "Attempt 1", "Attempt 2",
+    // ... reads better than that tool's name printed N times. A single
+    // pass's normal render-then-validate sequence uses two different
+    // tools, so it's left as-is.
+    const sameToolThroughout = plain.length > 1 && block.subSteps.every(
+      (s) => s.toolName === block.subSteps[0].toolName
+    );
+    if (sameToolThroughout) {
+      return plain.map((row, i) => ({ ...row, label: `Attempt ${i + 1}` }));
+    }
+    return plain;
+  }, [block.subSteps, block.group]);
 
   const rawExtra = block.thoughts.length > 1
     ? block.thoughts.slice(0, -1).map((t) => t.content).join("\n\n")
@@ -730,19 +769,32 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
   let i = 0;
   while (i < subSteps.length) {
     const idx = subSteps[i].slideIndex;
+    // A merged "Fixing Slide N" block (see `currentBlock`'s retry-loop
+    // reuse) accumulates one design_slide_content call per attempt, all
+    // for the same slide - group consecutive calls only within the same
+    // attempt, or every attempt would collapse into one row and the retry
+    // count would disappear from the checklist.
+    const attempt = subSteps[i].revisitAttempt;
     let end = i + 1;
     if (idx != null) {
-      while (end < subSteps.length && subSteps[end].slideIndex === idx) end++;
+      while (
+        end < subSteps.length &&
+        subSteps[end].slideIndex === idx &&
+        subSteps[end].revisitAttempt === attempt
+      ) end++;
     }
     const group = subSteps.slice(i, end);
     const last = group[group.length - 1];
     const anyRunning = group.some((s) => s.running);
     const anyFailed = group.some((s) => s.success === false);
     const sources = group.flatMap((s) => s.sources || []);
+    const maxAttempts = group[0].revisitMaxAttempts;
     rows.push({
-      key: `slide-${idx ?? i}`,
+      key: `slide-${idx ?? i}-${attempt ?? 0}`,
       icon: anyFailed ? "●" : anyRunning ? "↻" : "✓",
-      label: idx != null ? `Slide ${idx + 1}` : toolLabel(last.toolName),
+      label: attempt != null
+        ? `Attempt ${attempt}${maxAttempts ? `/${maxAttempts}` : ""}`
+        : idx != null ? `Slide ${idx + 1}` : toolLabel(last.toolName),
       note: last.summary || (anyRunning ? "" : last.error || ""),
       durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
       toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
