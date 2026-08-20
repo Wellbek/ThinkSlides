@@ -3759,6 +3759,13 @@ class AgentLoop:
                 "on a single source, attribute it in the slide's notes.",
                 "- Prefer primary and recent sources (the company's own filing, the statistics "
                 "office, the standards body) over aggregators repeating each other.",
+                "- When the request implies 'most recent', 'latest', or current information, "
+                "do not assume the first plausible-looking result is actually the newest thing "
+                "available. Run at least one query with an explicit recency qualifier (the "
+                "current year, 'latest') and pass web_search's recency argument (day/week/month/"
+                "year) so results are biased toward it, then check each result's published date "
+                "against today's date before treating it as current - a result from a year or "
+                "more ago is not 'the most recent' just because it was the first thing found.",
                 "- Do NOT call web_search for opinions, the user's own documents, or topics you already know well - avoid unnecessary calls.",
                 "- The web_search results are shown to the user as sources, so prefer it whenever a claim benefits from a citation.",
                 "",
