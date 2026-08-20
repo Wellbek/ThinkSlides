@@ -353,7 +353,7 @@ func (h *SessionHandler) GetSessionFiles(c *gin.Context) {
 	}
 
 	rows, err := h.pool.Query(ctx,
-		`SELECT id, session_id, file_type, file_path, original_filename, file_size_bytes, created_at
+		`SELECT id, session_id, file_type, file_path, original_filename, file_size_bytes, metadata, created_at
 		 FROM generated_files
 		 WHERE session_id = $1
 		 ORDER BY created_at`, sessionID,
@@ -369,8 +369,9 @@ func (h *SessionHandler) GetSessionFiles(c *gin.Context) {
 		var id, sessionID, fileType, filePath string
 		var originalFilename *string
 		var fileSizeBytes *int64
+		var metadataRaw []byte
 		var createdAt time.Time
-		if err := rows.Scan(&id, &sessionID, &fileType, &filePath, &originalFilename, &fileSizeBytes, &createdAt); err != nil {
+		if err := rows.Scan(&id, &sessionID, &fileType, &filePath, &originalFilename, &fileSizeBytes, &metadataRaw, &createdAt); err != nil {
 			continue
 		}
 		f := gin.H{
@@ -388,6 +389,17 @@ func (h *SessionHandler) GetSessionFiles(c *gin.Context) {
 		}
 		if fileSizeBytes != nil {
 			f["file_size"] = *fileSizeBytes
+		}
+		// slide_index (and any other per-asset context) lives in metadata -
+		// individual chart/image assets set it, the whole-deck pptx row
+		// doesn't (see #187).
+		if len(metadataRaw) > 0 {
+			var metadata map[string]interface{}
+			if err := json.Unmarshal(metadataRaw, &metadata); err == nil {
+				if slideIndex, ok := metadata["slideIndex"]; ok && slideIndex != nil {
+					f["slide_index"] = slideIndex
+				}
+			}
 		}
 		files = append(files, f)
 	}
