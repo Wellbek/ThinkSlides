@@ -1766,6 +1766,13 @@ class PPTXRenderer:
                 Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
             )
             describe_picture(picture, str(chart_data.get("title") or slide_title))
+            # Marks this as a picture the render pipeline itself placed, not
+            # one already sitting in the template layout (a logo, say) -
+            # #187's asset extraction reads this back to know which shapes
+            # are actually replaceable content, rather than guessing from
+            # shape position, which mispairs the moment a layout's own
+            # static pictures come first in document order.
+            picture.name = "ts-asset-chart"
         finally:
             os.unlink(img_stream.name)
 
@@ -2068,6 +2075,9 @@ class PPTXRenderer:
                 Inches(pos.left), Inches(pos.top), Inches(pos.width), Inches(pos.height)
             )
             describe_picture(picture, str(img_data.get("altText") or ""))
+            # See the matching note in _add_chart - marks this as a
+            # pipeline-placed picture for #187's asset extraction.
+            picture.name = "ts-asset-image"
         finally:
             os.unlink(img_stream.name)
 

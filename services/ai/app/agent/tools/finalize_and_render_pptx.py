@@ -257,16 +257,18 @@ class FinalizeAndRenderPptxTool:
 
         Reads the pictures back out of the already-rendered deck with
         python-pptx rather than intercepting bytes mid-render, so this never
-        touches the renderer's own XML-cloning logic. Pairs each slide's
-        picture shapes with that slide's "image"/"chart" content items by
-        position - the best signal available post-render, since nothing else
-        ties a rendered picture back to the item that produced it. A slide
-        where the counts don't line up just falls back to "image" for the
-        extra pictures rather than guessing further.
+        touches the renderer's own XML-cloning logic. Every picture the
+        render pipeline itself places is named "ts-asset-chart" or
+        "ts-asset-image" (see pptx_renderer.py's _add_chart/_add_image) -
+        that is what gets picked up here, not "the Nth picture on the
+        slide". Position-based pairing mispairs the moment a template
+        layout carries its own static pictures (a logo, say) ahead of the
+        content pictures in document order; the name marker sidesteps that
+        entirely instead of trying to out-guess it, and as a side effect
+        never surfaces a template's own artwork as a "replaceable" asset.
         """
         try:
             from pptx import Presentation
-            from pptx.enum.shapes import MSO_SHAPE_TYPE
 
             output_dir = os.environ.get("OUTPUT_DIR", "/app/output")
             assets_dir = os.path.join(output_dir, str(session_id), "assets")
@@ -274,38 +276,40 @@ class FinalizeAndRenderPptxTool:
 
             prs = Presentation(result_path)
             assets: list[dict] = []
+            asset_types = {"ts-asset-chart": "chart", "ts-asset-image": "image"}
 
             for slide_index, pptx_slide in enumerate(prs.slides):
-                declared_types = [
-                    item.get("type")
-                    for item in (slides[slide_index].get("contents", []) if slide_index < len(slides) else [])
-                    if item.get("type") in ("image", "chart")
-                ]
-                pictures = [
-                    shape for shape in pptx_slide.shapes
-                    if shape.shape_type == MSO_SHAPE_TYPE.PICTURE
-                ]
-
-                for position, shape in enumerate(pictures):
-                    file_type = declared_types[position] if position < len(declared_types) else "image"
+                position = 0
+                for shape in pptx_slide.shapes:
+                    # shape_type/name access itself can raise (a shape
+                    # python-pptx doesn't fully model - embedded OLE,
+                    # SmartArt - can throw NotImplementedError just reading
+                    # its type), so this has to be inside the per-shape
+                    # guard too, not just the picture-extraction below it.
+                    # One bad shape must cost that one shape, not silently
+                    # abort every asset on every remaining slide.
                     try:
+                        file_type = asset_types.get(shape.name)
+                        if file_type is None:
+                            continue
                         image = shape.image
                         ext = image.ext or "png"
+                        position += 1
                         asset_id = str(uuid.uuid4())
                         asset_path = os.path.join(assets_dir, f"{asset_id}.{ext}")
                         with open(asset_path, "wb") as f:
                             f.write(image.blob)
                         assets.append({
                             "filePath": asset_path,
-                            "fileName": f"slide-{slide_index + 1}-{file_type}-{position + 1}.{ext}",
+                            "fileName": f"slide-{slide_index + 1}-{file_type}-{position}.{ext}",
                             "fileSizeBytes": len(image.blob),
                             "fileType": file_type,
                             "slideIndex": slide_index,
                         })
                     except Exception as shape_error:
-                        # One bad shape (an unusual image format python-pptx
-                        # can't decode, for instance) should not lose every
-                        # other asset on the deck.
+                        # An unusual shape python-pptx can't fully read, or
+                        # an image format it can't decode, should not lose
+                        # every other asset on the deck.
                         logger.warning(
                             "slide_asset_extract_failed",
                             session_id=session_id,
