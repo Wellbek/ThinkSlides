@@ -1050,12 +1050,12 @@ func (h *SessionHandler) ReplaceAsset(c *gin.Context) {
 	// another org's session_id and asset_id could overwrite that org's
 	// asset. A mismatch reads identically to "not found" so it doesn't leak
 	// whether the id exists in someone else's org.
-	var fileType, originalFilename string
+	var fileType, originalFilename, oldFilePath string
 	var metadataRaw []byte
 	err = h.pool.QueryRow(ctx,
-		`SELECT file_type, original_filename, metadata FROM generated_files
+		`SELECT file_type, original_filename, file_path, metadata FROM generated_files
 		 WHERE id = $1 AND session_id = $2 AND organisation_id = $3`, assetID, sessionID, orgID,
-	).Scan(&fileType, &originalFilename, &metadataRaw)
+	).Scan(&fileType, &originalFilename, &oldFilePath, &metadataRaw)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
 		return
@@ -1093,6 +1093,17 @@ func (h *SessionHandler) ReplaceAsset(c *gin.Context) {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update asset"})
 			return
+		}
+		// The DB row is the source of truth and already points at newPath -
+		// the old file is now unreferenced. Best-effort cleanup: a delete
+		// failure here doesn't change what the asset resolves to, so it's
+		// logged rather than failing a request that already succeeded.
+		// Without this, repeated replaces of the same asset permanently
+		// accumulate orphaned files on disk.
+		if oldFilePath != "" && oldFilePath != newPath {
+			if err := os.Remove(oldFilePath); err != nil && !os.IsNotExist(err) {
+				log.Printf("ReplaceAsset: failed to remove superseded file %s: %v", oldFilePath, err)
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"id": assetID, "file_url": fmt.Sprintf("/api/files/%s", assetID),
