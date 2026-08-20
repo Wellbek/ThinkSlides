@@ -471,6 +471,41 @@ async def _run_agent(
                                     session_id, str(db_err),
                                 )
 
+                            # Individual chart/image assets extracted by
+                            # finalize_and_render_pptx (issue #187) - same
+                            # generated_files table, new file_type values, so
+                            # the workspace UI can list and download them
+                            # separately from the deck itself. One row per
+                            # asset so a bad row never loses the others.
+                            for asset in generated_file_info.get("assets", []) or []:
+                                try:
+                                    asset_id = str(uuid.uuid4())
+                                    await db.execute(
+                                        text(
+                                            """INSERT INTO generated_files
+                                               (id, organisation_id, session_id, file_type, file_path,
+                                                original_filename, file_size_bytes, metadata, created_at)
+                                               SELECT :fid, organisation_id, :sid, :ftype, :fpath,
+                                                      :fname, :fsize, :fmeta, NOW()
+                                               FROM chat_sessions WHERE id = :sid"""
+                                        ),
+                                        {
+                                            "fid": asset_id,
+                                            "sid": str(session_id),
+                                            "ftype": asset.get("fileType", "image"),
+                                            "fpath": asset.get("filePath", ""),
+                                            "fname": asset.get("fileName"),
+                                            "fsize": asset.get("fileSizeBytes", 0),
+                                            "fmeta": json.dumps({"slideIndex": asset.get("slideIndex")}),
+                                        },
+                                    )
+                                    await db.commit()
+                                except Exception as asset_db_err:
+                                    logger.error(
+                                        "_run_agent: failed to save generated asset for session %s: %s",
+                                        session_id, str(asset_db_err),
+                                    )
+
                 logger.info(
                     "_run_agent: loop finished, got %d events for session %s",
                     event_count, session_id
