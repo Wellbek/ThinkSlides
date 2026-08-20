@@ -2917,7 +2917,12 @@ class AgentLoop:
             "toolArgs": fn_args,
             "callId": call_id,
             "timestamp": _iso_now(),
-            **({"isRevision": True, "revisionReason": revision_reason} if is_revision else {}),
+            # Every revision this function currently flags is validation-
+            # driven - "error" is the only value produced today. A future
+            # trigger for a user-requested change (e.g. issue #187's image
+            # replace flow) sets "adjustment" instead, so the activity feed
+            # can tell "fixing a mistake" apart from "honoring an edit".
+            **({"isRevision": True, "revisionReason": revision_reason, "revisitKind": "error"} if is_revision else {}),
         }, step=step)
 
         # Execute tool

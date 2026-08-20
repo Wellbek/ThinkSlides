@@ -154,6 +154,7 @@ interface SubStep {
   running: boolean;
   isRevision?: boolean;
   revisionReason?: string;
+  revisitKind?: "error" | "adjustment";
   slideIndex?: number;
   sources?: SourceInfo[];
 }
@@ -237,6 +238,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
           running: true,
           isRevision: ev.isRevision,
           revisionReason: ev.revisionReason,
+          revisitKind: ev.revisitKind,
           slideIndex: typeof ev.toolArgs?.slide_index === "number" ? ev.toolArgs.slide_index : undefined,
         };
         block.subSteps.push(sub);

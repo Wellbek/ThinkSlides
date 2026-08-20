@@ -109,6 +109,11 @@ export interface ToolCallEvent {
   // which otherwise look identical in the activity feed.
   isRevision?: boolean;
   revisionReason?: string;
+  /** "error" for a validation-driven fix, "adjustment" for a change the
+   *  user asked for (e.g. replacing an image) - lets the UI tell "fixing a
+   *  mistake" apart from "honoring an edit" instead of treating every
+   *  revision the same way. */
+  revisitKind?: "error" | "adjustment";
 }
 
 export interface SourceInfo {
