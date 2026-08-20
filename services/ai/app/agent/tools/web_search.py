@@ -52,11 +52,23 @@ class WebSearchTool:
                     type="string",
                     description="The search query - a concise, specific phrase.",
                 ),
+                ToolParameter(
+                    name="recency",
+                    type="string",
+                    required=False,
+                    enum=["day", "week", "month", "year"],
+                    description=(
+                        "Optional. Bias results toward freshly published pages within "
+                        "this window. Use when the request asks for the 'most recent' "
+                        "or 'latest' information - omit for evergreen topics, where a "
+                        "recency filter can starve the search of good results."
+                    ),
+                ),
             ],
         )
 
     @classmethod
-    async def run(cls, query: str) -> ToolResult:
+    async def run(cls, query: str, recency: str | None = None) -> ToolResult:
         start = time.time()
 
         def elapsed() -> int:
@@ -87,7 +99,7 @@ class WebSearchTool:
                     duration_ms=elapsed(),
                 )
 
-            results = await run_search(config, query.strip())
+            results = await run_search(config, query.strip(), recency=recency)
 
             logger.info(
                 "web_search_completed",

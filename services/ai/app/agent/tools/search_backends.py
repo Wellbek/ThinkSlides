@@ -51,14 +51,23 @@ ANTHROPIC_SEARCH_TOOL = "web_search_20260209"
 ANTHROPIC_SEARCH_TOOL_FALLBACK = "web_search_20250305"
 
 
-async def run_search(config: SearchConfig, query: str, count: int = DEFAULT_COUNT) -> list[dict]:
-    """Execute a search through the configured backend."""
+async def run_search(
+    config: SearchConfig, query: str, count: int = DEFAULT_COUNT, recency: str | None = None
+) -> list[dict]:
+    """Execute a search through the configured backend.
+
+    ``recency`` asks the backend to bias or filter toward freshly published
+    results - "day"/"week"/"month"/"year" (Zhipu's own vocabulary; Tavily's
+    ``time_range`` is mapped onto the same four values). Only Zhipu and Tavily
+    support it; other backends silently ignore it rather than erroring, since
+    asking for recency is a hint, not a hard requirement of the tool contract.
+    """
     start = time.time()
 
     if config.backend == "native":
-        results = await _native_search(config, query, count)
+        results = await _native_search(config, query, count, recency)
     elif config.backend == "tavily":
-        results = await _tavily_search(config, query, count)
+        results = await _tavily_search(config, query, count, recency)
     elif config.backend == "firecrawl":
         results = await _firecrawl_search(config, query, count)
     else:
@@ -74,14 +83,16 @@ async def run_search(config: SearchConfig, query: str, count: int = DEFAULT_COUN
     return _dedupe(results)
 
 
-async def _native_search(config: SearchConfig, query: str, count: int) -> list[dict]:
+async def _native_search(
+    config: SearchConfig, query: str, count: int, recency: str | None = None
+) -> list[dict]:
     if config.model is None:
         raise ValueError("Native search needs a configured model provider")
     if config.model.provider == "anthropic":
         return await _anthropic_search(config, query, count)
     if config.model.provider == "openai":
         return await _openai_search(config, query, count)
-    return await _zhipu_search(config, query, count)
+    return await _zhipu_search(config, query, count, recency)
 
 
 def _dedupe(results: list[dict]) -> list[dict]:
@@ -163,7 +174,9 @@ def build_zhipu_jwt(api_key: str) -> str:
     )
 
 
-async def _zhipu_search(config: SearchConfig, query: str, count: int) -> list[dict]:
+async def _zhipu_search(
+    config: SearchConfig, query: str, count: int, recency: str | None = None
+) -> list[dict]:
     api_key = config.model.api_key if config.model else settings.zhipu_api_key
     body = {
         "search_engine": settings.zhipu_web_search_engine or "search_std",
@@ -175,6 +188,9 @@ async def _zhipu_search(config: SearchConfig, query: str, count: int) -> list[di
         "search_intent": False,
         "content_size": settings.zhipu_web_search_content_size,
     }
+    if recency:
+        # Zhipu's own vocabulary: day/week/month/year/noLimit.
+        body["search_recency_filter"] = recency
     headers = {
         "Authorization": f"Bearer {build_zhipu_jwt(api_key)}",
         "Content-Type": "application/json",
@@ -232,7 +248,9 @@ def parse_zhipu_response(response) -> list[dict]:
 # ── Tavily (external) ──────────────────────────────────────────────────
 
 
-async def _tavily_search(config: SearchConfig, query: str, count: int) -> list[dict]:
+async def _tavily_search(
+    config: SearchConfig, query: str, count: int, recency: str | None = None
+) -> list[dict]:
     body = {
         "api_key": config.api_key,
         "query": query,
@@ -242,6 +260,9 @@ async def _tavily_search(config: SearchConfig, query: str, count: int) -> list[d
         "include_answer": False,
         "include_raw_content": False,
     }
+    if recency:
+        # Tavily's time_range takes the same day/week/month/year vocabulary.
+        body["time_range"] = recency
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     url = f"{(config.base_url or '').rstrip('/')}/search" if config.base_url else TAVILY_SEARCH_URL
     return parse_tavily_response(await post_json(url, headers, body))
