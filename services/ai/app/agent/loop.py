@@ -3766,6 +3766,14 @@ class AgentLoop:
                 "year) so results are biased toward it, then check each result's published date "
                 "against today's date before treating it as current - a result from a year or "
                 "more ago is not 'the most recent' just because it was the first thing found.",
+                "- If, after checking dates, the freshest result you found still does not look "
+                "recent enough for what was asked - or you genuinely cannot tell how current it "
+                "is - do not silently proceed as if it were sufficient. Call ask_user_question: "
+                "name what you found and its apparent age, and ask whether to proceed with it, "
+                "search further with a narrower time window, or continue without that specific "
+                "claim. Only do this when the request genuinely implied recency and the check is "
+                "actually inconclusive - most searches resolve on their own and should not stop "
+                "to ask.",
                 "- Do NOT call web_search for opinions, the user's own documents, or topics you already know well - avoid unnecessary calls.",
                 "- The web_search results are shown to the user as sources, so prefer it whenever a claim benefits from a citation.",
                 "",
