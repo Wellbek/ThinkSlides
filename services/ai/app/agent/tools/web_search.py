@@ -24,7 +24,7 @@ import time
 from app import ai_settings
 from app.agent.registry import ToolParameter, ToolRegistry, ToolResult
 from app.agent.run_context import get_search_config
-from app.agent.tools.search_backends import run_search
+from app.agent.tools.search_backends import normalize_recency, recency_supported, run_search
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -99,33 +99,55 @@ class WebSearchTool:
                     duration_ms=elapsed(),
                 )
 
+            # Validated once here, at the tool boundary, so an off-schema value
+            # from the model never reaches an upstream request body (run_search
+            # normalizes defensively too, but the tool result below needs the
+            # sanitized value to report accurately on what actually happened).
+            requested_recency = recency
+            recency = normalize_recency(recency)
+            if requested_recency and not recency:
+                logger.info(
+                    "web_search_recency_invalid", query=query, requested=requested_recency
+                )
+
             results = await run_search(config, query.strip(), recency=recency)
 
             logger.info(
                 "web_search_completed",
                 query=query,
                 backend=config.backend,
+                recency=recency,
                 result_count=len(results),
                 duration_ms=elapsed(),
             )
+
+            recency_note = None
+            if recency and not recency_supported(config):
+                recency_note = (
+                    f"Requested recency='{recency}', but the configured '{config.backend}' "
+                    "search backend does not support filtering by recency - these results "
+                    "are unfiltered by date. Check each result's published date yourself."
+                )
+                logger.info("web_search_recency_unsupported", backend=config.backend, recency=recency)
 
             if not results:
                 return ToolResult(
                     success=True,
                     data={
                         "query": query,
+                        "recency": recency,
                         "results": [],
                         "result_count": 0,
-                        "note": "No search results returned. Proceed using your existing knowledge.",
+                        "note": recency_note
+                        or "No search results returned. Proceed using your existing knowledge.",
                     },
                     duration_ms=elapsed(),
                 )
 
-            return ToolResult(
-                success=True,
-                data={"query": query, "results": results, "result_count": len(results)},
-                duration_ms=elapsed(),
-            )
+            data = {"query": query, "recency": recency, "results": results, "result_count": len(results)}
+            if recency_note:
+                data["note"] = recency_note
+            return ToolResult(success=True, data=data, duration_ms=elapsed())
         except Exception as e:
             logger.error("web_search_failed", query=query, error=str(e))
             return ToolResult(

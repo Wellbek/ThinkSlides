@@ -50,6 +50,34 @@ FIRECRAWL_BASE_URL = "https://api.firecrawl.dev"
 ANTHROPIC_SEARCH_TOOL = "web_search_20260209"
 ANTHROPIC_SEARCH_TOOL_FALLBACK = "web_search_20250305"
 
+# The only recency values any backend understands. Validated here - not deep
+# inside each backend - so an off-schema value from the model (or from a
+# resumed/replayed tool call) never reaches an upstream API, and every caller
+# that wants to know "is this a real recency value" (the already-run cache
+# check in loop.py included) normalizes the exact same way a real call would.
+VALID_RECENCY = ("day", "week", "month", "year")
+
+
+def normalize_recency(value) -> str:
+    """``value`` if it's a known recency filter, else "" (no filter)."""
+    value = str(value or "").strip().lower()
+    return value if value in VALID_RECENCY else ""
+
+
+def recency_supported(config: SearchConfig) -> bool:
+    """Whether ``run_search``'s ``recency`` argument affects this config's backend.
+
+    Only Zhipu (native, non-Anthropic/OpenAI) and Tavily currently implement
+    a recency filter. Callers use this to warn rather than silently drop the
+    argument when it was requested against a backend that ignores it.
+    """
+    if config.backend == "tavily":
+        return True
+    if config.backend == "native":
+        provider = config.model.provider if config.model else None
+        return provider not in ("anthropic", "openai")
+    return False
+
 
 async def run_search(
     config: SearchConfig, query: str, count: int = DEFAULT_COUNT, recency: str | None = None
@@ -59,10 +87,13 @@ async def run_search(
     ``recency`` asks the backend to bias or filter toward freshly published
     results - "day"/"week"/"month"/"year" (Zhipu's own vocabulary; Tavily's
     ``time_range`` is mapped onto the same four values). Only Zhipu and Tavily
-    support it; other backends silently ignore it rather than erroring, since
-    asking for recency is a hint, not a hard requirement of the tool contract.
+    support it (see ``recency_supported``); other backends silently ignore it
+    rather than erroring, since asking for recency is a hint, not a hard
+    requirement of the tool contract. Always normalized here so an invalid
+    value never reaches an upstream request body.
     """
     start = time.time()
+    recency = normalize_recency(recency)
 
     if config.backend == "native":
         results = await _native_search(config, query, count, recency)
