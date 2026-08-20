@@ -1024,6 +1024,12 @@ func (h *SessionHandler) ReplaceAsset(c *gin.Context) {
 		return
 	}
 
+	orgID := c.GetString("org_id")
+	if orgID == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "No organisation associated with user"})
+		return
+	}
+
 	scope := c.PostForm("scope")
 	if scope != "asset_only" && scope != "keep_both" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "scope must be asset_only or keep_both"})
@@ -1039,11 +1045,16 @@ func (h *SessionHandler) ReplaceAsset(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
+	// Scoped to the caller's own organisation, not just this session/asset
+	// id pair - otherwise an authenticated user who knows or guesses
+	// another org's session_id and asset_id could overwrite that org's
+	// asset. A mismatch reads identically to "not found" so it doesn't leak
+	// whether the id exists in someone else's org.
 	var fileType, originalFilename string
 	var metadataRaw []byte
 	err = h.pool.QueryRow(ctx,
 		`SELECT file_type, original_filename, metadata FROM generated_files
-		 WHERE id = $1 AND session_id = $2`, assetID, sessionID,
+		 WHERE id = $1 AND session_id = $2 AND organisation_id = $3`, assetID, sessionID, orgID,
 	).Scan(&fileType, &originalFilename, &metadataRaw)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
@@ -1127,6 +1138,12 @@ func (h *SessionHandler) ImageReplaceInSlide(c *gin.Context) {
 		return
 	}
 
+	orgID := c.GetString("org_id")
+	if orgID == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "No organisation associated with user"})
+		return
+	}
+
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
@@ -1136,11 +1153,16 @@ func (h *SessionHandler) ImageReplaceInSlide(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
+	// Scoped to the caller's own organisation - without this, an
+	// authenticated user who knows or guesses another org's session_id and
+	// asset_id could trigger a resume that regenerates that org's slide
+	// content with an image they supplied.
 	var fileType string
 	var metadataRaw []byte
 	err = h.pool.QueryRow(ctx,
-		`SELECT file_type, metadata FROM generated_files WHERE id = $1 AND session_id = $2`,
-		assetID, sessionID,
+		`SELECT file_type, metadata FROM generated_files
+		 WHERE id = $1 AND session_id = $2 AND organisation_id = $3`,
+		assetID, sessionID, orgID,
 	).Scan(&fileType, &metadataRaw)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
@@ -1177,7 +1199,7 @@ func (h *SessionHandler) ImageReplaceInSlide(c *gin.Context) {
 		return
 	}
 
-	identity := client.Identity{OrgID: c.GetString("org_id"), UserID: c.GetString("user_id")}
+	identity := client.Identity{OrgID: orgID, UserID: c.GetString("user_id")}
 	result, err := h.aiClient.ReplaceImageInSlide(
 		sessionID, assetID, newPath, header.Filename, header.Size, slideIndex, identity,
 	)
