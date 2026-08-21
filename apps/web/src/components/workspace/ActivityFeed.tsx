@@ -107,6 +107,15 @@ function groupOf(ev: any): PhaseGroupKey | null {
   return STEP_TO_GROUP[step] ?? null;
 }
 
+/** Whether a generated file is the deck itself rather than one of the
+ *  charts or images that went into it. Both are rows in `generated_files`
+ *  and both emit `file_generated`; only the deck is what the run was for. */
+function isDeckFile(ev: any): boolean {
+  const type = String(ev?.fileType || "").toLowerCase();
+  if (type) return type === "pptx";
+  return String(ev?.fileName || "").toLowerCase().endsWith(".pptx");
+}
+
 function toolLabel(toolName: string): string {
   const map: Record<string, string> = {
     analyze_document: "Analyze document",
@@ -229,7 +238,10 @@ interface PhaseBlock {
   questionEvent?: any;
   validationUnresolvedEvent?: any;
   errorEvent?: any;
-  fileGeneratedEvent?: any;
+  /** Every file this block produced - a run writes one row per rendered
+   *  deck plus one per chart or image, and which of them belongs in the
+   *  chat is a question about the file, not about arrival order. */
+  fileGeneratedEvents: any[];
 }
 
 function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closingText: string } {
@@ -295,6 +307,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
       thoughts: [],
       progress: [],
       slideFinalized: [],
+      fileGeneratedEvents: [],
     };
     blocks.push(block);
     if (group === "draft" && revisit && last?.group === "render") {
@@ -398,7 +411,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
         block.errorEvent = ev;
         break;
       case "file_generated":
-        block.fileGeneratedEvent = ev;
+        block.fileGeneratedEvents.push(ev);
         break;
       default:
         break;
@@ -570,12 +583,31 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
   // across three validation attempts keeps its original position in the
   // feed, so its download row rendered above the fixing passes that came
   // after it.
-  const fileGenerated = findLastMatch(blocks, (b) => !!b.fileGeneratedEvent)?.fileGeneratedEvent;
+  // The deck, not the last file the run happened to write. Chart and image
+  // assets are saved to the same table and emit the same event, so picking
+  // the newest one put "slide-4-chart-1.png - 15.4 KB" at the end of the
+  // chat. Assets belong in the Assets panel; the run's own timeline ends
+  // with what it was asked to produce.
+  const fileGenerated = findLastMatch(
+    blocks.flatMap((b) => b.fileGeneratedEvents),
+    (ev) => isDeckFile(ev)
+  );
   // "5 slides finalized" belongs with the finished deck for the same reason
   // the download row does: it hangs off the Render block, which keeps its
   // position at the first validation attempt, so it announced a settled
   // deck above the fixing pass that came after it.
-  const finalized = blocks.flatMap((b) => b.slideFinalized);
+  // Distinct slides, not preview events: every re-render across a
+  // validation retry stages and flushes its own set, so a nine-slide deck
+  // that rendered twice reported "18 slides finalized".
+  const finalized = useMemo(() => {
+    const bySlide = new Map<number, any>();
+    blocks.forEach((b, blockIndex) => {
+      b.slideFinalized.forEach((ev: any, i: number) => {
+        bySlide.set(typeof ev.slideIndex === "number" ? ev.slideIndex : -(blockIndex * 1000 + i), ev);
+      });
+    });
+    return [...bySlide.values()];
+  }, [blocks]);
 
   return (
     <>
