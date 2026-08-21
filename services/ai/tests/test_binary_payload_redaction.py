@@ -72,6 +72,42 @@ def test_a_small_value_in_a_binary_field_is_left_alone(value):
     assert redact_binary(payload)["image"]["data"] == value
 
 
+def test_a_serialised_argument_is_walked_into():
+    """finalize_and_render_pptx is handed the deck already serialised, so the
+    payload is a *string* to anything walking the surrounding dict. One run
+    left 3,937,391 characters of it in a single tool_call row."""
+    import json
+
+    deck = json.dumps({"slides": [
+        {"slideIndex": 0, "contents": [
+            {"type": "image", "image": {"data": _png(), "altText": "a roastery"}},
+        ]},
+    ]})
+    args = {"slides_json": deck, "session_id": "s1"}
+    reduced = redact_binary(args)
+
+    assert len(reduced["slides_json"]) < 300
+    assert "bytes" in reduced["slides_json"]
+    assert "a roastery" in reduced["slides_json"]
+    assert reduced["session_id"] == "s1"
+    # The argument the tool itself is handed is untouched.
+    assert len(args["slides_json"]) > 100_000
+
+
+def test_a_long_string_that_is_not_json_is_left_alone():
+    prose = "x" * 200_000
+    payload = {"brief": prose}
+    assert redact_binary(payload)["brief"] == prose
+
+
+def test_a_serialised_argument_with_no_payload_keeps_its_exact_text():
+    import json
+
+    plan = json.dumps({"slides": [{"title": t} for t in ["a"] * 800]})
+    payload = {"plan_json": plan}
+    assert redact_binary(payload)["plan_json"] == plan
+
+
 def test_a_payload_with_nothing_to_strip_is_returned_as_is():
     payload = {"slideIndex": 2, "summary": "done", "items": [1, 2, 3]}
     assert redact_binary(payload) is payload

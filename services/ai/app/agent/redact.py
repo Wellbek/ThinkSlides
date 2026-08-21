@@ -26,6 +26,7 @@ the id server-side.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 # Fields whose value is a base64 blob rather than something to read.
@@ -36,11 +37,38 @@ BINARY_FIELDS = ("data", "renderedPng", "imageData", "pngBase64")
 # no benefit.
 MIN_REDACTED_CHARS = 512
 
+# Several tool arguments are handed over already serialised - slides_json,
+# prepared_visuals, selected_image_context - so the payload is a *string*
+# to anything walking the surrounding dict, and a walk that only looks at
+# dicts and lists sails straight past it. finalize_and_render_pptx is the
+# case that matters: it is given the deck's real JSON, images included,
+# and needs it, but the event announcing the call does not.
+MIN_NESTED_JSON_CHARS = 4096
+
 
 def _placeholder(value: str) -> str:
     """What stands in for the bytes: enough to reason about, not to carry."""
     # base64 is 4 characters per 3 bytes.
     return f"<{len(value) * 3 // 4} bytes, held by the run>"
+
+
+def _redact_serialised(value: str) -> str:
+    """The same JSON string with its binary fields replaced.
+
+    Parsed and re-serialised rather than pattern-matched: a regex over
+    base64 would have to guess where a payload starts and stops, and would
+    happily mangle a long ordinary string that happened to look like one.
+    """
+    if value[:1] not in ("{", "["):
+        return value
+    try:
+        parsed = json.loads(value)
+    except (ValueError, TypeError):
+        return value
+    reduced = redact_binary(parsed)
+    if reduced is parsed:
+        return value
+    return json.dumps(reduced)
 
 
 def redact_binary(payload: Any) -> Any:
@@ -49,6 +77,12 @@ def redact_binary(payload: Any) -> Any:
     Returns the argument itself when nothing needed replacing, so the common
     case costs one walk and no allocation.
     """
+    if isinstance(payload, str):
+        if len(payload) >= MIN_NESTED_JSON_CHARS:
+            reduced = _redact_serialised(payload)
+            if reduced is not payload:
+                return reduced
+        return payload
     if isinstance(payload, dict):
         changed = False
         out: dict[str, Any] = {}
