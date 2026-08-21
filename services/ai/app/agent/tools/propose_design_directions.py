@@ -143,13 +143,25 @@ class ProposeDesignDirectionsTool:
             proposed, content, palettes, problems = await cls._author(
                 brief, answers, brand_hex, uploaded
             )
-            fell_back = not proposed
-            if fell_back:
-                # The floor, not a failure: a user still gets a choice between
-                # three coherent directions, and the run still proceeds.
-                logger.warning("design_directions_fell_back", problems=problems[:3])
-                proposed = direction_model.default_directions(brand_hex)
-                palettes = []
+            wanted = (direction_model.DIRECTION_COUNT - 1) if uploaded \
+                else direction_model.DIRECTION_COUNT
+            # Topped up, not replaced. A set used to be discarded whole when
+            # any one direction failed, so a single hue that missed WCAG AA
+            # by 1.3:1 cost the user the two that passed, the palettes, and
+            # the specimen copy written about this deck - and every run
+            # showed the same built-in three in the house navy. What
+            # survived leads; the built-ins make up the number.
+            authored_ids = {d.get("id") for d in proposed}
+            proposed = direction_model.top_up(
+                proposed, wanted, brand_hex,
+                seeds=[hex_value for _, hex_value in palettes],
+            )
+            authored = sum(1 for d in proposed if d.get("id") in authored_ids)
+            if authored < wanted:
+                logger.warning("design_directions_topped_up",
+                               authored=authored, wanted=wanted,
+                               problems=problems[:3])
+            fell_back = authored == 0
 
             if uploaded is not None:
                 proposed = [direction_model.template_direction(uploaded)] + \
@@ -196,6 +208,7 @@ class ProposeDesignDirectionsTool:
                 brand_color=brand_hex,
                 asks_colour=asks_colour,
                 authored_content=content is not None,
+                authored_directions=authored,
                 from_template=uploaded is not None,
                 fell_back=fell_back,
                 duration_ms=duration_ms,
@@ -239,6 +252,11 @@ class ProposeDesignDirectionsTool:
         wanted = (direction_model.DIRECTION_COUNT - 1) if uploaded else \
             direction_model.DIRECTION_COUNT
         problems: list[str] = []
+        # The best attempt so far, kept so a short set is still worth
+        # something. Discarding everything because one direction of three
+        # was unusable is what made every run show the built-in three.
+        best: tuple[list[dict], specimen.SpecimenContent | None,
+                    list[tuple[str, str]]] = ([], None, [])
 
         for attempt in range(MAX_ATTEMPTS):
             prompt = _prompt(brief, answers, brand_hex, uploaded, wanted, problems)
@@ -265,22 +283,28 @@ class ProposeDesignDirectionsTool:
             compiled, problems = direction_model.validate(
                 specs[:wanted], brand_hex, uploaded
             )
+            # None, rather than the default set, when the model wrote no
+            # copy: the specimen deck falls back to it either way, and
+            # "authored" in the log should mean it.
+            written = payload.get("content")
+            attempt_result = (
+                compiled,
+                specimen.SpecimenContent.from_dict(written)
+                if isinstance(written, dict) else None,
+                _palettes(payload.get("colorOptions")),
+            )
+            if len(compiled) > len(best[0]):
+                best = attempt_result
             # With a template in play the set is smaller by one, so "only two
             # of three survived" is the expected count rather than a failure.
             fatal = [p for p in problems if "survived" not in p] if uploaded else problems
             if compiled and len(compiled) >= wanted and not fatal:
-                # None, rather than the default set, when the model wrote no
-                # copy: the specimen deck falls back to it either way, and
-                # "authored" in the log should mean it.
-                written = payload.get("content")
-                return (compiled,
-                        specimen.SpecimenContent.from_dict(written)
-                        if isinstance(written, dict) else None,
-                        _palettes(payload.get("colorOptions")),
-                        [])
+                return (*attempt_result, [])
             logger.info("design_directions_rejected", attempt=attempt + 1,
                         problems=problems[:3])
-        return [], None, [], problems
+        # Whatever survived, even if it is short - the caller tops it up from
+        # the built-ins rather than replacing it.
+        return (*best, problems)
 
 
 def _prompt(brief: str, answers: str, brand_hex: str | None,

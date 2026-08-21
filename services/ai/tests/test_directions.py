@@ -618,14 +618,35 @@ class TestProposingDirections:
             assert direction["spec"]["structure"]
 
     @pytest.mark.asyncio
-    async def test_a_model_that_never_produces_a_set_falls_back(
+    async def test_a_model_that_never_produces_a_set_is_topped_up(
             self, monkeypatch, no_previews):
+        """Three directions on one ground is not a set, but it is not
+        nothing either: the first is a real direction the model wrote for
+        this subject, and only the duplicates behind it need replacing.
+        Discarding the lot is what made every run show the built-in three."""
         tool = _install(monkeypatch, _StubLLM(HUE_ONLY, HUE_ONLY))
+
+        result = await tool.run(brief="a deck", session_id="s1")
+        proposed = result.data["directions"]
+
+        assert result.success
+        assert len(proposed) == 3
+        # What the model authored leads, and the built-ins make up the number.
+        assert proposed[0]["id"] == "d0"
+        default_ids = {s.id for s in directions.default_specs()}
+        assert {d["id"] for d in proposed[1:]} <= default_ids
+        # And the floor still holds: no two of them render the same cover.
+        grounds = [d["spec"]["ground"] for d in proposed]
+        assert len(set(grounds)) == 3
+
+    @pytest.mark.asyncio
+    async def test_a_model_that_answers_with_nothing_at_all_falls_back(
+            self, monkeypatch, no_previews):
+        tool = _install(monkeypatch, _StubLLM({"nope": True}, {"nope": True}))
 
         result = await tool.run(brief="a deck", session_id="s1")
 
         assert result.success
-        assert len(result.data["directions"]) == 3
         assert [d["id"] for d in result.data["directions"]] == \
             [s.id for s in directions.default_specs()]
 
