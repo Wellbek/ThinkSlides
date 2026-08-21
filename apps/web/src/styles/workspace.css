@@ -1025,7 +1025,10 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
 .ws-dot-revisit { background: var(--ws-orange-bg); border: 1px solid var(--ws-orange-border); color: var(--ws-orange-text); }
 
 .ws-phase-head { display: flex; align-items: center; gap: 8px; }
-.ws-phase-name { font-size: 13.5px; font-weight: 600; color: #DDD; }
+/* The phase's name holds its width; it is the reason pill beside it that
+   gives way on a narrow panel, since a truncated reason still reads and a
+   phase broken across three lines does not. */
+.ws-phase-name { font-size: 13.5px; font-weight: 600; color: #DDD; flex-shrink: 0; }
 
 /* A revisited phase's dot carries a small badge naming what kind of
    revisit it is - self-contained and anchored only to its own dot, not a
@@ -1051,9 +1054,50 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
   border: 1px solid var(--ws-revisit-c, var(--ws-red-text));
   color: var(--ws-revisit-c, var(--ws-red-text));
   background: var(--ws-revisit-c-bg, var(--ws-red-bg));
+  white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  display: inline-flex; align-items: baseline;
+}
+
+/* ---- The retry back-edge ----
+   A validation failure is a loop: the fix re-triggers the same Render &
+   Validate step rather than adding a new one. Two boxes said nothing about
+   that, so a dashed rail joins them down the feed's left gutter, carrying
+   the number of times round.
+
+   Every segment is sized by its own item's rendered height and drawn inside
+   that item, so consecutive segments always meet however tall the content
+   turns out to be - no coordinate anywhere is guessed, and nothing has to
+   track where a far-away element ended up as the feed streams and scrolls. */
+.ws-feed.has-loop { padding-left: 56px; }
+
+.ws-loop-rail {
+  position: absolute; left: -32px; top: 0; bottom: 0; width: 16px;
+  pointer-events: none; color: var(--ws-revisit-c, var(--ws-red-text));
+}
+.ws-loop-rail-line { position: absolute; left: 0; width: 0; border-left: 1.5px dashed currentColor; }
+/* 11px is the dot's own centre: 2px of margin-top plus half of its 18px. */
+.ws-loop-rail.start .ws-loop-rail-line { top: 11px; bottom: 0; }
+.ws-loop-rail.pass  .ws-loop-rail-line { top: 0; bottom: 0; }
+.ws-loop-rail.end   .ws-loop-rail-line { top: 0; height: 11px; }
+.ws-loop-rail-tick {
+  position: absolute; left: 0; top: 11px; width: 16px; height: 0;
+  border-top: 1.5px dashed currentColor;
+}
+.ws-loop-rail-badge {
+  /* Centred on the rail and lifted clear of the tick, so it interrupts the
+     dashed line the way a label on an edge should rather than floating
+     beside it - and so it never lands under the panel's own left border. */
+  position: absolute; left: 50%; transform: translateX(-50%); top: -7px;
+  font-family: var(--ws-font-code); font-size: 9.5px; line-height: 1.5;
+  color: currentColor; background: var(--ws-bg);
+  padding: 0 4px; border-radius: 4px; border: 1px solid currentColor;
   white-space: nowrap;
 }
-.ws-revisit-pill .attempt-count { font-family: var(--ws-font-code); opacity: 0.75; margin-left: 3px; }
+
+/* Says out loud what the rail draws, for anyone reading rather than
+   scanning - and for a screen reader, which the rail itself is hidden from. */
+.ws-loop-caption { margin-top: 6px; font-size: 10.5px; color: var(--ws-text-muted); }
+.ws-loop-caption::before { content: "\2191\00a0"; }
 
 /* Validator detail, when there is any: a subordinate line under the
    header, not swapped in as the whole message the way the old backtrack
@@ -1082,13 +1126,24 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
 .ws-phase-check-row {
   padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--ws-border);
 }
+
+/* The raw tool-call time, beside the step's full process span. A tooltip
+   nobody discovers is not the same as showing the number, and the approved
+   design shows it. */
+.ws-step-subdur {
+  font-family: var(--ws-font-code); font-size: 9.5px;
+  color: var(--ws-text-ghost); margin-left: 6px; white-space: nowrap;
+}
 .ws-phase-check-row:last-child { border-bottom: none; }
 .ws-check-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ws-check-icon { width: 14px; flex-shrink: 0; text-align: center; font-size: 11px; }
 .ws-check-icon.ok { color: var(--ws-green-text); }
 .ws-check-icon.bad { color: var(--ws-red-text); }
 .ws-check-icon.run { color: var(--ws-ai-text); }
-.ws-check-label { color: #CCC; flex-shrink: 0; }
+/* The label yields first when a row runs out of width. Before this it was
+   the durations and the Raw button that got pushed off the right edge of a
+   narrow panel, which is the wrong half to lose. */
+.ws-check-label { color: #CCC; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Wraps rather than truncating: the chat panel is narrow enough that a
    one-line ellipsis was cutting "Slide 2 drafted: Why Cats Sleep So Much."
    down to "Slide 2 dr...", losing the one thing the row exists to say. */
