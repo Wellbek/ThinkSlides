@@ -520,3 +520,207 @@ def test_firecrawl_without_metadata_claims_no_date():
         "data": {"web": [{"url": "https://a.com", "title": "A", "description": "x"}]}
     })
     assert parsed[0]["published"] == ""
+
+
+# ── OpenAI: the Responses API route ────────────────────────────────────
+
+
+class _RecordingOpenAI:
+    """A client that records the call and answers with one cited result."""
+
+    RESPONSES_ANSWER = _Obj(output=[_Obj(content=[_Obj(
+        type="output_text",
+        text="Everest is 8,849 m tall.",
+        annotations=[{
+            "type": "url_citation", "url": "https://nat-geo.example/everest",
+            "title": "Everest", "start_index": 0, "end_index": 24,
+        }],
+    )])])
+
+    def __init__(self, **kwargs):
+        self.seen: dict = {}
+        outer = self
+
+        class _Responses:
+            async def create(self, **kwargs):
+                outer.seen["responses"] = kwargs
+                if outer.responses_error:
+                    raise outer.responses_error
+                return outer.RESPONSES_ANSWER
+
+        class _Completions:
+            async def create(self, **kwargs):
+                outer.seen["chat"] = kwargs
+                return _Obj(choices=[_Obj(message=_Obj(content="", annotations=None))])
+
+        self.responses = _Responses()
+        self.chat = _Obj(completions=_Completions())
+        self.responses_error: Exception | None = None
+        _RecordingOpenAI.last = self
+
+
+@pytest.mark.asyncio
+async def test_a_current_model_searches_through_the_responses_api():
+    """Regression: the '-search-preview' models this used to need are retired.
+
+    Chat completions' web_search_options only ever worked on those, so after
+    they shut down on 23 July 2026 there was no model left that could search
+    this way. The Responses API's web_search tool is model-agnostic.
+    """
+    import openai
+
+    with patch.object(openai, "AsyncOpenAI", _RecordingOpenAI):
+        results = await search_backends._openai_search(
+            SearchConfig(
+                backend="native",
+                model=ProviderCredentials("openai", "gpt-5.6-terra", "sk-test"),
+            ),
+            "how tall is everest",
+            5,
+        )
+
+    seen = _RecordingOpenAI.last.seen
+    assert "chat" not in seen, "must not fall back to the retired route"
+    assert seen["responses"]["model"] == "gpt-5.6-terra"
+    # A named argument the installed SDK does not know is a TypeError before
+    # any request is made; extra_body is forwarded verbatim on every version.
+    assert seen["responses"]["extra_body"]["tools"] == [{"type": "web_search"}]
+    assert results == [{
+        "title": "Everest",
+        "url": "https://nat-geo.example/everest",
+        "snippet": "Everest is 8,849 m tall.",
+        "source": "nat-geo.example",
+        "published": "",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_search_model_still_takes_the_chat_completions_route():
+    """A deployment still pointed at a search-preview model keeps working."""
+    import openai
+
+    with patch.object(openai, "AsyncOpenAI", _RecordingOpenAI):
+        await search_backends._openai_search(
+            SearchConfig(
+                backend="native",
+                model=ProviderCredentials("openai", "gpt-4o-search-preview", "sk-test"),
+            ),
+            "how tall is everest",
+            5,
+        )
+
+    seen = _RecordingOpenAI.last.seen
+    assert "responses" not in seen
+    assert seen["chat"]["extra_body"] == {"web_search_options": {}}
+
+
+@pytest.mark.asyncio
+async def test_an_endpoint_without_a_responses_api_falls_back():
+    """An OpenAI-compatible proxy may implement chat completions and nothing else."""
+    import openai
+
+    def _factory(**kwargs):
+        client = _RecordingOpenAI(**kwargs)
+        client.responses_error = Exception("Error code: 404 - {'error': 'Not Found'}")
+        return client
+
+    with patch.object(openai, "AsyncOpenAI", _factory):
+        await search_backends._openai_search(
+            SearchConfig(
+                backend="native",
+                model=ProviderCredentials(
+                    "openai", "local-model", "sk-test", base_url="http://proxy/v1"
+                ),
+            ),
+            "how tall is everest",
+            5,
+        )
+
+    assert "chat" in _RecordingOpenAI.last.seen
+
+
+@pytest.mark.asyncio
+async def test_a_real_search_failure_is_not_hidden_by_the_fallback():
+    """Only "no such endpoint" falls back - a bad key must surface as itself."""
+    import openai
+
+    def _factory(**kwargs):
+        client = _RecordingOpenAI(**kwargs)
+        client.responses_error = Exception("Incorrect API key provided: sk-***.")
+        return client
+
+    with patch.object(openai, "AsyncOpenAI", _factory), \
+            pytest.raises(Exception, match="Incorrect API key"):
+        await search_backends._openai_search(
+            SearchConfig(
+                backend="native",
+                model=ProviderCredentials("openai", "gpt-5.6-terra", "sk-test"),
+            ),
+            "how tall is everest",
+            5,
+        )
+
+
+def test_the_responses_parser_reads_typed_annotations_too():
+    """Newer SDKs return models, not dicts, and nest nothing under url_citation."""
+    parsed = search_backends.parse_openai_response_annotations(
+        _Obj(output=[_Obj(content=[_Obj(
+            text="Everest is 8,849 m tall.",
+            annotations=[_Obj(
+                type="url_citation", url="https://a.example/e", title="E",
+                start_index=0, end_index=24,
+            )],
+        )])])
+    )
+
+    assert [r["url"] for r in parsed] == ["https://a.example/e"]
+    assert parsed[0]["snippet"] == "Everest is 8,849 m tall."
+
+
+@pytest.mark.asyncio
+async def test_a_missing_model_is_not_mistaken_for_a_missing_endpoint():
+    """Both are 404s. Only one is worth a second, equally doomed request."""
+    import openai
+
+    def _factory(**kwargs):
+        client = _RecordingOpenAI(**kwargs)
+        client.responses_error = Exception(
+            "Error code: 404 - The model 'gpt-5.7' does not exist."
+        )
+        return client
+
+    with patch.object(openai, "AsyncOpenAI", _factory), \
+            pytest.raises(Exception, match="does not exist"):
+        await search_backends._openai_search(
+            SearchConfig(
+                backend="native",
+                model=ProviderCredentials("openai", "gpt-5.7", "sk-test"),
+            ),
+            "how tall is everest",
+            5,
+        )
+
+    assert "chat" not in _RecordingOpenAI.last.seen
+
+
+@pytest.mark.asyncio
+async def test_an_sdk_without_a_responses_api_falls_back():
+    """A pinned-back openai SDK raises AttributeError before any request."""
+    import openai
+
+    class _OldSdk(_RecordingOpenAI):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            del self.responses
+
+    with patch.object(openai, "AsyncOpenAI", _OldSdk):
+        await search_backends._openai_search(
+            SearchConfig(
+                backend="native",
+                model=ProviderCredentials("openai", "gpt-5.6-terra", "sk-test"),
+            ),
+            "how tall is everest",
+            5,
+        )
+
+    assert "chat" in _RecordingOpenAI.last.seen

@@ -469,12 +469,55 @@ def parse_anthropic_citations(response) -> list[dict]:
 OPENAI_SNIPPET_CHARS = 400
 
 
-async def _openai_search(config: SearchConfig, query: str, count: int) -> list[dict]:
-    """Search through OpenAI's ``web_search_options``.
+SEARCH_INSTRUCTION = "Report the key facts, citing sources."
 
-    Only the ``-search-preview`` models support this through chat completions;
-    the settings layer refuses the native backend for any other model, so by the
-    time we get here the model is known to be a search model.
+# The chat-completions route to OpenAI search only ever worked on purpose-built
+# search models, and those are named, finite, and retired on a schedule: the
+# gpt-4o `-search-preview` pair shut down on 23 July 2026. Everything current
+# searches through the Responses API instead, which is model-agnostic. These
+# names exist only to keep a legacy or proxied deployment working - a model not
+# listed here takes the Responses route, so a new model id needs no change here.
+OPENAI_CHAT_COMPLETIONS_SEARCH_MODELS = (
+    "gpt-4o-search-preview",
+    "gpt-4o-mini-search-preview",
+    "gpt-5-search-api",
+)
+
+# What a request to /responses looks like when the endpoint has never heard of
+# it - a third-party service that emulates chat completions and nothing else.
+_NO_ENDPOINT_MARKERS = ("404", "not found", "unknown path", "unrecognized request")
+# ... and what it looks like when the endpoint is fine and the model is not.
+# Checked first, because that 404 must surface as itself rather than sending a
+# second doomed request down the legacy route.
+_MODEL_MISSING_MARKERS = (
+    "does not exist", "no such model", "model not found", "unknown model",
+)
+
+
+def _endpoint_lacks_responses_api(exc: Exception) -> bool:
+    """Whether this failure means "no such endpoint", not "bad request"."""
+    if isinstance(exc, AttributeError):
+        return True  # an openai SDK predating the Responses API
+    text = str(exc).lower()
+    if any(marker in text for marker in _MODEL_MISSING_MARKERS):
+        return False
+    return any(marker in text for marker in _NO_ENDPOINT_MARKERS)
+
+
+def _uses_chat_completions_search(model: str) -> bool:
+    """Whether this model searches the old way, through web_search_options."""
+    return any(name in model for name in OPENAI_CHAT_COMPLETIONS_SEARCH_MODELS)
+
+
+async def _openai_search(config: SearchConfig, query: str, count: int) -> list[dict]:
+    """Search through OpenAI's built-in web search.
+
+    Two routes, because OpenAI moved the feature. The Responses API's
+    ``web_search`` tool works with the ordinary reasoning models and is the only
+    route with a future; ``web_search_options`` on chat completions works only
+    with the retired search-preview models. Current models take the first route,
+    named legacy models take the second, and an endpoint that has no /responses
+    at all falls back rather than failing.
     """
     from openai import AsyncOpenAI
 
@@ -484,67 +527,121 @@ async def _openai_search(config: SearchConfig, query: str, count: int) -> list[d
         client_kwargs["base_url"] = credentials.base_url
     client = AsyncOpenAI(**client_kwargs)
 
-    # Passed via extra_body rather than as a named argument: web_search_options
-    # postdates the SDK version this service pins, and a named argument the
-    # installed SDK does not know raises TypeError before any request is made.
-    # extra_body is forwarded to the API verbatim, so this works on old and new
-    # SDKs alike. The annotations come back as plain dicts on older SDKs, which
-    # parse_openai_annotations already handles.
+    if _uses_chat_completions_search(credentials.model):
+        return await _openai_chat_completions_search(client, credentials.model, query)
+
+    try:
+        return await _openai_responses_search(client, credentials.model, query, count)
+    except Exception as exc:  # noqa: BLE001 - only the "no such endpoint" case
+        if not _endpoint_lacks_responses_api(exc):
+            raise
+        logger.info(
+            "openai_search_falling_back_to_chat_completions",
+            model=credentials.model,
+            error=str(exc)[:200],
+        )
+        return await _openai_chat_completions_search(client, credentials.model, query)
+
+
+async def _openai_responses_search(
+    client, model: str, query: str, count: int
+) -> list[dict]:
+    """Search with the Responses API's ``web_search`` tool.
+
+    The tool is passed through ``extra_body`` for the same reason
+    web_search_options is below - a named argument the installed SDK does not
+    know raises TypeError before any request leaves the process, while
+    extra_body is forwarded verbatim on every SDK version.
+    """
+    response = await client.responses.create(
+        model=model,
+        input=f"Search the web for: {query}\n\n{SEARCH_INSTRUCTION}",
+        extra_body={
+            "tools": [{"type": "web_search"}],
+            "max_tool_calls": max(1, count // 4),
+        },
+    )
+    return parse_openai_response_annotations(response)
+
+
+async def _openai_chat_completions_search(client, model: str, query: str) -> list[dict]:
+    """Search with ``web_search_options``, the route the retired models used."""
     response = await client.chat.completions.create(
-        model=credentials.model,
+        model=model,
         messages=[{
             "role": "user",
-            "content": f"Search the web for: {query}\n\nReport the key facts, citing sources.",
+            "content": f"Search the web for: {query}\n\n{SEARCH_INSTRUCTION}",
         }],
         extra_body={"web_search_options": {}},
     )
     return parse_openai_annotations(response)
 
 
-def parse_openai_annotations(response) -> list[dict]:
-    """Turn ``url_citation`` annotations into normalized results.
+def parse_openai_response_annotations(response) -> list[dict]:
+    """Turn a Responses API answer into normalized results.
 
-    OpenAI reports citations as offsets into the answer text rather than as
-    quoted snippets, so the snippet is the slice of the answer the citation
-    points at.
+    Same ``url_citation`` annotations as chat completions, one level deeper:
+    the response carries ``output`` items, message items carry ``content``
+    blocks, and the annotations hang off the ``output_text`` blocks.
     """
+    results: list[dict] = []
+    for item in _attr(response, "output") or []:
+        for block in _attr(item, "content") or []:
+            text = _attr(block, "text") or ""
+            for annotation in _attr(block, "annotations") or []:
+                result = _openai_citation(annotation, text)
+                if result:
+                    results.append(result)
+    return results
+
+
+def _attr(obj, name):
+    """Read one field off a dict or a typed SDK model, whichever came back."""
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _openai_citation(annotation, content: str) -> dict | None:
+    """One ``url_citation`` annotation, normalized against its answer text.
+
+    OpenAI reports citations as offsets into the answer rather than as quoted
+    snippets, so the snippet is the slice of the answer the citation points at.
+    In the Responses API the citation's fields sit on the annotation itself; in
+    chat completions they sit under a nested ``url_citation``.
+    """
+    citation = _attr(annotation, "url_citation") or annotation
+    url = _attr(citation, "url")
+    if not url:
+        return None
+    start, end = _attr(citation, "start_index"), _attr(citation, "end_index")
+
+    if isinstance(start, int) and isinstance(end, int) and content:
+        snippet = content[max(0, start - OPENAI_SNIPPET_CHARS):end].strip()
+    else:
+        snippet = content[:OPENAI_SNIPPET_CHARS].strip()
+
+    return {
+        "title": _attr(citation, "title") or url,
+        "url": url,
+        "snippet": snippet,
+        "source": host_from_url(url),
+        # OpenAI's url_citation annotations carry no date.
+        "published": "",
+    }
+
+
+def parse_openai_annotations(response) -> list[dict]:
+    """Turn a chat-completions answer's ``url_citation`` annotations into results."""
     choices = getattr(response, "choices", None) or []
     if not choices:
         return []
     message = choices[0].message
     content = getattr(message, "content", "") or ""
-    annotations = getattr(message, "annotations", None) or []
 
     results: list[dict] = []
-    for annotation in annotations:
-        citation = (
-            annotation.get("url_citation") if isinstance(annotation, dict)
-            else getattr(annotation, "url_citation", None)
-        )
-        if citation is None:
-            continue
-        if isinstance(citation, dict):
-            url, title = citation.get("url"), citation.get("title")
-            start, end = citation.get("start_index"), citation.get("end_index")
-        else:
-            url, title = getattr(citation, "url", None), getattr(citation, "title", None)
-            start = getattr(citation, "start_index", None)
-            end = getattr(citation, "end_index", None)
-        if not url:
-            continue
-
-        if isinstance(start, int) and isinstance(end, int) and content:
-            window_start = max(0, start - OPENAI_SNIPPET_CHARS)
-            snippet = content[window_start:end].strip()
-        else:
-            snippet = content[:OPENAI_SNIPPET_CHARS].strip()
-
-        results.append({
-            "title": title or url,
-            "url": url,
-            "snippet": snippet,
-            "source": host_from_url(url),
-            # OpenAI's url_citation annotations carry no date.
-            "published": "",
-        })
+    for annotation in getattr(message, "annotations", None) or []:
+        result = _openai_citation(annotation, content)
+        if result:
+            results.append(result)
     return results
