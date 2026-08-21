@@ -7,6 +7,7 @@ from __future__ import annotations
 from app.agent import run_context
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import require_chat_provider
+from app.agent.tools._today import today_line
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app import budget as budget_model
 from app.measure import archetypes as archetype_model
@@ -319,7 +320,9 @@ class PlanPresentationStructureTool:
             )
             chapter_info = _chapter_guidance(parsed_ds)
 
-            prompt = f"""Plan a presentation structure based on the following:
+            prompt = f"""{today_line()}
+
+Plan a presentation structure based on the following:
 
 Content Summary:
 {content_summary[:6000]}

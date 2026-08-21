@@ -11,6 +11,7 @@ from app.agent.run_context import require_chat_provider
 from app import budget as budget_model
 from app import titles
 from app.measure import grammar as grammar_model
+from app.agent.tools._today import today_line
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.observability.logging import get_logger
 import json
@@ -315,7 +316,9 @@ Design System Context:
                     rendered=title_register, reason=register_note,
                 )
 
-            prompt = f"""Generate content for a single presentation slide.
+            prompt = f"""{today_line()}
+
+Generate content for a single presentation slide.
 
 Slide Outline:
 {json.dumps(outline, indent=2)}
