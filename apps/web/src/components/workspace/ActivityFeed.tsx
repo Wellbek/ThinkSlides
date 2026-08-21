@@ -1416,6 +1416,9 @@ function SourceLink({ source }: { source: SourceInfo }) {
       title={source.url}
     >
       {favicon && !imgFailed ? (
+        // next/image would need this third-party host allow-listed in
+        // next.config and buys nothing for a 16px favicon.
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={favicon}
           alt=""
