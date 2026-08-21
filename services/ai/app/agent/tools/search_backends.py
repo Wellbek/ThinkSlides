@@ -32,6 +32,7 @@ import jwt
 
 from app.ai_settings import SearchConfig
 from app.config import settings
+from app.agent.tools._today import today_line
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -451,6 +452,7 @@ async def _anthropic_search(config: SearchConfig, query: str, count: int) -> lis
         "messages": [{
             "role": "user",
             "content": (
+                f"{today_line()}\n\n"
                 f"Search the web for: {query}\n\n"
                 "Report the key facts you find. Cite every claim - the citations "
                 "are the actual output being collected."
@@ -546,7 +548,10 @@ async def _openai_search(config: SearchConfig, query: str, count: int) -> list[d
         model=credentials.model,
         messages=[{
             "role": "user",
-            "content": f"Search the web for: {query}\n\nReport the key facts, citing sources.",
+            "content": (
+                f"{today_line()}\n\nSearch the web for: {query}\n\n"
+                "Report the key facts, citing sources."
+            ),
         }],
         extra_body={"web_search_options": {}},
     )

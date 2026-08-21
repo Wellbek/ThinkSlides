@@ -6,6 +6,7 @@ Pulls specific data points (metrics, dates, names, figures) from analyzed docume
 from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import require_chat_provider
+from app.agent.tools._today import today_line
 from app.agent.tools._json_extract import extract_json_object
 from app.observability.logging import get_logger
 import time
@@ -96,7 +97,9 @@ class ExtractKeyDataTool:
             detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
             max_chars = _DETAIL_MAX_CHARS.get(detail_level, _DETAIL_MAX_CHARS["detailed"])
 
-            prompt = f"""Extract key data points from the following content.
+            prompt = f"""{today_line()}
+
+Extract key data points from the following content.
 Focus on: {data_types}
 
 {detail_guidance}

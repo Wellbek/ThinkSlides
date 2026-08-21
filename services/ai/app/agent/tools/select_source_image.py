@@ -14,6 +14,7 @@ and folds it into the corresponding slide's content.
 """
 
 from __future__ import annotations
+from app.agent.tools._today import today_line
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import require_chat_provider
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
@@ -84,7 +85,9 @@ class SelectSourceImageTool:
                 for entry in catalog if isinstance(entry, dict) and entry.get("id")
             )
 
-            prompt = f"""A slide in a presentation covers: "{slide_topic}"
+            prompt = f"""{today_line()}
+
+A slide in a presentation covers: "{slide_topic}"
 
 Here are images already available (extracted from the user's own uploaded documents, or found via web search) - NOT images to be generated:
 {catalog_lines}

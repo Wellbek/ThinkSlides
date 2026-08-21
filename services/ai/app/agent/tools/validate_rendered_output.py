@@ -22,6 +22,7 @@ import shutil
 import tempfile
 import time
 
+from app.agent.tools._today import today_line
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools import output_qa
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
@@ -347,6 +348,7 @@ class ValidateRenderedOutputTool:
 
                     response = await vision_provider.chat_with_images(
                         prompt=(
+                            f"{today_line()}\n\n"
                             "Look at this presentation slide screenshot. Reply with ONLY a JSON "
                             'object: {"hasIssue": true|false, "issue": "one short sentence, or '
                             'empty string"}. Only flag a genuine visual defect - overlapping '

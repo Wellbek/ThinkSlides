@@ -9,6 +9,7 @@ from typing import Optional
 import asyncio
 
 from app import ai_settings
+from app.agent.tools._today import today_line
 from app.db.session import get_db
 from app.db.models import Template, DesignSystemBundle
 from app.agent.tools.extract_template_design_system import ExtractTemplateDesignSystemTool
@@ -66,7 +67,10 @@ async def stream_analysis(file_path: str, name: str, org_id: str, db: AsyncSessi
     # that will generate with this template. A workspace that has configured
     # nothing still gets its template: the design system above is parsed from
     # the file itself, and only this cosmetic summary needs a model.
-    prompt = f"""Analyze this design system in 2-3 sentences:\n{json.dumps(design_system, indent=2)}"""
+    prompt = (
+        f"{today_line()}\n\n"
+        f"Analyze this design system in 2-3 sentences:\n{json.dumps(design_system, indent=2)}"
+    )
     full_analysis = ""
     credentials = ai_settings.resolve_chat_credentials(
         await ai_settings.load_row(db, uuid.UUID(org_id))

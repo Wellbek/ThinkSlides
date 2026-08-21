@@ -10,6 +10,7 @@ generating new ones.
 """
 
 from __future__ import annotations
+from app.agent.tools._today import today_line
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.run_context import require_chat_provider
 from app.observability.logging import get_logger
@@ -161,6 +162,7 @@ class AnalyzeDocumentTool:
             try:
                 response = await llm.chat(
                     messages=[{"role": "user", "content": (
+                        f"{today_line()}\n\n"
                         "Summarize the following document excerpt for use in writing a "
                         "presentation. Preserve concrete facts, figures, names, and dates - "
                         "do not lose specific details in favor of vague generalities.\n\n"
