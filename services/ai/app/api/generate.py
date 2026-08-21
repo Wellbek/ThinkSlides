@@ -474,6 +474,19 @@ async def _run_agent(
                                     "slideCount": slide_count,
                                     "timestamp": datetime.datetime.utcnow().isoformat(),
                                 }
+                                # Persisted like every other event, so a
+                                # reloaded session still shows the deck at
+                                # the end of its own timeline rather than
+                                # only in the side panel.
+                                db.add(AgentEvent(
+                                    session_id=session_id,
+                                    message_id=assistant_message_id,
+                                    event_type="file_generated",
+                                    phase=file_event["phase"],
+                                    content={},
+                                    raw_event=file_event,
+                                ))
+                                await db.commit()
                                 pub_result = await redis_client.publish(
                                     f"agent:events:{session_id}", json.dumps(file_event, default=str)
                                 )
