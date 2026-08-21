@@ -82,6 +82,54 @@ class AnswerQuestionRequest(BaseModel):
     assistant_message_id: str | None = None
 
 
+def _generated_summary(generated_files: list[dict]) -> str:
+    """What the run produced, said once.
+
+    Every render across a validation retry appends its own deck row plus a
+    fresh copy of every chart, so listing the lot gave "Presentation
+    generated: deck.pptx, slide-2-chart-1.png, slide-4-chart-1.png,
+    deck.pptx, slide-2-chart-1.png, slide-2-chart-2.png,
+    slide-4-chart-1.png". The deck is what was asked for; the images are a
+    count, and they are already listed in the Assets panel.
+    """
+    decks: list[str] = []
+    images = set()
+    for entry in generated_files:
+        name = str(entry.get("fileName") or "")
+        if str(entry.get("fileType") or "").lower() == "pptx":
+            if name and name not in decks:
+                decks.append(name)
+        elif name:
+            images.add(name)
+
+    if not decks:
+        return "The run produced no deck. Please try again."
+    sentence = f"Presentation generated: {decks[-1]}"
+    if images:
+        sentence += (
+            f" - with {len(images)} generated image"
+            + ("" if len(images) == 1 else "s")
+        )
+    return sentence
+
+
+def _option_label(option) -> str:
+    """One answer option as a line of text.
+
+    A design-direction option is a dict carrying a preview, a label and a
+    rationale. Interpolating it whole wrote a Python repr - braces, quoted
+    keys, a list of preview URLs - into the stored transcript, which is
+    what a plain-text reader of this conversation then sees.
+    """
+    if isinstance(option, dict):
+        label = str(option.get("label") or option.get("id") or "").strip()
+        description = str(option.get("description") or "").strip()
+        if label and description:
+            return f"{label} - {description}"
+        return label or description
+    return str(option)
+
+
 async def _exchange_rows(
     db: AsyncSession,
     session_id: uuid.UUID,
@@ -371,7 +419,7 @@ async def _run_agent(
                         for q in questions:
                             lines.append(f"Question: {q.get('question', '')}")
                             for i, opt in enumerate(q.get("options") or [], 1):
-                                lines.append(f"{i}. {opt}")
+                                lines.append(f"{i}. {_option_label(opt)}")
                             lines.append("")
                         question_content = "\n".join(lines)
                         if context:
@@ -468,6 +516,19 @@ async def _run_agent(
                                     "slideCount": slide_count,
                                     "timestamp": datetime.datetime.utcnow().isoformat(),
                                 }
+                                # Persisted like every other event, so a
+                                # reloaded session still shows the deck at
+                                # the end of its own timeline rather than
+                                # only in the side panel.
+                                db.add(AgentEvent(
+                                    session_id=session_id,
+                                    message_id=assistant_message_id,
+                                    event_type="file_generated",
+                                    phase=file_event["phase"],
+                                    content={},
+                                    raw_event=file_event,
+                                ))
+                                await db.commit()
                                 pub_result = await redis_client.publish(
                                     f"agent:events:{session_id}", json.dumps(file_event, default=str)
                                 )
@@ -578,8 +639,7 @@ async def _run_agent(
                 # not be reported as a success it did not confirm.
                 if not final_content:
                     if generated_files:
-                        file_names = ", ".join(f["fileName"] for f in generated_files)
-                        final_content = f"Presentation generated: {file_names}"
+                        final_content = _generated_summary(generated_files)
                     else:
                         final_content = (
                             "The run ended without producing a deck or a clear "
