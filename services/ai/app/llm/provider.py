@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 from app.config import settings
 from app.llm.catalog import PROVIDERS_BY_ID
+from app.llm.openai_compat import create_with_compatible_params
 from app.llm.retry_notices import REASON_RATE_LIMIT, RetryNotice, publish_retry_notice
 from app.observability.logging import get_logger
 import asyncio
@@ -327,6 +328,7 @@ class AzureOpenAIProvider(LLMProvider):
             max_retries=SDK_MAX_RETRIES,
         )
         self.deployment = settings.azure_openai_deployment
+        self.endpoint = settings.azure_openai_endpoint or "azure"
 
     async def chat(
         self,
@@ -348,8 +350,16 @@ class AzureOpenAIProvider(LLMProvider):
             kwargs["tools"] = tools
 
         try:
-            response = await _with_rate_limit_retry(
-                lambda: self.client.chat.completions.create(**kwargs),
+            # A deployment fronting a current model rejects the same
+            # parameters the model does - see OpenAIProvider.chat.
+            response = await create_with_compatible_params(
+                lambda payload: _with_rate_limit_retry(
+                    lambda: self.client.chat.completions.create(**payload),
+                    provider="azure_openai",
+                    model=self.deployment,
+                ),
+                kwargs,
+                endpoint=self.endpoint,
                 provider="azure_openai",
                 model=self.deployment,
             )
@@ -400,6 +410,11 @@ class OpenAIProvider(LLMProvider):
     Also serves any OpenAI-compatible endpoint via ``base_url``.
     """
 
+    # Where a compatibility lesson belongs when no base_url was given. The
+    # same model id can behave differently behind a proxy, so what is learned
+    # is keyed on the endpoint as well as the model.
+    DEFAULT_ENDPOINT = "https://api.openai.com/v1"
+
     def __init__(self, model: str, api_key: str, base_url: str | None = None) -> None:
         from openai import AsyncOpenAI
         kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": SDK_MAX_RETRIES}
@@ -407,6 +422,7 @@ class OpenAIProvider(LLMProvider):
             kwargs["base_url"] = base_url
         self.client = AsyncOpenAI(**kwargs)
         self.model = model
+        self.endpoint = base_url or self.DEFAULT_ENDPOINT
 
     async def chat(
         self,
@@ -417,22 +433,30 @@ class OpenAIProvider(LLMProvider):
     ) -> dict:
         start_time = time.time()
 
+        # Sent as written. Which of these the model still accepts is not
+        # knowable from its name - current models want max_completion_tokens
+        # and reject temperature, older ones take both - so the request is
+        # rewritten from what the API says when it rejects one, and the
+        # lesson is remembered for the rest of the process. See openai_compat.
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
+            "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # The web-search-preview models reject `temperature`; every other model
-        # accepts it. Omitting it there costs nothing but avoids a hard 400.
-        if "search-preview" not in self.model:
-            kwargs["temperature"] = temperature
 
         if tools:
             kwargs["tools"] = tools
 
         try:
-            response = await _with_rate_limit_retry(
-                lambda: self.client.chat.completions.create(**kwargs),
+            response = await create_with_compatible_params(
+                lambda payload: _with_rate_limit_retry(
+                    lambda: self.client.chat.completions.create(**payload),
+                    provider="openai",
+                    model=self.model,
+                ),
+                kwargs,
+                endpoint=self.endpoint,
                 provider="openai",
                 model=self.model,
             )
@@ -816,6 +840,7 @@ class AzureOpenAIVisionProvider(VisionLLMProvider):
             max_retries=SDK_MAX_RETRIES,
         )
         self.deployment = settings.azure_openai_vision_deployment
+        self.endpoint = settings.azure_openai_endpoint or "azure"
 
     async def chat_with_images(
         self,
@@ -838,13 +863,21 @@ class AzureOpenAIVisionProvider(VisionLLMProvider):
         messages = [{"role": "user", "content": content}]
 
         try:
-            response = await _with_rate_limit_retry(
-                lambda: self.client.chat.completions.create(
+            # Vision deployments retire parameters on the same schedule as
+            # text ones - see OpenAIProvider.chat.
+            response = await create_with_compatible_params(
+                lambda payload: _with_rate_limit_retry(
+                    lambda: self.client.chat.completions.create(**payload),
+                    provider="azure_openai",
                     model=self.deployment,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
                 ),
+                {
+                    "model": self.deployment,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                },
+                endpoint=self.endpoint,
                 provider="azure_openai",
                 model=self.deployment,
             )

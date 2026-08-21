@@ -240,3 +240,86 @@ def test_response_parsing_accepts_dict_blocks_too():
 def test_anthropic_max_tokens_floor_leaves_room_for_thinking():
     """Current Claude models think by default and `max_tokens` caps thinking + reply."""
     assert AnthropicProvider.MIN_MAX_TOKENS >= 16000
+
+
+# ── Parameters a model no longer accepts ───────────────────────────────
+
+
+class _Rejecting:
+    """A chat.completions stand-in that refuses the named parameters."""
+
+    def __init__(self, *rejected: str) -> None:
+        self.rejected = rejected
+        self.calls: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        flat = {**kwargs, **(kwargs.get("extra_body") or {})}
+        for name in self.rejected:
+            if name in flat:
+                raise _Rejected(name)
+        return _Obj(choices=[_Obj(
+            message=_Obj(content="ok", tool_calls=None), finish_reason="stop"
+        )])
+
+
+class _Rejected(Exception):
+    def __init__(self, param: str) -> None:
+        replacement = {"max_tokens": "max_completion_tokens"}.get(param)
+        detail = f" Use '{replacement}' instead." if replacement else ""
+        super().__init__(
+            f"Error code: 400 - Unsupported parameter: '{param}' is not "
+            f"supported with this model.{detail}"
+        )
+        self.param = param
+
+
+class _Obj:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+def _openai_provider(model: str, completions) -> OpenAIProvider:
+    provider = OpenAIProvider.__new__(OpenAIProvider)
+    provider.client = _Obj(chat=_Obj(completions=completions))
+    provider.model = model
+    provider.endpoint = f"https://test.invalid/{model}"
+    return provider
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_wants_max_completion_tokens_gets_it():
+    """The reported failure: every request 400d on 'max_tokens'.
+
+    Nothing here knows the model's name - the rename comes out of the error
+    the API itself returned, which is what keeps this working for whatever
+    OpenAI ships next.
+    """
+    from app.llm.openai_compat import reset_cache
+    reset_cache()
+    completions = _Rejecting("max_tokens", "temperature")
+
+    result = await _openai_provider("gpt-5.6-terra", completions).chat(
+        [{"role": "user", "content": "hi"}]
+    )
+
+    assert result["message"]["content"] == "ok"
+    accepted = completions.calls[-1]
+    assert "max_tokens" not in accepted and "temperature" not in accepted
+    assert accepted["extra_body"] == {"max_completion_tokens": 4096}
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_still_takes_max_tokens_is_left_alone():
+    """No extra round trip, and no rename, for a model that never complains."""
+    from app.llm.openai_compat import reset_cache
+    reset_cache()
+    completions = _Rejecting()
+
+    await _openai_provider("gpt-4o", completions).chat(
+        [{"role": "user", "content": "hi"}]
+    )
+
+    assert len(completions.calls) == 1
+    assert completions.calls[0]["max_tokens"] == 4096
+    assert "extra_body" not in completions.calls[0]
