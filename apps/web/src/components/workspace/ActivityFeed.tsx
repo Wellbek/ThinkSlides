@@ -989,7 +989,10 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
     const attempt = attempts.get(group[0]);
     const last = group[group.length - 1];
     const anyRunning = group.some((s) => s.running);
-    const anyFailed = group.some((s) => s.success === false);
+    // How the row ENDED, not whether anything in it ever failed: a slide
+    // whose schema check bounced once and then passed is a slide that got
+    // written, and a red dot over "3 bullets written" reads as broken.
+    const anyFailed = last.success === false;
     const sources = group.flatMap((s) => s.sources || []);
     const maxAttempts = findLastMatch(group, (x) => !!x.revisitMaxAttempts)?.revisitMaxAttempts;
     const slideLabel = idx != null ? `Slide ${idx + 1}` : undefined;
@@ -1038,7 +1041,7 @@ function groupRenderRows(subSteps: SubStep[]): Row[] {
     const group = subSteps.slice(i, end);
     const last = group[group.length - 1];
     const anyRunning = group.some((s) => s.running);
-    const anyFailed = group.some((s) => s.success === false);
+    const anyFailed = last.success === false;
     const sources = group.flatMap((s) => s.sources || []);
     rows.push({
       key: `render-attempt-${attempt}`,
