@@ -477,8 +477,13 @@ class TestARevisionIsLabelledAsOne:
         assert call["isRevision"] is True
         assert call["revisionReason"] == "chart has no data"
 
+        # The slide and the reason travel on the event as fields, not
+        # welded onto the summary: the timeline names the slide in the
+        # block header and lists the clauses beneath it, so a prefix here
+        # is the same two facts a third time inside a row that has to
+        # truncate to fit them.
         result = next(e for e in events if e["type"] == "tool_result")
-        assert result["summary"].startswith("Fixing Slide 2 (chart has no data):")
+        assert "Fixing Slide 2" not in (result["summary"] or "")
 
     @pytest.mark.asyncio
     async def test_a_first_pass_carries_no_revision_marker(self, monkeypatch):

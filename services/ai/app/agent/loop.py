@@ -3019,12 +3019,13 @@ class AgentLoop:
         summary = summarize_tool_result(
             fn_name, fn_args, tool_result.data, tool_result.success
         )
-        if is_revision and summary:
-            where = f"Slide {fn_args.get('slide_index') + 1}"
-            summary = (
-                f"Fixing {where} ({revision_reason}): {summary}" if revision_reason
-                else f"Fixing {where}: {summary}"
-            )
+        # The revision's slide and its reason used to be prefixed onto this
+        # summary, for a flat feed that had nowhere else to put them. The
+        # phase timeline now names the slide in the block header and lists
+        # the validator's clauses under it, so the prefix was the same two
+        # facts a third time, inside a checklist row that had to truncate to
+        # fit them. The event still carries isRevision, revisionReason and
+        # the attempt count for the UI to present structurally.
         yield "event", _event("tool_result", current_phase, {
             "toolName": fn_name,
             "callId": call_id,

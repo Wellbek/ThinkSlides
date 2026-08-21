@@ -878,7 +878,7 @@ function revisitInfo(block: PhaseBlock): {
   // clause behind it drops to the subordinate list. Putting a raw clause
   // in the pill made it long enough to be truncated in a narrow panel,
   // which loses both the reason and the room for the phase's own clock.
-  const label = summariseReason(clauses) || `${verb} - ${noun[block.group]}`;
+  const label = summariseReason(clauses, kind) || `${verb} - ${noun[block.group]}`;
   const detail = clauses;
 
   // The retry count is not repeated here: every row in this block's
@@ -892,20 +892,26 @@ function revisitInfo(block: PhaseBlock): {
  *  underneath, not in a label that has to sit beside a phase name and a
  *  clock. Anything unrecognised falls back to the generic verb rather than
  *  being cut off mid-word. */
-const REASON_SUMMARIES: { match: RegExp; label: string }[] = [
+const REASON_SUMMARIES: { match: RegExp; label: string; kind?: "error" | "adjustment" }[] = [
   { match: /overlap/i, label: "overlapping content" },
   { match: /overflow|too (long|much|large)|does not fit|doesn't fit/i, label: "text overflowing" },
   { match: /off[- ]slide|outside the (slide|placeholder)|out of bounds/i, label: "content off the page" },
   { match: /contrast|unreadable|illegible/i, label: "unreadable contrast" },
   { match: /missing|empty|no content/i, label: "missing content" },
-  { match: /image|picture|illustration/i, label: "image replaced" },
+  // An image can be the subject of either kind, and the two mean opposite
+  // things: the agent found its own illustration unusable, or you swapped
+  // the picture and asked for the slide back. Labelling an error "image
+  // replaced" told the user they had done something they had not.
+  { match: /image|picture|illustration/i, label: "unusable illustration", kind: "error" },
+  { match: /image|picture|illustration/i, label: "image replaced", kind: "adjustment" },
 ];
 
-function summariseReason(clauses: string[]): string {
+function summariseReason(clauses: string[], kind: "error" | "adjustment"): string {
   const text = clauses.join("; ");
   if (!text) return "";
-  for (const { match, label } of REASON_SUMMARIES) {
-    if (match.test(text)) return label;
+  for (const entry of REASON_SUMMARIES) {
+    if (entry.kind && entry.kind !== kind) continue;
+    if (entry.match.test(text)) return entry.label;
   }
   return "";
 }
