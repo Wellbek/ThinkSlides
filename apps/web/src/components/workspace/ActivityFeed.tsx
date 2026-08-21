@@ -177,6 +177,11 @@ interface SubStep {
    *  lands on the step it precedes instead of going unaccounted for, so
    *  step durations sum to the phase's wall-clock total by construction. */
   processDurationMs?: number;
+  /** Where `processDurationMs` is measured from, captured when the call
+   *  starts. A row ticking while it runs counts up from here, so the
+   *  moment it freezes the number it lands on is the one it was already
+   *  showing. */
+  processStartTs?: string;
   running: boolean;
   isRevision?: boolean;
   revisionReason?: string;
@@ -193,6 +198,18 @@ interface PhaseBlock {
   revisit: boolean;
   startTs: string;
   endTs: string;
+  /** This block's own share of the run's wall clock: the sum of its
+   *  substeps' process spans, which by construction tile the timeline
+   *  without gaps or overlaps. Wall clock (`endTs - startTs`) cannot be
+   *  used directly because a reused retry block's span encloses the
+   *  fixing block that ran between two of its attempts, and would count
+   *  that time on both. */
+  elapsedMs: number;
+  /** Where the next substep's span will be measured from - the last
+   *  completion, or the block's own start. A live block ticks from here
+   *  on top of `elapsedMs`, so the headline never jumps when a step
+   *  finishes and never restarts when the next one begins. */
+  cursorTs: string;
   subSteps: SubStep[];
   thoughts: { content: string; timestamp: string }[];
   progress: any[];
@@ -260,6 +277,8 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
       revisit,
       startTs: ts,
       endTs: ts,
+      elapsedMs: 0,
+      cursorTs: ts,
       subSteps: [],
       thoughts: [],
       progress: [],
@@ -270,6 +289,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
       // This fix block continues the render block's timeline rather than
       // starting its own - see cursorGroupKey above.
       cursorGroupKey.set(block.key, resolveCursorKey(last.key));
+      block.cursorTs = cursorByBlock.get(resolveCursorKey(block.key)) ?? ts;
     } else {
       cursorByBlock.set(block.key, ts);
     }
@@ -307,6 +327,8 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
           revisitAttempt: ev.revisitAttempt,
           revisitMaxAttempts: ev.revisitMaxAttempts,
           slideIndex: typeof ev.toolArgs?.slide_index === "number" ? ev.toolArgs.slide_index : undefined,
+          processStartTs:
+            cursorByBlock.get(resolveCursorKey(block.key)) ?? block.startTs,
         };
         block.subSteps.push(sub);
         openSubSteps.set(ev.callId, sub);
@@ -325,6 +347,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
           sub.error = ev.error;
           sub.durationMs = ev.durationMs;
           sub.processDurationMs = new Date(ev.timestamp).getTime() - new Date(cursor).getTime();
+          block.elapsedMs += sub.processDurationMs;
           sub.sources = Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined;
           openSubSteps.delete(ev.callId);
         } else {
@@ -344,8 +367,10 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
             running: false,
             sources: Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined,
           });
+          block.elapsedMs += new Date(ev.timestamp).getTime() - new Date(cursor).getTime();
         }
         cursorByBlock.set(cursorKey, ev.timestamp);
+        block.cursorTs = ev.timestamp;
         break;
       }
       case "slide_finalized":
@@ -369,6 +394,15 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
   }
 
   return { blocks, closingText };
+}
+
+/** A block's headline duration. Frozen: its own share of the timeline.
+ *  Live: that share plus however long the step now in flight has been
+ *  running. The two are the same expression, so the number never jumps
+ *  when a step completes and never restarts when the next one starts. */
+function phaseElapsed(block: PhaseBlock, now: number, running: boolean): number {
+  if (!running) return block.elapsedMs;
+  return block.elapsedMs + Math.max(0, now - new Date(block.cursorTs).getTime());
 }
 
 // ──────────────────────────────────────────────
@@ -711,18 +745,28 @@ function revisitStyleVars(kind: "error" | "adjustment"): React.CSSProperties {
   } as React.CSSProperties;
 }
 
+/** The phase headline clock. Ticks while the phase is in flight and
+ *  freezes on the phase's own share of the run, which is what its substep
+ *  rows sum to. A phase that only narrated - no tool calls, no measurable
+ *  span - shows no number at all rather than a meaningless "<1ms". */
 function PhaseTimer({ block, active }: { block: PhaseBlock; active: boolean }) {
-  const totalFromSteps = block.subSteps.reduce((s, x) => s + (x.durationMs || 0), 0);
-  const wallMs = block.endTs && block.startTs
-    ? new Date(block.endTs).getTime() - new Date(block.startTs).getTime()
-    : undefined;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [active]);
+
+  const elapsed = phaseElapsed(block, now, active);
+  if (!active && !block.subSteps.length && elapsed < 1000) return null;
   return (
-    <StepTimer
-      startTs={block.startTs}
-      endTs={block.endTs}
-      durationMs={totalFromSteps || wallMs}
-      running={active}
-    />
+    <span
+      className={`ws-step-dur${active ? " live" : ""}`}
+      title={active ? `started ${fmtTime(block.startTs)}` : `finished ${fmtTime(block.endTs)}`}
+    >
+      {fmtDuration(elapsed)}
+    </span>
   );
 }
 
@@ -793,7 +837,7 @@ function toRow(s: SubStep): Row {
     durationMs: s.processDurationMs ?? s.durationMs,
     toolDurationMs: s.durationMs,
     running: s.running,
-    startTs: s.startTs,
+    startTs: s.processStartTs ?? s.startTs,
     args: s.args,
     result: s.result,
     sources: s.sources,
@@ -850,7 +894,7 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
       durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
       toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
       running: anyRunning,
-      startTs: group.find((s) => s.running)?.startTs || group[0].startTs,
+      startTs: group[0].processStartTs ?? group[0].startTs,
       args: last.args,
       result: last.result,
       sources: sources.length ? sources : undefined,
@@ -890,7 +934,7 @@ function groupRenderRows(subSteps: SubStep[]): Row[] {
       durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
       toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
       running: anyRunning,
-      startTs: group.find((s) => s.running)?.startTs || group[0].startTs,
+      startTs: group[0].processStartTs ?? group[0].startTs,
       args: last.args,
       result: last.result,
       sources: sources.length ? sources : undefined,
