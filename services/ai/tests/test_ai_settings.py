@@ -163,17 +163,33 @@ def test_native_backend_is_available_for_anthropic():
     assert (config.backend, reason) == ("native", "")
 
 
-def test_native_backend_is_refused_for_a_non_search_openai_model():
-    """Only the '-search-preview' models can search via chat completions."""
+def test_native_backend_is_allowed_for_an_ordinary_openai_model():
+    """Regression: OpenAI search used to be gated on the '-search-preview' pair.
+
+    Those models shut down on 23 July 2026, and search moved to the Responses
+    API, which any current model can use. While the gate stood, every model a
+    user could actually select reported Deep Thinking as unavailable.
+    """
     row = _row(
         search_backend="native",
-        search_provider="openai", search_model="gpt-4o", search_api_key="sk-abcd",
+        search_provider="openai", search_model="gpt-5.6-terra", search_api_key="sk-abcd",
+    )
+
+    config, reason = ai_settings.resolve_search_config(row)
+
+    assert (config.backend, reason) == ("native", "")
+
+
+def test_native_backend_is_refused_for_a_provider_without_its_own_search():
+    row = _row(
+        search_backend="native",
+        search_provider="acme", search_model="acme-1", search_api_key="k",
     )
 
     config, reason = ai_settings.resolve_search_config(row)
 
     assert config is None
-    assert "search-preview" in reason
+    assert reason
 
 
 def test_native_backend_is_refused_for_a_zhipu_key_that_cannot_sign():

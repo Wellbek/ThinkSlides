@@ -28,6 +28,7 @@ from app.connections.catalog import catalog_payload as connections_catalog_paylo
 from app.db.session import get_db
 from app.llm.catalog import (
     PROVIDER_IDS,
+    PROVIDERS_BY_ID,
     SEARCH_BACKEND_IDS,
     catalog_payload,
     supports_tool_calling,
@@ -45,8 +46,11 @@ TEST_PROMPT = "Reply with exactly: OK"
 # Generous enough that a reasoning model still has room to answer after its
 # thinking preamble. A tight budget looks like a broken credential: GLM spends
 # every one of 32 tokens thinking and returns finish_reason=length with empty
-# content, even though the key is perfectly valid.
-TEST_MAX_TOKENS = 256
+# content, even though the key is perfectly valid. 256 was enough for GLM and
+# not for OpenAI's current line, where the budget covers reasoning tokens as
+# well and a two-word answer can cost hundreds of them - so a correctly
+# configured key came back with the "returned no text" note instead of "OK".
+TEST_MAX_TOKENS = 2048
 
 # Phrased as a natural question rather than keywords. Search APIs tuned for LLM
 # grounding answer questions well but key off individual words otherwise -
@@ -117,13 +121,15 @@ def _validate_chat_model(role: ModelRoleInput | None) -> None:
         return
     if supports_tool_calling(role.provider, role.model):
         return
+    spec = PROVIDERS_BY_ID.get(role.provider or "")
+    suggestion = f" (such as {spec.default_model})" if spec else ""
     raise HTTPException(
         status_code=400,
         detail=(
             f"'{role.model}' cannot be the reasoning model: it does not support "
             "tool calling, which the agent needs for every step of a generation. "
             "Use it as the Deep Thinking search model instead, and choose a "
-            "tool-calling model (such as gpt-4o) to reason with."
+            f"tool-calling model{suggestion} to reason with."
         ),
     )
 

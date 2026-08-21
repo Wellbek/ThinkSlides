@@ -344,8 +344,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           deepSearch: {
             ...EMPTY_ROLE,
             provider: parsed.id,
-            // Prefer a model whose search actually works: picking OpenAI and
-            // landing on gpt-4o gives a source that cannot search at all.
+            // A provider that gates search on particular models pins one of
+            // those; everyone else gets their default, which can search.
             model: spec?.nativeWebSearchModels?.[0] ?? spec?.defaultModel ?? '',
           },
           searchBackend: backend,
