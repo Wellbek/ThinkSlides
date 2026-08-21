@@ -39,10 +39,14 @@ const GROUP_LABEL: Record<PhaseGroupKey, string> = {
  *  the Design box legitimately appears twice in a run that never went
  *  backwards. Treating a repeated box as a revisit labelled every such run
  *  "fixing — the design" when nothing had gone wrong. */
-const PIPELINE_STEPS: { step: string; group: PhaseGroupKey }[] = [
+const PIPELINE_STEPS: { step: string; group: PhaseGroupKey; ordered?: boolean }[] = [
   { step: "intake", group: "understand" },
   { step: "scout", group: "research" },
-  { step: "consult", group: "understand" },
+  // `consult` is the run stopping to ask, which it may legitimately do at
+  // any point - before planning, and again in the middle of drafting. It
+  // therefore has no position in the pipeline: ranking it early made every
+  // later question read as the run doubling back to the brief.
+  { step: "consult", group: "understand", ordered: false },
   { step: "design", group: "design" },
   { step: "research", group: "research" },
   { step: "plan", group: "design" },
@@ -57,10 +61,18 @@ const STEP_TO_GROUP: Record<string, PhaseGroupKey> = Object.fromEntries(
 );
 
 /** How far through the pipeline each step is. A block whose step ranks
- *  earlier than the furthest the run has reached is the run going back. */
+ *  earlier than the furthest the run has reached is the run going back.
+ *  Unordered steps are absent, so they neither count as going back nor
+ *  advance the mark. */
 const STEP_ORDER: Record<string, number> = Object.fromEntries(
-  PIPELINE_STEPS.map(({ step }, i) => [step, i])
+  PIPELINE_STEPS.filter((entry) => entry.ordered !== false)
+    .map(({ step }, i) => [step, i])
 );
+
+/** Tools whose whole job is to stop and put something to the user. A block
+ *  containing nothing else did not redo any work, whatever its step rank
+ *  says, so it is not a revisit and must not be dressed as one. */
+const PAUSING_TOOLS = new Set(["ask_user_question", "propose_design_directions"]);
 
 /** The two groups a validation-retry loop alternates between - see
  *  `currentBlock`'s reuse logic below. No other group pair loops this
@@ -391,6 +403,17 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
       default:
         break;
     }
+  }
+
+  // A revisit means the run redid work it had already done. A block that
+  // only paused - a question, a design card, a line of narration - did
+  // not, no matter where its step sits in the pipeline. Applied after the
+  // fold rather than at block creation, because whether a block turns out
+  // to contain real work is not known until its substeps have arrived.
+  for (const block of blocks) {
+    if (!block.revisit) continue;
+    const redidWork = block.subSteps.some((s) => !PAUSING_TOOLS.has(s.toolName));
+    if (!redidWork) block.revisit = false;
   }
 
   return { blocks, closingText };
