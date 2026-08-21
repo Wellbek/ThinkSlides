@@ -178,7 +178,8 @@ class DirectionSpec:
 
 
 def compile_direction(spec: DirectionSpec, brand_hex: Optional[str] = None,
-                      base: Optional[dict] = None) -> dict:
+                      base: Optional[dict] = None,
+                      accent_hex: Optional[str] = None) -> dict:
     """
     A spec as a full design system the renderer can build a deck from.
 
@@ -189,7 +190,7 @@ def compile_direction(spec: DirectionSpec, brand_hex: Optional[str] = None,
     of things three directions are supposed to differ on.
     """
     system = dict(base or get_default_design_system())
-    palette = _palette_for(spec, brand_hex, system)
+    palette = _palette_for(spec, brand_hex, system, accent_hex)
     system["palette"] = {"colors": palette,
                          "schemeName": f"direction-{spec.id}"}
     grounds = _grounds_for(spec, palette)
@@ -217,7 +218,7 @@ def compile_direction(spec: DirectionSpec, brand_hex: Optional[str] = None,
 
 
 def _palette_for(spec: DirectionSpec, brand_hex: Optional[str],
-                 base: dict) -> list[dict]:
+                 base: dict, accent_hex: Optional[str] = None) -> list[dict]:
     """
     The palette, with the direction's ground deployed into it.
 
@@ -230,7 +231,7 @@ def _palette_for(spec: DirectionSpec, brand_hex: Optional[str],
     """
     seed = brand_hex or spec.palette_hex
     if seed and colors.parse_hex(seed):
-        palette = [dict(entry) for entry in derive_brand_palette(seed)]
+        palette = [dict(entry) for entry in derive_brand_palette(seed, accent_hex)]
     else:
         base_colors = (base.get("palette") or {}).get("colors")
         palette = [dict(entry) for entry in
@@ -700,8 +701,9 @@ def default_directions(brand_hex: Optional[str] = None,
     return compiled
 
 
-def recolour(direction: dict, brand_hex: str,
-             base: Optional[dict] = None) -> dict:
+def recolour(direction: dict, brand_hex: Optional[str],
+             base: Optional[dict] = None,
+             accent_hex: Optional[str] = None) -> dict:
     """
     The same direction, compiled again in another hue.
 
@@ -714,13 +716,29 @@ def recolour(direction: dict, brand_hex: str,
     A recolour that cannot be read is not applied. A user who asked for a
     yellow deck and got unreadable body copy has been given a worse deck than
     the one they were looking at, and silently is the worst way to do it.
+
+    ``accent_hex`` carries the highlight half of a two-part answer - "navy
+    with gold accents" - and may arrive on its own, when the user named
+    only what the highlights should be.
     """
+    from app import color_words
+
     spec_data = (direction or {}).get("spec")
-    if not isinstance(spec_data, dict) or not colors.parse_hex(brand_hex):
+    wanted = brand_hex if colors.parse_hex(brand_hex or "") else None
+    accent = accent_hex if colors.parse_hex(accent_hex or "") else None
+    if not isinstance(spec_data, dict) or not (wanted or accent):
         # No spec means an uploaded template, whose palette is the user's own
         # and is not ours to overwrite.
         return direction
-    system = compile_direction(DirectionSpec.from_dict(spec_data), brand_hex, base)
+
+    spec = DirectionSpec.from_dict(spec_data)
+    if wanted and color_words.is_near_white(wanted):
+        # "White with slight pink accents" is a white deck. A dark or split
+        # ground would put the requested paper colour nowhere the user can
+        # see it, so the deployment follows the answer rather than the
+        # direction that was chosen before the answer existed.
+        spec = replace(spec, ground="light")
+    system = compile_direction(spec, wanted, base, accent)
     if contrast_problems(system):
         return direction
     return {**direction, "designSystem": system}
