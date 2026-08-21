@@ -571,6 +571,11 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
   // feed, so its download row rendered above the fixing passes that came
   // after it.
   const fileGenerated = findLastMatch(blocks, (b) => !!b.fileGeneratedEvent)?.fileGeneratedEvent;
+  // "5 slides finalized" belongs with the finished deck for the same reason
+  // the download row does: it hangs off the Render block, which keeps its
+  // position at the first validation attempt, so it announced a settled
+  // deck above the fixing pass that came after it.
+  const finalized = blocks.flatMap((b) => b.slideFinalized);
 
   return (
     <>
@@ -600,6 +605,14 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
             <span className="ws-ai-cursor" />
           </div>
         </FeedItem>
+      )}
+
+      {!!finalized.length && (
+        <div className="ws-run-complete">
+          {finalized.length === 1
+            ? `Slide ${(finalized[0].slideIndex ?? 0) + 1} finalized.`
+            : `${finalized.length} slides finalized.`}
+        </div>
       )}
 
       {fileGenerated && <FileGeneratedNote ev={fileGenerated} />}
@@ -706,14 +719,6 @@ function PhaseBlockItem({
           <ProgressBar current={p.current} total={p.total} />
         </div>
       ))}
-
-      {!!block.slideFinalized.length && (
-        <div className="ws-feed-text">
-          {block.slideFinalized.length === 1
-            ? `Slide ${(block.slideFinalized[0].slideIndex ?? 0) + 1} finalized.`
-            : `${block.slideFinalized.length} slides finalized.`}
-        </div>
-      )}
 
       {block.questionEvent && (
         <QuestionCard
@@ -873,12 +878,19 @@ interface Row {
   sources?: SourceInfo[];
 }
 
+/** What a failed step says when the backend gave it neither a summary nor
+ *  an error string. A red dot over an empty line reads as the UI being
+ *  broken rather than the step being. */
+function failureNote(failed: boolean): string {
+  return failed ? "Didn't pass - open Raw for what came back." : "";
+}
+
 function toRow(s: SubStep): Row {
   return {
     key: s.key,
     icon: s.success === false ? "●" : s.running ? "↻" : "✓",
     label: toolLabel(s.toolName),
-    note: s.summary || (s.running ? "" : s.error || ""),
+    note: s.summary || (s.running ? "" : s.error || failureNote(s.success === false)),
     durationMs: s.processDurationMs ?? s.durationMs,
     toolDurationMs: s.durationMs,
     running: s.running,
@@ -898,6 +910,37 @@ function toRow(s: SubStep): Row {
  *  4, then writes slide 3, validates it and rewrites it - which under
  *  consecutive-only grouping produced three separate "Slide 3" rows for
  *  one slide, and two rows sharing a React key. */
+/** Which retry attempt each substep belongs to, filling in the ones that
+ *  carry no number of their own: they belong to the attempt they are
+ *  working towards, which is the next numbered call for the same slide -
+ *  or, for anything trailing it, the one just finished. */
+function effectiveAttempts(subSteps: SubStep[]): Map<SubStep, number | undefined> {
+  const out = new Map<SubStep, number | undefined>();
+  const pending = new Map<number, SubStep[]>();
+  const lastSeen = new Map<number, number>();
+  for (const step of subSteps) {
+    const idx = step.slideIndex;
+    if (idx == null) {
+      out.set(step, step.revisitAttempt);
+      continue;
+    }
+    if (step.revisitAttempt != null) {
+      for (const waiting of pending.get(idx) ?? []) out.set(waiting, step.revisitAttempt);
+      pending.delete(idx);
+      lastSeen.set(idx, step.revisitAttempt);
+      out.set(step, step.revisitAttempt);
+    } else {
+      const waiting = pending.get(idx);
+      if (waiting) waiting.push(step);
+      else pending.set(idx, [step]);
+    }
+  }
+  for (const [idx, waiting] of pending) {
+    for (const step of waiting) out.set(step, lastSeen.get(idx));
+  }
+  return out;
+}
+
 function groupDraftRows(subSteps: SubStep[]): Row[] {
   // A merged "Fixing" block (see `currentBlock`'s retry-loop reuse) can
   // cover more than one slide in the same pass - slides_needing_revision
@@ -913,11 +956,18 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
   // design_slide_content call per attempt, all for the same slide, and
   // collapsing those into one row would lose the retry count. Insertion
   // order is preserved, so a row still appears where its slide first did.
+  //
+  // Only the redesign call itself carries an attempt number, though - the
+  // image it regenerates first does not, and keying on the raw value split
+  // one fixing pass into a "Slide 1" row and an "Attempt 1/3" row for the
+  // same slide. A call with no attempt of its own takes the one it is
+  // working towards.
+  const attempts = effectiveAttempts(subSteps);
   const groups = new Map<string, SubStep[]>();
   let loose = 0;
   for (const step of subSteps) {
     const key = step.slideIndex != null
-      ? `s${step.slideIndex}-a${step.revisitAttempt ?? 0}`
+      ? `s${step.slideIndex}-a${attempts.get(step) ?? 0}`
       : `x${loose++}`;
     const bucket = groups.get(key);
     if (bucket) bucket.push(step);
@@ -927,12 +977,12 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
   const rows: Row[] = [];
   for (const [key, group] of groups) {
     const idx = group[0].slideIndex;
-    const attempt = group[0].revisitAttempt;
+    const attempt = attempts.get(group[0]);
     const last = group[group.length - 1];
     const anyRunning = group.some((s) => s.running);
     const anyFailed = group.some((s) => s.success === false);
     const sources = group.flatMap((s) => s.sources || []);
-    const maxAttempts = group[0].revisitMaxAttempts;
+    const maxAttempts = findLastMatch(group, (x) => !!x.revisitMaxAttempts)?.revisitMaxAttempts;
     const slideLabel = idx != null ? `Slide ${idx + 1}` : undefined;
     const attemptLabel = attempt != null ? `Attempt ${attempt}${maxAttempts ? `/${maxAttempts}` : ""}` : undefined;
     const label = attemptLabel
@@ -946,7 +996,7 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
       // call was a bare schema check would otherwise lose the summary
       // naming what was written.
       note: findLastMatch(group, (s) => !!s.summary)?.summary
-        || (anyRunning ? "" : last.error || ""),
+        || (anyRunning ? "" : last.error || failureNote(anyFailed)),
       durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
       toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
       running: anyRunning,
@@ -985,7 +1035,7 @@ function groupRenderRows(subSteps: SubStep[]): Row[] {
       key: `render-attempt-${attempt}`,
       icon: anyFailed ? "●" : anyRunning ? "↻" : "✓",
       label: `Attempt ${attempt}`,
-      note: last.summary || (anyRunning ? "" : last.error || ""),
+      note: last.summary || (anyRunning ? "" : last.error || failureNote(anyFailed)),
       durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
       toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
       running: anyRunning,
