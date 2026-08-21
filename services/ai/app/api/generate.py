@@ -932,8 +932,12 @@ async def replace_image_in_slide(
             ),
         )
 
+    # Parsed only to confirm it is intact - the agent reloads the state
+    # itself when it resumes, so nothing here needs the decoded value. A
+    # corrupted blob has to fail now rather than half-way through the resume,
+    # once the generated_files row and the image have already been written.
     try:
-        state_dict = json.loads(state_json)
+        json.loads(state_json)
     except (json.JSONDecodeError, TypeError):
         raise HTTPException(status_code=500, detail="Working state was corrupted")
 
