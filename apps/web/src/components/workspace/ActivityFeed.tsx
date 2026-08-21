@@ -31,18 +31,36 @@ const GROUP_LABEL: Record<PhaseGroupKey, string> = {
   render: "Render & check",
 };
 
-const STEP_TO_GROUP: Record<string, PhaseGroupKey> = {
-  intake: "understand",
-  consult: "understand",
-  scout: "research",
-  research: "research",
-  design: "design",
-  plan: "design",
-  review: "design",
-  draft: "draft",
-  render: "render",
-  validate: "render",
-};
+/** The pipeline's steps in the order a run walks them, mirroring PIPELINE in
+ *  services/ai/app/agent/pipeline.py, each with the timeline box it belongs
+ *  to. Several steps share a box, and the ORDER is what tells a revisit from
+ *  ordinary progress: `design` (pick a direction) and `plan` (outline the
+ *  deck) both live in the Design box but sit either side of `research`, so
+ *  the Design box legitimately appears twice in a run that never went
+ *  backwards. Treating a repeated box as a revisit labelled every such run
+ *  "fixing — the design" when nothing had gone wrong. */
+const PIPELINE_STEPS: { step: string; group: PhaseGroupKey }[] = [
+  { step: "intake", group: "understand" },
+  { step: "scout", group: "research" },
+  { step: "consult", group: "understand" },
+  { step: "design", group: "design" },
+  { step: "research", group: "research" },
+  { step: "plan", group: "design" },
+  { step: "review", group: "design" },
+  { step: "draft", group: "draft" },
+  { step: "render", group: "render" },
+  { step: "validate", group: "render" },
+];
+
+const STEP_TO_GROUP: Record<string, PhaseGroupKey> = Object.fromEntries(
+  PIPELINE_STEPS.map(({ step, group }) => [step, group])
+);
+
+/** How far through the pipeline each step is. A block whose step ranks
+ *  earlier than the furthest the run has reached is the run going back. */
+const STEP_ORDER: Record<string, number> = Object.fromEntries(
+  PIPELINE_STEPS.map(({ step }, i) => [step, i])
+);
 
 /** The two groups a validation-retry loop alternates between - see
  *  `currentBlock`'s reuse logic below. No other group pair loops this
@@ -187,7 +205,9 @@ interface PhaseBlock {
 
 function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closingText: string } {
   const blocks: PhaseBlock[] = [];
-  const seenGroups = new Set<PhaseGroupKey>();
+  // How far through the pipeline this run has got. A step that ranks behind
+  // it is the run doubling back - the only thing that counts as a revisit.
+  let furthestStep = -1;
   const openSubSteps = new Map<string, SubStep>();
   // Per-block cursor for `processDurationMs`: seeded at the block's own
   // start, then advanced to each step's own end as steps complete - so the
@@ -205,7 +225,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
   let closingText = "";
   let blockCounter = 0;
 
-  const currentBlock = (group: PhaseGroupKey, ts: string): PhaseBlock => {
+  const currentBlock = (group: PhaseGroupKey, step: string, ts: string): PhaseBlock => {
     const last = blocks[blocks.length - 1];
     if (last && last.group === group) {
       last.endTs = ts;
@@ -231,8 +251,9 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
       }
     }
     blockCounter++;
-    const revisit = seenGroups.has(group);
-    seenGroups.add(group);
+    const rank = STEP_ORDER[step];
+    const revisit = rank !== undefined && rank < furthestStep;
+    if (rank !== undefined) furthestStep = Math.max(furthestStep, rank);
     const block: PhaseBlock = {
       key: `phase-${blockCounter}-${group}`,
       group,
@@ -263,7 +284,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
     }
     const group = groupOf(ev);
     if (!group) continue;
-    const block = currentBlock(group, ev.timestamp || blocks[blocks.length - 1]?.endTs || "");
+    const block = currentBlock(group, step, ev.timestamp || blocks[blocks.length - 1]?.endTs || "");
 
     switch (ev.type) {
       case "thought":
@@ -663,8 +684,11 @@ function findLastMatch<T>(arr: T[], pred: (item: T) => boolean): T | undefined {
 
 function revisitInfo(block: PhaseBlock): { kind: "error" | "adjustment"; label: string; attempt?: string; detail: string[] } {
   const withKind = findLastMatch(block.subSteps, (s) => !!s.revisitKind);
-  const kind: "error" | "adjustment" = withKind?.revisitKind ?? "error";
-  const verb = kind === "adjustment" ? "adjusting" : "fixing";
+  // Only the backend knows whether a jump back is the agent repairing its
+  // own mistake. Absent that, this is "the run went back here", which is
+  // what the word says - not an accusation in alarm red.
+  const kind: "error" | "adjustment" = withKind?.revisitKind ?? "adjustment";
+  const verb = !withKind ? "revisiting" : kind === "adjustment" ? "adjusting" : "fixing";
   const noun: Record<PhaseGroupKey, string> = {
     understand: "the brief",
     research: "the research",
