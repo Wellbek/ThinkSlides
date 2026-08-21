@@ -86,9 +86,30 @@ def _is_quota_exhausted(exc: Exception) -> bool:
     return any(marker in text for marker in _QUOTA_EXHAUSTED_MARKERS)
 
 
+# A request larger than the model can take arrives as a 429 with
+# code=rate_limit_exceeded, indistinguishable by status from "you are going
+# too fast" - but waiting cannot help, because the request exceeds the
+# per-minute ceiling on its own. One observed run spent 63 seconds backing
+# off six times over a request asking for 767,678 tokens against a 450,000
+# limit, then told the user to try again in a few minutes.
+_REQUEST_TOO_LARGE_MARKERS = (
+    "request too large",
+    "must be reduced",
+    "maximum context length",
+    "context_length_exceeded",
+    "too many tokens",
+)
+
+
+def _is_request_too_large(exc: Exception) -> bool:
+    """True when the request itself is oversized rather than too frequent."""
+    text = str(exc).lower()
+    return any(marker in text for marker in _REQUEST_TOO_LARGE_MARKERS)
+
+
 def _is_rate_limit_error(exc: Exception) -> bool:
     """True for a provider's 'slow down' response, in any SDK's shape."""
-    if _is_quota_exhausted(exc):
+    if _is_quota_exhausted(exc) or _is_request_too_large(exc):
         return False
     for candidate in (exc, getattr(exc, "response", None)):
         if getattr(candidate, "status_code", None) == 429:
