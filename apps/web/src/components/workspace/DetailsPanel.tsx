@@ -338,6 +338,9 @@ function WebSourceIcon({ url }: { url: string }) {
   return (
     <div className="s-ic web">
       {faviconUrl && !failed ? (
+        // next/image would need this third-party host allow-listed in
+        // next.config and buys nothing for a 16px favicon.
+        // eslint-disable-next-line @next/next/no-img-element
         <img src={faviconUrl} alt="" className="s-ic-fav" onError={() => setFailed(true)} />
       ) : (
         <Globe size={14} />
