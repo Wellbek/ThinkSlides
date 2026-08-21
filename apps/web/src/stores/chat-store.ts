@@ -280,9 +280,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const normalizedFiles: GeneratedFile[] = files.map((f: any) => ({
         ...f,
         filename: f.filename || 'presentation.pptx',
-        file_url: f.file_url
-          ? `/api/orchestrator${f.file_url.startsWith('/') ? f.file_url : `/${f.file_url}`}`
-          : `/api/orchestrator/files/${f.id}`,
+        // Built from the id, not by prefixing the path the API returned.
+        // That path is already the orchestrator's own route
+        // ("/api/files/<id>"), so prefixing it produced
+        // "/api/orchestrator/api/files/<id>" and every download on a
+        // reloaded session 404'd - the deck as well as the assets. Live
+        // files were fine, because onFileGenerated builds this same shape
+        // itself, which is why it only ever broke after a reload.
+        file_url: `/api/orchestrator/files/${f.id}`,
         file_size: f.file_size ?? f.file_size_bytes,
       }));
       set({
