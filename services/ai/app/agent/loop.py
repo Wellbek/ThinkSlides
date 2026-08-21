@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import ai_settings
 from app.agent import run_context
 from app.agent.event_types import ALL_EVENT_TYPES
+from app.agent.redact import redact_binary
 from app.agent.registry import get_registry, ToolResult
 from app.agent import pipeline
 from app.agent.summaries import summarize_tool_result
@@ -31,6 +32,7 @@ from app.llm.provider import (
     AINotConfiguredError,
     _is_quota_exhausted,
     _is_rate_limit_error,
+    _is_request_too_large,
     build_chat_provider,
 )
 from app.llm.retry_notices import (
@@ -413,7 +415,10 @@ def _is_retryable(exc: Exception) -> bool:
     # one used to see only the status and retry anyway, so a run with no credit
     # left spent 35 seconds backing off - 5s, 10s, 20s - before reporting the
     # failure the very first call already knew about.
-    if _is_quota_exhausted(exc):
+    # A request the model cannot accept arrives as a 429 too, and this layer
+    # would otherwise see the status alone and back off over something that
+    # will be exactly as oversized on the next attempt.
+    if _is_quota_exhausted(exc) or _is_request_too_large(exc):
         return False
     status = _status_of(exc)
     if status in _RETRYABLE_STATUSES:
@@ -456,6 +461,13 @@ def _provider_failure_message(exc: Exception) -> str:
             "The AI provider rejected the request: this account is out of credit. "
             "Top it up, or switch provider in the workspace's AI settings, and try "
             "again - nothing was generated."
+        )
+    if _is_request_too_large(exc):
+        return (
+            "The request grew larger than the model can accept, so the provider "
+            "refused it. Waiting will not help. Try again with a shorter brief, "
+            "fewer attached documents or fewer slides, or switch to a model with "
+            "a larger context in the workspace's AI settings."
         )
     if _is_rate_limit_error(exc):
         return (
@@ -2254,8 +2266,14 @@ class AgentLoop:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call_id,
+                    # The single largest thing a tool can return is a
+                    # rendered image, and the model has no use for its
+                    # bytes - only for the fact that it exists and what it
+                    # shows. Left in, two illustrations pushed one request
+                    # to 767k tokens against a 450k ceiling and ended the
+                    # run at the draft phase.
                     "content": json.dumps(
-                        tool_result.data if tool_result.success
+                        redact_binary(tool_result.data) if tool_result.success
                         else {"error": tool_result.error}
                     ),
                 })
@@ -2852,8 +2870,11 @@ class AgentLoop:
                     self.working_state.selected_layouts[slide_index]
                 )
             if slide_index in self.working_state.selected_images:
+                # Without redaction the chosen image's base64 rides into
+                # design_slide_content's own prompt, which is the same
+                # blowup generate_image caused by another route.
                 fn_args["selected_image_context"] = json.dumps(
-                    self.working_state.selected_images[slide_index]
+                    redact_binary(self.working_state.selected_images[slide_index])
                 )
             prepared = self.working_state.prepared_visuals.get(slide_index)
             if prepared:
@@ -2864,7 +2885,7 @@ class AgentLoop:
                 # about the "technology" and "healthcare" segments,
                 # because the model had a vague outline, no figures,
                 # and filled the gap by inventing some.
-                fn_args["prepared_visuals"] = json.dumps(prepared)
+                fn_args["prepared_visuals"] = json.dumps(redact_binary(prepared))
         elif fn_name == "finalize_and_render_pptx":
             # Needed so generated tables/charts can be styled from
             # the template's own brand colors instead of a generic
@@ -2914,7 +2935,11 @@ class AgentLoop:
         is_revision, revision_reason = self._revision_context(fn_name, fn_args)
         yield "event", _event("tool_call", current_phase, {
             "toolName": fn_name,
-            "toolArgs": fn_args,
+            # Redacted on the way out only: finalize_and_render_pptx is
+            # handed the deck's real JSON, images included, and needs it -
+            # but nothing downstream of this event does, and it travels
+            # Redis, an SSE stream, the browser and a database row.
+            "toolArgs": redact_binary(fn_args),
             "callId": call_id,
             "timestamp": _iso_now(),
             **({"isRevision": True, "revisionReason": revision_reason} if is_revision else {}),
@@ -2994,7 +3019,12 @@ class AgentLoop:
         yield "event", _event("tool_result", current_phase, {
             "toolName": fn_name,
             "callId": call_id,
-            "result": tool_result.data if tool_result.success else tool_result.error,
+            # Redacted: a generated image's own bytes are three megabytes
+            # of base64, and this event travels Redis, the browser and a
+            # Postgres row. The run keeps the real block - see
+            # working_state.prepared_visuals below.
+            "result": (redact_binary(tool_result.data) if tool_result.success
+                       else tool_result.error),
             "summary": summary,
             "durationMs": tool_duration,
             "success": tool_result.success,
