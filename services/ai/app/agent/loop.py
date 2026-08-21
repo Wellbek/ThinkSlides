@@ -3700,7 +3700,8 @@ class AgentLoop:
             "can answer by tapping. OPTIONS MUST BE TAILORED TO THE ACTUAL REQUEST, never "
             "generic placeholders: for content focus, name the 2-4 candidate angles you "
             "actually saw in the material (not 'Option A/B/C'); for data presentation, offer "
-            "the concrete alternatives for THAT data ('Line chart of revenue 2011-2025', "
+            "the concrete alternatives for THAT data ('Line chart of revenue over the "
+            "period the data covers', "
             "'Table of year-by-year figures', 'Keep it as bullets') rather than asking "
             "abstractly whether the user likes charts.",
             "6. THE LOOK AND THE COLOUR ARE BOTH SETTLED BY propose_design_directions. Never ask "

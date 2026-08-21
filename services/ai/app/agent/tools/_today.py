@@ -18,6 +18,24 @@ from __future__ import annotations
 import datetime
 
 
+def recent_years(count: int = 3) -> list[str]:
+    """The last ``count`` years, ending with this one, as strings.
+
+    For the example values in tool schemas and prompts. A literal
+    ``["2021", "2022", "2023"]`` in an example does not just go stale - it
+    primes the model toward exactly the years it already wrongly believes are
+    current, which is the failure these examples were feeding.
+    """
+    year = datetime.date.today().year
+    return [str(y) for y in range(year - count + 1, year + 1)]
+
+
+def example_quarter() -> str:
+    """A plausible recent quarter, for a 'when did this happen' example."""
+    today = datetime.date.today()
+    return f"Q{(today.month - 1) // 3 + 1} {today.year}"
+
+
 def today_line() -> str:
     """One paragraph stating the date, for the top of a copy-writing prompt."""
     today = datetime.datetime.now().astimezone()
