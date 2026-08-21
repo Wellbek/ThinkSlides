@@ -405,7 +405,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (!activeMsg) return { activeFiles: [...state.activeFiles, generatedFile] };
             const updatedMessages = state.activeMessages.map((msg) =>
               msg.id === activeMsg.id
-                ? { ...msg, generatedFiles: [...(msg.generatedFiles || []), generatedFile] }
+                ? {
+                    ...msg,
+                    generatedFiles: [...(msg.generatedFiles || []), generatedFile],
+                    // Also part of the run's own story, not only of the
+                    // side panel: the activity timeline has always had a
+                    // row for the finished deck and it never rendered,
+                    // because this event reached the file list and nothing
+                    // else. A run ended with no sign of what it produced.
+                    agentEventStream: [...(msg.agentEventStream || []), JSON.parse(e.data)],
+                  }
                 : msg
             );
             return { activeMessages: updatedMessages, activeFiles: [...state.activeFiles, generatedFile] };
