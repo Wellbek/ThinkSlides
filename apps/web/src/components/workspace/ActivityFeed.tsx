@@ -11,7 +11,7 @@ import type { AgentEvent, SourceInfo } from "@thinkslides/schemas";
 // ──────────────────────────────────────────────
 // The phase timeline groups the flat event stream into the five things a
 // deck actually goes through - Understand, Research, Design, Draft, Render &
-// check - rather than the ten-odd pipeline steps underneath, several of which
+// Validate - rather than the ten-odd pipeline steps underneath, several of which
 // (a clarifying question and the brief that prompted it; a render and the
 // check that follows it) only make sense read together.
 //
@@ -28,7 +28,7 @@ const GROUP_LABEL: Record<PhaseGroupKey, string> = {
   research: "Research",
   design: "Design",
   draft: "Draft",
-  render: "Render & check",
+  render: "Render & Validate",
 };
 
 /** The pipeline's steps in the order a run walks them, mirroring PIPELINE in
@@ -244,6 +244,46 @@ interface PhaseBlock {
   fileGeneratedEvents: any[];
 }
 
+/** Which segment of the retry back-edge a block carries, if any. The rail
+ *  is drawn from each block's own rendered height - a start segment from
+ *  the block's dot to its bottom, a pass segment down a block in between,
+ *  an end segment from the top to the next block's dot - so consecutive
+ *  pieces always meet without a single coordinate being guessed. */
+type RailRole = "start" | "pass" | "end";
+
+interface LoopRail {
+  role: RailRole;
+  /** How many times the fix ran, shown on the end segment's badge. */
+  count?: number;
+}
+
+/** The back-edges in a run: a fixing block, and the Render & Validate block
+ *  it re-triggers. They are two boxes but one loop, and nothing in the feed
+ *  said so - the approved design draws a dashed rail joining them, carrying
+ *  the number of times round. */
+function loopRails(blocks: PhaseBlock[]): Map<string, LoopRail> {
+  const rails = new Map<string, LoopRail>();
+  for (let i = 0; i < blocks.length; i++) {
+    const fix = blocks[i];
+    if (!fix.revisit || fix.group !== "draft") continue;
+    let start = -1;
+    for (let j = i - 1; j >= 0; j--) {
+      if (blocks[j].group === "render") { start = j; break; }
+    }
+    if (start < 0) continue;
+    rails.set(blocks[start].key, { role: "start" });
+    for (let j = start + 1; j < i; j++) rails.set(blocks[j].key, { role: "pass" });
+    const attempts = fix.subSteps.reduce(
+      (max, sub) => Math.max(max, sub.revisitAttempt ?? 0), 0
+    );
+    rails.set(fix.key, {
+      role: "end",
+      count: attempts || groupDraftRows(fix.subSteps).length,
+    });
+  }
+  return rails;
+}
+
 function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closingText: string } {
   const blocks: PhaseBlock[] = [];
   // How far through the pipeline this run has got. A step that ranks behind
@@ -455,6 +495,16 @@ export function ActivityFeed() {
   const atBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
 
+  // The back-edge rail is drawn to the left of the timeline, so the feed
+  // needs a gutter for it - but only when a run actually looped. Reserving
+  // it always would push every ordinary run to the right for nothing.
+  const hasLoop = useMemo(
+    () => messages.some((m) =>
+      (m.agentEventStream ?? []).some((ev: any) => ev?.isRevision)
+    ),
+    [messages]
+  );
+
   // Signature that changes whenever the visible content grows.
   const signature = useMemo(() => {
     let events = 0;
@@ -509,7 +559,7 @@ export function ActivityFeed() {
 
   return (
     <div className="ws-feed-wrap">
-      <div className="ws-feed" ref={scrollRef} onScroll={onScroll}>
+      <div className={`ws-feed${hasLoop ? " has-loop" : ""}`} ref={scrollRef} onScroll={onScroll}>
         {messages.length === 0 && (
           <div className="ws-empty-note">Send a message to start the agent workflow.</div>
         )}
@@ -558,6 +608,7 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
   const isLive = message.isComplete === false;
 
   const { blocks, closingText } = useMemo(() => buildPhaseBlocks(events), [events]);
+  const rails = useMemo(() => loopRails(blocks), [blocks]);
 
   const lastBlock = blocks[blocks.length - 1];
   // A block that ended on a question is not "running" any more - the run
@@ -599,6 +650,13 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
   // Distinct slides, not preview events: every re-render across a
   // validation retry stages and flushes its own set, so a nine-slide deck
   // that rendered twice reported "18 slides finalized".
+  // A conclusion about the whole run, not about the block that produced
+  // it: it hung off the Render block, which keeps its position at the
+  // first validation attempt, so it appeared above the fixing passes that
+  // were still to come.
+  const unresolved = findLastMatch(blocks, (b) => !!b.validationUnresolvedEvent)
+    ?.validationUnresolvedEvent;
+
   const finalized = useMemo(() => {
     const bySlide = new Map<number, any>();
     blocks.forEach((b, blockIndex) => {
@@ -618,6 +676,7 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
           active={i === activeIndex}
           isAnswered={isAnswered}
           answerText={answerText}
+          rail={rails.get(block.key)}
         />
       ))}
 
@@ -639,6 +698,8 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
         </FeedItem>
       )}
 
+      {unresolved && <ValidationUnresolvedNote ev={unresolved} />}
+
       {!!finalized.length && (
         <div className="ws-run-complete">
           {finalized.length === 1
@@ -647,7 +708,11 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
         </div>
       )}
 
-      {fileGenerated && <FileGeneratedNote ev={fileGenerated} />}
+      {fileGenerated && (
+        <FeedItem dot="⤓" dotClass="ws-dot-fact">
+          <FileGeneratedNote ev={fileGenerated} />
+        </FeedItem>
+      )}
 
       {finalText && (
         <FeedItem dot="◆" dotClass="ws-dot-fact">
@@ -666,14 +731,23 @@ function PhaseBlockItem({
   active,
   isAnswered,
   answerText,
+  rail,
 }: {
   block: PhaseBlock;
   active: boolean;
   isAnswered?: boolean;
   answerText?: string;
+  rail?: LoopRail;
 }) {
   const failed = !!block.errorEvent;
-  const icon = failed ? "●" : active ? "↻" : block.revisit ? "↺" : "✓";
+  const revisitDetail = block.revisit ? revisitInfo(block) : null;
+  // A revisited phase's dot carries the reason itself - the agent fixing
+  // its own mistake, or an edit that was asked for - and the loop glyph
+  // moves to the badge, where it names the *edge* rather than the node.
+  const icon = failed ? "●"
+    : active ? "↻"
+    : revisitDetail ? (revisitDetail.kind === "adjustment" ? "✎" : "⚠")
+    : "✓";
   const dotClass = failed ? "ws-dot-error" : active ? "ws-dot-status" : block.revisit ? "ws-dot-revisit" : "ws-dot-fact";
 
   // Everything the model has said in this phase, in order. Showing only
@@ -703,24 +777,25 @@ function PhaseBlockItem({
     return block.subSteps.map(toRow);
   }, [block.subSteps, block.group]);
 
-  const revisit = block.revisit ? revisitInfo(block) : null;
+  const revisit = revisitDetail;
 
   return (
     <FeedItem
       dot={icon}
       dotClass={dotClass}
+      rail={rail}
+      railStyle={revisit ? revisitStyleVars(revisit.kind) : undefined}
       dotBadge={revisit && (
         <span className="ws-revisit-badge" style={revisitStyleVars(revisit.kind)}>
-          {revisit.kind === "adjustment" ? "✎" : "⚠"}
+          <LoopGlyph />
         </span>
       )}
     >
       <div className="ws-phase-head">
-        <span className="ws-phase-name">{GROUP_LABEL[block.group]}</span>
+        <span className="ws-phase-name">{revisit ? revisit.name : GROUP_LABEL[block.group]}</span>
         {revisit && (
           <span className="ws-revisit-pill" style={revisitStyleVars(revisit.kind)}>
             {revisit.label}
-            {revisit.attempt && <span className="attempt-count">({revisit.attempt})</span>}
           </span>
         )}
         <span className="ws-spacer-sm" />
@@ -728,9 +803,7 @@ function PhaseBlockItem({
       </div>
 
       {revisit && !!revisit.detail.length && (
-        <ul className="ws-revisit-detail">
-          {revisit.detail.map((d, i) => <li key={i}>{d}</li>)}
-        </ul>
+        <ClauseList clauses={revisit.detail} />
       )}
 
       {(takeawayText || active) && (
@@ -754,6 +827,12 @@ function PhaseBlockItem({
         </div>
       )}
 
+      {rail?.role === "end" && (
+        <div className="ws-loop-caption">
+          each attempt reruns the same {GROUP_LABEL.render} step above - not a new one.
+        </div>
+      )}
+
       {block.progress.map((p: any, i: number) => (
         <div key={`pg-${i}`} className="ws-step-progress">
           <div className="ws-feed-text">{p.message}</div>
@@ -772,10 +851,6 @@ function PhaseBlockItem({
           answered={isAnswered}
           answerText={answerText}
         />
-      )}
-
-      {block.validationUnresolvedEvent && (
-        <ValidationUnresolvedNote ev={block.validationUnresolvedEvent} />
       )}
 
       {block.errorEvent && (
@@ -804,7 +879,9 @@ function findLastMatch<T>(arr: T[], pred: (item: T) => boolean): T | undefined {
   return undefined;
 }
 
-function revisitInfo(block: PhaseBlock): { kind: "error" | "adjustment"; label: string; attempt?: string; detail: string[] } {
+function revisitInfo(block: PhaseBlock): {
+  kind: "error" | "adjustment"; name: string; label: string; detail: string[];
+} {
   const withKind = findLastMatch(block.subSteps, (s) => !!s.revisitKind);
   // Only the backend knows whether a jump back is the agent repairing its
   // own mistake. Absent that, this is "the run went back here", which is
@@ -819,11 +896,94 @@ function revisitInfo(block: PhaseBlock): { kind: "error" | "adjustment"; label: 
     render: "the render",
   };
   const reason = findLastMatch(block.subSteps, (s) => !!s.revisionReason)?.revisionReason;
-  const detail = reason ? reason.split(";").map((r) => r.trim()).filter(Boolean) : [];
-  const attempt = withKind?.revisitAttempt && withKind?.revisitMaxAttempts
-    ? `${withKind.revisitAttempt}/${withKind.revisitMaxAttempts}`
-    : undefined;
-  return { kind, label: `${verb} — ${noun[block.group]}`, attempt, detail };
+  const clauses = reason ? reason.split(";").map((r) => r.trim()).filter(Boolean) : [];
+
+  // The header names what is being worked on, not the box it lives in:
+  // "Fixing Slide 3" says more than "Draft" plus a pill that mentions
+  // neither the slide nor the problem. When one pass covers several
+  // slides there is no single number to name, so the group noun stands in.
+  const slides = Array.from(new Set(
+    block.subSteps.map((s) => s.slideIndex).filter((idx): idx is number => idx != null)
+  ));
+  const subject = slides.length === 1 ? `Slide ${slides[0] + 1}` : noun[block.group];
+  const name = kind === "error" && withKind ? `Fixing ${subject}` : subject;
+
+  // The pill names the *kind* of problem in a couple of words, the way the
+  // approved design does ("overlapping content"), and every validator
+  // clause behind it drops to the subordinate list. Putting a raw clause
+  // in the pill made it long enough to be truncated in a narrow panel,
+  // which loses both the reason and the room for the phase's own clock.
+  const label = summariseReason(clauses, kind) || `${verb} - ${noun[block.group]}`;
+  const detail = clauses;
+
+  // The retry count is not repeated here: every row in this block's
+  // checklist already reads "Attempt N/3", which is the approved design's
+  // "tag once, where it's the whole story".
+  return { kind, name, label, detail };
+}
+
+/** What went wrong, in the two or three words a pill has room for. The
+ *  validator's own sentences are precise and long; they belong in the list
+ *  underneath, not in a label that has to sit beside a phase name and a
+ *  clock. Anything unrecognised falls back to the generic verb rather than
+ *  being cut off mid-word. */
+const REASON_SUMMARIES: { match: RegExp; label: string; kind?: "error" | "adjustment" }[] = [
+  { match: /overlap/i, label: "overlapping content" },
+  { match: /overflow|too (long|much|large)|does not fit|doesn't fit/i, label: "text overflowing" },
+  { match: /off[- ]slide|outside the (slide|placeholder)|out of bounds/i, label: "content off the page" },
+  { match: /contrast|unreadable|illegible/i, label: "unreadable contrast" },
+  { match: /missing|empty|no content/i, label: "missing content" },
+  // An image can be the subject of either kind, and the two mean opposite
+  // things: the agent found its own illustration unusable, or you swapped
+  // the picture and asked for the slide back. Labelling an error "image
+  // replaced" told the user they had done something they had not.
+  { match: /image|picture|illustration/i, label: "unusable illustration", kind: "error" },
+  { match: /image|picture|illustration/i, label: "image replaced", kind: "adjustment" },
+];
+
+function summariseReason(clauses: string[], kind: "error" | "adjustment"): string {
+  const text = clauses.join("; ");
+  if (!text) return "";
+  for (const entry of REASON_SUMMARIES) {
+    if (entry.kind && entry.kind !== kind) continue;
+    if (entry.match.test(text)) return entry.label;
+  }
+  return "";
+}
+
+/** How many validator clauses a revisited phase shows before it stops.
+ *  One overlap on a slide is reported once per pair of overlapping runs,
+ *  so a single bad row produced fifteen near-identical lines and the
+ *  subordinate detail became the largest thing on screen. */
+const MAX_CLAUSES_SHOWN = 4;
+
+function ClauseList({ clauses }: { clauses: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const hidden = clauses.length - MAX_CLAUSES_SHOWN;
+  const shown = expanded ? clauses : clauses.slice(0, MAX_CLAUSES_SHOWN);
+  return (
+    <ul className="ws-revisit-detail">
+      {shown.map((clause, i) => <li key={i}>{clause}</li>)}
+      {hidden > 0 && (
+        <li className="ws-revisit-more">
+          <button type="button" onClick={() => setExpanded((open) => !open)}>
+            {expanded ? "show less" : `and ${hidden} more`}
+          </button>
+        </li>
+      )}
+    </ul>
+  );
+}
+
+/** The arrow-loop that marks a back-edge, on the dot's own badge. */
+function LoopGlyph() {
+  return (
+    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H9" />
+    </svg>
+  );
 }
 
 function revisitStyleVars(kind: "error" | "adjustment"): React.CSSProperties {
@@ -919,6 +1079,21 @@ interface Row {
   sources?: SourceInfo[];
 }
 
+/** Whether a step passed, as opposed to merely having run.
+ *
+ *  validate_rendered_output returns success:true whenever the check
+ *  *executed*, whatever it found, so three attempts that each reported
+ *  seven, eight and seventeen layout problems all rendered with a green
+ *  tick. What the row is reporting is the check, not the call. */
+function stepPassed(step: SubStep): boolean {
+  if (step.success === false) return false;
+  const issues = (step.result as any)?.issues;
+  if (step.toolName === "validate_rendered_output" && Array.isArray(issues)) {
+    return issues.length === 0;
+  }
+  return true;
+}
+
 /** What a failed step says when the backend gave it neither a summary nor
  *  an error string. A red dot over an empty line reads as the UI being
  *  broken rather than the step being. */
@@ -929,9 +1104,9 @@ function failureNote(failed: boolean): string {
 function toRow(s: SubStep): Row {
   return {
     key: s.key,
-    icon: s.success === false ? "●" : s.running ? "↻" : "✓",
+    icon: !stepPassed(s) ? "●" : s.running ? "↻" : "✓",
     label: toolLabel(s.toolName),
-    note: s.summary || (s.running ? "" : s.error || failureNote(s.success === false)),
+    note: s.summary || (s.running ? "" : s.error || failureNote(!stepPassed(s))),
     durationMs: s.processDurationMs ?? s.durationMs,
     toolDurationMs: s.durationMs,
     running: s.running,
@@ -1073,7 +1248,7 @@ function groupRenderRows(subSteps: SubStep[]): Row[] {
     const group = subSteps.slice(i, end);
     const last = group[group.length - 1];
     const anyRunning = group.some((s) => s.running);
-    const anyFailed = last.success === false;
+    const anyFailed = !stepPassed(last);
     const sources = group.flatMap((s) => s.sources || []);
     rows.push({
       key: `render-attempt-${attempt}`,
@@ -1111,16 +1286,14 @@ function CheckRow({ row }: { row: Row }) {
           {row.running ? (
             <StepTimer startTs={row.startTs || ""} running durationMs={undefined} />
           ) : (
-            <span
-              className="ws-step-dur"
-              title={
-                row.toolDurationMs != null && row.toolDurationMs !== row.durationMs
-                  ? `tool call: ${fmtDuration(row.toolDurationMs)}`
-                  : undefined
-              }
-            >
-              {fmtDuration(row.durationMs)}
-            </span>
+            <>
+              <span className="ws-step-dur">{fmtDuration(row.durationMs)}</span>
+              {row.toolDurationMs != null && row.toolDurationMs !== row.durationMs && (
+                <span className="ws-step-subdur" title="time inside the tool call itself">
+                  tool {fmtDuration(row.toolDurationMs)}
+                </span>
+              )}
+            </>
           )}
           {hasRaw && (
             <button type="button" className="ws-check-raw" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
@@ -1243,6 +1416,9 @@ function SourceLink({ source }: { source: SourceInfo }) {
       title={source.url}
     >
       {favicon && !imgFailed ? (
+        // next/image would need this third-party host allow-listed in
+        // next.config and buys nothing for a 16px favicon.
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={favicon}
           alt=""
@@ -1312,6 +1488,8 @@ export function FeedItem({
   dot,
   dotClass,
   dotBadge,
+  rail,
+  railStyle,
   children,
 }: {
   dot: React.ReactNode;
@@ -1319,10 +1497,25 @@ export function FeedItem({
   /** A small self-contained badge anchored to this item's own dot, e.g.
    *  the revisit-kind marker - never a line reaching for another element. */
   dotBadge?: React.ReactNode;
+  /** This item's segment of a retry back-edge, drawn in the feed's own
+   *  left gutter. Each segment is sized by this item's rendered height,
+   *  so a segment always meets the one above it however tall the content
+   *  turns out to be. */
+  rail?: LoopRail;
+  railStyle?: React.CSSProperties;
   children: React.ReactNode;
 }) {
   return (
     <div className="ws-feed-item">
+      {rail && (
+        <div className={`ws-loop-rail ${rail.role}`} style={railStyle} aria-hidden="true">
+          <div className="ws-loop-rail-line" />
+          {rail.role !== "pass" && <div className="ws-loop-rail-tick" />}
+          {rail.role === "end" && !!rail.count && (
+            <div className="ws-loop-rail-badge">↻ ×{rail.count}</div>
+          )}
+        </div>
+      )}
       <div className="ws-feed-dot-wrap">
         <div className={`ws-feed-dot ${dotClass ?? ""}`}>{dot}</div>
         {dotBadge}
