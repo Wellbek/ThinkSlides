@@ -1066,7 +1066,12 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
 .ws-revisit-detail li::before { content: "\00b7"; position: absolute; left: 0; }
 
 .ws-phase-takeaway { color: #999; font-size: 13px; line-height: 1.55; margin-top: 5px; }
-.ws-phase-raw { display: inline-block; margin-left: 8px; vertical-align: middle; }
+
+/* The phase's narration accumulates rather than being replaced, so it is
+   several paragraphs by the end of a long phase and needs them separated.
+   The last one stays inline so the typing cursor sits against the text. */
+.ws-phase-narration .ws-md p { margin: 0 0 7px; }
+.ws-phase-narration .ws-md p:last-child { margin-bottom: 0; }
 
 /* Boxed substep checklist - "as in A", per the approved concept: substeps
    live inside a bordered card rather than floating loose on the timeline. */

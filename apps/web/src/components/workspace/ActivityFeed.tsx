@@ -631,19 +631,23 @@ function PhaseBlockItem({
   const icon = failed ? "●" : active ? "↻" : block.revisit ? "↺" : "✓";
   const dotClass = failed ? "ws-dot-error" : active ? "ws-dot-status" : block.revisit ? "ws-dot-revisit" : "ws-dot-fact";
 
-  const lastThought = block.thoughts[block.thoughts.length - 1];
+  // Everything the model has said in this phase, in order. Showing only
+  // the last line meant each new thought wiped the one before it and the
+  // typewriter retyped the replacement from an empty box, so a phase with
+  // several substeps flickered its way through the run and its reasoning
+  // ended up behind a "Raw" disclosure that read as debug output.
   const lastStep = block.subSteps[block.subSteps.length - 1];
-  const takeawayText = lastThought?.content || (!active ? lastStep?.summary || "" : "");
+  const narration = useMemo(() => {
+    const said = block.thoughts.map((t) => t.content.trim()).filter(Boolean);
+    return said.join("\n\n");
+  }, [block.thoughts]);
+  const takeawayText = narration || (!active ? lastStep?.summary || "" : "");
 
   const rows = useMemo(() => {
     if (block.group === "draft") return groupDraftRows(block.subSteps);
     if (block.group === "render") return groupRenderRows(block.subSteps);
     return block.subSteps.map(toRow);
   }, [block.subSteps, block.group]);
-
-  const rawExtra = block.thoughts.length > 1
-    ? block.thoughts.slice(0, -1).map((t) => t.content).join("\n\n")
-    : "";
 
   const revisit = block.revisit ? revisitInfo(block) : null;
 
@@ -676,7 +680,7 @@ function PhaseBlockItem({
       )}
 
       {(takeawayText || active) && (
-        <div className="ws-phase-takeaway">
+        <div className="ws-phase-takeaway ws-phase-narration">
           {active ? (
             takeawayText ? (
               <TypewriterText text={takeawayText} />
@@ -687,7 +691,6 @@ function PhaseBlockItem({
             <MarkdownText className="ws-md-inline">{takeawayText}</MarkdownText>
           )}
           {active && takeawayText && <span className="ws-ai-cursor" />}
-          {rawExtra && <PhaseRawLink content={rawExtra} />}
         </div>
       )}
 
@@ -813,38 +816,41 @@ function PhaseTimer({ block, active }: { block: PhaseBlock; active: boolean }) {
  *  actually said arrives whole over SSE, so this types it out on the client
  *  rather than pasting it in - not real per-token streaming (that needs the
  *  provider call itself to stream), but visually honest about being in
- *  progress rather than static. */
+ *  progress rather than static.
+ *
+ *  Narration accumulates, so a new thought extends the text rather than
+ *  replacing it. Whatever is already on screen therefore stays exactly
+ *  where it is and only the new passage animates in; the box is cleared
+ *  and retyped only if the text genuinely changed underneath it, which
+ *  happens when a different phase block reuses this component. */
+const TYPE_TICK_MS = 18;
+/** Longest a single passage takes to reveal, in ticks. A paragraph types
+ *  character by character; a wall of reasoning reveals in chunks rather
+ *  than making the user wait half a minute to read it. */
+const TYPE_MAX_TICKS = 90;
+
 function TypewriterText({ text }: { text: string }) {
   const [shown, setShown] = useState("");
-  const prevTextRef = useRef<string>("");
+  const shownRef = useRef<string>("");
 
   useEffect(() => {
-    if (text === prevTextRef.current) return;
-    prevTextRef.current = text;
-    setShown("");
-    let i = 0;
+    if (text === shownRef.current) return;
+    if (!text.startsWith(shownRef.current)) {
+      shownRef.current = "";
+      setShown("");
+    }
+    let i = shownRef.current.length;
+    const step = Math.max(1, Math.ceil((text.length - i) / TYPE_MAX_TICKS));
     const id = setInterval(() => {
-      i++;
-      setShown(text.slice(0, i));
+      i = Math.min(text.length, i + step);
+      shownRef.current = text.slice(0, i);
+      setShown(shownRef.current);
       if (i >= text.length) clearInterval(id);
-    }, 18);
+    }, TYPE_TICK_MS);
     return () => clearInterval(id);
   }, [text]);
 
   return <MarkdownText className="ws-md-inline">{shown}</MarkdownText>;
-}
-
-function PhaseRawLink({ content }: { content: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="ws-raw ws-phase-raw">
-      <button type="button" className="ws-raw-toggle" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <ChevronDown size={11} className={`ws-raw-chev ${open ? "open" : ""}`} />
-        Raw
-      </button>
-      {open && <DetailBlock label="Narration" content={content} />}
-    </div>
-  );
 }
 
 // ──────────────────────────────────────────────
