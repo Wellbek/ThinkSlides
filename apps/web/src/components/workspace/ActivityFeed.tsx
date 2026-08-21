@@ -31,17 +31,43 @@ const GROUP_LABEL: Record<PhaseGroupKey, string> = {
   render: "Render & check",
 };
 
-const STEP_TO_GROUP: Record<string, PhaseGroupKey> = {
-  intake: "understand",
-  consult: "understand",
-  scout: "research",
-  research: "research",
-  design: "design",
-  plan: "design",
-  review: "design",
-  draft: "draft",
-  render: "render",
-  validate: "render",
+/** The pipeline's steps in the order a run walks them, mirroring PIPELINE in
+ *  services/ai/app/agent/pipeline.py, each with the timeline box it belongs
+ *  to. Several steps share a box, and the ORDER is what tells a revisit from
+ *  ordinary progress: `design` (pick a direction) and `plan` (outline the
+ *  deck) both live in the Design box but sit either side of `research`, so
+ *  the Design box legitimately appears twice in a run that never went
+ *  backwards. Treating a repeated box as a revisit labelled every such run
+ *  "fixing — the design" when nothing had gone wrong. */
+const PIPELINE_STEPS: { step: string; group: PhaseGroupKey }[] = [
+  { step: "intake", group: "understand" },
+  { step: "scout", group: "research" },
+  { step: "consult", group: "understand" },
+  { step: "design", group: "design" },
+  { step: "research", group: "research" },
+  { step: "plan", group: "design" },
+  { step: "review", group: "design" },
+  { step: "draft", group: "draft" },
+  { step: "render", group: "render" },
+  { step: "validate", group: "render" },
+];
+
+const STEP_TO_GROUP: Record<string, PhaseGroupKey> = Object.fromEntries(
+  PIPELINE_STEPS.map(({ step, group }) => [step, group])
+);
+
+/** How far through the pipeline each step is. A block whose step ranks
+ *  earlier than the furthest the run has reached is the run going back. */
+const STEP_ORDER: Record<string, number> = Object.fromEntries(
+  PIPELINE_STEPS.map(({ step }, i) => [step, i])
+);
+
+/** The two groups a validation-retry loop alternates between - see
+ *  `currentBlock`'s reuse logic below. No other group pair loops this
+ *  way, so this stays deliberately narrow rather than a general rule. */
+const RETRY_PAIR: Partial<Record<PhaseGroupKey, PhaseGroupKey>> = {
+  render: "draft",
+  draft: "render",
 };
 
 /** Coarse `phase` → best-guess fine step, for events recorded before `step`
@@ -140,10 +166,23 @@ interface SubStep {
   error?: string;
   startTs: string;
   endTs?: string;
+  /** Raw tool-execution time, as reported by the backend - excludes the
+   *  model's reasoning/decision time that preceded the call. Kept around
+   *  as a secondary value once `processDurationMs` takes over as the
+   *  headline duration. */
   durationMs?: number;
+  /** This step's full process span: from the moment the previous step in
+   *  this phase finished (or the phase itself started, for the first
+   *  step) to this step's own completion. Reasoning time between calls
+   *  lands on the step it precedes instead of going unaccounted for, so
+   *  step durations sum to the phase's wall-clock total by construction. */
+  processDurationMs?: number;
   running: boolean;
   isRevision?: boolean;
   revisionReason?: string;
+  revisitKind?: "error" | "adjustment";
+  revisitAttempt?: number;
+  revisitMaxAttempts?: number;
   slideIndex?: number;
   sources?: SourceInfo[];
 }
@@ -166,20 +205,55 @@ interface PhaseBlock {
 
 function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closingText: string } {
   const blocks: PhaseBlock[] = [];
-  const seenGroups = new Set<PhaseGroupKey>();
+  // How far through the pipeline this run has got. A step that ranks behind
+  // it is the run doubling back - the only thing that counts as a revisit.
+  let furthestStep = -1;
   const openSubSteps = new Map<string, SubStep>();
+  // Per-block cursor for `processDurationMs`: seeded at the block's own
+  // start, then advanced to each step's own end as steps complete - so the
+  // next step's process span picks up exactly where the last one left off.
+  const cursorByBlock = new Map<string, string>();
+  // A retry loop's Render block and its Fixing block are visually two
+  // blocks, but they're one continuous timeline - the fix happens in the
+  // gap between two validate attempts. Once the first fix block is
+  // created right after its Render block, they share ONE cursor entry
+  // (keyed by the Render block's key) instead of two independent ones, or
+  // the fix cycle's wall time gets counted once on each side and the
+  // phase's substeps would sum to more than its own wall-clock total.
+  const cursorGroupKey = new Map<string, string>();
+  const resolveCursorKey = (key: string): string => cursorGroupKey.get(key) ?? key;
   let closingText = "";
   let blockCounter = 0;
 
-  const currentBlock = (group: PhaseGroupKey, ts: string): PhaseBlock => {
+  const currentBlock = (group: PhaseGroupKey, step: string, ts: string): PhaseBlock => {
     const last = blocks[blocks.length - 1];
     if (last && last.group === group) {
       last.endTs = ts;
       return last;
     }
+    // A validate/fix retry loop alternates strictly between "render" and
+    // "draft" - reuse the most recent block of this group instead of
+    // starting a new one each time it comes back around, so N attempts
+    // read as one "Validate" block and one "Fixing" block, each with an
+    // attempt checklist, rather than N near-duplicate blocks. A fix block
+    // never absorbs the original (non-revisit) draft pass - only a prior
+    // fix attempt - so "Draft" and "Fixing Slide 2" stay visually distinct.
+    const pairGroup = RETRY_PAIR[group];
+    if (pairGroup) {
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const b = blocks[i];
+        if (b.group === group) {
+          if (group === "draft" && !b.revisit) break;
+          b.endTs = ts;
+          return b;
+        }
+        if (b.group !== pairGroup) break;
+      }
+    }
     blockCounter++;
-    const revisit = seenGroups.has(group);
-    seenGroups.add(group);
+    const rank = STEP_ORDER[step];
+    const revisit = rank !== undefined && rank < furthestStep;
+    if (rank !== undefined) furthestStep = Math.max(furthestStep, rank);
     const block: PhaseBlock = {
       key: `phase-${blockCounter}-${group}`,
       group,
@@ -192,6 +266,13 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
       slideFinalized: [],
     };
     blocks.push(block);
+    if (group === "draft" && revisit && last?.group === "render") {
+      // This fix block continues the render block's timeline rather than
+      // starting its own - see cursorGroupKey above.
+      cursorGroupKey.set(block.key, resolveCursorKey(last.key));
+    } else {
+      cursorByBlock.set(block.key, ts);
+    }
     return block;
   };
 
@@ -203,7 +284,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
     }
     const group = groupOf(ev);
     if (!group) continue;
-    const block = currentBlock(group, ev.timestamp || blocks[blocks.length - 1]?.endTs || "");
+    const block = currentBlock(group, step, ev.timestamp || blocks[blocks.length - 1]?.endTs || "");
 
     switch (ev.type) {
       case "thought":
@@ -222,6 +303,9 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
           running: true,
           isRevision: ev.isRevision,
           revisionReason: ev.revisionReason,
+          revisitKind: ev.revisitKind,
+          revisitAttempt: ev.revisitAttempt,
+          revisitMaxAttempts: ev.revisitMaxAttempts,
           slideIndex: typeof ev.toolArgs?.slide_index === "number" ? ev.toolArgs.slide_index : undefined,
         };
         block.subSteps.push(sub);
@@ -229,6 +313,8 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
         break;
       }
       case "tool_result": {
+        const cursorKey = resolveCursorKey(block.key);
+        const cursor = cursorByBlock.get(cursorKey) ?? block.startTs;
         const sub = openSubSteps.get(ev.callId);
         if (sub) {
           sub.running = false;
@@ -238,6 +324,7 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
           sub.success = ev.success;
           sub.error = ev.error;
           sub.durationMs = ev.durationMs;
+          sub.processDurationMs = new Date(ev.timestamp).getTime() - new Date(cursor).getTime();
           sub.sources = Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined;
           openSubSteps.delete(ev.callId);
         } else {
@@ -253,10 +340,12 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
             success: ev.success,
             error: ev.error,
             durationMs: ev.durationMs,
+            processDurationMs: new Date(ev.timestamp).getTime() - new Date(cursor).getTime(),
             running: false,
             sources: Array.isArray(ev.sources) && ev.sources.length ? ev.sources : undefined,
           });
         }
+        cursorByBlock.set(cursorKey, ev.timestamp);
         break;
       }
       case "slide_finalized":
@@ -472,108 +561,154 @@ function PhaseBlockItem({
   const lastStep = block.subSteps[block.subSteps.length - 1];
   const takeawayText = lastThought?.content || (!active ? lastStep?.summary || "" : "");
 
-  const rows = useMemo(
-    () => (block.group === "draft" ? groupDraftRows(block.subSteps) : block.subSteps.map(toRow)),
-    [block.subSteps, block.group]
-  );
+  const rows = useMemo(() => {
+    if (block.group === "draft") return groupDraftRows(block.subSteps);
+    if (block.group === "render") return groupRenderRows(block.subSteps);
+    return block.subSteps.map(toRow);
+  }, [block.subSteps, block.group]);
 
   const rawExtra = block.thoughts.length > 1
     ? block.thoughts.slice(0, -1).map((t) => t.content).join("\n\n")
     : "";
 
+  const revisit = block.revisit ? revisitInfo(block) : null;
+
   return (
-    <>
-      {block.revisit && <BacktrackBanner block={block} />}
-      <FeedItem dot={icon} dotClass={dotClass}>
-        <div className="ws-phase-head">
-          <span className="ws-phase-name">{GROUP_LABEL[block.group]}</span>
-          {block.revisit && <span className="ws-phase-tag">revisit</span>}
-          <span className="ws-spacer-sm" />
-          <PhaseTimer block={block} active={active} />
-        </div>
+    <FeedItem
+      dot={icon}
+      dotClass={dotClass}
+      dotBadge={revisit && (
+        <span className="ws-revisit-badge" style={revisitStyleVars(revisit.kind)}>
+          {revisit.kind === "adjustment" ? "✎" : "⚠"}
+        </span>
+      )}
+    >
+      <div className="ws-phase-head">
+        <span className="ws-phase-name">{GROUP_LABEL[block.group]}</span>
+        {revisit && (
+          <span className="ws-revisit-pill" style={revisitStyleVars(revisit.kind)}>
+            {revisit.label}
+            {revisit.attempt && <span className="attempt-count">({revisit.attempt})</span>}
+          </span>
+        )}
+        <span className="ws-spacer-sm" />
+        <PhaseTimer block={block} active={active} />
+      </div>
 
-        {(takeawayText || active) && (
-          <div className="ws-phase-takeaway">
-            {active ? (
-              takeawayText ? (
-                <TypewriterText text={takeawayText} />
-              ) : (
-                <span className="ws-shimmer-body">Reasoning through this step<span className="ws-ai-cursor" /></span>
-              )
+      {revisit && !!revisit.detail.length && (
+        <ul className="ws-revisit-detail">
+          {revisit.detail.map((d, i) => <li key={i}>{d}</li>)}
+        </ul>
+      )}
+
+      {(takeawayText || active) && (
+        <div className="ws-phase-takeaway">
+          {active ? (
+            takeawayText ? (
+              <TypewriterText text={takeawayText} />
             ) : (
-              <MarkdownText className="ws-md-inline">{takeawayText}</MarkdownText>
-            )}
-            {active && takeawayText && <span className="ws-ai-cursor" />}
-            {rawExtra && <PhaseRawLink content={rawExtra} />}
-          </div>
-        )}
+              <span className="ws-shimmer-body">Reasoning through this step<span className="ws-ai-cursor" /></span>
+            )
+          ) : (
+            <MarkdownText className="ws-md-inline">{takeawayText}</MarkdownText>
+          )}
+          {active && takeawayText && <span className="ws-ai-cursor" />}
+          {rawExtra && <PhaseRawLink content={rawExtra} />}
+        </div>
+      )}
 
-        {!!rows.length && (
-          <div className="ws-phase-checklist">
-            {rows.map((row) => <CheckRow key={row.key} row={row} />)}
-          </div>
-        )}
+      {!!rows.length && (
+        <div className="ws-phase-checklist">
+          {rows.map((row) => <CheckRow key={row.key} row={row} />)}
+        </div>
+      )}
 
-        {block.progress.map((p: any, i: number) => (
-          <div key={`pg-${i}`} className="ws-step-progress">
-            <div className="ws-feed-text">{p.message}</div>
-            <ProgressBar current={p.current} total={p.total} />
-          </div>
-        ))}
+      {block.progress.map((p: any, i: number) => (
+        <div key={`pg-${i}`} className="ws-step-progress">
+          <div className="ws-feed-text">{p.message}</div>
+          <ProgressBar current={p.current} total={p.total} />
+        </div>
+      ))}
 
-        {!!block.slideFinalized.length && (
-          <div className="ws-feed-text">
-            {block.slideFinalized.length === 1
-              ? `Slide ${(block.slideFinalized[0].slideIndex ?? 0) + 1} finalized.`
-              : `${block.slideFinalized.length} slides finalized.`}
-          </div>
-        )}
+      {!!block.slideFinalized.length && (
+        <div className="ws-feed-text">
+          {block.slideFinalized.length === 1
+            ? `Slide ${(block.slideFinalized[0].slideIndex ?? 0) + 1} finalized.`
+            : `${block.slideFinalized.length} slides finalized.`}
+        </div>
+      )}
 
-        {block.questionEvent && (
-          <QuestionCard
-            questions={
-              Array.isArray(block.questionEvent.questions) && block.questionEvent.questions.length
-                ? block.questionEvent.questions
-                : [{ question: block.questionEvent.question, options: block.questionEvent.options || [] }]
-            }
-            context={block.questionEvent.context}
-            answered={isAnswered}
-            answerText={answerText}
-          />
-        )}
+      {block.questionEvent && (
+        <QuestionCard
+          questions={
+            Array.isArray(block.questionEvent.questions) && block.questionEvent.questions.length
+              ? block.questionEvent.questions
+              : [{ question: block.questionEvent.question, options: block.questionEvent.options || [] }]
+          }
+          context={block.questionEvent.context}
+          answered={isAnswered}
+          answerText={answerText}
+        />
+      )}
 
-        {block.validationUnresolvedEvent && (
-          <ValidationUnresolvedNote ev={block.validationUnresolvedEvent} />
-        )}
+      {block.validationUnresolvedEvent && (
+        <ValidationUnresolvedNote ev={block.validationUnresolvedEvent} />
+      )}
 
-        {block.errorEvent && (
-          <div className="ws-feed-text" style={{ color: "#F87171" }}>
-            {block.errorEvent.message}
-            {block.errorEvent.code ? <code> ({block.errorEvent.code})</code> : null}
-          </div>
-        )}
+      {block.errorEvent && (
+        <div className="ws-feed-text" style={{ color: "#F87171" }}>
+          {block.errorEvent.message}
+          {block.errorEvent.code ? <code> ({block.errorEvent.code})</code> : null}
+        </div>
+      )}
 
-        {block.fileGeneratedEvent && <FileGeneratedNote ev={block.fileGeneratedEvent} />}
-      </FeedItem>
-    </>
+      {block.fileGeneratedEvent && <FileGeneratedNote ev={block.fileGeneratedEvent} />}
+    </FeedItem>
   );
 }
 
-function BacktrackBanner({ block }: { block: PhaseBlock }) {
-  const reason = block.subSteps.find((s) => s.revisionReason)?.revisionReason;
-  const fallback: Record<PhaseGroupKey, string> = {
-    understand: "The plan changed - going back to reconsider the brief",
-    research: "More was needed - going back to research further",
-    design: "The design needs another look - going back to adjust it",
-    draft: "Validation flagged an issue - going back to fix it",
-    render: "Going back to render and check again",
+/** What a revisited phase's badge/pill/detail should say: a short label
+ *  colored by whether this is the agent fixing its own mistake ("error")
+ *  or honoring something the user asked for ("adjustment"), plus any
+ *  validator detail as a subordinate list - never swapped in as the
+ *  entire message the way the old backtrack banner did. */
+/** Last array element matching `pred`, not the first - a merged retry
+ *  block's subSteps span every attempt, and the header should reflect
+ *  the current (most recent) one, not stay frozen on the first. */
+function findLastMatch<T>(arr: T[], pred: (item: T) => boolean): T | undefined {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (pred(arr[i])) return arr[i];
+  }
+  return undefined;
+}
+
+function revisitInfo(block: PhaseBlock): { kind: "error" | "adjustment"; label: string; attempt?: string; detail: string[] } {
+  const withKind = findLastMatch(block.subSteps, (s) => !!s.revisitKind);
+  // Only the backend knows whether a jump back is the agent repairing its
+  // own mistake. Absent that, this is "the run went back here", which is
+  // what the word says - not an accusation in alarm red.
+  const kind: "error" | "adjustment" = withKind?.revisitKind ?? "adjustment";
+  const verb = !withKind ? "revisiting" : kind === "adjustment" ? "adjusting" : "fixing";
+  const noun: Record<PhaseGroupKey, string> = {
+    understand: "the brief",
+    research: "the research",
+    design: "the design",
+    draft: "content",
+    render: "the render",
   };
-  return (
-    <div className="ws-backtrack">
-      <span className="ws-backtrack-icon">↩</span>
-      {reason || fallback[block.group]}
-    </div>
-  );
+  const reason = findLastMatch(block.subSteps, (s) => !!s.revisionReason)?.revisionReason;
+  const detail = reason ? reason.split(";").map((r) => r.trim()).filter(Boolean) : [];
+  const attempt = withKind?.revisitAttempt && withKind?.revisitMaxAttempts
+    ? `${withKind.revisitAttempt}/${withKind.revisitMaxAttempts}`
+    : undefined;
+  return { kind, label: `${verb} — ${noun[block.group]}`, attempt, detail };
+}
+
+function revisitStyleVars(kind: "error" | "adjustment"): React.CSSProperties {
+  return {
+    ["--ws-revisit-c" as string]: kind === "adjustment" ? "var(--ws-yellow-text)" : "var(--ws-red-text)",
+    ["--ws-revisit-c-bg" as string]: kind === "adjustment" ? "var(--ws-yellow-bg)" : "var(--ws-red-bg)",
+  } as React.CSSProperties;
 }
 
 function PhaseTimer({ block, active }: { block: PhaseBlock; active: boolean }) {
@@ -639,11 +774,13 @@ interface Row {
   label: string;
   note: string;
   durationMs?: number;
+  /** Raw tool-execution time, kept as a secondary/tooltip value once
+   *  `durationMs` carries the fuller process span instead. */
+  toolDurationMs?: number;
   running?: boolean;
   startTs?: string;
   args?: Record<string, unknown>;
   result?: unknown;
-  revisit?: boolean;
   sources?: SourceInfo[];
 }
 
@@ -653,12 +790,12 @@ function toRow(s: SubStep): Row {
     icon: s.success === false ? "●" : s.running ? "↻" : "✓",
     label: toolLabel(s.toolName),
     note: s.summary || (s.running ? "" : s.error || ""),
-    durationMs: s.durationMs,
+    durationMs: s.processDurationMs ?? s.durationMs,
+    toolDurationMs: s.durationMs,
     running: s.running,
     startTs: s.startTs,
     args: s.args,
     result: s.result,
-    revisit: s.isRevision,
     sources: s.sources,
   };
 }
@@ -667,31 +804,95 @@ function toRow(s: SubStep): Row {
  *  slide - a slide is drafted through several calls (layout, a chart, the
  *  copy itself), and listing each separately says less than "Slide 3" does. */
 function groupDraftRows(subSteps: SubStep[]): Row[] {
+  // A merged "Fixing" block (see `currentBlock`'s retry-loop reuse) can
+  // cover more than one slide in the same pass - slides_needing_revision
+  // isn't always a single index. Once that's true, "Attempt 2" alone is
+  // ambiguous between rows, so the slide number has to be in every label,
+  // not just implied by a phase header that doesn't name a slide either.
+  const distinctSlides = new Set(
+    subSteps.map((s) => s.slideIndex).filter((idx): idx is number => idx != null)
+  );
+  const disambiguateSlide = distinctSlides.size > 1;
+
   const rows: Row[] = [];
   let i = 0;
   while (i < subSteps.length) {
     const idx = subSteps[i].slideIndex;
+    // A merged "Fixing" block accumulates one design_slide_content call
+    // per attempt, all for the same slide - group consecutive calls only
+    // within the same attempt, or every attempt would collapse into one
+    // row and the retry count would disappear from the checklist.
+    const attempt = subSteps[i].revisitAttempt;
     let end = i + 1;
     if (idx != null) {
-      while (end < subSteps.length && subSteps[end].slideIndex === idx) end++;
+      while (
+        end < subSteps.length &&
+        subSteps[end].slideIndex === idx &&
+        subSteps[end].revisitAttempt === attempt
+      ) end++;
     }
     const group = subSteps.slice(i, end);
     const last = group[group.length - 1];
     const anyRunning = group.some((s) => s.running);
     const anyFailed = group.some((s) => s.success === false);
-    const anyRevision = group.some((s) => s.isRevision);
     const sources = group.flatMap((s) => s.sources || []);
+    const maxAttempts = group[0].revisitMaxAttempts;
+    const slideLabel = idx != null ? `Slide ${idx + 1}` : undefined;
+    const attemptLabel = attempt != null ? `Attempt ${attempt}${maxAttempts ? `/${maxAttempts}` : ""}` : undefined;
+    const label = attemptLabel
+      ? (disambiguateSlide && slideLabel ? `${slideLabel} — ${attemptLabel}` : attemptLabel)
+      : slideLabel ?? toolLabel(last.toolName);
     rows.push({
-      key: `slide-${idx ?? i}`,
+      key: `slide-${idx ?? i}-${attempt ?? 0}`,
       icon: anyFailed ? "●" : anyRunning ? "↻" : "✓",
-      label: idx != null ? `Slide ${idx + 1}` : toolLabel(last.toolName),
+      label,
       note: last.summary || (anyRunning ? "" : last.error || ""),
-      durationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
+      durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
+      toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
       running: anyRunning,
       startTs: group.find((s) => s.running)?.startTs || group[0].startTs,
       args: last.args,
       result: last.result,
-      revisit: anyRevision,
+      sources: sources.length ? sources : undefined,
+    });
+    i = end;
+  }
+  return rows;
+}
+
+/** A merged "Validate" block (see `currentBlock`'s retry-loop reuse) runs
+ *  one finalize_and_render_pptx + validate_rendered_output pair per
+ *  attempt (confirmed against pipeline.py: a redesign invalidates
+ *  render_is_current, so every attempt re-renders before re-validating) -
+ *  group each pair into one "Attempt N" row instead of listing every call
+ *  under its own tool name, N times over. */
+function groupRenderRows(subSteps: SubStep[]): Row[] {
+  const attemptCount = subSteps.filter((s) => s.toolName === "finalize_and_render_pptx").length;
+  if (attemptCount <= 1) return subSteps.map(toRow);
+
+  const rows: Row[] = [];
+  let i = 0;
+  let attempt = 0;
+  while (i < subSteps.length) {
+    attempt++;
+    let end = i + 1;
+    while (end < subSteps.length && subSteps[end].toolName !== "finalize_and_render_pptx") end++;
+    const group = subSteps.slice(i, end);
+    const last = group[group.length - 1];
+    const anyRunning = group.some((s) => s.running);
+    const anyFailed = group.some((s) => s.success === false);
+    const sources = group.flatMap((s) => s.sources || []);
+    rows.push({
+      key: `render-attempt-${attempt}`,
+      icon: anyFailed ? "●" : anyRunning ? "↻" : "✓",
+      label: `Attempt ${attempt}`,
+      note: last.summary || (anyRunning ? "" : last.error || ""),
+      durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
+      toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
+      running: anyRunning,
+      startTs: group.find((s) => s.running)?.startTs || group[0].startTs,
+      args: last.args,
+      result: last.result,
       sources: sources.length ? sources : undefined,
     });
     i = end;
@@ -712,13 +913,21 @@ function CheckRow({ row }: { row: Row }) {
         <div className="ws-check-top">
           <span className={`ws-check-icon ${iconClass}`}>{row.icon}</span>
           <span className="ws-check-label">{row.label}</span>
-          {row.revisit && <span className="ws-phase-tag sm">revisit</span>}
           {!!row.sources?.length && <SourcesInline sources={row.sources} />}
           <span className="ws-spacer-sm" />
           {row.running ? (
             <StepTimer startTs={row.startTs || ""} running durationMs={undefined} />
           ) : (
-            <span className="ws-step-dur">{fmtDuration(row.durationMs)}</span>
+            <span
+              className="ws-step-dur"
+              title={
+                row.toolDurationMs != null && row.toolDurationMs !== row.durationMs
+                  ? `tool call: ${fmtDuration(row.toolDurationMs)}`
+                  : undefined
+              }
+            >
+              {fmtDuration(row.durationMs)}
+            </span>
           )}
           {hasRaw && (
             <button type="button" className="ws-check-raw" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
@@ -738,15 +947,18 @@ function CheckRow({ row }: { row: Row }) {
   );
 }
 
+/** Quiet, single-color note for "gave up after the retry cap" - a fact
+ *  worth noticing, not an alarm. Colored with the same adjustment-driven
+ *  yellow the revisit badges use, not a bordered red alert box. */
 function ValidationUnresolvedNote({ ev }: { ev: any }) {
   const issues: any[] = Array.isArray(ev.issues) ? ev.issues : [];
   return (
-    <div className="ws-feed-text">
-      The deck is available to download, but after {ev.attempts} revision
-      {ev.attempts === 1 ? "" : "s"} it still has {ev.issueCount ?? issues.length} layout
-      {(ev.issueCount ?? issues.length) === 1 ? " problem" : " problems"}. Ask the agent
-      to simplify the affected slides, or adjust them yourself.
-      <ul className="ws-md-issues">
+    <div className="ws-feed-text" style={{ color: "var(--ws-yellow-text)" }}>
+      Wasn&apos;t able to fully resolve {ev.issueCount ?? issues.length} layout
+      {(ev.issueCount ?? issues.length) === 1 ? " issue" : " issues"} after {ev.attempts} attempt
+      {ev.attempts === 1 ? "" : "s"}. Continuing with the presentation - you may want to review
+      the affected slides manually.
+      <ul className="ws-md-issues" style={{ color: "var(--ws-text-muted)" }}>
         {issues.slice(0, 6).map((issue: any, i: number) => (
           <li key={i}>
             {typeof issue.slideIndex === "number" ? `Slide ${issue.slideIndex + 1}: ` : ""}
@@ -906,15 +1118,22 @@ function ProgressBar({ current, total }: { current?: number; total?: number }) {
 export function FeedItem({
   dot,
   dotClass,
+  dotBadge,
   children,
 }: {
   dot: React.ReactNode;
   dotClass?: string;
+  /** A small self-contained badge anchored to this item's own dot, e.g.
+   *  the revisit-kind marker - never a line reaching for another element. */
+  dotBadge?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="ws-feed-item">
-      <div className={`ws-feed-dot ${dotClass ?? ""}`}>{dot}</div>
+      <div className="ws-feed-dot-wrap">
+        <div className={`ws-feed-dot ${dotClass ?? ""}`}>{dot}</div>
+        {dotBadge}
+      </div>
       <div className="ws-feed-body">{children}</div>
     </div>
   );

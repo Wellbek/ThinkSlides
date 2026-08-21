@@ -109,6 +109,15 @@ export interface ToolCallEvent {
   // which otherwise look identical in the activity feed.
   isRevision?: boolean;
   revisionReason?: string;
+  /** "error" for a validation-driven fix, "adjustment" for a change the
+   *  user asked for (e.g. replacing an image) - lets the UI tell "fixing a
+   *  mistake" apart from "honoring an edit" instead of treating every
+   *  revision the same way. */
+  revisitKind?: "error" | "adjustment";
+  /** Which validation pass (of MAX_VALIDATION_ATTEMPTS) flagged this fix -
+   *  lets the UI show a rising "(2/3)" while the retry budget is spent. */
+  revisitAttempt?: number;
+  revisitMaxAttempts?: number;
 }
 
 export interface SourceInfo {
