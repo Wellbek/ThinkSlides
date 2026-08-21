@@ -64,8 +64,11 @@ COLOUR_AS_PROPOSED = "As proposed - the colours in the previews"
 # what the first did not, and this sits inside a pause the user is watching.
 MAX_ATTEMPTS = 2
 # More than this and the colour question stops being a choice and becomes a
-# swatch book.
+# swatch book. Fewer and it stops being a choice at all - two runs on
+# unrelated subjects both offered exactly one alternative, and it was the
+# same one, because it was the hex written into the prompt's own example.
 MAX_COLOUR_OPTIONS = 3
+MIN_COLOUR_OPTIONS = 3
 
 _HEX_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 
@@ -176,6 +179,7 @@ class ProposeDesignDirectionsTool:
             # A settled colour has already been applied to all three, and an
             # uploaded template's palette is the user's own - neither is a
             # question worth a slot on the card.
+            palettes = _top_up_palettes(palettes, proposed)
             asks_colour = not brand_hex and uploaded is None and bool(palettes)
             questions = [{
                 "question": QUESTION,
@@ -332,7 +336,10 @@ def _prompt(brief: str, answers: str, brand_hex: str | None,
 
     lines += [
         "",
-        "Return JSON only, in this exact shape:",
+        "Return JSON only, in this exact shape. Every value written in "
+        "<angle brackets> is a description of what belongs there, not a "
+        "value to copy - a set that comes back naming the placeholders is "
+        "a set that answered nothing:",
         json.dumps({
             "content": {
                 "title": "the specimen cover's title, about THIS deck's subject",
@@ -352,10 +359,14 @@ def _prompt(brief: str, answers: str, brand_hex: str | None,
                     "series": [{"name": "Series", "values": [18, 27, 36, 45, 54]}],
                 },
             },
-            "colorOptions": [{"name": "Forest green", "hex": "#1B4332"}],
+            "colorOptions": [
+                {"name": "<a plain colour name>", "hex": "#RRGGBB"},
+                {"name": "<a plain colour name>", "hex": "#RRGGBB"},
+                {"name": "<a plain colour name>", "hex": "#RRGGBB"},
+            ],
             "directions": [{
-                "id": "dark-analyst",
-                "name": "Dark analyst",
+                "id": "<a slug of the name>",
+                "name": "<what this direction looks like, in two words>",
                 "rationale": "One line on why this direction, in plain words.",
                 "ground": "light|dark|rail|split",
                 "structure": "list|stats|cards|bands",
@@ -421,8 +432,10 @@ def _prompt(brief: str, answers: str, brand_hex: str | None,
         "beyond the numbers. Omit it and it follows the density, which pairs the "
         "chart with the deck's own register - name it only when the direction "
         "wants a treatment its density would not give it.",
-        "- Name each direction for what it looks like - 'Dark analyst', "
-        "'Editorial serif', 'Clean minimal'. Never lettered A/B/C.",
+        "- Name each direction for what it looks like, in two words a "
+        "non-designer would recognise - the kind of deck it is, or the "
+        "feeling of its page. Never lettered A/B/C, and never a name from "
+        "this prompt.",
         "- The rationale is one line a non-designer can act on.",
     ]
     if not brand_hex:
@@ -434,12 +447,20 @@ def _prompt(brief: str, answers: str, brand_hex: str | None,
             "suit the subject rather than a default corporate blue, and give "
             "the directions different ones so the set is not a single hue in "
             "three layouts.",
-            "- colorOptions is 2-3 alternatives the user can override with, "
-            "named in plain words with a real hex. If the deck is about a "
-            "specific organisation with a known brand colour, that colour is "
-            "the FIRST option, named for the organisation ('Starbucks green') "
-            "with its real hex - and if you are not confident of the real hex, "
-            "leave it out rather than inventing one.",
+            "- colorOptions is EXACTLY 3 alternatives the user can override "
+            "with, named in plain words with a real hex, and every one of "
+            "them must suit THIS deck's subject. A fund for climate "
+            "projects is offered greens and blues; a toy company is offered "
+            "its own primary colours. Three unrelated corporate hues, or "
+            "the same option every deck gets, is not a choice.",
+            "- They must differ from each other and from the hues the three "
+            "directions already propose - an option identical to what the "
+            "user is already looking at is a wasted slot.",
+            "- If the deck is about a specific organisation with a known "
+            "brand colour, that colour is the FIRST option, named for the "
+            "organisation ('Starbucks green') with its real hex - and if you "
+            "are not confident of the real hex, leave it out rather than "
+            "inventing one.",
             "- Every hex must be dark enough for white text or light enough "
             "for dark text; a mid-grey that is neither is rejected as "
             "unreadable.",
@@ -449,6 +470,32 @@ def _prompt(brief: str, answers: str, brand_hex: str | None,
                   *(f"- {problem}" for problem in problems[:4]),
                   "Fix those specifically."]
     return "\n".join(lines)
+
+
+def _top_up_palettes(palettes: list[tuple[str, str]],
+                     proposed: list[dict]) -> list[tuple[str, str]]:
+    """
+    Make sure the colour question is actually a choice.
+
+    A model that returns one option, or none, leaves a card with nothing to
+    pick between. The directions themselves each proposed a hue for this
+    subject, so those are the topical alternatives already to hand - named
+    by the nearest colour word, because a swatch has to read as a choice
+    rather than as a value.
+    """
+    from app import color_words
+
+    out = list(palettes)
+    seen = {value.upper() for _, value in out}
+    for direction in proposed:
+        if len(out) >= MIN_COLOUR_OPTIONS:
+            break
+        hex_value = str((direction.get("spec") or {}).get("paletteHex") or "").upper()
+        if not hex_value or hex_value in seen or not colors.parse_hex(hex_value):
+            continue
+        seen.add(hex_value)
+        out.append((color_words.name_for(hex_value), hex_value))
+    return out[:MAX_COLOUR_OPTIONS]
 
 
 def _palettes(raw) -> list[tuple[str, str]]:
@@ -480,7 +527,9 @@ def _context(brand_hex: str | None, from_template: bool, asks_colour: bool) -> s
     if asks_colour:
         parts.append("Each is proposed in its own colour. Pick a different one "
                      "and it is applied to whichever direction you choose - the "
-                     "previews show its structure either way.")
+                     "previews show its structure either way. You can also just "
+                     "name a colour in the box: \"purple\", \"navy with gold "
+                     "accents\", \"white with slight pink accents\".")
     if from_template:
         parts.append("The first is your uploaded template, unchanged.")
     return " ".join(parts)

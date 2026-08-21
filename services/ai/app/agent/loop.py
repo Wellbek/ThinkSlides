@@ -3514,27 +3514,44 @@ class AgentLoop:
         """
         from app import directions as direction_model
 
+        from app import color_words
+        from app.agent.tools.propose_design_directions import COLOUR_QUESTION
+
         latest = next(
             (str(m.get("content") or "") for m in reversed(chat_messages)
              if m.get("role") == "user"),
             "",
         )
-        found = _HEX_IN_TEXT.search(latest)
-        if not found:
-            return chosen, None
-        wanted = found.group(0).upper()
+        # Only the colour half of the reply. Both answers arrive in one
+        # string - "Which design direction...? Vibrant Green And the
+        # colour? ..." - and a direction named for a colour would otherwise
+        # be read as the colour answer.
+        marker = latest.lower().rfind(COLOUR_QUESTION.lower())
+        answer = latest[marker + len(COLOUR_QUESTION):] if marker >= 0 else latest
 
-        recoloured = direction_model.recolour(chosen, wanted)
+        # A hex is what the offered swatches carry; a colour named in words
+        # is what the free-text box gets, and it used to be discarded
+        # entirely, so "purple" changed nothing at all.
+        request = color_words.parse(answer)
+        if not request:
+            return chosen, None
+
+        recoloured = direction_model.recolour(chosen, request.base, accent_hex=request.accent)
         if recoloured is chosen or recoloured == chosen:
             # An uploaded template, an unreadable pairing, or the colour it was
             # already in. Saying nothing beats claiming a change that did not
             # happen.
             logger.info("direction_recolour_skipped",
-                        direction=chosen.get("id"), wanted=wanted)
+                        direction=chosen.get("id"), wanted=request.base,
+                        accent=request.accent)
             return chosen, None
+        told = request.base or request.accent or ""
+        if request.base and request.accent:
+            told = f"{request.base} with {request.accent} accents"
         logger.info("direction_recoloured", direction=chosen.get("id"),
-                    color=wanted)
-        return recoloured, wanted
+                    color=request.base, accent=request.accent,
+                    phrase=request.phrase[:80])
+        return recoloured, told
 
     def _clean_up_direction_previews(self, session_id: uuid.UUID, keep: str | None) -> None:
         """

@@ -88,7 +88,7 @@ def normalize_color_theme(theme: str | None) -> str:
     return key if key in COLOR_THEMES else DEFAULT_COLOR_THEME
 
 
-def derive_brand_palette(brand_hex: str) -> list[dict]:
+def derive_brand_palette(brand_hex: str, accent_hex: str | None = None) -> list[dict]:
     """
     Build a full, internally coherent palette around a single brand colour.
 
@@ -113,13 +113,45 @@ def derive_brand_palette(brand_hex: str) -> list[dict]:
       brand hue rather than a neutral grey, so even the quiet areas are on-brand.
     * ``gray``      - footers and slide numbers, hue-tinted just enough to
       belong to the deck without competing with the content.
+
+    ``accent_hex`` sets the highlight role independently of the brand hue,
+    which is what a request like "white with slight pink accents" means: a
+    light deck whose rules, glyphs and chart series are pink, rather than a
+    pink deck or a white one with the pink discarded.
     """
+    from app import color_words
+
+    accent = accent_hex or colors.shift_hue(brand_hex, 32, lightness=0.48,
+                                            min_saturation=0.55)
+
+    if color_words.is_near_white(brand_hex):
+        # The brand colour IS the paper - "white with slight pink accents".
+        # Titles cannot be the brand colour here, or the deck is white text
+        # on white; the ink is derived from whatever else was named, so it
+        # carries a trace of the accent rather than being a flat black
+        # dropped in from nowhere.
+        ink = colors.with_lightness(accent, 0.14, 0.35 if accent_hex else 0.0)
+        return [
+            {"name": "primary", "value": ink, "type": "hex"},
+            {"name": "secondary", "value": colors.with_lightness(accent, 0.58, 0.75),
+             "type": "hex"},
+            {"name": "accent", "value": accent, "type": "hex"},
+            {"name": "dark", "value": ink, "type": "hex"},
+            {"name": "light", "value": colors.with_lightness(accent, 0.955, 0.55),
+             "type": "hex"},
+            {"name": "white", "value": brand_hex, "type": "hex"},
+            {"name": "gray", "value": colors.with_lightness(ink, 0.52, 0.20), "type": "hex"},
+        ]
+
     return [
         {"name": "primary", "value": brand_hex, "type": "hex"},
-        {"name": "secondary", "value": colors.with_lightness(brand_hex, 0.45, 0.50),
+        # A second chart series follows the accent when one was asked for,
+        # so a deck told to highlight in gold does not draw its second bar
+        # in a paler version of the first.
+        {"name": "secondary",
+         "value": colors.with_lightness(accent if accent_hex else brand_hex, 0.45, 0.50),
          "type": "hex"},
-        {"name": "accent", "value": colors.shift_hue(brand_hex, 32, lightness=0.48,
-                                                     min_saturation=0.55), "type": "hex"},
+        {"name": "accent", "value": accent, "type": "hex"},
         {"name": "dark", "value": colors.with_lightness(brand_hex, 0.15, 0.9), "type": "hex"},
         {"name": "light", "value": colors.with_lightness(brand_hex, 0.955, 0.55), "type": "hex"},
         {"name": "white", "value": "#FFFFFF", "type": "hex"},
