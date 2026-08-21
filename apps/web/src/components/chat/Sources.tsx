@@ -57,6 +57,9 @@ function SourceItem({ source }: { source: SourceInfo }) {
       className="group flex items-center gap-2 px-2 py-1.5 rounded-md bg-graphite/30 hover:bg-graphite/50 transition-colors text-caption text-fog hover:text-paper"
     >
       {source.type === "web" && faviconUrl ? (
+        // next/image would need this third-party host allow-listed in
+        // next.config and buys nothing for a 16px favicon.
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={faviconUrl}
           alt=""
