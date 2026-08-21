@@ -32,13 +32,17 @@ class ProviderSpec:
     # picking. Empty when there is nothing to warn about.
     native_web_search_note: str = ""
     # Models that must be used for the provider's native search to work.
-    # Empty means any model works.
+    # Empty means any model works, which is the case for every provider here -
+    # this exists for a provider that gates search on a fixed model list, and
+    # a list that goes stale is worse than none: the entry that used to sit
+    # here named OpenAI models that no longer exist, so Deep Thinking refused
+    # to run on any model a user could actually select.
     native_web_search_models: tuple[str, ...] = field(default_factory=tuple)
     # Models that cannot serve as the chat model because they reject tool
     # calling. The agent is a tool-calling loop, so one of these in the chat
     # role fails every generation with "tools is not supported in this model".
-    # They are still perfectly valid as the Deep Thinking model, which only
-    # ever asks them to search.
+    # Kept for deployments still pointed at a retired search model or at a
+    # proxy that serves one; nothing current belongs here.
     no_tool_calling_models: tuple[str, ...] = field(default_factory=tuple)
     api_key_help: str = ""
 
@@ -60,15 +64,25 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         id="openai",
         label="ChatGPT (OpenAI)",
-        default_model="gpt-4o",
-        suggested_models=("gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"),
+        default_model="gpt-5.6-terra",
+        suggested_models=(
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4o",
+        ),
         default_base_url="https://api.openai.com/v1",
         native_web_search=True,
         native_web_search_note=(
-            "OpenAI only searches on its '-search-preview' models, and those "
-            "cannot be the reasoning model - they do not support tool calling."
+            "OpenAI's own web search, through the Responses API. Works with "
+            "any current model - the '-search-preview' models it used to "
+            "require were retired in July 2026."
         ),
-        native_web_search_models=("gpt-4o-search-preview", "gpt-4o-mini-search-preview"),
+        # Deliberately empty: search is no longer tied to particular models.
+        # It used to name the '-search-preview' pair, which is why picking a
+        # current model made Deep Thinking report itself unavailable.
         no_tool_calling_models=("gpt-4o-search-preview", "gpt-4o-mini-search-preview"),
         api_key_help="Create a key at platform.openai.com. Starts with 'sk-'.",
     ),

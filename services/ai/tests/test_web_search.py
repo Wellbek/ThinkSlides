@@ -326,14 +326,16 @@ def test_openai_parser_handles_a_response_with_no_annotations():
 # ── Tool-level behaviour ───────────────────────────────────────────────
 
 
+@pytest.mark.unconfigured_workspace
 @pytest.mark.asyncio
-async def test_unconfigured_backend_returns_an_actionable_error(monkeypatch):
-    """Simple mode, and orgs with no backend, must degrade rather than raise."""
-    from app.config import settings as env_settings
-    monkeypatch.setattr(env_settings, "zhipu_api_key", "")
-    monkeypatch.setattr(env_settings, "web_search_provider", "zhipu")
-    monkeypatch.setattr(env_settings, "tavily_api_key", "")
+async def test_unconfigured_backend_returns_an_actionable_error():
+    """A workspace with no backend must degrade rather than raise.
 
+    Genuinely unconfigured, not merely lacking a search-capable model: now
+    that OpenAI search is not gated on particular model names, a workspace
+    with any chat model configured can search with it, so the only way to
+    reach this path is to have configured nothing at all.
+    """
     result = await WebSearchTool.run(query="anything")
 
     assert result.success is False

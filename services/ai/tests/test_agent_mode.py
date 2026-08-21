@@ -235,10 +235,10 @@ async def test_configure_defaults_to_simple_when_no_mode_was_given():
 @pytest.mark.asyncio
 async def test_deep_mode_is_downgraded_when_no_search_backend_is_usable(monkeypatch):
     """An unconfigured organisation still generates, just without research."""
-    from app.config import settings as env_settings
-    monkeypatch.setattr(env_settings, "web_search_provider", "tavily")
-    monkeypatch.setattr(env_settings, "tavily_api_key", "")
-    monkeypatch.setattr(env_settings, "zhipu_api_key", "")
+    monkeypatch.setattr(
+        "app.ai_settings.resolve_search_config",
+        lambda row: (None, "No deep-search backend is configured."),
+    )
 
     loop = _loop(MODE_DEEP)
     await loop._configure()
@@ -470,10 +470,38 @@ def test_saving_a_search_only_model_as_the_reasoning_model_is_rejected():
     _validate_chat_model(ModelRoleInput(provider="openai", model="gpt-4o"))
 
 
-def test_native_search_reason_names_the_field_to_change():
-    """Regression: "requires one of ..." read as "change your chat model"."""
+def test_native_search_is_not_gated_on_a_list_of_model_names():
+    """Regression: the list named the retired '-search-preview' models.
+
+    Anything a user could actually select was therefore refused, and the
+    refusal told them to pick a model that no longer exists.
+    """
     from app.ai_settings import _native_search_supported
     from app.llm.provider import ProviderCredentials
+
+    for model in ("gpt-5.6-terra", "gpt-4o", "some-model-shipped-next-year"):
+        ok, reason = _native_search_supported(
+            ProviderCredentials("openai", model, "sk-test")
+        )
+        assert (ok, reason) == (True, ""), model
+
+
+def test_native_search_reason_names_the_field_to_change(monkeypatch):
+    """A provider that does gate search on models still says which field.
+
+    Regression: "requires one of ..." read as "change your chat model", which
+    puts a search-only model in the role that drives the agent.
+    """
+    from dataclasses import replace
+
+    from app.ai_settings import _native_search_supported
+    from app.llm.catalog import PROVIDERS_BY_ID
+    from app.llm.provider import ProviderCredentials
+
+    gated = replace(
+        PROVIDERS_BY_ID["openai"], native_web_search_models=("only-this-one",)
+    )
+    monkeypatch.setitem(PROVIDERS_BY_ID, "openai", gated)
 
     ok, reason = _native_search_supported(
         ProviderCredentials("openai", "gpt-4o", "sk-test")
@@ -481,7 +509,7 @@ def test_native_search_reason_names_the_field_to_change():
 
     assert ok is False
     assert "Deep Thinking model" in reason
-    assert "gpt-4o-search-preview" in reason
+    assert "only-this-one" in reason
 
 
 @pytest.mark.parametrize(
