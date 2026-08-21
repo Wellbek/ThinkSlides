@@ -12,13 +12,18 @@ import { PanelRightClose, Download, ExternalLink, Presentation, FileDown } from 
 export function ChatFlow({ onCollapse }: { collapsed: boolean; onCollapse: () => void }) {
   const [tab, setTab] = useState<"activity" | "files">("activity");
   const activeFiles = useChatStore((s) => s.activeFiles);
+  // activeFiles also carries individual chart/image assets now (#187) -
+  // this tab is the rendered deck only, same as before. Assets live in the
+  // details sidebar's Assets section; listing them here too would just
+  // duplicate that panel and inflate this tab's count badge.
+  const deckFiles = activeFiles.filter((f) => !f.file_type || f.file_type === "pptx");
 
   return (
     <>
       <div className="ws-tabs">
         <div className={`ws-tab ${tab === "activity" ? "active" : ""}`} onClick={() => setTab("activity")}>Activity</div>
         <div className={`ws-tab ${tab === "files" ? "active" : ""}`} onClick={() => setTab("files")}>
-          Files{activeFiles.length > 0 && <span className="ws-tab-count">{activeFiles.length}</span>}
+          Files{deckFiles.length > 0 && <span className="ws-tab-count">{deckFiles.length}</span>}
         </div>
         <div className="ws-spacer" />
         <button className="ws-collapse" onClick={onCollapse} title="Collapse chat"><PanelRightClose size={15} /></button>
@@ -34,10 +39,10 @@ export function ChatFlow({ onCollapse }: { collapsed: boolean; onCollapse: () =>
         {tab === "activity" && <ActivityFeed />}
         {tab === "files" && (
           <div className="ws-feed">
-            {activeFiles.length === 0 && (
+            {deckFiles.length === 0 && (
               <div className="ws-empty-note">Generated files appear here once the deck is rendered.</div>
             )}
-            {activeFiles.map((f) => (
+            {deckFiles.map((f) => (
               <FileCard key={f.id} file={f} />
             ))}
           </div>

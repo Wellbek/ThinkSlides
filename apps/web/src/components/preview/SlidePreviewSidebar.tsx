@@ -115,6 +115,10 @@ export function SlidePreviewSidebar({ collapsed = false, width = 320 }: SlidePre
               <div className="p-3">
                 {previewUrl ? (
                   <div className="bg-paper rounded-lg aspect-video relative shadow-inner overflow-hidden">
+                    {/* A preview served by our own orchestrator behind a
+                        token; next/image would proxy and re-encode it for
+                        no gain. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={previewUrl}
                       alt={`Slide ${slide.slideIndex + 1}`}

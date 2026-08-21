@@ -211,6 +211,14 @@ class FinalizeAndRenderPptxTool:
             preview_gen = PreviewGenerator()
             preview_urls = preview_gen.generate_previews(result_path, session_id)
 
+            # Individual chart/image assets, extracted from the rendered
+            # deck itself rather than intercepted mid-render - this reads
+            # already-embedded pictures back out with python-pptx, so it
+            # never touches the render path's own XML handling (issue #187).
+            # Best-effort only: a failure here must never turn a successful
+            # render into a failed one.
+            assets = cls._persist_slide_assets(result_path, slides, session_id)
+
             duration_ms = int((time.time() - start) * 1000)
             logger.info(
                 "pptx_rendered",
@@ -218,6 +226,7 @@ class FinalizeAndRenderPptxTool:
                 slide_count=len(slides),
                 file_size=file_size,
                 preview_count=len(preview_urls),
+                asset_count=len(assets),
                 duration_ms=duration_ms,
             )
 
@@ -232,12 +241,89 @@ class FinalizeAndRenderPptxTool:
                     "sessionId": session_id,
                     "previewUrls": preview_urls,
                     "fallbackMarkdownPath": markdown_path,
+                    "assets": assets,
                 },
                 duration_ms=duration_ms,
             )
         except Exception as e:
             logger.error("pptx_render_failed", error=str(e))
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
+
+    @classmethod
+    def _persist_slide_assets(cls, result_path: str, slides: list[dict], session_id: str) -> list[dict]:
+        """Write each slide's embedded chart/image as its own downloadable
+        asset (issue #187), so the workspace UI can list and replace them
+        individually - separate from the single all-in-one PPTX row.
+
+        Reads the pictures back out of the already-rendered deck with
+        python-pptx rather than intercepting bytes mid-render, so this never
+        touches the renderer's own XML-cloning logic. Every picture the
+        render pipeline itself places is named "ts-asset-chart" or
+        "ts-asset-image" (see pptx_renderer.py's _add_chart/_add_image) -
+        that is what gets picked up here, not "the Nth picture on the
+        slide". Position-based pairing mispairs the moment a template
+        layout carries its own static pictures (a logo, say) ahead of the
+        content pictures in document order; the name marker sidesteps that
+        entirely instead of trying to out-guess it, and as a side effect
+        never surfaces a template's own artwork as a "replaceable" asset.
+        """
+        try:
+            from pptx import Presentation
+
+            output_dir = os.environ.get("OUTPUT_DIR", "/app/output")
+            assets_dir = os.path.join(output_dir, str(session_id), "assets")
+            os.makedirs(assets_dir, exist_ok=True)
+
+            prs = Presentation(result_path)
+            assets: list[dict] = []
+            asset_types = {"ts-asset-chart": "chart", "ts-asset-image": "image"}
+
+            for slide_index, pptx_slide in enumerate(prs.slides):
+                position = 0
+                for shape in pptx_slide.shapes:
+                    # shape_type/name access itself can raise (a shape
+                    # python-pptx doesn't fully model - embedded OLE,
+                    # SmartArt - can throw NotImplementedError just reading
+                    # its type), so this has to be inside the per-shape
+                    # guard too, not just the picture-extraction below it.
+                    # One bad shape must cost that one shape, not silently
+                    # abort every asset on every remaining slide.
+                    try:
+                        file_type = asset_types.get(shape.name)
+                        if file_type is None:
+                            continue
+                        image = shape.image
+                        ext = image.ext or "png"
+                        position += 1
+                        asset_id = str(uuid.uuid4())
+                        asset_path = os.path.join(assets_dir, f"{asset_id}.{ext}")
+                        with open(asset_path, "wb") as f:
+                            f.write(image.blob)
+                        assets.append({
+                            "filePath": asset_path,
+                            "fileName": f"slide-{slide_index + 1}-{file_type}-{position}.{ext}",
+                            "fileSizeBytes": len(image.blob),
+                            "fileType": file_type,
+                            "slideIndex": slide_index,
+                        })
+                    except Exception as shape_error:
+                        # An unusual shape python-pptx can't fully read, or
+                        # an image format it can't decode, should not lose
+                        # every other asset on the deck.
+                        logger.warning(
+                            "slide_asset_extract_failed",
+                            session_id=session_id,
+                            slide_index=slide_index,
+                            error=str(shape_error),
+                        )
+
+            return assets
+        except Exception as e:
+            # Individual assets are a bonus, not the deliverable - the PPTX
+            # itself has already rendered successfully by the time this
+            # runs, and that must never be undone by an asset-extraction bug.
+            logger.warning("slide_asset_persist_failed", session_id=session_id, error=str(e))
+            return []
 
     @classmethod
     def _generate_markdown_fallback(cls, slides: list[dict], metadata: dict) -> str:

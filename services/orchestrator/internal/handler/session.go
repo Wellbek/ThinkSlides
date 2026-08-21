@@ -353,7 +353,7 @@ func (h *SessionHandler) GetSessionFiles(c *gin.Context) {
 	}
 
 	rows, err := h.pool.Query(ctx,
-		`SELECT id, session_id, file_type, file_path, original_filename, file_size_bytes, created_at
+		`SELECT id, session_id, file_type, file_path, original_filename, file_size_bytes, metadata, created_at
 		 FROM generated_files
 		 WHERE session_id = $1
 		 ORDER BY created_at`, sessionID,
@@ -369,8 +369,9 @@ func (h *SessionHandler) GetSessionFiles(c *gin.Context) {
 		var id, sessionID, fileType, filePath string
 		var originalFilename *string
 		var fileSizeBytes *int64
+		var metadataRaw []byte
 		var createdAt time.Time
-		if err := rows.Scan(&id, &sessionID, &fileType, &filePath, &originalFilename, &fileSizeBytes, &createdAt); err != nil {
+		if err := rows.Scan(&id, &sessionID, &fileType, &filePath, &originalFilename, &fileSizeBytes, &metadataRaw, &createdAt); err != nil {
 			continue
 		}
 		f := gin.H{
@@ -388,6 +389,17 @@ func (h *SessionHandler) GetSessionFiles(c *gin.Context) {
 		}
 		if fileSizeBytes != nil {
 			f["file_size"] = *fileSizeBytes
+		}
+		// slide_index (and any other per-asset context) lives in metadata -
+		// individual chart/image assets set it, the whole-deck pptx row
+		// doesn't (see #187).
+		if len(metadataRaw) > 0 {
+			var metadata map[string]interface{}
+			if err := json.Unmarshal(metadataRaw, &metadata); err == nil {
+				if slideIndex, ok := metadata["slideIndex"]; ok && slideIndex != nil {
+					f["slide_index"] = slideIndex
+				}
+			}
 		}
 		files = append(files, f)
 	}
@@ -995,4 +1007,272 @@ func (h *SessionHandler) DownloadFile(c *gin.Context) {
 	}
 
 	c.FileAttachment(filePath, fileName)
+}
+
+// ReplaceAsset handles a drag-dropped replacement for one generated chart or
+// image asset (#187). Two of the confirmation dialog's three options land
+// here directly - "asset_only" overwrites the existing row in place,
+// "keep_both" adds the drop as a new, distinctly-named asset alongside it.
+// The third option, replacing the asset in its slide too, goes through the
+// agent-resume endpoint instead (see the image-replace-in-slide handler) -
+// updating a slide is a job for the agent, not a plain file swap.
+func (h *SessionHandler) ReplaceAsset(c *gin.Context) {
+	sessionID := c.Param("id")
+	assetID := c.Param("assetId")
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	orgID := c.GetString("org_id")
+	if orgID == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "No organisation associated with user"})
+		return
+	}
+
+	scope := c.PostForm("scope")
+	if scope != "asset_only" && scope != "keep_both" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "scope must be asset_only or keep_both"})
+		return
+	}
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
+		return
+	}
+	defer file.Close()
+
+	ctx := c.Request.Context()
+
+	// Scoped to the caller's own organisation, not just this session/asset
+	// id pair - otherwise an authenticated user who knows or guesses
+	// another org's session_id and asset_id could overwrite that org's
+	// asset. A mismatch reads identically to "not found" so it doesn't leak
+	// whether the id exists in someone else's org.
+	var fileType, originalFilename, oldFilePath string
+	var metadataRaw []byte
+	err = h.pool.QueryRow(ctx,
+		`SELECT file_type, original_filename, file_path, metadata FROM generated_files
+		 WHERE id = $1 AND session_id = $2 AND organisation_id = $3`, assetID, sessionID, orgID,
+	).Scan(&fileType, &originalFilename, &oldFilePath, &metadataRaw)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
+		return
+	}
+	if fileType != "image" && fileType != "chart" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only individual chart/image assets can be replaced this way"})
+		return
+	}
+
+	outputDir := os.Getenv("OUTPUT_DIR")
+	if outputDir == "" {
+		outputDir = "/app/output"
+	}
+	assetsDir := filepath.Join(outputDir, sessionID, "assets")
+	if err := os.MkdirAll(assetsDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not prepare asset storage"})
+		return
+	}
+
+	ext := filepath.Ext(header.Filename)
+	newID := uuid.New().String()
+	newPath := filepath.Join(assetsDir, newID+ext)
+	if err := c.SaveUploadedFile(header, newPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save uploaded file"})
+		return
+	}
+	fileSize := header.Size
+
+	if scope == "asset_only" {
+		_, err = h.pool.Exec(ctx,
+			`UPDATE generated_files SET file_path = $1, original_filename = $2, file_size_bytes = $3
+			 WHERE id = $4`,
+			newPath, header.Filename, fileSize, assetID,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update asset"})
+			return
+		}
+		// The DB row is the source of truth and already points at newPath -
+		// the old file is now unreferenced. Best-effort cleanup: a delete
+		// failure here doesn't change what the asset resolves to, so it's
+		// logged rather than failing a request that already succeeded.
+		// Without this, repeated replaces of the same asset permanently
+		// accumulate orphaned files on disk.
+		if oldFilePath != "" && oldFilePath != newPath {
+			if err := os.Remove(oldFilePath); err != nil && !os.IsNotExist(err) {
+				log.Printf("ReplaceAsset: failed to remove superseded file %s: %v", oldFilePath, err)
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"id": assetID, "file_url": fmt.Sprintf("/api/files/%s", assetID),
+			"filename": header.Filename, "file_size": fileSize, "file_type": fileType,
+		})
+		return
+	}
+
+	// keep_both: name the new asset like a filesystem duplicate, numbered
+	// against every other asset already sharing this base name in the
+	// session, not just the one that was just dropped on.
+	newFilename := nextDuplicateName(ctx, h.pool, sessionID, header.Filename)
+	newFileID := uuid.New().String()
+	_, err = h.pool.Exec(ctx,
+		`INSERT INTO generated_files
+		   (id, organisation_id, session_id, file_type, file_path, original_filename, file_size_bytes, metadata, created_at)
+		 SELECT $1, organisation_id, $2, $3, $4, $5, $6, $7, NOW()
+		 FROM chat_sessions WHERE id = $2`,
+		newFileID, sessionID, fileType, newPath, newFilename, fileSize, metadataRaw,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save new asset"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id": newFileID, "file_url": fmt.Sprintf("/api/files/%s", newFileID),
+		"filename": newFilename, "file_size": fileSize, "file_type": fileType,
+	})
+}
+
+// ImageReplaceInSlide saves a drag-dropped replacement image and asks the AI
+// service to resume the agent so the slide using this asset is regenerated
+// with it (#187's third dialog option). The heavier logic - reusing the
+// image_catalog/slides_needing_revision resume machinery - lives entirely in
+// the AI service, since only it has the agent loop and Redis working state;
+// this handler's job is just the multipart upload and identity forwarding,
+// the same division of labour SendMessage/AnswerQuestion already use.
+func (h *SessionHandler) ImageReplaceInSlide(c *gin.Context) {
+	sessionID := c.Param("id")
+	assetID := c.Param("assetId")
+	if h.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not ready"})
+		return
+	}
+
+	orgID := c.GetString("org_id")
+	if orgID == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "No organisation associated with user"})
+		return
+	}
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
+		return
+	}
+	defer file.Close()
+
+	ctx := c.Request.Context()
+
+	// Scoped to the caller's own organisation - without this, an
+	// authenticated user who knows or guesses another org's session_id and
+	// asset_id could trigger a resume that regenerates that org's slide
+	// content with an image they supplied.
+	var fileType string
+	var metadataRaw []byte
+	err = h.pool.QueryRow(ctx,
+		`SELECT file_type, metadata FROM generated_files
+		 WHERE id = $1 AND session_id = $2 AND organisation_id = $3`,
+		assetID, sessionID, orgID,
+	).Scan(&fileType, &metadataRaw)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
+		return
+	}
+	if fileType != "image" && fileType != "chart" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only individual chart/image assets can be replaced this way"})
+		return
+	}
+	var metadata map[string]interface{}
+	if len(metadataRaw) > 0 {
+		json.Unmarshal(metadataRaw, &metadata)
+	}
+	slideIndexFloat, ok := metadata["slideIndex"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "This asset isn't tied to a slide"})
+		return
+	}
+	slideIndex := int(slideIndexFloat)
+
+	outputDir := os.Getenv("OUTPUT_DIR")
+	if outputDir == "" {
+		outputDir = "/app/output"
+	}
+	assetsDir := filepath.Join(outputDir, sessionID, "assets")
+	if err := os.MkdirAll(assetsDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not prepare asset storage"})
+		return
+	}
+	ext := filepath.Ext(header.Filename)
+	newPath := filepath.Join(assetsDir, uuid.New().String()+ext)
+	if err := c.SaveUploadedFile(header, newPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save uploaded file"})
+		return
+	}
+
+	identity := client.Identity{OrgID: orgID, UserID: c.GetString("user_id")}
+	result, err := h.aiClient.ReplaceImageInSlide(
+		sessionID, assetID, newPath, header.Filename, header.Size, slideIndex, identity,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "AI service error 409") {
+			c.JSON(http.StatusConflict, gin.H{"error": extractDetail(err.Error())})
+			return
+		}
+		log.Printf("ImageReplaceInSlide: AI service call failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resume the agent for this slide"})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// extractDetail pulls a FastAPI-style {"detail": "..."} message out of the
+// raw "AI service error <code>: <body>" text postJSON wraps errors in, so
+// the browser sees the actual explanation instead of a generic failure.
+func extractDetail(errText string) string {
+	idx := strings.Index(errText, "{")
+	if idx < 0 {
+		return errText
+	}
+	var body struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(errText[idx:]), &body); err != nil || body.Detail == "" {
+		return errText
+	}
+	return body.Detail
+}
+
+// nextDuplicateName finds a filename like the given one that isn't already
+// used by another asset in this session, numbering it the way a filesystem
+// numbers a duplicate: "chart.png", then "chart (1).png", "chart (2).png".
+func nextDuplicateName(ctx context.Context, pool *pgxpool.Pool, sessionID, filename string) string {
+	base := strings.TrimSuffix(filename, filepath.Ext(filename))
+	ext := filepath.Ext(filename)
+
+	existing := map[string]bool{}
+	rows, err := pool.Query(ctx,
+		`SELECT original_filename FROM generated_files WHERE session_id = $1 AND original_filename IS NOT NULL`,
+		sessionID,
+	)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			if rows.Scan(&name) == nil {
+				existing[name] = true
+			}
+		}
+	}
+
+	if !existing[filename] {
+		return filename
+	}
+	for n := 1; ; n++ {
+		candidate := fmt.Sprintf("%s (%d)%s", base, n, ext)
+		if !existing[candidate] {
+			return candidate
+		}
+	}
 }

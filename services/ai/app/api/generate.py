@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import uuid
 import json
 import asyncio
+import base64
 import redis.asyncio as redis
 import datetime
 import time
@@ -56,6 +57,16 @@ class SimplePresentationRequest(BaseModel):
     slide2_title: str = "Conclusion"
     slide2_content: list[str] = []
     template_path: str = ""
+
+
+class ReplaceImageInSlideRequest(BaseModel):
+    # Path on the shared output volume the orchestrator already saved the
+    # replacement image to - the file itself never travels through this
+    # request, only where to find it (#187).
+    file_path: str
+    original_filename: str
+    file_size_bytes: int = 0
+    slide_index: int
 
 
 class AnswerQuestionRequest(BaseModel):
@@ -471,6 +482,71 @@ async def _run_agent(
                                     session_id, str(db_err),
                                 )
 
+                            # Individual chart/image assets extracted by
+                            # finalize_and_render_pptx (issue #187) - same
+                            # generated_files table, new file_type values, so
+                            # the workspace UI can list and download them
+                            # separately from the deck itself. One row per
+                            # asset so a bad row never loses the others.
+                            for asset in generated_file_info.get("assets", []) or []:
+                                try:
+                                    asset_id = str(uuid.uuid4())
+                                    asset_file_type = asset.get("fileType", "image")
+                                    asset_file_name = asset.get("fileName")
+                                    asset_file_size = asset.get("fileSizeBytes", 0)
+                                    await db.execute(
+                                        text(
+                                            """INSERT INTO generated_files
+                                               (id, organisation_id, session_id, file_type, file_path,
+                                                original_filename, file_size_bytes, metadata, created_at)
+                                               SELECT :fid, organisation_id, :sid, :ftype, :fpath,
+                                                      :fname, :fsize, :fmeta, NOW()
+                                               FROM chat_sessions WHERE id = :sid"""
+                                        ),
+                                        {
+                                            "fid": asset_id,
+                                            "sid": str(session_id),
+                                            "ftype": asset_file_type,
+                                            "fpath": asset.get("filePath", ""),
+                                            "fname": asset_file_name,
+                                            "fsize": asset_file_size,
+                                            "fmeta": json.dumps({"slideIndex": asset.get("slideIndex")}),
+                                        },
+                                    )
+                                    await db.commit()
+
+                                    # Same event the pptx row gets a few
+                                    # lines up - without it the Assets panel
+                                    # (which chat-store only ever populates
+                                    # from file_generated/done, never a
+                                    # mid-run poll) stays empty until the
+                                    # page is reloaded.
+                                    asset_event = {
+                                        "type": "file_generated",
+                                        "phase": "rendering",
+                                        "step": "render",
+                                        "fileId": asset_id,
+                                        "fileName": asset_file_name,
+                                        "fileUrl": f"/api/files/{asset_id}",
+                                        "fileSizeBytes": asset_file_size,
+                                        "fileType": asset_file_type,
+                                        "slideIndex": asset.get("slideIndex"),
+                                        "timestamp": datetime.datetime.utcnow().isoformat(),
+                                    }
+                                    pub_result = await redis_client.publish(
+                                        f"agent:events:{session_id}", json.dumps(asset_event, default=str)
+                                    )
+                                    logger.info(
+                                        "_run_agent: published file_generated event for asset, session %s, file_id=%s, subscribers=%d",
+                                        session_id, asset_id, pub_result,
+                                    )
+                                    generated_files.append(asset_event)
+                                except Exception as asset_db_err:
+                                    logger.error(
+                                        "_run_agent: failed to save generated asset for session %s: %s",
+                                        session_id, str(asset_db_err),
+                                    )
+
                 logger.info(
                     "_run_agent: loop finished, got %d events for session %s",
                     event_count, session_id
@@ -795,4 +871,206 @@ async def answer_question(
         "message_id": str(assistant_message_id),
         "session_id": str(sid),
         "answer": answer_content,
+    }
+
+
+@router.post("/sessions/{session_id}/assets/{asset_id}/replace-in-slide")
+async def replace_image_in_slide(
+    session_id: str,
+    asset_id: str,
+    req: ReplaceImageInSlideRequest,
+    org_id: uuid.UUID = Depends(resolve_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Replace a chart/image asset AND update the slide that uses it (#187).
+
+    Reuses the same pause/resume machinery ask_user_question already relies
+    on, rather than inventing a new mechanism: the new image is added to the
+    session's image_catalog, the slide is marked in slides_needing_revision
+    the same way a validation failure marks one, and the run is resumed
+    exactly like answering a question resumes it.
+
+    That machinery assumes a working state still exists in Redis - true
+    whenever a run is paused or mid-flight, but not once a deck has
+    finished rendering: _clear_working_state deletes it the moment
+    validation settles, and there is currently nowhere else the full deck
+    content is persisted. Since the whole point of this endpoint is
+    editing a deck you already finished and came back to later, that is
+    the common case, not an edge case - so this fails with a clear,
+    actionable error instead of silently no-oping or resuming into an
+    empty deck.
+    """
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session_id")
+
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == sid)
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # The orchestrator already checks ownership before it ever calls this,
+    # but /api/ai/ is reachable directly (see apps/web/src/middleware.ts) -
+    # without this, a caller who skips the orchestrator and knows/guesses
+    # another org's session_id could resume that org's agent and regenerate
+    # its slide content with an image they supplied.
+    if session.organisation_id != org_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    state_json = await redis_client.get(f"working_state:{session_id}")
+    if not state_json:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This session's editing state has expired, so the agent can't "
+                "resume it to update just this slide. Ask it in chat to make "
+                "the change instead - describe the new image and which slide "
+                "it belongs on."
+            ),
+        )
+
+    # Parsed only to confirm it is intact - the agent reloads the state
+    # itself when it resumes, so nothing here needs the decoded value. A
+    # corrupted blob has to fail now rather than half-way through the resume,
+    # once the generated_files row and the image have already been written.
+    try:
+        json.loads(state_json)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(status_code=500, detail="Working state was corrupted")
+
+    # Confirm the upload is actually readable before writing anything about
+    # it to the DB - inserting the generated_files row first and checking
+    # readability after left an orphaned row pointing at nothing whenever
+    # the read failed.
+    try:
+        with open(req.file_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+    except OSError as read_err:
+        raise HTTPException(status_code=500, detail=f"Could not read the replacement image: {read_err}")
+
+    # New asset row for the replacement image, same shape as the ones
+    # finalize_and_render_pptx writes.
+    new_asset_id = str(uuid.uuid4())
+    try:
+        await db.execute(
+            text(
+                """INSERT INTO generated_files
+                   (id, organisation_id, session_id, file_type, file_path,
+                    original_filename, file_size_bytes, metadata, created_at)
+                   SELECT :fid, organisation_id, :sid, :ftype, :fpath,
+                          :fname, :fsize, :fmeta, NOW()
+                   FROM chat_sessions WHERE id = :sid"""
+            ),
+            {
+                "fid": new_asset_id,
+                "sid": session_id,
+                "ftype": "image",
+                "fpath": req.file_path,
+                "fname": req.original_filename,
+                "fsize": req.file_size_bytes,
+                "fmeta": json.dumps({"slideIndex": req.slide_index}),
+            },
+        )
+        await db.commit()
+    except Exception as db_err:
+        logger.error(
+            "replace_image_in_slide: failed to save new asset for session %s: %s",
+            session_id, str(db_err),
+        )
+        raise HTTPException(status_code=500, detail="Failed to save the replacement image")
+
+    # Optimistic-locked read-modify-write: two near-concurrent replace
+    # requests on the same session both read, mutate, and set with no
+    # coordination otherwise, and the second SET silently overwrites the
+    # first's changes even though both requests return 200. WATCH the key
+    # and re-read it fresh right before merging in - not the stale
+    # state_dict from the initial existence check above, since the DB
+    # insert and file read that happened in between only widen that
+    # window - so a change that landed in the meantime is merged against
+    # instead of clobbered, and a genuine collision (both sides watching
+    # the same version) aborts the transaction and fails loudly rather
+    # than silently dropping one side's update.
+    working_state_key = f"working_state:{session_id}"
+    catalog_id = f"replace-{new_asset_id}"
+    pipe = redis_client.pipeline(transaction=True)
+    try:
+        await pipe.watch(working_state_key)
+        fresh_json = await pipe.get(working_state_key)
+        if not fresh_json:
+            raise HTTPException(
+                status_code=409,
+                detail="This session's editing state expired while the replacement was being saved. Please try again.",
+            )
+        try:
+            fresh_state = json.loads(fresh_json)
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(status_code=500, detail="Working state was corrupted")
+
+        image_catalog = fresh_state.get("image_catalog") or []
+        image_catalog.append({
+            "id": catalog_id,
+            "sourceType": "upload",
+            "data": encoded,
+            "context": (
+                f"The user just replaced the image on slide {req.slide_index + 1} "
+                f"with this one - use it for that slide instead of whatever was "
+                f"there before."
+            ),
+        })
+        fresh_state["image_catalog"] = image_catalog
+        fresh_state["slides_needing_revision"] = sorted(
+            set(fresh_state.get("slides_needing_revision") or []) | {req.slide_index}
+        )
+
+        pipe.multi()
+        pipe.set(working_state_key, json.dumps(fresh_state), ex=3600)
+        await pipe.execute()
+    except redis.WatchError:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Another change to this session landed at the same time as this one. "
+                "Please try the replacement again."
+            ),
+        )
+    finally:
+        await pipe.reset()
+
+    instruction = (
+        f"Replaced the image on slide {req.slide_index + 1} with a new one "
+        f"(catalog id {catalog_id}) - please update that slide to use it."
+    )
+    user_message_id, assistant_message_id = await _exchange_rows(
+        db,
+        sid,
+        content=instruction,
+        attachments=[],
+        user_message_id=None,
+        assistant_message_id=None,
+    )
+
+    asyncio.create_task(
+        _run_agent(
+            sid,
+            user_message_id,
+            assistant_message_id,
+            instruction,
+            "",
+            mode=None,
+            org_id=org_id,
+        )
+    )
+
+    logger.info(
+        "replace_image_in_slide: resumed session %s for slide %d with new asset %s",
+        session_id, req.slide_index, new_asset_id,
+    )
+
+    return {
+        "message_id": str(assistant_message_id),
+        "session_id": str(sid),
+        "new_asset_id": new_asset_id,
     }

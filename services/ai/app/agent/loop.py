@@ -2922,13 +2922,17 @@ class AgentLoop:
             }, step=step)
 
         # Yield tool_call event
-        is_revision, revision_reason = self._revision_context(fn_name, fn_args)
+        is_revision, revision_reason, revisit_kind = self._revision_context(fn_name, fn_args)
         yield "event", _event("tool_call", current_phase, {
             "toolName": fn_name,
             "toolArgs": fn_args,
             "callId": call_id,
             "timestamp": _iso_now(),
-            **({"isRevision": True, "revisionReason": revision_reason} if is_revision else {}),
+            **({
+                "isRevision": True,
+                "revisionReason": revision_reason,
+                "revisitKind": revisit_kind,
+            } if is_revision else {}),
         }, step=step)
 
         # Execute tool
@@ -3983,24 +3987,32 @@ class AgentLoop:
 
         return "\n".join(prompt_parts)
 
-    def _revision_context(self, fn_name: str, fn_args: dict) -> tuple[bool, str]:
+    def _revision_context(self, fn_name: str, fn_args: dict) -> tuple[bool, str, str]:
         """Whether this design_slide_content call is fixing a flagged slide,
         and why - the same information slide_directive already puts in front
         of the model, surfaced on the event too so the activity feed can show
         "Fixing slide 4 (validation: missing chart data)" instead of a bare
         repeated "Design slide content" indistinguishable from the first pass.
+
+        Also classifies the revisit itself: "error" when validation flagged
+        this slide, "adjustment" when it's in slides_needing_revision for
+        some other reason - currently only the image-replace endpoint (#187),
+        which marks a slide for revision without recording a validation
+        issue for it. The UI (#225) uses this to tell "the agent is fixing
+        its own mistake" apart from "you asked for a change" at a glance.
         """
         if fn_name != "design_slide_content":
-            return False, ""
+            return False, "", ""
         slide_index = fn_args.get("slide_index")
         if not isinstance(slide_index, int) or slide_index not in self.working_state.slides_needing_revision:
-            return False, ""
+            return False, "", ""
         reasons = [
             str(issue.get("detail") or issue.get("type") or "").strip()
             for issue in self.working_state.validation_issues
             if issue.get("slideIndex") == slide_index and (issue.get("detail") or issue.get("type"))
         ]
-        return True, "; ".join(dict.fromkeys(r for r in reasons if r))
+        revisit_kind = "error" if reasons else "adjustment"
+        return True, "; ".join(dict.fromkeys(r for r in reasons if r)), revisit_kind
 
     def _describe_validation_issues(self, limit: int = 8) -> str:
         """Render the last validation run's issues as a slide-numbered list."""

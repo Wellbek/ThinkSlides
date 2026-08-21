@@ -4,7 +4,9 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useChatStore } from "@/stores/chat-store";
 import { collectPreviewSlides } from "@/lib/slides";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
-import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download, ExternalLink, ChevronDown } from "lucide-react";
+import { apiUpload } from "@/lib/api";
+import { AssetReplaceDialog, type ReplaceScope } from "./AssetReplaceDialog";
+import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download, ExternalLink, ChevronDown, Image as ImageIcon } from "lucide-react";
 
 export function DetailsPanel() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -22,11 +24,57 @@ export function DetailsPanel() {
   const documents = useMemo(() => collectDocuments(activeMessages), [activeMessages]);
   const webSources = useMemo(() => collectWebSources(activeMessages), [activeMessages]);
   const generatedFiles = useMemo(
-    () => activeFiles.map((f) => ({ ...f, downloadUrl: buildDownloadUrl(f.file_url) })),
+    () =>
+      activeFiles
+        .filter((f) => !f.file_type || f.file_type === "pptx")
+        .map((f) => ({ ...f, downloadUrl: buildDownloadUrl(f.file_url) })),
     [activeFiles]
   );
+  const assets = useMemo(() => collectAssets(activeFiles), [activeFiles]);
 
   const created = session?.created_at ? new Date(session.created_at).toISOString().slice(0, 10) : "-";
+
+  const [dragOverAssetId, setDragOverAssetId] = useState<string | null>(null);
+  const [pendingReplace, setPendingReplace] = useState<{ asset: any; file: File } | null>(null);
+
+  const handleAssetDrop = (asset: any, e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOverAssetId(null);
+    const file = e.dataTransfer.files?.[0];
+    if (file) setPendingReplace({ asset, file });
+  };
+
+  const handleReplaceConfirm = async (scope: ReplaceScope) => {
+    if (!pendingReplace || !activeSessionId) return;
+    const { asset, file } = pendingReplace;
+    const formData = new FormData();
+    formData.append("file", file);
+
+    // "in_slide" hits a different endpoint - it resumes the agent rather
+    // than just swapping a file, so it can fail in ways the other two
+    // scopes can't (most notably: the session's editing state expired -
+    // see the AI service's replace-in-slide endpoint). Left uncaught here
+    // deliberately: AssetReplaceDialog catches it and keeps itself open
+    // with the message shown, instead of the drop silently vanishing.
+    //
+    // The dialog is still awaiting this same call while it runs, so it
+    // must not be torn down (setPendingReplace(null) unmounts it) until
+    // everything below has actually settled - closing it early meant a
+    // failure in setActiveSession threw into an already-unmounted
+    // component: the error never reached the user, and React logged a
+    // set-state-on-unmounted warning.
+    if (scope === "in_slide") {
+      await apiUpload(`/api/orchestrator/sessions/${activeSessionId}/assets/${asset.id}/replace-in-slide`, formData);
+      await useChatStore.getState().setActiveSession(activeSessionId);
+      setPendingReplace(null);
+      return;
+    }
+
+    formData.append("scope", scope);
+    await apiUpload(`/api/orchestrator/sessions/${activeSessionId}/assets/${asset.id}/replace`, formData);
+    await useChatStore.getState().setActiveSession(activeSessionId);
+    setPendingReplace(null);
+  };
 
   return (
     <div className="ws-scroll ws-left-pad">
@@ -92,6 +140,46 @@ export function DetailsPanel() {
       </CollapsibleSection>
 
       <div className="ws-divider" />
+      <CollapsibleSection title="Assets" count={assets.length}>
+        <div className="ws-sources">
+          {assets.length === 0 && <div className="ws-empty-note">Charts and images will appear here as they&apos;re generated. Drag a file onto one to replace it.</div>}
+          {assets.map((a) => (
+            <a
+              className={`ws-src ws-src-dl ${dragOverAssetId === a.id ? "dragging" : ""}`}
+              key={a.id}
+              href={a.downloadUrl}
+              download
+              title={`Download ${a.filename}`}
+              onDragOver={(e) => { e.preventDefault(); setDragOverAssetId(a.id); }}
+              onDragLeave={() => setDragOverAssetId((id) => (id === a.id ? null : id))}
+              onDrop={(e) => handleAssetDrop(a, e)}
+            >
+              <AssetThumb src={a.downloadUrl} alt={a.filename} />
+              <div className="s-body">
+                <div className="s-name">{a.filename}</div>
+                <div className="s-meta">
+                  {typeof a.slide_index === "number" ? `Slide ${a.slide_index + 1} - ` : ""}
+                  {a.file_type}
+                  {a.file_size ? ` - ${formatFileSize(a.file_size)}` : ""}
+                </div>
+              </div>
+              <span className="s-tag"><Download size={13} /></span>
+              {dragOverAssetId === a.id && <span className="drop-overlay">Drop to replace</span>}
+            </a>
+          ))}
+        </div>
+      </CollapsibleSection>
+
+      {pendingReplace && (
+        <AssetReplaceDialog
+          asset={pendingReplace.asset}
+          file={pendingReplace.file}
+          onConfirm={handleReplaceConfirm}
+          onCancel={() => setPendingReplace(null)}
+        />
+      )}
+
+      <div className="ws-divider" />
       <CollapsibleSection title="Documents" count={documents.length}>
         <div className="ws-sources">
           {documents.length === 0 && <div className="ws-empty-note">No documents attached yet.</div>}
@@ -149,6 +237,38 @@ function collectDocuments(messages: any[]): DocumentRow[] {
     }
   }
   return rows;
+}
+
+/**
+ * The asset itself, at row size.
+ *
+ * The panel showed a generic image glyph and a filename, so the only way
+ * to tell whether `slide-4-chart-1.png` was the chart you meant was to
+ * download it - on a panel whose whole purpose is deciding which asset to
+ * replace. The file endpoint takes the same `?token=` the download link
+ * does, so the row can just show it.
+ *
+ * Falls back to the glyph if the image will not load: a row that renders
+ * a broken-image icon is worse than the one it replaced.
+ */
+function AssetThumb({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <div className="s-ic img"><ImageIcon size={14} /></div>;
+  return (
+    <div className="s-ic img ws-asset-thumb">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} />
+    </div>
+  );
+}
+
+function collectAssets(files: any[]): (any & { downloadUrl: string })[] {
+  // Individual chart/image assets (#187) share the generated_files table
+  // with the whole-deck pptx row - anything that isn't "pptx" belongs here,
+  // not in Output.
+  return files
+    .filter((f) => f.file_type === "image" || f.file_type === "chart")
+    .map((f) => ({ ...f, downloadUrl: buildDownloadUrl(f.file_url) }));
 }
 
 function collectWebSources(messages: any[]): WebSourceRow[] {
@@ -218,6 +338,9 @@ function WebSourceIcon({ url }: { url: string }) {
   return (
     <div className="s-ic web">
       {faviconUrl && !failed ? (
+        // next/image would need this third-party host allow-listed in
+        // next.config and buys nothing for a 16px favicon.
+        // eslint-disable-next-line @next/next/no-img-element
         <img src={faviconUrl} alt="" className="s-ic-fav" onError={() => setFailed(true)} />
       ) : (
         <Globe size={14} />

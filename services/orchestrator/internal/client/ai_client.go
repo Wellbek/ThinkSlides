@@ -244,3 +244,19 @@ func (c *AIServiceClient) AnswerQuestion(sessionID string, selectedOption string
 	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/answer-question", c.baseURL, sessionID)
 	return c.postJSON(url, payload, identity)
 }
+
+// ReplaceImageInSlide tells the AI service a replacement image was saved for
+// one asset and asks it to resume the agent so the slide using that asset
+// gets regenerated with it (#187). The file itself already lives on the
+// shared output volume by the time this is called - the AI service reads it
+// from filePath rather than the image travelling through this request too.
+func (c *AIServiceClient) ReplaceImageInSlide(sessionID, assetID, filePath, originalFilename string, fileSizeBytes int64, slideIndex int, identity Identity) (map[string]interface{}, error) {
+	payload := map[string]interface{}{
+		"file_path":         filePath,
+		"original_filename": originalFilename,
+		"file_size_bytes":   fileSizeBytes,
+		"slide_index":       slideIndex,
+	}
+	url := fmt.Sprintf("%s/api/v1/generate/sessions/%s/assets/%s/replace-in-slide", c.baseURL, sessionID, assetID)
+	return c.postJSON(url, payload, identity)
+}

@@ -23,7 +23,12 @@ export function SlideStage({ onCollapse }: { collapsed: boolean; onCollapse: () 
   const slide = slides[idx];
   const total = slides.length;
 
-  const latestFile = activeFiles[activeFiles.length - 1];
+  // activeFiles now also holds individual chart/image assets (#187), which
+  // insert into generated_files after the deck's own row - array position
+  // is no longer "the deck", it's "whatever was persisted last". The
+  // toolbar's primary download is always the rendered presentation.
+  const pptxFiles = activeFiles.filter((f) => !f.file_type || f.file_type === "pptx");
+  const latestFile = pptxFiles[pptxFiles.length - 1];
   const downloadUrl = buildDownloadUrl(latestFile?.file_url);
 
   return (
