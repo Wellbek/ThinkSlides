@@ -6,6 +6,7 @@ Uses a cheap flash GLM model to generate concise titles from user queries.
 
 from typing import Optional
 import httpx
+from app.agent.tools._today import today_line
 from app.config import settings
 from app.observability.logging import get_logger
 
@@ -35,7 +36,12 @@ async def generate_chat_title(first_user_message: str) -> Optional[str]:
         messages = [
             {
                 "role": "system",
-                "content": "You are a title generator. Generate a concise, descriptive title (max 50 characters) for a chat conversation based on the user's first message. Return ONLY the title, nothing else."
+                "content": (
+                    f"{today_line()} "
+                    "You are a title generator. Generate a concise, descriptive title "
+                    "(max 50 characters) for a chat conversation based on the user's "
+                    "first message. Return ONLY the title, nothing else."
+                )
             },
             {
                 "role": "user",

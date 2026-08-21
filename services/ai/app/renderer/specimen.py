@@ -43,6 +43,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
+from app.agent.tools._today import recent_years
 from app.observability.logging import get_logger
 from app.renderer.preview_generator import PreviewGenerator
 
@@ -176,7 +177,10 @@ def default_content() -> SpecimenContent:
         evidence_headline="Growth held in every one of the five measured years",
         takeaway="Both lines have compounded since the programme began",
         chart_title="Measured segments, percent",
-        categories=("2020", "2021", "2022", "2023", "2024"),
+        # Dated from today rather than written down: these specimen slides are
+        # shown to the user when they pick a direction, and a sample chart
+        # whose axis stops years ago reads as a stale product.
+        categories=tuple(recent_years(5)),
         series=(
             ("Core", (18.0, 27.0, 36.0, 45.0, 54.0)),
             ("Adjacent", (12.0, 15.0, 21.0, 26.0, 33.0)),

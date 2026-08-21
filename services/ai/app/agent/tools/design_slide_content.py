@@ -11,6 +11,7 @@ from app.agent.run_context import require_chat_provider
 from app import budget as budget_model
 from app import titles
 from app.measure import grammar as grammar_model
+from app.agent.tools._today import today_line
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.observability.logging import get_logger
 import json
@@ -315,7 +316,9 @@ Design System Context:
                     rendered=title_register, reason=register_note,
                 )
 
-            prompt = f"""Generate content for a single presentation slide.
+            prompt = f"""{today_line()}
+
+Generate content for a single presentation slide.
 
 Slide Outline:
 {json.dumps(outline, indent=2)}
@@ -367,7 +370,7 @@ Rules:
 - Only use "image" type when an image was supplied above - either a pre-vetted source image (source: "selected") or one built by generate_image. {image_rule}
 - Use "table" type for tbl placeholders (or any content placeholder, if no dedicated table placeholder exists) when the content is genuinely tabular (comparisons, structured data with 2+ rows and 2+ columns) - do not force prose bullet points into a table, and do not use a table for anything that reads better as bullets. Shape: {{type: "table", placeholderIdx: N, table: {{headerRow: true, rows: [["Column A", "Column B"], ["Row 1 value", "Row 1 value"], ["Row 2 value", "Row 2 value"]]}}}}. Every row must have the same number of cells as the header row. Keep cell text short (a few words) - tables are rendered at a fixed size, not auto-expanded.
 - Whenever the key points for this slide carry numbers that tell a story a reader would rather SEE than read (a trend over time, a comparison across categories, a breakdown of a whole, a correlation), that is a chart, not a list of sentences - but do not write chart JSON here yourself. Stop and call build_chart for this slide_index first: it carries the full chart vocabulary, picks the right type from the same intent (trend, comparison, whole, correlation, movement between totals), and validates the shape against the type you chose. A "chart" content item written directly in this response is rejected - the placeholder stays whatever build_chart's own {{type: "chart", ...}} block produced when you attach it here.
-- A chart or a table REPLACES the prose it visualizes - do not emit a chart and then also restate the same figures as bullets in the same body placeholder. A short bullet or two of interpretation ("growth flattened after 2023") alongside a chart is good; a duplicate of the chart's own numbers is not.
+- A chart or a table REPLACES the prose it visualizes - do not emit a chart and then also restate the same figures as bullets in the same body placeholder. A short bullet or two of interpretation ("growth flattened after the second year") alongside a chart is good; a duplicate of the chart's own numbers is not.
 - Each content item must have a placeholderIdx matching one of the available placeholders.
 {citation_guidance}"""
 

@@ -50,6 +50,7 @@ from app import colors, directions as direction_model
 from app.agent.registry import ToolParameter, ToolRegistry, ToolResult
 from app.agent.run_context import require_chat_provider
 from app.agent.tools._json_extract import extract_json_object
+from app.agent.tools._today import recent_years, today_line
 from app.observability.logging import get_logger
 from app.renderer import specimen
 
@@ -287,6 +288,8 @@ def _prompt(brief: str, answers: str, brand_hex: str | None,
             uploaded: dict | None, wanted: int, problems: list[str]) -> str:
     settled = str(answers or "").strip()
     lines = [
+        today_line(),
+        "",
         f"Author {wanted} genuinely different design directions for this deck, "
         "and the specimen copy all of them will be previewed with.",
         "",
@@ -324,7 +327,7 @@ def _prompt(brief: str, answers: str, brand_hex: str | None,
                 "takeaway": "one sentence stating what the figures show",
                 "chart": {
                     "title": "what the chart measures, with its unit",
-                    "categories": ["2020", "2021", "2022", "2023", "2024"],
+                    "categories": recent_years(5),
                     "series": [{"name": "Series", "values": [18, 27, 36, 45, 54]}],
                 },
             },

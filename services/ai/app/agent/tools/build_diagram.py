@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 import time
 
+from app.agent.tools._today import example_quarter
 from app.agent.registry import ToolParameter, ToolRegistry, ToolResult
 from app.agent.tools._binding import bind as _bind
 from app.agent.tools._binding import region_param as _region_param
@@ -117,7 +118,10 @@ class BuildDiagramTool:
                             },
                             "date": {
                                 "type": "string",
-                                "description": "timeline only: when it happened, e.g. 'Q3 2025'.",
+                                "description": (
+                                    "timeline only: when it happened, e.g. "
+                                    f"'{example_quarter()}'."
+                                ),
                             },
                             "parent": {
                                 "type": "string",

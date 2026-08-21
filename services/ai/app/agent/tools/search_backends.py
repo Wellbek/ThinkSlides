@@ -32,6 +32,7 @@ import jwt
 
 from app.ai_settings import SearchConfig
 from app.config import settings
+from app.agent.tools._today import today_line
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -50,15 +51,55 @@ FIRECRAWL_BASE_URL = "https://api.firecrawl.dev"
 ANTHROPIC_SEARCH_TOOL = "web_search_20260209"
 ANTHROPIC_SEARCH_TOOL_FALLBACK = "web_search_20250305"
 
+# The only recency values any backend understands. Validated here - not deep
+# inside each backend - so an off-schema value from the model (or from a
+# resumed/replayed tool call) never reaches an upstream API, and every caller
+# that wants to know "is this a real recency value" (the already-run cache
+# check in loop.py included) normalizes the exact same way a real call would.
+VALID_RECENCY = ("day", "week", "month", "year")
 
-async def run_search(config: SearchConfig, query: str, count: int = DEFAULT_COUNT) -> list[dict]:
-    """Execute a search through the configured backend."""
+
+def normalize_recency(value) -> str:
+    """``value`` if it's a known recency filter, else "" (no filter)."""
+    value = str(value or "").strip().lower()
+    return value if value in VALID_RECENCY else ""
+
+
+def recency_supported(config: SearchConfig) -> bool:
+    """Whether ``run_search``'s ``recency`` argument affects this config's backend.
+
+    Only Zhipu (native, non-Anthropic/OpenAI) and Tavily currently implement
+    a recency filter. Callers use this to warn rather than silently drop the
+    argument when it was requested against a backend that ignores it.
+    """
+    if config.backend == "tavily":
+        return True
+    if config.backend == "native":
+        provider = config.model.provider if config.model else None
+        return provider not in ("anthropic", "openai")
+    return False
+
+
+async def run_search(
+    config: SearchConfig, query: str, count: int = DEFAULT_COUNT, recency: str | None = None
+) -> list[dict]:
+    """Execute a search through the configured backend.
+
+    ``recency`` asks the backend to bias or filter toward freshly published
+    results - "day"/"week"/"month"/"year" (Zhipu's own vocabulary; Tavily's
+    ``time_range`` is mapped onto the same four values). Only Zhipu and Tavily
+    support it (see ``recency_supported``); other backends silently ignore it
+    rather than erroring, since asking for recency is a hint, not a hard
+    requirement of the tool contract. Always normalized here so an invalid
+    value never reaches an upstream request body.
+    """
     start = time.time()
+    recency = normalize_recency(recency)
 
     if config.backend == "native":
-        results = await _native_search(config, query, count)
+        results = await _native_search(config, query, count, recency)
     elif config.backend == "tavily":
-        results = await _tavily_search(config, query, count)
+        results = await _tavily_search(config, query, count, recency)
     elif config.backend == "firecrawl":
         results = await _firecrawl_search(config, query, count)
     else:
@@ -74,14 +115,16 @@ async def run_search(config: SearchConfig, query: str, count: int = DEFAULT_COUN
     return _dedupe(results)
 
 
-async def _native_search(config: SearchConfig, query: str, count: int) -> list[dict]:
+async def _native_search(
+    config: SearchConfig, query: str, count: int, recency: str | None = None
+) -> list[dict]:
     if config.model is None:
         raise ValueError("Native search needs a configured model provider")
     if config.model.provider == "anthropic":
         return await _anthropic_search(config, query, count)
     if config.model.provider == "openai":
         return await _openai_search(config, query, count)
-    return await _zhipu_search(config, query, count)
+    return await _zhipu_search(config, query, count, recency)
 
 
 def _dedupe(results: list[dict]) -> list[dict]:
@@ -163,7 +206,9 @@ def build_zhipu_jwt(api_key: str) -> str:
     )
 
 
-async def _zhipu_search(config: SearchConfig, query: str, count: int) -> list[dict]:
+async def _zhipu_search(
+    config: SearchConfig, query: str, count: int, recency: str | None = None
+) -> list[dict]:
     api_key = config.model.api_key if config.model else settings.zhipu_api_key
     body = {
         "search_engine": settings.zhipu_web_search_engine or "search_std",
@@ -175,6 +220,9 @@ async def _zhipu_search(config: SearchConfig, query: str, count: int) -> list[di
         "search_intent": False,
         "content_size": settings.zhipu_web_search_content_size,
     }
+    if recency:
+        # Zhipu's own vocabulary: day/week/month/year/noLimit.
+        body["search_recency_filter"] = recency
     headers = {
         "Authorization": f"Bearer {build_zhipu_jwt(api_key)}",
         "Content-Type": "application/json",
@@ -232,7 +280,9 @@ def parse_zhipu_response(response) -> list[dict]:
 # ── Tavily (external) ──────────────────────────────────────────────────
 
 
-async def _tavily_search(config: SearchConfig, query: str, count: int) -> list[dict]:
+async def _tavily_search(
+    config: SearchConfig, query: str, count: int, recency: str | None = None
+) -> list[dict]:
     body = {
         "api_key": config.api_key,
         "query": query,
@@ -242,6 +292,9 @@ async def _tavily_search(config: SearchConfig, query: str, count: int) -> list[d
         "include_answer": False,
         "include_raw_content": False,
     }
+    if recency:
+        # Tavily's time_range takes the same day/week/month/year vocabulary.
+        body["time_range"] = recency
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     url = f"{(config.base_url or '').rstrip('/')}/search" if config.base_url else TAVILY_SEARCH_URL
     return parse_tavily_response(await post_json(url, headers, body))
@@ -399,6 +452,7 @@ async def _anthropic_search(config: SearchConfig, query: str, count: int) -> lis
         "messages": [{
             "role": "user",
             "content": (
+                f"{today_line()}\n\n"
                 f"Search the web for: {query}\n\n"
                 "Report the key facts you find. Cite every claim - the citations "
                 "are the actual output being collected."
@@ -494,7 +548,10 @@ async def _openai_search(config: SearchConfig, query: str, count: int) -> list[d
         model=credentials.model,
         messages=[{
             "role": "user",
-            "content": f"Search the web for: {query}\n\nReport the key facts, citing sources.",
+            "content": (
+                f"{today_line()}\n\nSearch the web for: {query}\n\n"
+                "Report the key facts, citing sources."
+            ),
         }],
         extra_body={"web_search_options": {}},
     )

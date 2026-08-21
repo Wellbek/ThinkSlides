@@ -32,6 +32,7 @@ import base64
 import time
 
 from app.agent import run_context
+from app.agent.tools._today import recent_years
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._binding import bind, region_param, slot_param
 from app.agent.tools._json_extract import coerce_json_arg
@@ -185,7 +186,7 @@ class BuildChartTool:
                     name="categories", type="array", items={"type": "string"},
                     description=(
                         "The x-axis labels (or pie slice names), in the order they "
-                        'should appear, e.g. ["2021", "2022", "2023"]'
+                        f"should appear, e.g. {recent_years()}"
                     ),
                 ),
                 ToolParameter(

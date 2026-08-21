@@ -22,6 +22,7 @@ from app.agent.summaries import summarize_tool_result
 from app.agent.tools._binding import slot_key
 from app.agent.tools._json_extract import extract_json_object
 from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
+from app.agent.tools.search_backends import normalize_recency
 from app.agent.tools.build_blocks import BLOCK_BUILDER_TOOLS
 from app.connections import mcp_tools
 from app.connections import store as connection_store
@@ -2743,16 +2744,24 @@ class AgentLoop:
         return ToolResult(success=True, data=design_system, duration_ms=0)
 
     def _search_already_run(self, fn_args: dict, context: dict) -> ToolResult | None:
-        """This run's findings for a query it has already asked.
+        """This run's findings for a query it has already asked with the same recency filter.
 
         Returned rather than re-fetched, and it does not spend a search from the
         budget: the backend would hand back the same pages, several seconds
         later, for a slot the run is supposed to spend on a different facet of
         the topic.
+
+        Recency is part of the match on purpose: the research prompt tells the
+        model to re-run a query WITH a recency filter to get fresher results
+        than an earlier, unfiltered search of the same text found. Matching on
+        query text alone would hand back that stale cached answer instead of
+        actually running the filtered search - silently defeating the exact
+        thing the model was just told to do.
         """
         query = _normalize_query(fn_args.get("query"))
         if not query:
             return None
+        recency = normalize_recency(fn_args.get("recency"))
 
         found = [
             {
@@ -2763,6 +2772,7 @@ class AgentLoop:
             }
             for entry in context.get("research") or []
             if _normalize_query(entry.get("query")) == query
+            and entry.get("recency", "") == recency
         ]
         if not found:
             return None
@@ -2771,6 +2781,7 @@ class AgentLoop:
             success=True,
             data={
                 "query": fn_args.get("query", ""),
+                "recency": recency,
                 "results": found,
                 "result_count": len(found),
                 "note": (
@@ -3157,6 +3168,12 @@ class AgentLoop:
                         self.working_state.researched_urls.add(item["url"])
                     research.append({
                         "query": tool_result.data.get("query", ""),
+                        # The recency filter actually applied to this search
+                        # (already normalized by the tool - see
+                        # search_backends.normalize_recency) - part of what
+                        # makes this a *different* search from the same query
+                        # text without it. See _search_already_run.
+                        "recency": tool_result.data.get("recency", ""),
                         "title": item.get("title", ""),
                         "url": item.get("url", ""),
                         "snippet": item.get("snippet", ""),
@@ -3683,7 +3700,8 @@ class AgentLoop:
             "can answer by tapping. OPTIONS MUST BE TAILORED TO THE ACTUAL REQUEST, never "
             "generic placeholders: for content focus, name the 2-4 candidate angles you "
             "actually saw in the material (not 'Option A/B/C'); for data presentation, offer "
-            "the concrete alternatives for THAT data ('Line chart of revenue 2011-2025', "
+            "the concrete alternatives for THAT data ('Line chart of revenue over the "
+            "period the data covers', "
             "'Table of year-by-year figures', 'Keep it as bullets') rather than asking "
             "abstractly whether the user likes charts.",
             "6. THE LOOK AND THE COLOUR ARE BOTH SETTLED BY propose_design_directions. Never ask "
@@ -3759,6 +3777,28 @@ class AgentLoop:
                 "on a single source, attribute it in the slide's notes.",
                 "- Prefer primary and recent sources (the company's own filing, the statistics "
                 "office, the standards body) over aggregators repeating each other.",
+                "- When the request implies 'most recent', 'latest', or current information, "
+                "do not assume the first plausible-looking result is actually the newest thing "
+                "available. Say so with web_search's recency argument (day/week/month/year) "
+                "rather than by typing a year into the query text.",
+                f"- NEVER WRITE A YEAR INTO A SEARCH QUERY FROM MEMORY. The year that feels "
+                f"current to you is the year your training data ended, not the year it is; it "
+                f"is {today.year}, as stated at the top of this prompt. A query that asks for "
+                "the 'latest' and also names a past year contradicts itself and returns "
+                "precisely the stale pages the request was trying to avoid - web_search strips "
+                "such a year and tells you it did, so do not put it back. A year belongs in a "
+                "query only when the user asked about that specific year.",
+                f"- Then check each result's published date against {today.strftime('%Y-%m-%d')} "
+                "before treating it as current - a result from a year or more ago is not 'the "
+                "most recent' just because it was the first thing found.",
+                "- If, after checking dates, the freshest result you found still does not look "
+                "recent enough for what was asked - or you genuinely cannot tell how current it "
+                "is - do not silently proceed as if it were sufficient. Call ask_user_question: "
+                "name what you found and its apparent age, and ask whether to proceed with it, "
+                "search further with a narrower time window, or continue without that specific "
+                "claim. Only do this when the request genuinely implied recency and the check is "
+                "actually inconclusive - most searches resolve on their own and should not stop "
+                "to ask.",
                 "- Do NOT call web_search for opinions, the user's own documents, or topics you already know well - avoid unnecessary calls.",
                 "- The web_search results are shown to the user as sources, so prefer it whenever a claim benefits from a citation.",
                 "",

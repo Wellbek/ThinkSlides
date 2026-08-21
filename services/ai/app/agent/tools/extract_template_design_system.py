@@ -13,6 +13,7 @@ as a versioned DesignSystemBundle in the database.
 """
 
 from __future__ import annotations
+from app.agent.tools._today import today_line
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.measure import archetypes as archetype_model
 from app.measure import clusters
@@ -489,9 +490,10 @@ class ExtractTemplateDesignSystemTool:
         each kind of page this deck has".
         """
         page_note = (
+            f"{today_line()}\n\n"
             f"I am showing you {page_count} pages from this template."
             if page_count > 1
-            else "I am showing you one page from this template."
+            else f"{today_line()}\n\nI am showing you one page from this template."
         )
         if survey is not None and survey.clusters:
             page_note += (
