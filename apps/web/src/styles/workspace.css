@@ -433,6 +433,18 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-src .s-ic.pptx { background: rgba(129,140,248,0.10); color: var(--ws-ai-text); }
 .ws-src .s-ic.web { background: rgba(96,165,250,0.10); color: var(--ws-blue-text); }
 .ws-src .s-ic.img { background: rgba(249,115,22,0.10); color: var(--ws-orange-text); }
+
+/* An asset row shows the asset. Wider than the square glyph it replaces
+   because a chart is landscape and a 24px square of one says nothing;
+   `contain` keeps a portrait image from being cropped into a lie about
+   what it contains. */
+.ws-src .s-ic.ws-asset-thumb {
+  width: 46px; height: 30px; background: var(--ws-surface-2);
+  border: 1px solid var(--ws-border); overflow: hidden; padding: 1px;
+}
+.ws-src .s-ic.ws-asset-thumb img {
+  width: 100%; height: 100%; object-fit: contain; display: block;
+}
 .ws-src .s-ic-fav { width: 15px; height: 15px; border-radius: 3px; }
 .ws-src .s-body { flex: 1; min-width: 0; }
 .ws-src .s-name { font-size: 12px; color: #AAA; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

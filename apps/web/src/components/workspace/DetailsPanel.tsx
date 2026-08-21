@@ -154,7 +154,7 @@ export function DetailsPanel() {
               onDragLeave={() => setDragOverAssetId((id) => (id === a.id ? null : id))}
               onDrop={(e) => handleAssetDrop(a, e)}
             >
-              <div className="s-ic img"><ImageIcon size={14} /></div>
+              <AssetThumb src={a.downloadUrl} alt={a.filename} />
               <div className="s-body">
                 <div className="s-name">{a.filename}</div>
                 <div className="s-meta">
@@ -237,6 +237,29 @@ function collectDocuments(messages: any[]): DocumentRow[] {
     }
   }
   return rows;
+}
+
+/**
+ * The asset itself, at row size.
+ *
+ * The panel showed a generic image glyph and a filename, so the only way
+ * to tell whether `slide-4-chart-1.png` was the chart you meant was to
+ * download it - on a panel whose whole purpose is deciding which asset to
+ * replace. The file endpoint takes the same `?token=` the download link
+ * does, so the row can just show it.
+ *
+ * Falls back to the glyph if the image will not load: a row that renders
+ * a broken-image icon is worse than the one it replaced.
+ */
+function AssetThumb({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <div className="s-ic img"><ImageIcon size={14} /></div>;
+  return (
+    <div className="s-ic img ws-asset-thumb">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} />
+    </div>
+  );
 }
 
 function collectAssets(files: any[]): (any & { downloadUrl: string })[] {
