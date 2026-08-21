@@ -650,6 +650,13 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
   // Distinct slides, not preview events: every re-render across a
   // validation retry stages and flushes its own set, so a nine-slide deck
   // that rendered twice reported "18 slides finalized".
+  // A conclusion about the whole run, not about the block that produced
+  // it: it hung off the Render block, which keeps its position at the
+  // first validation attempt, so it appeared above the fixing passes that
+  // were still to come.
+  const unresolved = findLastMatch(blocks, (b) => !!b.validationUnresolvedEvent)
+    ?.validationUnresolvedEvent;
+
   const finalized = useMemo(() => {
     const bySlide = new Map<number, any>();
     blocks.forEach((b, blockIndex) => {
@@ -690,6 +697,8 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
           </div>
         </FeedItem>
       )}
+
+      {unresolved && <ValidationUnresolvedNote ev={unresolved} />}
 
       {!!finalized.length && (
         <div className="ws-run-complete">
@@ -794,9 +803,7 @@ function PhaseBlockItem({
       </div>
 
       {revisit && !!revisit.detail.length && (
-        <ul className="ws-revisit-detail">
-          {revisit.detail.map((d, i) => <li key={i}>{d}</li>)}
-        </ul>
+        <ClauseList clauses={revisit.detail} />
       )}
 
       {(takeawayText || active) && (
@@ -844,10 +851,6 @@ function PhaseBlockItem({
           answered={isAnswered}
           answerText={answerText}
         />
-      )}
-
-      {block.validationUnresolvedEvent && (
-        <ValidationUnresolvedNote ev={block.validationUnresolvedEvent} />
       )}
 
       {block.errorEvent && (
@@ -946,6 +949,30 @@ function summariseReason(clauses: string[], kind: "error" | "adjustment"): strin
     if (entry.match.test(text)) return entry.label;
   }
   return "";
+}
+
+/** How many validator clauses a revisited phase shows before it stops.
+ *  One overlap on a slide is reported once per pair of overlapping runs,
+ *  so a single bad row produced fifteen near-identical lines and the
+ *  subordinate detail became the largest thing on screen. */
+const MAX_CLAUSES_SHOWN = 4;
+
+function ClauseList({ clauses }: { clauses: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const hidden = clauses.length - MAX_CLAUSES_SHOWN;
+  const shown = expanded ? clauses : clauses.slice(0, MAX_CLAUSES_SHOWN);
+  return (
+    <ul className="ws-revisit-detail">
+      {shown.map((clause, i) => <li key={i}>{clause}</li>)}
+      {hidden > 0 && (
+        <li className="ws-revisit-more">
+          <button type="button" onClick={() => setExpanded((open) => !open)}>
+            {expanded ? "show less" : `and ${hidden} more`}
+          </button>
+        </li>
+      )}
+    </ul>
+  );
 }
 
 /** The arrow-loop that marks a back-edge, on the dot's own badge. */
@@ -1052,6 +1079,21 @@ interface Row {
   sources?: SourceInfo[];
 }
 
+/** Whether a step passed, as opposed to merely having run.
+ *
+ *  validate_rendered_output returns success:true whenever the check
+ *  *executed*, whatever it found, so three attempts that each reported
+ *  seven, eight and seventeen layout problems all rendered with a green
+ *  tick. What the row is reporting is the check, not the call. */
+function stepPassed(step: SubStep): boolean {
+  if (step.success === false) return false;
+  const issues = (step.result as any)?.issues;
+  if (step.toolName === "validate_rendered_output" && Array.isArray(issues)) {
+    return issues.length === 0;
+  }
+  return true;
+}
+
 /** What a failed step says when the backend gave it neither a summary nor
  *  an error string. A red dot over an empty line reads as the UI being
  *  broken rather than the step being. */
@@ -1062,9 +1104,9 @@ function failureNote(failed: boolean): string {
 function toRow(s: SubStep): Row {
   return {
     key: s.key,
-    icon: s.success === false ? "●" : s.running ? "↻" : "✓",
+    icon: !stepPassed(s) ? "●" : s.running ? "↻" : "✓",
     label: toolLabel(s.toolName),
-    note: s.summary || (s.running ? "" : s.error || failureNote(s.success === false)),
+    note: s.summary || (s.running ? "" : s.error || failureNote(!stepPassed(s))),
     durationMs: s.processDurationMs ?? s.durationMs,
     toolDurationMs: s.durationMs,
     running: s.running,
@@ -1206,7 +1248,7 @@ function groupRenderRows(subSteps: SubStep[]): Row[] {
     const group = subSteps.slice(i, end);
     const last = group[group.length - 1];
     const anyRunning = group.some((s) => s.running);
-    const anyFailed = last.success === false;
+    const anyFailed = !stepPassed(last);
     const sources = group.flatMap((s) => s.sources || []);
     rows.push({
       key: `render-attempt-${attempt}`,
