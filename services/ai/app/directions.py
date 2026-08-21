@@ -41,10 +41,11 @@ enforces a floor once the model is authoring outright:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional, Sequence
 
 from app import colors
+from app.colors import _to_hls
 from app.renderer import table_style
 from app.design_system import (
     COLOR_THEMES, derive_brand_palette, derive_data_viz_config,
@@ -489,6 +490,67 @@ def distinctness_problems(specs: Sequence[DirectionSpec]) -> list[str]:
     return problems
 
 
+# How far a hue may be moved to make a direction readable. Lightness only:
+# the hue the model picked for this subject is the thing worth keeping, and
+# moving it along one axis is a repair rather than a substitution.
+_REPAIR_STEP = 0.04
+_REPAIR_MAX_SHIFT = 0.40
+# Past these a colour is effectively black or white, and no longer the hue
+# it started as.
+_REPAIR_FLOOR, _REPAIR_CEILING = 0.08, 0.92
+
+
+def _repair_lightnesses(seed: str) -> list[float]:
+    """Lightnesses to try, nearest to the seed's own first.
+
+    Both directions, alternating, so a colour that is too light for white
+    text is as likely to be darkened as a colour that is too dark for black
+    text is to be lightened - the fix is whichever is closer.
+    """
+    current = _to_hls(seed)
+    start = current[1] if current else 0.5
+    out: list[float] = []
+    steps = int(_REPAIR_MAX_SHIFT / _REPAIR_STEP)
+    for step in range(1, steps + 1):
+        for delta in (-step * _REPAIR_STEP, step * _REPAIR_STEP):
+            value = round(start + delta, 4)
+            if _REPAIR_FLOOR <= value <= _REPAIR_CEILING:
+                out.append(value)
+    return out
+
+
+def repair_contrast(spec: DirectionSpec, brand_hex: Optional[str] = None,
+                    base: Optional[dict] = None) -> tuple[Optional[DirectionSpec],
+                                                          Optional[dict]]:
+    """
+    The same direction in the nearest readable version of its own hue.
+
+    Contrast is a property that can be repaired rather than a verdict. A
+    direction that missed WCAG AA by 1.3:1 used to take the whole set down
+    with it - the two that passed, the specimen copy written about this
+    deck, and the palettes - and the user was shown the built-in three in
+    the house navy instead. Darkening the coral the model chose keeps the
+    direction it chose it for.
+
+    Returns ``(None, None)`` when no lightness clears the floor, which is
+    the case a caller should still reject.
+    """
+    seed = brand_hex or spec.palette_hex
+    if not seed or not colors.parse_hex(seed):
+        # Nothing to move: the direction is drawn from the built-in palette,
+        # so an unreadable one is a bug in the defaults, not in the model.
+        return None, None
+    for lightness in _repair_lightnesses(seed):
+        candidate = colors.with_lightness(seed, lightness)
+        repaired = replace(spec, palette_hex=candidate)
+        # Compiled against the repaired hue explicitly rather than against
+        # ``brand_hex``, which would win over it in ``_palette_for``.
+        system = compile_direction(repaired, None, base)
+        if not contrast_problems(system):
+            return repaired, system
+    return None, None
+
+
 def validate(specs: Sequence[DirectionSpec], brand_hex: Optional[str] = None,
              base: Optional[dict] = None) -> tuple[list[dict], list[str]]:
     """
@@ -497,15 +559,25 @@ def validate(specs: Sequence[DirectionSpec], brand_hex: Optional[str] = None,
     Returns the compiled directions and the problems. A caller with problems
     should re-ask rather than show them: the point of authoring outright is
     that nothing enforces a floor, so this is the floor.
+
+    A direction whose text cannot be read on its ground is repaired first -
+    see :func:`repair_contrast` - and only reported as a problem when no
+    version of its own hue clears WCAG AA.
     """
     problems = distinctness_problems(specs)
     compiled: list[dict] = []
-    for spec in specs:
+    for proposed in specs:
+        spec = proposed
         system = compile_direction(spec, brand_hex, base)
-        failures = contrast_problems(system)
-        if failures:
-            problems.append(f"{spec.name!r} is unreadable: {failures[0]}")
-            continue
+        if contrast_problems(system):
+            repaired, repaired_system = repair_contrast(spec, brand_hex, base)
+            if repaired_system is None:
+                problems.append(
+                    f"{proposed.name!r} is unreadable, and no lightness of "
+                    "its own hue clears WCAG AA"
+                )
+                continue
+            spec, system = repaired, repaired_system
         compiled.append({
             "id": spec.id,
             "name": spec.name,
@@ -521,6 +593,66 @@ def validate(specs: Sequence[DirectionSpec], brand_hex: Optional[str] = None,
             f"only {len(compiled)} of {DIRECTION_COUNT} directions survived"
         )
     return compiled, problems
+
+
+def top_up(compiled: list[dict], wanted: int,
+           brand_hex: Optional[str] = None,
+           base: Optional[dict] = None,
+           seeds: Sequence[str] = ()) -> list[dict]:
+    """
+    Fill a short set from the defaults, keeping what was authored.
+
+    A set that came back one direction short used to be discarded whole,
+    so a single unusable direction cost the user the two good ones as
+    well. The authored ones lead; the built-ins make up the number, and
+    only where they do not collide with a ground or an id already in use.
+
+    ``seeds`` are hues the model proposed for this subject. A built-in
+    filling a gap takes one rather than the house navy, so a topped-up
+    card is still a card about this deck rather than half a stock one.
+    """
+    # Deduplicated first: an authored set can reach here still carrying two
+    # directions on the same ground, which is two directions a user cannot
+    # tell apart in a thumbnail. Keeping the first of each is the same floor
+    # ``distinctness_problems`` states, applied instead of merely reported.
+    taken_ids: set = set()
+    taken_grounds: set = set()
+    out: list[dict] = []
+    for entry in compiled:
+        ground = (entry.get("spec") or {}).get("ground")
+        if entry.get("id") in taken_ids or (ground and ground in taken_grounds):
+            continue
+        taken_ids.add(entry.get("id"))
+        if ground:
+            taken_grounds.add(ground)
+        out.append(entry)
+        if len(out) >= wanted:
+            return out
+
+    unused_seeds = [seed for seed in seeds if colors.parse_hex(seed)]
+    for spec in default_specs():
+        if len(out) >= wanted:
+            break
+        if spec.id in taken_ids or spec.ground in taken_grounds:
+            continue
+        if not brand_hex and unused_seeds:
+            spec = replace(spec, palette_hex=unused_seeds.pop(0))
+        system = compile_direction(spec, brand_hex, base)
+        if contrast_problems(system):
+            spec, system = repair_contrast(spec, brand_hex, base)
+            if system is None:
+                continue
+        taken_ids.add(spec.id)
+        taken_grounds.add(spec.ground)
+        out.append({
+            "id": spec.id,
+            "name": spec.name,
+            "rationale": spec.rationale,
+            "designSystem": system,
+            "spec": spec.to_dict(),
+            "previewUrls": [],
+        })
+    return out[:wanted]
 
 
 # ── The fallback set ──────────────────────────────────────────────────
