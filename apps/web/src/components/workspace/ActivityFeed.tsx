@@ -651,7 +651,16 @@ function PhaseBlockItem({
   // ended up behind a "Raw" disclosure that read as debug output.
   const lastStep = block.subSteps[block.subSteps.length - 1];
   const narration = useMemo(() => {
-    const said = block.thoughts.map((t) => t.content.trim()).filter(Boolean);
+    const said: string[] = [];
+    for (const thought of block.thoughts) {
+      const line = thought.content.trim();
+      // Some narration is authored by the loop rather than by the model -
+      // the LibreOffice check announces itself the same way every time -
+      // so a phase that ran two validation attempts said the identical
+      // paragraph twice. Now that narration accumulates instead of
+      // replacing itself, that repetition is visible.
+      if (line && line !== said[said.length - 1]) said.push(line);
+    }
     return said.join("\n\n");
   }, [block.thoughts]);
   const takeawayText = narration || (!active ? lastStep?.summary || "" : "");
