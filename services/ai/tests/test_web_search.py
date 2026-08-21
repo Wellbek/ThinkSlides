@@ -657,3 +657,92 @@ class TestRecencyIsPartOfTheAlreadyRunCacheKey:
 
         assert cached is not None
         assert [r["url"] for r in cached.data["results"]] == ["https://gcf.example/board-45"]
+
+
+# ── Stale years in the query ───────────────────────────────────────────
+
+# A model reaches for the year its training data ended in whenever it means
+# "now". The system prompt states today's date, and it still happens: "latest
+# Green Climate Fund approved projects 2023", asked in 2026, is a real query
+# this tool received. The search engine honours the year and returns exactly
+# the stale pages "latest" was meant to exclude.
+
+import datetime  # noqa: E402
+
+from app.agent.tools.web_search import strip_stale_year  # noqa: E402
+
+TODAY = datetime.date(2026, 8, 21)
+
+
+@pytest.mark.parametrize(
+    "query,expected,removed",
+    [
+        (
+            "latest Green Climate Fund approved projects 2023",
+            "latest Green Climate Fund approved projects",
+            "2023",
+        ),
+        # The dangling connective the year leaves behind goes with it.
+        ("most recent GCF approvals in 2024", "most recent GCF approvals", "2024"),
+        # No recency word: a deliberate question about a past year, untouched.
+        ("Green Climate Fund approvals in 2019", "Green Climate Fund approvals in 2019", ""),
+        # The current year is not stale, and neither is a later one.
+        ("latest GCF projects 2026", "latest GCF projects 2026", ""),
+        ("latest GCF pipeline through 2030", "latest GCF pipeline through 2030", ""),
+        # Nothing to do at all.
+        ("Green Climate Fund portfolio size", "Green Climate Fund portfolio size", ""),
+    ],
+)
+def test_a_past_year_survives_only_when_the_query_is_not_asking_for_the_latest(
+    query, expected, removed
+):
+    assert strip_stale_year(query, TODAY) == (expected, removed)
+
+
+def test_a_query_that_is_only_a_stale_year_is_left_intact():
+    """Emptying the query would turn a bad search into no search."""
+    assert strip_stale_year("latest 2023", TODAY) == ("latest 2023", "2023")
+
+
+@pytest.mark.asyncio
+async def test_the_tool_searches_the_corrected_query_and_says_so():
+    _use(TAVILY)
+    mock_post = AsyncMock(return_value={"results": []})
+
+    with patch.object(search_backends, "post_json", new=mock_post):
+        result = await WebSearchTool.run(
+            query="latest Green Climate Fund approved projects 2023"
+        )
+
+    body = mock_post.call_args.args[2]
+    assert "2023" not in body["query"]
+    # The intent behind the year is preserved, in the form the backend can act on.
+    assert body["time_range"] == "year"
+    assert result.data["recency"] == "year"
+    assert "2023" in result.data["note"] and "past" in result.data["note"]
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_recency_is_not_overridden_by_the_correction():
+    _use(TAVILY)
+    mock_post = AsyncMock(return_value={"results": []})
+
+    with patch.object(search_backends, "post_json", new=mock_post):
+        await WebSearchTool.run(
+            query="latest GCF board decisions 2023", recency="week"
+        )
+
+    assert mock_post.call_args.args[2]["time_range"] == "week"
+
+
+@pytest.mark.asyncio
+async def test_a_deliberate_historical_query_reaches_the_backend_unchanged():
+    """The correction must not rewrite a question that meant its year."""
+    _use(TAVILY)
+    mock_post = AsyncMock(return_value={"results": []})
+
+    with patch.object(search_backends, "post_json", new=mock_post):
+        result = await WebSearchTool.run(query="GCF projects approved in 2019")
+
+    assert mock_post.call_args.args[2]["query"] == "GCF projects approved in 2019"
+    assert "2019" not in (result.data.get("note") or "")

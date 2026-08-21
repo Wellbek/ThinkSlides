@@ -19,6 +19,8 @@ is unavailable and proceeds with its own knowledge.
 
 from __future__ import annotations
 
+import datetime
+import re
 import time
 
 from app import ai_settings
@@ -28,6 +30,66 @@ from app.agent.tools.search_backends import normalize_recency, recency_supported
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# Words that mean "give me the newest thing", in the phrasings a model
+# actually produces.
+_RECENCY_WORDS = (
+    "latest", "most recent", "newest", "current", "currently", "up to date",
+    "up-to-date", "this year", "recent", "so far", "as of today", "today",
+)
+
+_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+
+
+def strip_stale_year(query: str, today: datetime.date) -> tuple[str, str]:
+    """Drop a past year from a query that also asks for the latest.
+
+    Returns ``(query, removed_year)``, with ``removed_year`` empty when there
+    was nothing to correct.
+
+    A model reaches for the year its training data ended in whenever it wants
+    to say "now", and the system prompt stating today's date does not reliably
+    stop it - "latest Green Climate Fund approved projects 2023", asked in
+    2026, is a real query this tool received. Left alone it defeats the whole
+    request: the search engine honours the year and returns exactly the stale
+    pages the word "latest" was meant to exclude.
+
+    The signature is the contradiction, not the year: asking for the newest
+    thing while pinning a year that has already passed cannot be what was
+    meant. A past year *without* a recency word is left alone, because
+    "GCF approvals in 2019" is a perfectly good question.
+    """
+    if not any(word in query.lower() for word in _RECENCY_WORDS):
+        return query, ""
+
+    stale = [m.group(0) for m in _YEAR_RE.finditer(query) if int(m.group(0)) < today.year]
+    if not stale:
+        return query, ""
+
+    cleaned = _YEAR_RE.sub(
+        lambda m: "" if int(m.group(0)) < today.year else m.group(0), query
+    )
+    # Tidy the hole the year left behind: doubled spaces, and a trailing
+    # connective that now dangles ("projects in " -> "projects").
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    cleaned = re.sub(r"[\s,;:-]+$", "", cleaned)
+    cleaned = re.sub(r"\b(in|for|from|during|of)$", "", cleaned).strip()
+
+    # Never hand back a worse query than we were given. Once the year is out,
+    # "latest 2023" is just "latest" - no subject left to search for - and a
+    # badly dated query still beats a contentless one.
+    if not _has_subject(cleaned):
+        return query, stale[0]
+    return cleaned, stale[0]
+
+
+def _has_subject(query: str) -> bool:
+    """Whether anything is left to search for once the framing is discounted."""
+    remainder = query.lower()
+    for word in _RECENCY_WORDS:
+        remainder = remainder.replace(word, " ")
+    return bool(re.sub(r"[^a-z0-9]+", "", remainder))
 
 
 class WebSearchTool:
@@ -80,6 +142,17 @@ class WebSearchTool:
                     success=False, error="No search query provided", duration_ms=elapsed()
                 )
 
+            # Corrected before anything else looks at it, so the stale year
+            # reaches neither the backend nor the logged query.
+            query, stale_year = strip_stale_year(query, datetime.date.today())
+            if stale_year:
+                logger.info(
+                    "web_search_stale_year_stripped", query=query, year=stale_year
+                )
+                # The request was clearly about recency; say so the way the
+                # backends can act on, now that the query no longer does.
+                recency = recency or "year"
+
             config = get_search_config()
             if config is None:
                 # Outside a Deep Thinking run, fall back to whatever the
@@ -121,14 +194,22 @@ class WebSearchTool:
                 duration_ms=elapsed(),
             )
 
-            recency_note = None
+            notes = []
+            if stale_year:
+                notes.append(
+                    f"Your query named {stale_year}, which is in the past, while asking "
+                    f"for current information. It was searched as '{query}' with "
+                    f"recency='{recency}' instead. Today is {datetime.date.today():%Y-%m-%d} "
+                    "- do not date a query from memory."
+                )
             if recency and not recency_supported(config):
-                recency_note = (
+                notes.append(
                     f"Requested recency='{recency}', but the configured '{config.backend}' "
                     "search backend does not support filtering by recency - these results "
                     "are unfiltered by date. Check each result's published date yourself."
                 )
                 logger.info("web_search_recency_unsupported", backend=config.backend, recency=recency)
+            recency_note = " ".join(notes)
 
             if not results:
                 return ToolResult(

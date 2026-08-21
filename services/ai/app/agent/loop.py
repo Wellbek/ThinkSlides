@@ -3778,11 +3778,18 @@ class AgentLoop:
                 "office, the standards body) over aggregators repeating each other.",
                 "- When the request implies 'most recent', 'latest', or current information, "
                 "do not assume the first plausible-looking result is actually the newest thing "
-                "available. Run at least one query with an explicit recency qualifier (the "
-                "current year, 'latest') and pass web_search's recency argument (day/week/month/"
-                "year) so results are biased toward it, then check each result's published date "
-                "against today's date before treating it as current - a result from a year or "
-                "more ago is not 'the most recent' just because it was the first thing found.",
+                "available. Say so with web_search's recency argument (day/week/month/year) "
+                "rather than by typing a year into the query text.",
+                f"- NEVER WRITE A YEAR INTO A SEARCH QUERY FROM MEMORY. The year that feels "
+                f"current to you is the year your training data ended, not the year it is; it "
+                f"is {today.year}, as stated at the top of this prompt. A query that asks for "
+                "the 'latest' and also names a past year contradicts itself and returns "
+                "precisely the stale pages the request was trying to avoid - web_search strips "
+                "such a year and tells you it did, so do not put it back. A year belongs in a "
+                "query only when the user asked about that specific year.",
+                f"- Then check each result's published date against {today.strftime('%Y-%m-%d')} "
+                "before treating it as current - a result from a year or more ago is not 'the "
+                "most recent' just because it was the first thing found.",
                 "- If, after checking dates, the freshest result you found still does not look "
                 "recent enough for what was asked - or you genuinely cannot tell how current it "
                 "is - do not silently proceed as if it were sufficient. Call ask_user_question: "
