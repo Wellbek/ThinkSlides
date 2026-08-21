@@ -71,6 +71,37 @@ class AnswerQuestionRequest(BaseModel):
     assistant_message_id: str | None = None
 
 
+def _generated_summary(generated_files: list[dict]) -> str:
+    """What the run produced, said once.
+
+    Every render across a validation retry appends its own deck row plus a
+    fresh copy of every chart, so listing the lot gave "Presentation
+    generated: deck.pptx, slide-2-chart-1.png, slide-4-chart-1.png,
+    deck.pptx, slide-2-chart-1.png, slide-2-chart-2.png,
+    slide-4-chart-1.png". The deck is what was asked for; the images are a
+    count, and they are already listed in the Assets panel.
+    """
+    decks: list[str] = []
+    images = set()
+    for entry in generated_files:
+        name = str(entry.get("fileName") or "")
+        if str(entry.get("fileType") or "").lower() == "pptx":
+            if name and name not in decks:
+                decks.append(name)
+        elif name:
+            images.add(name)
+
+    if not decks:
+        return "The run produced no deck. Please try again."
+    sentence = f"Presentation generated: {decks[-1]}"
+    if images:
+        sentence += (
+            f" - with {len(images)} generated image"
+            + ("" if len(images) == 1 else "s")
+        )
+    return sentence
+
+
 def _option_label(option) -> str:
     """One answer option as a line of text.
 
@@ -532,8 +563,7 @@ async def _run_agent(
                 # not be reported as a success it did not confirm.
                 if not final_content:
                     if generated_files:
-                        file_names = ", ".join(f["fileName"] for f in generated_files)
-                        final_content = f"Presentation generated: {file_names}"
+                        final_content = _generated_summary(generated_files)
                     else:
                         final_content = (
                             "The run ended without producing a deck or a clear "
