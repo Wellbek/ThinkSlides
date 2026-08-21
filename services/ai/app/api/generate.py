@@ -71,6 +71,23 @@ class AnswerQuestionRequest(BaseModel):
     assistant_message_id: str | None = None
 
 
+def _option_label(option) -> str:
+    """One answer option as a line of text.
+
+    A design-direction option is a dict carrying a preview, a label and a
+    rationale. Interpolating it whole wrote a Python repr - braces, quoted
+    keys, a list of preview URLs - into the stored transcript, which is
+    what a plain-text reader of this conversation then sees.
+    """
+    if isinstance(option, dict):
+        label = str(option.get("label") or option.get("id") or "").strip()
+        description = str(option.get("description") or "").strip()
+        if label and description:
+            return f"{label} - {description}"
+        return label or description
+    return str(option)
+
+
 async def _exchange_rows(
     db: AsyncSession,
     session_id: uuid.UUID,
@@ -360,7 +377,7 @@ async def _run_agent(
                         for q in questions:
                             lines.append(f"Question: {q.get('question', '')}")
                             for i, opt in enumerate(q.get("options") or [], 1):
-                                lines.append(f"{i}. {opt}")
+                                lines.append(f"{i}. {_option_label(opt)}")
                             lines.append("")
                         question_content = "\n".join(lines)
                         if context:

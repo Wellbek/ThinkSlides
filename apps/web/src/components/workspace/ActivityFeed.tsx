@@ -555,7 +555,22 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
   // Nothing has happened yet: the very first event has not arrived.
   const showStartShimmer = isLive && blocks.length === 0;
 
-  const finalText = !isLive ? message.content : (message.content || (activeIndex === -1 ? closingText : ""));
+  // A run that pauses on a question stores the question itself as this
+  // turn's assistant message, so rendering that message under the question
+  // card printed the whole question - every option included - a second
+  // time. The card is the rendering of it; the text is the same fact again.
+  const pausedOnQuestion = !!lastBlock?.questionEvent;
+
+  const finalText = pausedOnQuestion
+    ? ""
+    : !isLive ? message.content : (message.content || (activeIndex === -1 ? closingText : ""));
+
+  // The deck's file and the unresolved-issue note belong at the end of the
+  // run, not inside whichever block produced them: a Render block reused
+  // across three validation attempts keeps its original position in the
+  // feed, so its download row rendered above the fixing passes that came
+  // after it.
+  const fileGenerated = findLastMatch(blocks, (b) => !!b.fileGeneratedEvent)?.fileGeneratedEvent;
 
   return (
     <>
@@ -586,6 +601,8 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
           </div>
         </FeedItem>
       )}
+
+      {fileGenerated && <FileGeneratedNote ev={fileGenerated} />}
 
       {finalText && (
         <FeedItem dot="◆" dotClass="ws-dot-fact">
@@ -719,7 +736,6 @@ function PhaseBlockItem({
         </div>
       )}
 
-      {block.fileGeneratedEvent && <FileGeneratedNote ev={block.fileGeneratedEvent} />}
     </FeedItem>
   );
 }
@@ -869,7 +885,13 @@ function toRow(s: SubStep): Row {
 
 /** Every tool call a slide took, folded into one checklist row for that
  *  slide - a slide is drafted through several calls (layout, a chart, the
- *  copy itself), and listing each separately says less than "Slide 3" does. */
+ *  copy itself), and listing each separately says less than "Slide 3" does.
+ *
+ *  Grouping is by slide, not by run of adjacent calls. The agent
+ *  interleaves freely - it picks a layout for slide 3, picks one for slide
+ *  4, then writes slide 3, validates it and rewrites it - which under
+ *  consecutive-only grouping produced three separate "Slide 3" rows for
+ *  one slide, and two rows sharing a React key. */
 function groupDraftRows(subSteps: SubStep[]): Row[] {
   // A merged "Fixing" block (see `currentBlock`'s retry-loop reuse) can
   // cover more than one slide in the same pass - slides_needing_revision
@@ -881,24 +903,25 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
   );
   const disambiguateSlide = distinctSlides.size > 1;
 
+  // Keyed by slide *and* attempt: a merged "Fixing" block accumulates one
+  // design_slide_content call per attempt, all for the same slide, and
+  // collapsing those into one row would lose the retry count. Insertion
+  // order is preserved, so a row still appears where its slide first did.
+  const groups = new Map<string, SubStep[]>();
+  let loose = 0;
+  for (const step of subSteps) {
+    const key = step.slideIndex != null
+      ? `s${step.slideIndex}-a${step.revisitAttempt ?? 0}`
+      : `x${loose++}`;
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(step);
+    else groups.set(key, [step]);
+  }
+
   const rows: Row[] = [];
-  let i = 0;
-  while (i < subSteps.length) {
-    const idx = subSteps[i].slideIndex;
-    // A merged "Fixing" block accumulates one design_slide_content call
-    // per attempt, all for the same slide - group consecutive calls only
-    // within the same attempt, or every attempt would collapse into one
-    // row and the retry count would disappear from the checklist.
-    const attempt = subSteps[i].revisitAttempt;
-    let end = i + 1;
-    if (idx != null) {
-      while (
-        end < subSteps.length &&
-        subSteps[end].slideIndex === idx &&
-        subSteps[end].revisitAttempt === attempt
-      ) end++;
-    }
-    const group = subSteps.slice(i, end);
+  for (const [key, group] of groups) {
+    const idx = group[0].slideIndex;
+    const attempt = group[0].revisitAttempt;
     const last = group[group.length - 1];
     const anyRunning = group.some((s) => s.running);
     const anyFailed = group.some((s) => s.success === false);
@@ -907,13 +930,17 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
     const slideLabel = idx != null ? `Slide ${idx + 1}` : undefined;
     const attemptLabel = attempt != null ? `Attempt ${attempt}${maxAttempts ? `/${maxAttempts}` : ""}` : undefined;
     const label = attemptLabel
-      ? (disambiguateSlide && slideLabel ? `${slideLabel} — ${attemptLabel}` : attemptLabel)
+      ? (disambiguateSlide && slideLabel ? `${slideLabel} - ${attemptLabel}` : attemptLabel)
       : slideLabel ?? toolLabel(last.toolName);
     rows.push({
-      key: `slide-${idx ?? i}-${attempt ?? 0}`,
+      key: `draft-${key}`,
       icon: anyFailed ? "●" : anyRunning ? "↻" : "✓",
       label,
-      note: last.summary || (anyRunning ? "" : last.error || ""),
+      // The last call that actually said something: a slide whose final
+      // call was a bare schema check would otherwise lose the summary
+      // naming what was written.
+      note: findLastMatch(group, (s) => !!s.summary)?.summary
+        || (anyRunning ? "" : last.error || ""),
       durationMs: group.reduce((s, x) => s + (x.processDurationMs ?? x.durationMs ?? 0), 0),
       toolDurationMs: group.reduce((s, x) => s + (x.durationMs || 0), 0),
       running: anyRunning,
@@ -922,7 +949,6 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
       result: last.result,
       sources: sources.length ? sources : undefined,
     });
-    i = end;
   }
   return rows;
 }
