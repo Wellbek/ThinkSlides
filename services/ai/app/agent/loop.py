@@ -1035,6 +1035,27 @@ class WorkingState:
         self.phase_turns = {}
 
 
+def _visual_asserts_figures(fn_name: str, fn_args: dict) -> bool:
+    """Whether this visual would present a number as measured.
+
+    Every builder but one does, by construction: a chart, a chart grid, a
+    table and a metric row exist to carry figures. A diagram carries
+    structure, and only carries figures when its nodes were given a value or
+    a date - a funnel with counts in it, a timeline of dated events. A flow
+    of named steps asserts nothing that could be wrong.
+    """
+    if fn_name != "build_diagram":
+        return True
+    items = fn_args.get("items")
+    if not isinstance(items, list):
+        return False
+    return any(
+        str((item or {}).get(field) or "").strip()
+        for item in items if isinstance(item, dict)
+        for field in ("value", "date")
+    )
+
+
 class AgentLoop:
     """
     ReAct agent loop that orchestrates presentation generation.
@@ -2768,7 +2789,15 @@ class AgentLoop:
         # The backstop for a run with nothing behind its figures: the deck still
         # gets built, but a number nobody can check does not get an axis and a
         # legend. Text can be hedged on the slide; a chart cannot.
-        if fn_name in BUILD_VISUAL_TOOLS and not self._has_grounding():
+        #
+        # A diagram is only caught by this when it actually carries figures.
+        # "Request goes to the load balancer, then the application server,
+        # then the database" states no measurement, and it is usually the
+        # user's own architecture described in their own brief - so blocking
+        # it left process and architecture decks, the ones that most need a
+        # diagram and have no numbers at all, falling back to bullet lists.
+        if (fn_name in BUILD_VISUAL_TOOLS and not self._has_grounding()
+                and _visual_asserts_figures(fn_name, fn_args)):
             return (
                 "There is no source behind this figure - no research was run and no "
                 "document was uploaded, so any number here would come from memory. "
