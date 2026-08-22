@@ -724,6 +724,33 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
   );
 }
 
+/** What a completed phase shows instead of its rows: how much it did, and a
+ *  way back to them.
+ *
+ *  Every phase kept all of its substeps on screen forever, so by the end of a
+ *  real run the feed was hundreds of rows deep and the finished phases -
+ *  which nobody is reading any more - crowded out the one actually running. */
+function PhaseSummary({ count, expanded, onToggle }: {
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="ws-phase-summary"
+      aria-expanded={expanded}
+      onClick={onToggle}
+      title={expanded ? "Hide these steps" : "Show these steps"}
+    >
+      <span className="ws-phase-summary-text">
+        {count} step{count === 1 ? "" : "s"} completed
+      </span>
+      <span className="ws-phase-summary-chev" aria-hidden="true"><ChevronDown size={20} /></span>
+    </button>
+  );
+}
+
 /** One phase group's box on the timeline: dot, name, takeaway, boxed
  *  substeps, and whatever it paused or failed on. */
 function PhaseBlockItem({
@@ -779,6 +806,18 @@ function PhaseBlockItem({
 
   const revisit = revisitDetail;
 
+  // A phase folds away once it is finished and nothing about it needs
+  // reading. Deliberately not while it is running, not when it failed - its
+  // rows are the reason it failed - not when it paused on a question, and not
+  // when it was revisited, where the rows are the evidence of what changed.
+  const collapsible = !active && !failed && !block.questionEvent && !revisit && rows.length > 0;
+  // null means "nobody has touched this", so it follows the rule above and
+  // folds itself the moment the phase completes. Once the user has expressed
+  // a preference it sticks: a phase they opened must not slam shut because a
+  // later event re-rendered the feed.
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  const expanded = toggled ?? !collapsible;
+
   return (
     <FeedItem
       dot={icon}
@@ -821,7 +860,15 @@ function PhaseBlockItem({
         </div>
       )}
 
-      {!!rows.length && (
+      {collapsible && (
+        <PhaseSummary
+          count={rows.length}
+          expanded={expanded}
+          onToggle={() => setToggled(!expanded)}
+        />
+      )}
+
+      {!!rows.length && expanded && (
         <div className="ws-phase-checklist">
           {rows.map((row) => <CheckRow key={row.key} row={row} />)}
         </div>
