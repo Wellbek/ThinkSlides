@@ -11,6 +11,7 @@ from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._json_extract import coerce_json_arg
 from app.agent import run_context
 from app.renderer.citations import apply_source_citations
+from app.titles import slide_title
 from app.renderer.pptx_renderer import PPTXRenderer
 from app.renderer.preview_generator import PreviewGenerator
 from app.observability.logging import get_logger
@@ -123,6 +124,11 @@ class FinalizeAndRenderPptxTool:
             # rendered or written, so the markdown fallback carries it too.
             # A run with the toggle off, or with nothing to cite, passes
             # straight through - see renderer/citations.py.
+            # How many pages the model itself designed. Anything past this in
+            # the rendered deck was injected here rather than by the agent, and
+            # the outline below marks it so - see _rendered_outline.
+            designed_count = len(slides)
+
             slides, cited_sources = apply_source_citations(
                 slides,
                 run_context.get_research_findings(),
@@ -240,6 +246,7 @@ class FinalizeAndRenderPptxTool:
                     "citedSources": cited_sources,
                     "sessionId": session_id,
                     "previewUrls": preview_urls,
+                    "renderedOutline": cls._rendered_outline(slides, designed_count),
                     "fallbackMarkdownPath": markdown_path,
                     "assets": assets,
                 },
@@ -248,6 +255,36 @@ class FinalizeAndRenderPptxTool:
         except Exception as e:
             logger.error("pptx_render_failed", error=str(e))
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
+
+    @staticmethod
+    def _rendered_outline(slides: list[dict], designed_count: int) -> list[dict]:
+        """
+        One entry per page of the deck that was actually rendered.
+
+        The agent's own record of the deck stops at the slides it designed, but
+        the file does not: ``apply_source_citations`` appends a Sources appendix
+        after the model is finished, and previews are rasterised from every page
+        of the result. Without this the UI receives a preview image for those
+        pages and has nothing to attach it to, so they vanish from the preview
+        while remaining in the downloaded file.
+
+        Deliberately just the index, the headline and whether the page was
+        injected. The preview shows the rendered image; a title is all the
+        surrounding chrome needs, and shipping whole slide bodies here would put
+        another copy of the deck - image bytes included - into the tool result.
+        """
+        return [
+            {
+                "slideIndex": (
+                    slide.get("slideIndex")
+                    if isinstance(slide, dict) and isinstance(slide.get("slideIndex"), int)
+                    else position
+                ),
+                "title": slide_title(slide) if isinstance(slide, dict) else "",
+                "injected": position >= designed_count,
+            }
+            for position, slide in enumerate(slides)
+        ]
 
     @classmethod
     def _persist_slide_assets(cls, result_path: str, slides: list[dict], session_id: str) -> list[dict]:

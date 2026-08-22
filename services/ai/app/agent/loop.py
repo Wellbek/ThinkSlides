@@ -3093,6 +3093,12 @@ class AgentLoop:
             # renderer was given - not the order the slides happened to
             # be designed in.
             rendered_order = self.working_state.ordered_slides()
+            # The renderer appends pages the agent never designed - today the
+            # Sources appendix - so ordered_slides() runs out before the
+            # previews do. renderedOutline covers every page of the file, and
+            # carries the headline the UI needs to label a page it has no
+            # design record for.
+            outline = tool_result.data.get("renderedOutline") or []
             self.working_state.pending_slide_previews = [
                 {
                     "slideIndex": slide_idx,
@@ -3100,6 +3106,16 @@ class AgentLoop:
                         rendered_order[slide_idx]
                         if slide_idx < len(rendered_order)
                         else None
+                    ),
+                    "slideTitle": (
+                        outline[slide_idx].get("title")
+                        if slide_idx < len(outline) and isinstance(outline[slide_idx], dict)
+                        else None
+                    ),
+                    "injected": bool(
+                        outline[slide_idx].get("injected")
+                        if slide_idx < len(outline) and isinstance(outline[slide_idx], dict)
+                        else slide_idx >= len(rendered_order)
                     ),
                     "previewUrl": preview_url,
                 }
