@@ -720,8 +720,70 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
           <MarkdownText className="ws-feed-text">{finalText}</MarkdownText>
         </FeedItem>
       )}
+
+      <RunDivider
+        blocks={blocks}
+        live={isLive}
+        paused={pausedOnQuestion}
+        slideCount={finalized.length}
+        producedDeck={!!fileGenerated}
+      />
     </>
   );
+}
+
+/** Where one run of the agent ends and the next begins.
+ *
+ *  A session that runs the agent more than once rendered as one unbroken
+ *  column of phase blocks: the only hint that a new run had started was the
+ *  user message wedged between them, and the elapsed time TimerHeader showed
+ *  live disappeared the moment the run stopped being the active one. */
+function RunDivider({ blocks, live, paused, slideCount, producedDeck }: {
+  blocks: PhaseBlock[];
+  live: boolean;
+  paused: boolean;
+  slideCount: number;
+  producedDeck: boolean;
+}) {
+  // Only a run that actually ran the pipeline gets one. A turn that just
+  // answered a question in prose is not a workflow, and marking it as one
+  // would put a rule between every message in the session.
+  if (live || paused || !blocks.length) return null;
+
+  const span = runSpan(blocks);
+  // A pipeline run that finished without a deck did not succeed, whatever
+  // else it managed - saying "complete" there would be a lie the user has to
+  // scroll up to catch.
+  const failed = !producedDeck;
+  const slides = slideCount === 1 ? "1 slide" : `${slideCount} slides`;
+  const label = failed
+    ? `Run failed - no deck produced - stopped after ${fmtDuration(span)}`
+    : `Run complete - ${slides} - finished in ${fmtDuration(span)}`;
+
+  return (
+    <div className={`ws-run-divider${failed ? " failed" : ""}`} role="separator" aria-label={label}>
+      <span className="rule" />
+      <span className="txt">{label}</span>
+      <span className="rule" />
+    </div>
+  );
+}
+
+/** How long the run took, first event to last.
+ *
+ *  Deliberately measured from the events rather than read off a live ticker:
+ *  the ticker resets when the run stops being the active one, which is
+ *  exactly when this number needs to survive. */
+function runSpan(blocks: PhaseBlock[]): number {
+  const start = new Date(blocks[0].startTs).getTime();
+  let end = start;
+  for (const block of blocks) {
+    for (const ts of [block.endTs, block.cursorTs, block.startTs]) {
+      const at = ts ? new Date(ts).getTime() : NaN;
+      if (!Number.isNaN(at) && at > end) end = at;
+    }
+  }
+  return Number.isNaN(start) ? 0 : Math.max(0, end - start);
 }
 
 /** One phase group's box on the timeline: dot, name, takeaway, boxed
