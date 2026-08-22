@@ -1209,8 +1209,15 @@ def _cartesian_furniture(ax, categories, chart_data, style, font, base_pt,
         ax.tick_params(**{"axis": "x" if horizontal else "y",
                           value_side: False, f"label{value_side}": False})
     if not style.show_category_axis:
+        # The tick marks and the rule go; the category *names* stay. The two
+        # axes are not symmetric: a value axis is redundant on a chart that
+        # prints its values on the bars, so hiding it loses nothing, while
+        # the category labels are the only thing saying which bar is which.
+        # Dropping them turned a sourced three-segment forecast into three
+        # unlabelled green rectangles over an axis titled "Market Segments".
         ax.tick_params(**{"axis": "y" if horizontal else "x",
-                          category_side: False, f"label{category_side}": False})
+                          category_side: False,
+                          f"label{category_side}": True})
 
     _set_grid(value_axis, style.show_value_gridlines, style)
     _set_grid(category_axis, style.show_category_gridlines, style)
