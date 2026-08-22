@@ -16,11 +16,11 @@ from __future__ import annotations
 from app.agent.tools._today import today_line
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.measure import archetypes as archetype_model
+from app.agent import run_context
 from app.measure import clusters
 from app.measure import density as density_model
 from app.measure import grammar as grammar_model
 from app.observability.logging import get_logger
-from app.llm import get_vision_llm_provider
 from typing import Sequence
 import os
 import json
@@ -411,7 +411,16 @@ class ExtractTemplateDesignSystemTool:
             raise ValueError("No pages could be rendered from the PDF")
 
         prompt = cls._build_vision_prompt(page_count=len(images), survey=survey)
-        vision_provider = get_vision_llm_provider()
+        # The workspace's own configured model. This used to be a process-wide
+        # provider built from environment variables, which meant reading a
+        # user's template - their brand - on a key they had never chosen.
+        vision_provider = run_context.get_vision_provider()
+        if vision_provider is None:
+            raise ValueError(
+                "The model saved in Settings cannot read a PDF template. "
+                "Choose a vision-capable model, or upload the template as a "
+                ".pptx instead."
+            )
 
         logger.info(
             "pdf_vision_analysis_starting",

@@ -40,6 +40,9 @@ _search_config: ContextVar[SearchConfig | None] = ContextVar(
 
 _image_connection: ContextVar = ContextVar("image_connection", default=None)
 _figure_connection: ContextVar = ContextVar("figure_connection", default=None)
+_vision_provider: ContextVar[object | None] = ContextVar(
+    "thinkslides_vision_provider", default=None
+)
 _chat_provider: ContextVar[LLMProvider | None] = ContextVar(
     "thinkslides_chat_provider", default=None
 )
@@ -195,6 +198,28 @@ def require_chat_provider() -> LLMProvider:
 def reset_chat_provider(token: Token) -> None:
     """Restore whatever provider was in place before ``set_chat_provider``."""
     _chat_provider.reset(token)
+
+
+def set_vision_provider(provider: object | None) -> Token:
+    """Install the organisation's vision provider for the current run."""
+    return _vision_provider.set(provider)
+
+
+def get_vision_provider() -> object | None:
+    """The current run's vision provider, or None when it has none.
+
+    Same rule as the chat provider, for the same reason: a tool that reached
+    for the process-wide, environment-built provider instead turned a
+    workspace with no model configured into one silently running on somebody
+    else's key. Returns None rather than raising, because every caller so far
+    is a best-effort qualitative pass that must degrade rather than fail a run.
+    """
+    return _vision_provider.get()
+
+
+def reset_vision_provider(token: Token) -> None:
+    """Restore whatever provider was in place before ``set_vision_provider``."""
+    _vision_provider.reset(token)
 
 
 def set_image_connection(connection: object | None) -> Token:

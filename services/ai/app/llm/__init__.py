@@ -6,9 +6,6 @@ from app.llm.provider import (
     VisionLLMProvider,
     ZhipuProvider,
     build_chat_provider,
-    get_llm_provider,
-    get_tools_llm_provider,
-    get_vision_llm_provider,
 )
 
 __all__ = [
@@ -19,7 +16,4 @@ __all__ = [
     "VisionLLMProvider",
     "ZhipuProvider",
     "build_chat_provider",
-    "get_llm_provider",
-    "get_tools_llm_provider",
-    "get_vision_llm_provider",
 ]

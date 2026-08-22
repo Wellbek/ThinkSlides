@@ -364,3 +364,54 @@ def _short(value: Any) -> str:
 
 def _slug(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in name.lower()).strip("-")
+
+
+@dataclass
+class LibraryResult:
+    """A deck scored against every exemplar, best first.
+
+    Reported as a spread rather than a single number on purpose. One reference
+    cannot represent "publication grade" - three excellent decks disagree by
+    3x on words per page - so the useful question is "how close is this to the
+    nearest thing we consider excellent", and the answer is more honest when
+    the distance to the others is visible beside it.
+    """
+
+    cards: list[Scorecard]
+
+    @property
+    def best(self) -> Optional[Scorecard]:
+        return self.cards[0] if self.cards else None
+
+    def to_markdown(self) -> str:
+        if not self.cards:
+            return "No exemplar profiles are available to score against.\n"
+        lines = [
+            f"# {self.cards[0].deck} vs the exemplar library",
+            "",
+            "| exemplar | style | substance |",
+            "| --- | --- | --- |",
+        ]
+        for card in self.cards:
+            lines.append(
+                f"| {card.reference} | {_format(card.style_score)} "
+                f"| {_format(card.substance_score)} |"
+            )
+        lines += ["", "## Nearest exemplar", "", self.cards[0].to_markdown()]
+        return "\n".join(lines) + "\n"
+
+
+def score_library(generated: DeckProfile,
+                  library: dict[str, DeckProfile]) -> LibraryResult:
+    """Score one deck against every exemplar, nearest first.
+
+    Nearest by *style*: substance is about whether there is anything in the
+    deck, which is a property of the deck alone and not of which publication
+    it happens to resemble. Ranking on a blend of the two would let a deck
+    with more filler look closer to an exemplar it is nothing like.
+    """
+    cards = [score(generated, profile) for profile in library.values()]
+    for card, name in zip(cards, library):
+        card.reference = name
+    cards.sort(key=lambda card: (card.style_score is None, -(card.style_score or 0.0)))
+    return LibraryResult(cards=cards)

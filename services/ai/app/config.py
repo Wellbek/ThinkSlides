@@ -38,11 +38,6 @@ class Settings(BaseSettings):
     # thorough, longer snippets). Defaults to advanced so factual grounding is
     # as strong as possible.
     tavily_search_depth: Literal["basic", "advanced"] = "advanced"
-    # Model used for lower-stakes internal tool LLM calls (planning, key-data
-    # extraction). Defaults to the cheap/fast flash model to speed up
-    # generation; slide content design still uses the main model.
-    zhipu_tools_model: str = "glm-4.5-flash"
-
     # Azure OpenAI
     azure_openai_api_key: Optional[str] = None
     azure_openai_endpoint: Optional[str] = None
@@ -50,8 +45,11 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = "2024-02-15-preview"
 
     # ── Vision LLM (for PDF/image-based template analysis) ──
-    vision_llm_provider: Literal["zhipu", "azure_openai"] = "zhipu"
-    zhipu_vision_model: str = "glm-4.6v"
+    # Which model looks at an image is the workspace's choice in Settings,
+    # like every other model in the product - see build_vision_provider. There
+    # is deliberately no environment default: one here meant a workspace that
+    # had configured nothing still read the user's own template on somebody
+    # else's key.
     azure_openai_vision_deployment: str = "gpt-4o"
 
     # ── Storage ─────────────────────────────────

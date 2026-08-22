@@ -334,10 +334,19 @@ class ValidateRenderedOutputTool:
         """
         issues: list[dict] = []
         try:
-            from app.llm import get_vision_llm_provider
             import fitz
 
-            vision_provider = get_vision_llm_provider()
+            from app.agent import run_context
+
+            # The workspace's own configured model, not a process-wide one
+            # built from environment variables - see run_context's
+            # require_chat_provider for what that fallback used to cost. None
+            # when the run's provider has no vision support, in which case the
+            # geometric check above still stands on its own.
+            vision_provider = run_context.get_vision_provider()
+            if vision_provider is None:
+                logger.info("aesthetic_check_skipped", reason="no_vision_provider")
+                return issues
             doc = fitz.open(pdf_path)
             try:
                 page_count = min(len(doc), MAX_VISION_REVIEW_SLIDES)

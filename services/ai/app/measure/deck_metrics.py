@@ -205,6 +205,17 @@ def build_profile(name: str, pages: Sequence[PageMetrics],
 # Substance - the measures density cannot fake
 # --------------------------------------------------------------------------
 
+# Two letters, because a headline made only of one-letter tokens is a mark
+# rather than a word. Deliberately does not require a *known* word: headlines
+# legitimately consist of names and acronyms ("BXSL has led peer BDCs").
+_HEADLINE_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def _has_word(text: str) -> bool:
+    """Whether a line contains anything that could be part of a headline."""
+    return bool(_HEADLINE_WORD_RE.search(text or ""))
+
+
 def _page_texts(pdf_path: str, page_numbers: Sequence[int]) -> dict[int, dict[str, Any]]:
     """
     Per page: its headline (the largest type on the page) and its body copy.
@@ -235,10 +246,24 @@ def _page_texts(pdf_path: str, page_numbers: Sequence[int]) -> dict[int, dict[st
                     lines.append((size, top, text))
                     body.append(text)
             headline = ""
-            if lines:
-                biggest = max(size for size, _, _ in lines)
+            # "The largest type on the page" is not the same as "the
+            # headline", and on a real deck the difference is the whole
+            # metric. A stat panel sets its figures larger than its title
+            # ("$212B $125B $121B $78B"), a section opener sets a ghosted
+            # numeral larger than anything else ("04"), and a page number can
+            # be the biggest run on a sparse page. Every one of those was
+            # being read as that page's headline and then classified - which
+            # is why decks whose titles are demonstrably assertions scored
+            # near zero on informative titles.
+            #
+            # A headline has words in it. Anything with no real word is a
+            # figure, a mark or a folio, and is not a candidate whatever size
+            # it is set at.
+            candidates = [line for line in lines if _has_word(line[2])]
+            if candidates:
+                biggest = max(size for size, _, _ in candidates)
                 headline = " ".join(
-                    text for size, _, text in sorted(lines, key=lambda t: t[1])
+                    text for size, _, text in sorted(candidates, key=lambda t: t[1])
                     if size >= biggest - 0.6
                 ).strip()
             out[page_number] = {"headline": headline, "body": " ".join(body)}
