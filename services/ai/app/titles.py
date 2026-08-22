@@ -61,6 +61,13 @@ sped overtook widen widened narrow narrowed hold holds held sit sits sat
 rank ranks ranked accelerate accelerated flatten flattened soften softened
 tighten tightened loosen loosened concentrate concentrated shrink shrank
 represent represents make makes made take takes took see sees saw
+turn turns turned become becomes became emerge emerges emerged
+provide provides provided need needs needed face faces faced
+show shows showed find finds found build builds built bring brings brought
+buy buys bought continue continues continued expect expects expected
+rely relies relied prefer prefers preferred upend upends upended
+rewire rewires rewired optimize optimizes optimized protect protects protected
+create creates created serve serves served meet meets met beat beats
 """.split())
 
 # A claim needs something to weigh: a comparison or a quantity. "Revenue
@@ -96,6 +103,20 @@ def normalize_register(value: Any, default: str = LABEL) -> str:
     return text if text in REGISTERS else default
 
 
+def has_finite_verb(title: str) -> bool:
+    """
+    Whether a headline contains a verb that makes it a sentence.
+
+    Every entry in ``CLAIM_VERBS`` is a finite form, which is the point: a
+    finite verb asserts something ("Employees turn to AI"), where a participle
+    only modifies a noun ("Emerging markets"). That distinction is what lets a
+    qualitative finding count as a claim without letting a dressed-up topic
+    label in behind it.
+    """
+    words = [w.lower() for w in _WORD_RE.findall(title or "")]
+    return any(word in CLAIM_VERBS for word in words)
+
+
 def has_verb(title: str) -> bool:
     """
     Whether a headline contains something doing work.
@@ -106,7 +127,7 @@ def has_verb(title: str) -> bool:
     connectivity" and "Leading indicators" out.
     """
     words = [w.lower() for w in _WORD_RE.findall(title or "")]
-    if any(word in CLAIM_VERBS for word in words):
+    if has_finite_verb(title):
         return True
     return any(
         len(word) >= 5 and (word.endswith("ed") or word.endswith("ing"))
@@ -127,13 +148,22 @@ def states_a_claim(title: str) -> bool:
     """
     True when a headline states a finding rather than naming a topic.
 
-    A claim needs a verb, and it needs something to weigh - a comparison or a
-    quantity. "Revenue" is a topic, "Revenue increased" is a statement, and
-    "Revenue grew 12% on price" is a finding.
+    A finite verb is enough on its own: it makes the headline assert
+    something, and at four words or more that assertion has a subject and a
+    predicate. "Employees turn to AI for things that humans can't provide" is
+    a finding with no number in it, and requiring one classified every
+    qualitative assertion in a publication-grade deck as a bare topic label.
+
+    The comparison-or-quantity test still guards the weaker evidence. A
+    participle is not a verb doing work - "Advanced connectivity in emerging
+    markets" is a noun phrase - so a headline resting only on the
+    morphological fallback has to bring something to weigh as well.
     """
     words = _WORD_RE.findall(title or "")
     if not MIN_CLAIM_WORDS <= len(words) <= MAX_CLAIM_WORDS:
         return False
+    if has_finite_verb(title):
+        return True
     return has_verb(title) and (has_comparison(title) or has_quantity(title))
 
 
