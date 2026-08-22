@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import sys
 import json
-import shutil
 import tempfile
 import argparse
 

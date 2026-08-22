@@ -36,11 +36,19 @@ from app.db.models import (  # noqa: E402
 from app.agent.loop import AgentLoop  # noqa: E402
 
 
-async def _seed(db, prompt: str):
-    """Seed a session under the organisation that has a configured provider."""
-    configured = (
-        await db.execute(select(OrganisationAISettings).limit(1))
-    ).scalar_one_or_none()
+async def _seed(db, prompt: str, org_id: uuid.UUID | None = None):
+    """Seed a session under the organisation that has a configured provider.
+
+    ``org_id`` pins it. Without one this takes whichever settings row comes
+    back first, which is fine for a one-off look but not for an eval pass -
+    two workspaces with different models would silently score as one.
+    """
+    query = select(OrganisationAISettings)
+    if org_id is not None:
+        query = query.where(OrganisationAISettings.organisation_id == org_id)
+    configured = (await db.execute(query.limit(1))).scalar_one_or_none()
+    if org_id is not None and configured is None:
+        raise SystemExit(f"no configured workspace with id {org_id}")
     org = None
     if configured is not None:
         org = (
@@ -142,6 +150,11 @@ async def main() -> int:
         help="Answer every question with this text instead of the first option.",
     )
     ap.add_argument("--max-pauses", type=int, default=4)
+    ap.add_argument(
+        "--org", default=None,
+        help="organisation UUID to run under, instead of whichever configured "
+             "workspace comes back first",
+    )
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -152,7 +165,9 @@ async def main() -> int:
         prompt += " Just build it, don't ask me anything."
 
     async with async_session() as db:
-        session_id, org_id = await _seed(db, prompt)
+        session_id, org_id = await _seed(
+            db, prompt, uuid.UUID(args.org) if args.org else None
+        )
         print(f"session: {session_id} org: {org_id}", flush=True)
 
         rendered_path = None

@@ -383,7 +383,20 @@ class LibraryResult:
     def best(self) -> Optional[Scorecard]:
         return self.cards[0] if self.cards else None
 
-    def to_markdown(self) -> str:
+    def card_for(self, reference: str) -> Optional[Scorecard]:
+        """The card for one named exemplar, whether or not it is the nearest.
+
+        The nearest exemplar answers "what does this deck resemble". A run
+        aimed at a register needs the other question - "how close did it get
+        to the one it was aiming at" - and those are different cards whenever
+        the deck drifts, which is exactly when the answer matters.
+        """
+        for card in self.cards:
+            if card.reference == reference:
+                return card
+        return None
+
+    def to_markdown(self, target: Optional[str] = None) -> str:
         if not self.cards:
             return "No exemplar profiles are available to score against.\n"
         lines = [
@@ -393,11 +406,23 @@ class LibraryResult:
             "| --- | --- | --- |",
         ]
         for card in self.cards:
+            mark = " (aimed at)" if target and card.reference == target else ""
             lines.append(
-                f"| {card.reference} | {_format(card.style_score)} "
+                f"| {card.reference}{mark} | {_format(card.style_score)} "
                 f"| {_format(card.substance_score)} |"
             )
-        lines += ["", "## Nearest exemplar", "", self.cards[0].to_markdown()]
+        aimed = self.card_for(target) if target else None
+        if aimed is not None:
+            lines += ["", "## The register this run aimed at", ""]
+            if aimed is not self.cards[0]:
+                lines += [
+                    f"The deck is nearer `{self.cards[0].reference}` than the "
+                    f"`{target}` it was aimed at. That drift is the finding.",
+                    "",
+                ]
+            lines.append(aimed.to_markdown())
+        else:
+            lines += ["", "## Nearest exemplar", "", self.cards[0].to_markdown()]
         return "\n".join(lines) + "\n"
 
 
