@@ -275,6 +275,31 @@ Design System Context:
                     f"  Available sources:\n{numbered}"
                 )
 
+            # The on-page apparatus, which is a different thing from the
+            # deck-wide reference trail above: sourceRef numbers a run for the
+            # appendix, sourceLine says on this page where its figures came
+            # from. The renderer and validate_slide_json have supported both
+            # for as long as they have existed, and nothing here ever told the
+            # model they were available - so decks built on researched figures
+            # carried them with no attribution anywhere on the page.
+            apparatus_guidance = ""
+            if findings:
+                apparatus_guidance = (
+                    "\n- A page that states figures says where they came from. "
+                    "Put a short attribution in \"sourceLine\" - \"Source: \" and "
+                    "the publications behind this slide's numbers, named, not "
+                    "URLs. One line, under the content.\n"
+                    "- Where a figure needs a caveat rather than a source - a "
+                    "definition, a restated basis, a period that differs - put "
+                    "it in \"footnotes\": an array of short lines, and mark the "
+                    "run it belongs to with [^1], [^2] in its text, numbered in "
+                    "the order the footnotes are listed. Every marker needs its "
+                    "footnote and every footnote needs its marker; a marker "
+                    "pointing at nothing is rejected at validation. Use these "
+                    "only where they earn their place - a page of your own "
+                    "framing needs neither."
+                )
+
             # The flat "there is no image-generation step" was true, and is
             # now true only when no image provider is configured. Saying it
             # unconditionally on a workspace that HAS one would have the model
@@ -325,7 +350,7 @@ Slide Outline:
 
 Key points to cover on this slide:
 {kp_list}
-{density_info}{grammar_info}
+{density_info}{grammar_info}{apparatus_guidance}
 Selected Layout: {layout_name}
 Available Placeholders:
 {ph_text}
