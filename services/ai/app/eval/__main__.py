@@ -2,7 +2,9 @@
 Command line for the style-fidelity harness.
 
     python -m app.eval build-reference          # remeasure the reference deck
+    python -m app.eval build-exemplars          # remeasure the exemplar library
     python -m app.eval score deck.pptx          # score a rendered deck
+    python -m app.eval score deck.pptx --library  # ...against every exemplar
     python -m app.eval baseline                 # score the built-in fixture decks
 
 ``baseline`` is the one that matters for the epic: run it on ``main`` before
@@ -28,6 +30,12 @@ DEFAULT_OUTPUT_DIR = os.path.join(
 
 
 def _score_pptx(pptx_path: str, name: str, split: str) -> scorecard.Scorecard:
+    generated = _profile_pptx(pptx_path, name)
+    return scorecard.score(generated, reference.load_reference_profile(split))
+
+
+def _profile_pptx(pptx_path: str, name: str):
+    """Render a .pptx to PDF and measure it. Shared by both score paths."""
     from app.renderer.preview_generator import PreviewGenerator
 
     work_dir = tempfile.mkdtemp(prefix="thinkslides_eval_")
@@ -35,10 +43,15 @@ def _score_pptx(pptx_path: str, name: str, split: str) -> scorecard.Scorecard:
         pdf_path = PreviewGenerator.convert_to_pdf(pptx_path, work_dir)
         if not pdf_path:
             raise RuntimeError(f"LibreOffice could not convert {pptx_path}")
-        generated = profile_pdf(pdf_path, name)
+        return profile_pdf(pdf_path, name)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
-    return scorecard.score(generated, reference.load_reference_profile(split))
+
+
+def _score_pptx_library(pptx_path: str, name: str,
+                        split: str) -> scorecard.LibraryResult:
+    generated = _profile_pptx(pptx_path, name)
+    return scorecard.score_library(generated, reference.load_exemplar_library(split))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,9 +61,19 @@ def main(argv: list[str] | None = None) -> int:
     build = sub.add_parser("build-reference", help="remeasure the reference deck")
     build.add_argument("--pdf", default=None)
 
+    build_ex = sub.add_parser("build-exemplars",
+                              help="remeasure the exemplar library")
+    build_ex.add_argument("--only", default=None,
+                          help="one exemplar id, instead of all of them")
+
     score_cmd = sub.add_parser("score", help="score a rendered .pptx")
     score_cmd.add_argument("pptx")
     score_cmd.add_argument("--name", default=None)
+    score_cmd.add_argument(
+        "--library", action="store_true",
+        help="score against every exemplar and report the nearest, rather "
+             "than against the primary reference alone",
+    )
     score_cmd.add_argument("--split", default=reference.VALIDATION_SPLIT,
                            choices=[reference.DESIGN_SPLIT, reference.VALIDATION_SPLIT])
     score_cmd.add_argument("--out", default=DEFAULT_OUTPUT_DIR)
@@ -68,8 +91,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {path}")
         return 0
 
+    if args.command == "build-exemplars":
+        corpus.assert_exemplar_splits_are_disjoint()
+        ids = [args.only] if args.only else [e.id for e in corpus.EXEMPLARS]
+        for exemplar_id in ids:
+            print(f"wrote {reference.build_exemplar_profile(exemplar_id)}")
+        return 0
+
     if args.command == "score":
         name = args.name or os.path.splitext(os.path.basename(args.pptx))[0]
+        if args.library:
+            result = _score_pptx_library(args.pptx, name, args.split)
+            print(result.to_markdown())
+            if result.best:
+                json_path, md_path = scorecard.write(result.best, args.out)
+                print(f"wrote {json_path}\nwrote {md_path}")
+            return 0
         card = _score_pptx(args.pptx, name, args.split)
         json_path, md_path = scorecard.write(card, args.out)
         print(card.to_markdown())
