@@ -1,9 +1,10 @@
-import pytest
 """
 Tests for the LLM provider abstraction.
 """
 
-from app.llm.provider import ZhipuProvider, AzureOpenAIProvider
+import pytest
+
+from app.llm.provider import ZhipuProvider
 
 
 def test_zhipu_provider_instantiation():
