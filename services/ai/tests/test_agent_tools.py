@@ -474,3 +474,59 @@ async def test_an_explicit_call_context_wins_over_a_hoisted_one():
     )
 
     assert result.data["context"] == "outer"
+
+
+# ── the on-page apparatus is offered to the model at all ─────────────────
+
+
+class _PromptCapturingProvider:
+    """Records the prompt it was given, then fails the call deliberately."""
+
+    def __init__(self):
+        self.prompt = ""
+
+    async def chat(self, messages, tools=None):
+        self.prompt = "\n".join(str(m.get("content") or "") for m in messages)
+        return {"message": {"content": "not json"}}
+
+
+async def _prompt_for(findings: list) -> str:
+    """The designer's prompt for a slide, with these research findings behind it."""
+    provider = _PromptCapturingProvider()
+    chat_token = run_context.set_chat_provider(provider)
+    research_token = run_context.set_research_findings(findings)
+    try:
+        await DesignSlideContentTool.run(
+            slide_outline='{"slideIndex": 0, "title": "Revenue held flat",'
+                          ' "keyPoints": ["Revenue was $4.1bn"]}',
+            layout_info="{}", slide_index=0,
+        )
+    finally:
+        run_context.reset_research_findings(research_token)
+        run_context.reset_chat_provider(chat_token)
+    return provider.prompt
+
+
+@pytest.mark.asyncio
+async def test_a_researched_slide_is_told_it_can_carry_a_source_line():
+    """
+    The renderer and validate_slide_json have supported sourceLine and
+    per-slide footnotes for as long as they have existed, and the designer's
+    prompt never mentioned either - so decks built on researched figures came
+    out with no attribution anywhere on the page. The deck-wide sourceRef
+    trail is a different thing: it numbers a run for an appendix, not for the
+    page the figure is on.
+    """
+    prompt = await _prompt_for([{"title": "Gartner IT spending", "url": "https://x"}])
+
+    assert "sourceLine" in prompt
+    assert "footnotes" in prompt
+    assert "[^1]" in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_slide_with_nothing_behind_it_is_not_asked_for_a_source():
+    """A source line on a deck with no sources is a citation of nothing."""
+    prompt = await _prompt_for([])
+
+    assert "sourceLine" not in prompt
