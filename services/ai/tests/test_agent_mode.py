@@ -625,3 +625,60 @@ async def test_a_bad_key_is_not_retried(monkeypatch):
 
     with pytest.raises(Exception, match="invalid x-api-key"):
         await loop._chat_with_retry(messages=[], tools=None)
+
+
+@pytest.mark.asyncio
+async def test_a_simple_run_still_learns_whether_a_backend_exists(monkeypatch):
+    """
+    The offer to research has to be reachable from the mode it upgrades.
+
+    ``_can_offer_research`` requires a search config, and this used to be
+    resolved only when the mode was already Deep - so a Simple run never had
+    one, the offer was never made, and a brief that plainly stood on facts
+    ("how big the market is, who the players are") was written from memory
+    without the user ever being asked. The existing tests missed it because
+    they set ``search_config`` by hand; the defect was in the wiring between
+    this method and the gate, not in either one alone.
+    """
+    from app.ai_settings import SearchConfig
+
+    monkeypatch.setattr(
+        "app.ai_settings.resolve_search_config",
+        lambda row: (SearchConfig(backend="tavily", api_key="tvly-test"), ""),
+    )
+
+    loop = _loop(MODE_SIMPLE)
+    await loop._configure()
+
+    assert loop.mode == MODE_SIMPLE
+    assert loop.search_config is not None
+    loop.working_state.brief = {"needsResearch": True}
+    assert loop._can_offer_research() is True
+
+
+@pytest.mark.asyncio
+async def test_a_simple_run_knowing_of_a_backend_still_cannot_use_it(monkeypatch):
+    """Knowing a backend exists is not the same as being able to search with it.
+
+    web_search reads its backend off the run context, so a Simple run must
+    leave that unset however much it knows - otherwise resolving the config
+    early would hand every Simple run the tool it was told it does not have.
+    """
+    from app.agent import run_context
+    from app.ai_settings import SearchConfig
+
+    monkeypatch.setattr(
+        "app.ai_settings.resolve_search_config",
+        lambda row: (SearchConfig(backend="tavily", api_key="tvly-test"), ""),
+    )
+
+    loop = _loop(MODE_SIMPLE)
+    try:
+        await loop._configure()
+
+        assert loop.search_config is not None
+        assert run_context.get_search_config() is None
+        assert loop._search_token is None
+    finally:
+        if loop._search_token is not None:
+            run_context.reset_search_config(loop._search_token)

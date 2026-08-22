@@ -1130,13 +1130,22 @@ class AgentLoop:
                 reason=str(e),
             )
 
+        # Resolved whatever the mode is. A Simple run needs to know whether
+        # there is a backend to research *with* before it can offer the user
+        # the upgrade - and resolving this only in Deep mode made that offer
+        # unreachable: `_can_offer_research` requires a search config, which
+        # only existed once Deep was already on. Every Simple run therefore
+        # declined to ask, however plainly its brief stood on facts.
+        config, reason = ai_settings.resolve_search_config(row)
+        self.search_config = config
         if self.mode == MODE_DEEP:
-            config, reason = ai_settings.resolve_search_config(row)
             if config is None:
                 logger.info("deep_mode_downgraded", reason=reason)
                 self.mode = MODE_SIMPLE
             else:
-                self.search_config = config
+                # Only a Deep run publishes it to the run context: that is what
+                # puts web_search within reach, and a Simple run knowing a
+                # backend exists must not be a Simple run using it.
                 self._search_token = run_context.set_search_config(config)
 
         await self._connect_mcp_servers()
