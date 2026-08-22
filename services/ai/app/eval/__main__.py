@@ -118,6 +118,12 @@ def main(argv: list[str] | None = None) -> int:
                            choices=[reference.DESIGN_SPLIT, reference.VALIDATION_SPLIT])
     judge_cmd.add_argument("--pages", type=int, default=None,
                            help="how many pages of the deck to look at")
+    judge_cmd.add_argument(
+        "--org", default=None,
+        help="organisation UUID whose configured model should do the looking. "
+             "Settings is the source of the model, same as for the agent; "
+             "without this the process singleton is used instead.",
+    )
 
     baseline = sub.add_parser("baseline", help="score the fixture decks")
     baseline.add_argument("--out", default=DEFAULT_OUTPUT_DIR)
@@ -172,8 +178,12 @@ def main(argv: list[str] | None = None) -> int:
                 generated, reference.load_exemplar_library(args.split)
             )
             best = result.best
+            import uuid as _uuid
+
             verdict = asyncio.run(visual_judge.judge_pdf(
-                pdf_path, **({"max_pages": args.pages} if args.pages else {})
+                pdf_path,
+                org_id=_uuid.UUID(args.org) if args.org else None,
+                **({"max_pages": args.pages} if args.pages else {}),
             ))
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)

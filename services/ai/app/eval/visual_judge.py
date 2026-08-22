@@ -24,6 +24,12 @@ Two rules follow from that, and they are the whole design:
   bounded call, and dropped. Feeding a rendered page back into the run's own
   conversation is what killed a run with a 767k-token request (#237), and this
   module exists next to that failure, not in ignorance of it.
+
+The model comes from the workspace's own settings, resolved the same way the
+agent resolves its chat model - not from the environment. Reaching for the
+environment singleton meant the judge ran on whatever provider the process
+was started with, which is how it ended up failing against an exhausted key
+for a provider nobody had chosen.
 """
 
 from __future__ import annotations
@@ -32,11 +38,13 @@ import base64
 import os
 import shutil
 import tempfile
+import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional, Sequence
 
 import structlog
 
+from app import ai_settings
 from app.eval import corpus
 from app.agent.tools._json_extract import extract_json_object
 
@@ -78,6 +86,9 @@ class Verdict:
     faults: list[str] = field(default_factory=list)
     pages: list[PageVerdict] = field(default_factory=list)
     compared_against: list[str] = field(default_factory=list)
+    # True when no exemplar pages were available to compare against, so the
+    # grade is an opinion rather than a comparison. Never confident.
+    unanchored: bool = False
     error: str = ""
 
     @property
@@ -224,10 +235,34 @@ def _parse(reply: str) -> Verdict:
         grade = "competent"
 
     def _lines(key: str) -> list[str]:
+        """Strengths/faults as readable lines, whatever shape they arrive in.
+
+        The prompt asks for strings, and models routinely answer with objects
+        instead - ``{"page": 2, "problem": "chart lacks annotation"}``. Left as
+        a bare ``str()`` those rendered as Python dict repr in the report,
+        which is unreadable exactly where the useful detail is.
+        """
         value = data.get(key)
         if not isinstance(value, list):
             return []
-        return [str(item).strip() for item in value if str(item).strip()]
+        lines: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                page = item.get("page")
+                body = next(
+                    (str(item[k]).strip() for k in ("problem", "note", "text", "detail")
+                     if item.get(k)),
+                    "",
+                ) or "; ".join(
+                    f"{k}: {v}" for k, v in item.items() if k != "page"
+                )
+                text = f"Page {page}: {body}" if page is not None else body
+            else:
+                text = str(item)
+            text = text.strip()
+            if text:
+                lines.append(text)
+        return lines
 
     pages = []
     for entry in data.get("pages") or []:
@@ -254,10 +289,38 @@ def _parse(reply: str) -> Verdict:
     )
 
 
-async def judge_pdf(pdf_path: str, *, max_pages: int = MAX_DECK_PAGES) -> Verdict:
-    """Put a rendered deck in front of the vision model and ask how it looks."""
-    from app.llm.provider import get_vision_llm_provider
+async def resolve_vision_provider(org_id: Optional[uuid.UUID] = None):
+    """
+    The vision model this workspace has configured.
 
+    Settings is the source, exactly as it is for the agent's own model - see
+    ``ai_settings.resolve_chat_credentials``, whose docstring records why the
+    environment fallback was removed. There is deliberately no fallback here
+    either: a judge that quietly ran on whatever key the process was started
+    with is how this module first graded a deck against nothing at all.
+    """
+    if org_id is None:
+        raise RuntimeError(
+            "no organisation given - pass --org so the workspace's own "
+            "configured model does the looking"
+        )
+
+    from app.db.session import async_session
+    from app.llm.provider import build_vision_provider
+
+    async with async_session() as db:
+        row = await ai_settings.load_row(db, org_id)
+    credentials = ai_settings.resolve_chat_credentials(row)
+    if credentials is None:
+        raise RuntimeError(
+            "no model is configured for this workspace - set one in Settings"
+        )
+    return build_vision_provider(credentials)
+
+
+async def judge_pdf(pdf_path: str, *, max_pages: int = MAX_DECK_PAGES,
+                    org_id: Optional[uuid.UUID] = None) -> Verdict:
+    """Put a rendered deck in front of the vision model and ask how it looks."""
     work_dir = tempfile.mkdtemp(prefix="thinkslides_judge_")
     try:
         import fitz
@@ -277,7 +340,8 @@ async def judge_pdf(pdf_path: str, *, max_pages: int = MAX_DECK_PAGES) -> Verdic
         payload = [_encode(path) for path in (*deck_images, *exemplar_images)]
 
         try:
-            reply = await get_vision_llm_provider().chat_with_images(
+            provider = await resolve_vision_provider(org_id)
+            reply = await provider.chat_with_images(
                 prompt=prompt, images=payload, temperature=0.2, max_tokens=2048
             )
         except Exception as exc:                                # noqa: BLE001
@@ -286,6 +350,20 @@ async def judge_pdf(pdf_path: str, *, max_pages: int = MAX_DECK_PAGES) -> Verdic
 
         verdict = _parse(reply)
         verdict.compared_against = used
+        if not used:
+            # Graded in a vacuum. "Publication grade" is a claim *relative to*
+            # published work, and with no reference pages in front of it the
+            # model reliably says yes to anything clean and unbroken - a
+            # four-element page with a label title and no apparatus came back
+            # "publication (confident)" the first time this ran without its
+            # exemplars. An unanchored opinion is still worth reporting, but
+            # it must not be allowed to overrule the score.
+            verdict.confident = False
+            verdict.unanchored = True
+            logger.warning(
+                "visual_judge_unanchored",
+                reason="no exemplar PDFs on this machine - grading without a bar",
+            )
         logger.info(
             "visual_judge_verdict",
             grade=verdict.grade, confident=verdict.confident,
@@ -345,5 +423,8 @@ def adjudicate(verdict: Verdict, style_score: Optional[float]) -> Adjudication:
     return Adjudication(
         verdict=verdict, style_score=style_score, accepted=not scored_low,
         metric_is_suspect=False,
-        reason="the judge was not confident enough to overrule the score",
+        reason=("the judge had no exemplar pages to compare against, so its "
+                "grade cannot overrule the score")
+        if verdict.unanchored else
+        "the judge was not confident enough to overrule the score",
     )
