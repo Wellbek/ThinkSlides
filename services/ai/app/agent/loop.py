@@ -713,7 +713,86 @@ class WorkingState:
                     return
         self.accumulated_slides.append(slide)
 
-    def resolve_and_add_slide(self, slide_data: dict) -> None:
+    def insert_slide(self, slide: dict) -> None:
+        """
+        Add a slide *between* two existing ones, pushing the rest down.
+
+        ``add_slide`` is replace-or-append, which is right when the model is
+        redesigning a slide it got wrong and wrong when the user asks for a new
+        one. "Add a slide about X after slide 2" designs a slide at index 2 and
+        destroyed whatever already held that index; nothing renumbered, so the
+        deck silently lost a page.
+
+        Renumbering is the whole job: ``slideIndex`` is not a label, it is the
+        read order the renderer, the markdown fallback and the validator all
+        sort by (see ``ordered_slides``), so a tail that keeps its old numbers
+        is a deck with two slide 2s.
+        """
+        self.design_serial += 1
+        at = slide.get("slideIndex")
+        if at is None:
+            self.accumulated_slides.append(slide)
+            return
+        for existing in self.accumulated_slides:
+            index = existing.get("slideIndex")
+            if isinstance(index, int) and index >= at:
+                existing["slideIndex"] = index + 1
+        self.accumulated_slides.append(slide)
+        self._renumber_dependents(at, +1)
+
+    def remove_slide(self, at: int) -> bool:
+        """
+        Drop a slide and close the gap. Returns whether anything was removed.
+
+        The counterpart of ``insert_slide`` and the same renumbering rule: a
+        deck with a hole in its index sequence sorts correctly but reports the
+        wrong page numbers everywhere they are derived from the index.
+        """
+        before = len(self.accumulated_slides)
+        self.accumulated_slides = [
+            slide for slide in self.accumulated_slides
+            if slide.get("slideIndex") != at
+        ]
+        if len(self.accumulated_slides) == before:
+            return False
+
+        self.design_serial += 1
+        for slide in self.accumulated_slides:
+            index = slide.get("slideIndex")
+            if isinstance(index, int) and index > at:
+                slide["slideIndex"] = index - 1
+        self._renumber_dependents(at, -1)
+        return True
+
+    def _renumber_dependents(self, at: int, delta: int) -> None:
+        """
+        Move everything else that is keyed by slide index along with the deck.
+
+        Layouts, vetted images, composed regions and prepared visuals are all
+        stored per slide index. Leaving them behind when the deck renumbers
+        does not fail loudly - it silently binds slide 3's chart to slide 4,
+        which is worse than an error.
+        """
+        def shifted(store: dict) -> dict:
+            moved = {}
+            for index, value in store.items():
+                if isinstance(index, int) and (
+                    index >= at if delta > 0 else index > at
+                ):
+                    moved[index + delta] = value
+                elif index == at and delta < 0:
+                    continue          # the slide that was removed
+                else:
+                    moved[index] = value
+            return moved
+
+        self.selected_layouts = shifted(self.selected_layouts)
+        self.selected_images = shifted(self.selected_images)
+        self.prepared_regions = shifted(self.prepared_regions)
+        self.prepared_visuals = shifted(self.prepared_visuals)
+        self.prepared_primitives = shifted(self.prepared_primitives)
+
+    def resolve_and_add_slide(self, slide_data: dict, *, insert: bool = False) -> None:
         """
         Add a designed slide, first resolving any image content item whose
         source is the "selected" sentinel. design_slide_content is told
@@ -783,7 +862,13 @@ class WorkingState:
 
         slide_data = _credit_generated_images(slide_data)
 
-        self.add_slide(slide_data)
+        # Attachments are read off the *old* numbering above, so the deck can
+        # only renumber once they have been consumed - insert_slide moves the
+        # stores along with the slides it shifts.
+        if insert:
+            self.insert_slide(slide_data)
+        else:
+            self.add_slide(slide_data)
 
     def get_slides_json(self) -> str:
         """The deck as JSON, in the order the slides are meant to be read.
@@ -2619,10 +2704,14 @@ class AgentLoop:
         if fn_name == "plan_presentation_structure" and ws.accumulated_slides:
             return (
                 "Presentation structure cannot be replanned - slide content has "
-                "already been designed using the current structure. If the "
-                "structure genuinely needs to change, ask the user with "
-                "ask_user_question before restructuring; otherwise continue "
-                "designing the remaining slides in the existing plan."
+                "already been designed using the current structure. To ADD a slide "
+                "to a deck that already exists, do not replan: call "
+                "design_slide_content with placement=\"insert\" and slide_index set "
+                "to the position the new slide should occupy, and the slides from "
+                "there on shift down to make room. If the structure genuinely needs "
+                "to change beyond that, ask the user with ask_user_question before "
+                "restructuring; otherwise continue designing the remaining slides in "
+                "the existing plan."
             )
 
         # The backstop for a run with nothing behind its figures: the deck still
@@ -3093,6 +3182,12 @@ class AgentLoop:
             # renderer was given - not the order the slides happened to
             # be designed in.
             rendered_order = self.working_state.ordered_slides()
+            # The renderer appends pages the agent never designed - today the
+            # Sources appendix - so ordered_slides() runs out before the
+            # previews do. renderedOutline covers every page of the file, and
+            # carries the headline the UI needs to label a page it has no
+            # design record for.
+            outline = tool_result.data.get("renderedOutline") or []
             self.working_state.pending_slide_previews = [
                 {
                     "slideIndex": slide_idx,
@@ -3100,6 +3195,16 @@ class AgentLoop:
                         rendered_order[slide_idx]
                         if slide_idx < len(rendered_order)
                         else None
+                    ),
+                    "slideTitle": (
+                        outline[slide_idx].get("title")
+                        if slide_idx < len(outline) and isinstance(outline[slide_idx], dict)
+                        else None
+                    ),
+                    "injected": bool(
+                        outline[slide_idx].get("injected")
+                        if slide_idx < len(outline) and isinstance(outline[slide_idx], dict)
+                        else slide_idx >= len(rendered_order)
                     ),
                     "previewUrl": preview_url,
                 }
@@ -3191,7 +3296,14 @@ class AgentLoop:
 
             if fn_name == "design_slide_content":
                 if tool_result.data and "slideIndex" in tool_result.data:
-                    self.working_state.resolve_and_add_slide(tool_result.data)
+                    # "insert" is how a follow-up turn adds a slide between two
+                    # existing ones. Without it every design lands via
+                    # replace-or-append, so "add a slide after slide 2"
+                    # overwrote slide 2 instead of pushing it to 3.
+                    inserting = str(fn_args.get("placement") or "").strip().lower() == "insert"
+                    self.working_state.resolve_and_add_slide(
+                        tool_result.data, insert=inserting
+                    )
 
             # Recorded by slide_index so design_slide_content's
             # layout_info can be auto-supplied later (see the

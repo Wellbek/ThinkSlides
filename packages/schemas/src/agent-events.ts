@@ -150,6 +150,13 @@ export interface SlideFinalizedEvent {
   step?: PipelineStep;
   slideIndex: number;
   slideData: unknown;
+  /** The page's headline, taken from the deck that was actually rendered.
+   *  Present even when `slideData` is null, which is how a page the renderer
+   *  injected (the Sources appendix) can still be labelled in the preview. */
+  slideTitle?: string | null;
+  /** True when this page was added by the renderer rather than designed by the
+   *  agent, so it has no `design_slide_content` result behind it. */
+  injected?: boolean;
   previewUrl?: string;
   timestamp: string;
 }
