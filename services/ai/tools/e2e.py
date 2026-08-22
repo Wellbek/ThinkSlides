@@ -92,10 +92,16 @@ def _describe(event: dict) -> str:
     if kind == "tool_call":
         return f"[call] {event.get('toolName')} {str(event.get('toolArgs'))[:260]}"
     if kind == "tool_result":
+        # A failed tool puts its message in "result" - the same field a
+        # successful one puts its data in, which is what the model reads.
+        # Looking for it under "error" printed nothing, so every tool failure
+        # in every bench run read as a blank line and the deck that quietly
+        # lost its diagram looked like a deck that never asked for one.
+        detail = "" if event.get("success") else str(event.get("result") or "")
         return (f"[result] {event.get('toolName')} "
                 f"success={event.get('success')} "
                 f"| {event.get('summary') or ''} "
-                f"{str(event.get('error') or '')[:220]}")
+                f"{detail[:400]}")
     if kind == "thought":
         return f"[thought] {str(event.get('content'))[:300]}"
     if kind == "rate_limit":
