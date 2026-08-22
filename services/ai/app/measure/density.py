@@ -556,16 +556,27 @@ def default_density() -> dict:
     """
     The density the built-in design system targets.
 
-    Not the reference deck's - a deck built with no template should not be
-    forced to consultancy density - but not the four-bullet slide either. The
-    numbers are what the built-in layouts hold comfortably at their own type
-    scale.
+    These are the *floor of the library*: the density of the least dense of
+    the four decks the exemplar corpus calls excellent (McKinsey Technology
+    Trends, design split - 208 words and 10 blocks a page at 20 words a
+    block). A deck built with no template is not forced to any one house, but
+    it is not allowed to sit below every house either.
+
+    The numbers this replaced - 70 words in 4 blocks - said in their own
+    docstring that they were "not the four-bullet slide either", and were
+    exactly the four-bullet slide: a run against them produced 58 words in 5
+    blocks, hit its budget, and was measured at 0.15 on blocks and 0.19 on
+    words against an editorial-consulting register. The budget, not the
+    model's willingness to write, was what held the page empty.
+
+    A single column at this word count is a wall of text, so the grid widens
+    with the budget: the reference sets three columns over three rows.
     """
     return DensityProfile(
         pages_measured=0,
-        words_median=70, words_p25=45, words_p75=110,
-        blocks_median=4, blocks_p25=3, blocks_p75=6,
-        ink_median=0.34,
-        grid_rows_median=3, grid_columns_median=1,
-        words_per_block_median=18,
+        words_median=208, words_p25=178, words_p75=235,
+        blocks_median=10, blocks_p25=7, blocks_p75=13,
+        ink_median=0.497,
+        grid_rows_median=3, grid_columns_median=3,
+        words_per_block_median=20,
     ).to_dict()
