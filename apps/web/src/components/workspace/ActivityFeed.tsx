@@ -634,6 +634,14 @@ export function ActivityFeed() {
           // Check if the next message is a user message (meaning this assistant message's questions are answered)
           const isAnswered = idx < messages.length - 1 && messages[idx + 1].role === 'user';
           const userAnswer = isAnswered && messages[idx + 1].role === 'user' ? messages[idx + 1].content : undefined;
+          // The run's own elapsed time, as the backend reported it on `done`.
+          // It arrives as a system message straight after the assistant's, and
+          // it is the authoritative number: it spans the whole workflow, where
+          // the event stream of this one turn only covers the segment after
+          // the last answer.
+          const completion = messages[idx + 1]?.metadata?.type === "completion"
+            ? messages[idx + 1].metadata?.elapsedMs
+            : undefined;
 
           if (m.role === "user") {
             return (
@@ -644,10 +652,20 @@ export function ActivityFeed() {
             );
           }
           if (m.role === "system") {
+            // A completion message is the run divider's source of truth, not a
+            // row of its own - rendering both printed the duration twice, and
+            // with two different numbers.
+            if (m.metadata?.type === "completion") return null;
             return <div key={m.id} className="ws-run-complete">{m.content}</div>;
           }
           return (
-            <AssistantTimeline key={m.id} message={m} isAnswered={isAnswered} answerText={userAnswer} />
+            <AssistantTimeline
+              key={m.id}
+              message={m}
+              isAnswered={isAnswered}
+              answerText={userAnswer}
+              elapsedMs={completion}
+            />
           );
         })}
       </div>
@@ -667,7 +685,9 @@ export function ActivityFeed() {
   );
 }
 
-function AssistantTimeline({ message, isAnswered, answerText }: { message: any; isAnswered?: boolean; answerText?: string }) {
+function AssistantTimeline({ message, isAnswered, answerText, elapsedMs }: {
+  message: any; isAnswered?: boolean; answerText?: string; elapsedMs?: number;
+}) {
   const events: AgentEvent[] = useMemo(
     () => message.agentEventStream || [],
     [message.agentEventStream]
@@ -794,6 +814,7 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
         paused={pausedOnQuestion}
         slideCount={finalized.length}
         producedDeck={!!fileGenerated}
+        elapsedMs={elapsedMs}
       />
     </>
   );
@@ -805,19 +826,23 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
  *  column of phase blocks: the only hint that a new run had started was the
  *  user message wedged between them, and the elapsed time TimerHeader showed
  *  live disappeared the moment the run stopped being the active one. */
-function RunDivider({ blocks, live, paused, slideCount, producedDeck }: {
+function RunDivider({ blocks, live, paused, slideCount, producedDeck, elapsedMs }: {
   blocks: PhaseBlock[];
   live: boolean;
   paused: boolean;
   slideCount: number;
   producedDeck: boolean;
+  elapsedMs?: number;
 }) {
   // Only a run that actually ran the pipeline gets one. A turn that just
   // answered a question in prose is not a workflow, and marking it as one
   // would put a rule between every message in the session.
   if (live || paused || !blocks.length) return null;
 
-  const span = runSpan(blocks);
+  // The run's reported total when there is one, because it spans the whole
+  // workflow; this turn's own event span otherwise, which is what survives a
+  // reload once the live completion message is gone.
+  const span = elapsedMs && elapsedMs > 0 ? elapsedMs : runSpan(blocks);
   // A pipeline run that finished without a deck did not succeed, whatever
   // else it managed - saying "complete" there would be a lie the user has to
   // scroll up to catch.
