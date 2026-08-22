@@ -118,6 +118,18 @@ class DesignSlideContentTool:
                     description="0-based index of this slide in the presentation",
                 ),
                 ToolParameter(
+                    name="placement",
+                    type="string",
+                    description=(
+                        'Either "replace" (default) or "insert". Use "insert" only when '
+                        "adding a NEW slide between existing ones - the slide currently at "
+                        "slide_index and everything after it shifts down by one to make "
+                        "room. Use the default when redesigning a slide that already "
+                        "exists, which overwrites it in place."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
                     name="detail_level",
                     type="string",
                     description="Content depth: concise, detailed, or comprehensive",
