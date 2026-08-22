@@ -5,7 +5,8 @@ import { useChatStore } from "@/stores/chat-store";
 import { QuestionCard } from "./QuestionCard";
 import { MarkdownText } from "./MarkdownText";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
-import { ChevronDown, Download, ExternalLink, Globe } from "lucide-react";
+import { BookOpen, CheckCheck, ChevronDown, Download, ExternalLink, Globe, LayoutTemplate, LoaderCircle, Pencil } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { AgentEvent, SourceInfo } from "@thinkslides/schemas";
 
 // ──────────────────────────────────────────────
@@ -73,6 +74,72 @@ const STEP_ORDER: Record<string, number> = Object.fromEntries(
  *  containing nothing else did not redo any work, whatever its step rank
  *  says, so it is not a revisit and must not be dressed as one. */
 const PAUSING_TOOLS = new Set(["ask_user_question", "propose_design_directions"]);
+
+/** The kinds of work a phase can contain, for the stack of glyphs a
+ *  collapsed phase shows instead of its rows. Deliberately four: the point
+ *  is a glanceable sense of what the phase did, and a stack with one circle
+ *  per tool would be confetti.
+ *
+ *  Keyed on the tool rather than on the step, because a step is already the
+ *  phase - deriving from it would give every block a stack of one - and
+ *  because the tool is what the row itself is about. Anything unlisted falls
+ *  back to the block's own group via `GROUP_TO_KIND`, so a tool added later
+ *  gets a sensible glyph rather than none. */
+type WorkKind = "research" | "design" | "draft" | "check";
+
+const TOOL_KIND: Record<string, WorkKind> = {
+  analyze_document: "research",
+  extract_key_data: "research",
+  web_search: "research",
+  select_source_image: "research",
+
+  extract_template_design_system: "design",
+  propose_design_directions: "design",
+  plan_presentation_structure: "design",
+  select_layout: "design",
+  compose_slide_regions: "design",
+
+  design_slide_content: "draft",
+  build_chart: "draft",
+  build_chart_grid: "draft",
+  build_table: "draft",
+  build_key_metrics: "draft",
+  build_stat_callouts: "draft",
+  build_icon_cards: "draft",
+  build_accent_cards: "draft",
+  build_row_bands: "draft",
+  build_banner: "draft",
+  build_legend: "draft",
+  build_image_card_row: "draft",
+  build_diagram: "draft",
+  draw_primitives: "draft",
+  generate_image: "draft",
+
+  validate_slide_json: "check",
+  validate_rendered_output: "check",
+  finalize_and_render_pptx: "check",
+};
+
+/** The fallback when a tool is not in the table above, so a tool added to the
+ *  backend later still gets a glyph. */
+const GROUP_TO_KIND: Record<PhaseGroupKey, WorkKind> = {
+  understand: "research",
+  research: "research",
+  design: "design",
+  draft: "draft",
+  render: "check",
+};
+
+const KIND_LABEL: Record<WorkKind, string> = {
+  research: "Research",
+  design: "Design",
+  draft: "Drafting",
+  check: "Validation",
+};
+
+/** The order a stack is drawn in - pipeline order, so the glyphs read the
+ *  way the work happened rather than the order the tools happened to fire. */
+const KIND_ORDER: WorkKind[] = ["research", "design", "draft", "check"];
 
 /** The two groups a validation-retry loop alternates between - see
  *  `currentBlock`'s reuse logic below. No other group pair loops this
@@ -724,17 +791,39 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
   );
 }
 
+/** Which kinds of work a phase contains, in pipeline order.
+ *
+ *  Reads the substeps rather than the block's group so a merged retry block -
+ *  which spans drafting and validation - says so. */
+function kindsIn(block: PhaseBlock): WorkKind[] {
+  const present = new Set<WorkKind>();
+  for (const step of block.subSteps) {
+    present.add(TOOL_KIND[step.toolName] ?? GROUP_TO_KIND[block.group]);
+  }
+  return KIND_ORDER.filter((kind) => present.has(kind));
+}
+
+const KIND_ICON: Record<WorkKind, LucideIcon> = {
+  research: BookOpen,
+  design: LayoutTemplate,
+  draft: Pencil,
+  check: CheckCheck,
+};
+
 /** What a completed phase shows instead of its rows: how much it did, and a
- *  way back to them.
+ *  half-overlapped stack of glyphs saying what kinds of work that was.
  *
  *  Every phase kept all of its substeps on screen forever, so by the end of a
  *  real run the feed was hundreds of rows deep and the finished phases -
  *  which nobody is reading any more - crowded out the one actually running. */
-function PhaseSummary({ count, expanded, onToggle }: {
+function PhaseSummary({ block, count, expanded, onToggle }: {
+  block: PhaseBlock;
   count: number;
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const kinds = kindsIn(block);
+  const label = `${count} step${count === 1 ? "" : "s"} completed`;
   return (
     <button
       type="button"
@@ -743,9 +832,17 @@ function PhaseSummary({ count, expanded, onToggle }: {
       onClick={onToggle}
       title={expanded ? "Hide these steps" : "Show these steps"}
     >
-      <span className="ws-phase-summary-text">
-        {count} step{count === 1 ? "" : "s"} completed
+      <span className="ws-kind-stack">
+        {kinds.map((kind) => {
+          const Icon = KIND_ICON[kind];
+          return (
+            <span key={kind} className={`ws-kind-bubble ${kind}`} title={KIND_LABEL[kind]}>
+              <Icon size={10} />
+            </span>
+          );
+        })}
       </span>
+      <span className="ws-phase-summary-text">{label}</span>
       <span className="ws-phase-summary-chev" aria-hidden="true"><ChevronDown size={20} /></span>
     </button>
   );
@@ -862,6 +959,7 @@ function PhaseBlockItem({
 
       {collapsible && (
         <PhaseSummary
+          block={block}
           count={rows.length}
           expanded={expanded}
           onToggle={() => setToggled(!expanded)}
@@ -1326,7 +1424,13 @@ function CheckRow({ row }: { row: Row }) {
     <>
       <div className="ws-phase-check-row">
         <div className="ws-check-top">
-          <span className={`ws-check-icon ${iconClass}`}>{row.icon}</span>
+          <span className={`ws-check-icon ${iconClass}`}>
+            {/* A step still in flight spins rather than sitting as a static
+                glyph, so the row states what it is doing on its own. */}
+            {iconClass === "run"
+              ? <span className="ws-spinner"><LoaderCircle size={11} /></span>
+              : row.icon}
+          </span>
           <span className="ws-check-label">{row.label}</span>
           {!!row.sources?.length && <SourcesInline sources={row.sources} />}
           <span className="ws-spacer-sm" />
