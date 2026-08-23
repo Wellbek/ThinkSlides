@@ -81,12 +81,20 @@ NO_CHANGE = BodyBalance(size_scale=1.0, paragraph_gap_pt=0.0, top_offset_in=0.0)
 
 
 def _measure_in(texts: list[str], sizes: list[float], usable_width_pt: float,
-                scale: float = 1.0) -> float:
+                scale: float = 1.0, family: str = "") -> float:
     blocks = [
-        text_fit.TextBlock(text=text, font_size_pt=size * scale)
+        text_fit.TextBlock(text=text, font_size_pt=size * scale, family=family)
         for text, size in zip(texts, sizes)
     ]
     return text_fit.estimate_blocks_height_pt(blocks, usable_width_pt) / 72.0
+
+
+def _line_count(texts: list[str], sizes: list[float], usable_width_pt: float,
+                scale: float) -> int:
+    return sum(
+        text_fit.estimate_wrapped_lines(text, size * scale, usable_width_pt)
+        for text, size in zip(texts, sizes)
+    )
 
 
 def balance_body(
@@ -123,12 +131,22 @@ def balance_body(
         wanted = min(MAX_GROWTH, COMFORTABLE_FILL / fill)
         # Re-measure rather than assuming height scales linearly: growing the
         # type also rewraps, which can add a line and eat the gain.
+        base_lines = _line_count(texts, sizes, usable_width_pt, 1.0)
         for candidate in _steps(wanted):
-            if _measure_in(texts, sizes, usable_width_pt, candidate) <= (
+            if _measure_in(texts, sizes, usable_width_pt, candidate) > (
                 box_height_in * COMFORTABLE_FILL
             ):
-                scale = candidate
-                break
+                continue
+            # Growing the type must not change how the copy breaks. A
+            # headline that reads on one line at its declared size and on two
+            # after being grown has been made worse, not better - and with
+            # accurate measurement there is a lot more headroom to grow into,
+            # so this guard now does real work where the old over-estimate
+            # never let it get that far.
+            if _line_count(texts, sizes, usable_width_pt, candidate) > base_lines:
+                continue
+            scale = candidate
+            break
 
     measured = _measure_in(texts, sizes, usable_width_pt, scale)
     surplus_in = max(0.0, box_height_in - measured)

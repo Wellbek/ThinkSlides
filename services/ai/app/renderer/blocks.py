@@ -157,6 +157,24 @@ class BlockCompiler:
     # asked for", and it applies to the whole block at once.
     scale: float = 1.0
 
+    # ------------------------------------------------------------ measuring
+
+    def _measure(self, text, size_pt: float, width_in: float,
+                 bold: bool = False) -> float:
+        """``primitives.measure_text``, told which face this deck is set in.
+
+        Measurement now reads real advance widths, so it has to be given the
+        right font: measuring Arial for a block that renders in a wider face
+        reports a line that fits and draws one that does not. The old
+        character-ratio estimate was face-blind, which hid the question by
+        being equally wrong for everything.
+        """
+        return primitives.measure_text(
+            text, size_pt, width_in, bold=bold,
+            family=(self.type_scale.title_font if bold
+                    else self.type_scale.body_font),
+        )
+
     # ----------------------------------------------------------------- API
 
     def compile(self, kind: str, item: dict, rect: PositionConfig,
@@ -229,7 +247,7 @@ class BlockCompiler:
             value_color = (resolve_tone(tone, self.design_system) if tone
                            else self.style.accent_color)
             value = str(entry.get("value", "")).strip()
-            value_height = primitives.measure_text(value, value_pt, column, bold=True)
+            value_height = self._measure(value, value_pt, column, bold=True)
             out.append(self._text(
                 f"{prefix}-stat{index}-value", left, rect.top, column, value_height,
                 value, value_pt, value_color, bold=True,
@@ -237,7 +255,7 @@ class BlockCompiler:
             ))
             caption = str(entry.get("caption") or "").strip()
             if caption:
-                caption_height = primitives.measure_text(caption, caption_pt, column)
+                caption_height = self._measure(caption, caption_pt, column)
                 out.append(self._text(
                     f"{prefix}-stat{index}-caption", left,
                     rect.top + value_height + self._gap * 0.4,
@@ -266,7 +284,7 @@ class BlockCompiler:
         # and the headings hang above it.
         headings = [str(entry.get("heading") or "").strip() for entry in entries]
         heading_heights = [
-            primitives.measure_text(heading, heading_pt, column, bold=True)
+            self._measure(heading, heading_pt, column, bold=True)
             for heading in headings
         ]
         heading_top = rect.top + badge + self._gap * 1.4
@@ -289,7 +307,7 @@ class BlockCompiler:
                 ))
             top = body_top
             for line_index, line in enumerate(_lines(entry.get("body"))):
-                height = primitives.measure_text(line, body_pt, column)
+                height = self._measure(line, body_pt, column)
                 out.append(self._text(
                     f"{prefix}-card{index}-body{line_index}", left, top, column,
                     height, line, body_pt, self.style.body_color,
@@ -344,9 +362,9 @@ class BlockCompiler:
         for entry in entries:
             heading = str(entry.get("heading") or "").strip()
             body_lines = _lines(entry.get("body"))
-            heading_height = primitives.measure_text(heading, heading_pt, text_width,
+            heading_height = self._measure(heading, heading_pt, text_width,
                                                      bold=True) if heading else 0.0
-            body_heights = [primitives.measure_text(line, body_pt, text_width)
+            body_heights = [self._measure(line, body_pt, text_width)
                             for line in body_lines]
             measured.append((
                 heading, heading_height, body_lines, body_heights,
@@ -412,9 +430,9 @@ class BlockCompiler:
         for index, row in enumerate(rows):
             label = str(row.get("label") or "").strip()
             prose = str(row.get("prose") or "").strip()
-            label_height = primitives.measure_text(label, label_pt, label_width,
+            label_height = self._measure(label, label_pt, label_width,
                                                    bold=True)
-            prose_height = primitives.measure_text(prose, prose_pt, prose_width)
+            prose_height = self._measure(prose, prose_pt, prose_width)
             height = max(label_height, prose_height)
 
             out.append(Primitive(
@@ -464,7 +482,7 @@ class BlockCompiler:
         size_pt = self._pt(self.type_scale.body_style(0).font_size_pt * 1.15)
         rule_hex = colors.mix(self.style.background, self.style.body_color, 0.45)
         inner_width = max(0.4, rect.width - self._banner_pad * 2)
-        body_height = primitives.measure_text(text, size_pt, inner_width, bold=True)
+        body_height = self._measure(text, size_pt, inner_width, bold=True)
 
         top = rect.top
         out = [Primitive(
@@ -548,7 +566,7 @@ class BlockCompiler:
         for index, entry in enumerate(entries):
             left = rect.left + index * (column + BLOCK_GAP_IN)
             label = str(entry.get("label")).strip()
-            height = primitives.measure_text(label, size_pt, label_width)
+            height = self._measure(label, size_pt, label_width)
             out.append(Primitive(
                 id=f"{prefix}-legend{index}-swatch", kind="rect",
                 box=PositionConfig(
@@ -585,7 +603,7 @@ class BlockCompiler:
         if groups:
             # A group heading spans an unequal subset of the row, which is what
             # makes it a grouping rather than a per-card label.
-            group_height = primitives.measure_text("Ag", title_pt, rect.width, bold=True)
+            group_height = self._measure("Ag", title_pt, rect.width, bold=True)
             cursor = 0
             for index, group in enumerate(groups):
                 span = max(1, int(group.get("span") or 1))
@@ -604,7 +622,7 @@ class BlockCompiler:
         # Titles wrap to different depths; captions share a baseline for the
         # same reason card bodies do.
         title_heights = [
-            primitives.measure_text(str(card.get("title") or ""), title_pt, column,
+            self._measure(str(card.get("title") or ""), title_pt, column,
                                     bold=True)
             for card in cards
         ]
@@ -645,7 +663,7 @@ class BlockCompiler:
             cursor += tallest_title + self._gap * 0.3
             caption = str(card.get("caption") or "").strip()
             if caption:
-                height = primitives.measure_text(caption, caption_pt, column)
+                height = self._measure(caption, caption_pt, column)
                 out.append(self._text(
                     f"{prefix}-image{index}-caption", left, cursor, column, height,
                     caption, caption_pt, self.style.body_color,
