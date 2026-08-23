@@ -1,0 +1,209 @@
+{
+  "id": "ey-iif-risk",
+  "version": "1",
+  "label": "EY / IIF Global Insurance Risk Management Survey",
+  "source_note": "Measured from the March 2023 report, design-split pages only. Faces are declared as the publication sets them; this machine substitutes Liberation, so rendered specimens differ in face while matching in metrics.",
+  "canvas": {
+    "w_in": 26.666666666666668,
+    "h_in": 15.0,
+    "bleed_in": 0.0,
+    "safe_in": 0.0
+  },
+  "grid": {
+    "columns": 4,
+    "gutter_in": 0.6640703057183162,
+    "margin": {
+      "top": 0.63,
+      "right": 1.7947369723849842,
+      "bottom": 0.63,
+      "left": 1.3226666666666669
+    },
+    "baseline_in": 0.2916666666666667,
+    "rows": null,
+    "row_gutter_in": 0.0
+  },
+  "grid_confidence": {
+    "value": 0.7101176571314156,
+    "residual": 0.011737326846291302,
+    "note": "recovered from page 4; 4 columns"
+  },
+  "rhythm": {
+    "unit_pt": 21.0,
+    "phase_pt": 0.0,
+    "confidence": {
+      "value": 0.88,
+      "residual": 0.5,
+      "note": "16pt body set on 21pt, 125 of 141 lines"
+    }
+  },
+  "spacing": {
+    "base_pt": 5.25,
+    "steps": [
+      0.5,
+      1.0,
+      2.0,
+      3.0,
+      4.0,
+      6.0,
+      8.0,
+      12.0
+    ],
+    "confidence": {
+      "value": 0.0,
+      "residual": 0.0,
+      "note": ""
+    }
+  },
+  "type_roles": {
+    "folio": {
+      "size_pt": 36.0,
+      "line_height_pt": 36.0,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink_muted",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": null,
+      "measured_median_pt": 36.0,
+      "measured_max_pt": null
+    },
+    "eyebrow": {
+      "size_pt": 11.0,
+      "line_height_pt": 13.0,
+      "weight": "light",
+      "face": "body",
+      "case": "upper",
+      "tracking_per_mille": 40,
+      "color_role": "ink_muted",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": null,
+      "measured_median_pt": 11.0,
+      "measured_max_pt": null
+    },
+    "headline": {
+      "size_pt": 52.0,
+      "line_height_pt": 57.0,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": null,
+      "measured_median_pt": 52.0,
+      "measured_max_pt": null
+    },
+    "standfirst": {
+      "size_pt": 21.0,
+      "line_height_pt": 27.0,
+      "weight": "regular",
+      "face": "display",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": null,
+      "measured_median_pt": 21.0,
+      "measured_max_pt": null
+    },
+    "pullquote": {
+      "size_pt": 23.5,
+      "line_height_pt": 31.5,
+      "weight": "regular",
+      "face": "display",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": null,
+      "measured_median_pt": 23.5,
+      "measured_max_pt": null
+    },
+    "panelquote": {
+      "size_pt": 26.0,
+      "line_height_pt": 33.0,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink_reversed",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": null,
+      "measured_median_pt": 26.0,
+      "measured_max_pt": null
+    },
+    "body": {
+      "size_pt": 16.0,
+      "line_height_pt": 21.0,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": 1,
+      "min_pt": 6.0,
+      "measure_chars_target": 52,
+      "measured_min_pt": 16.0,
+      "measured_median_pt": 16.0,
+      "measured_max_pt": null
+    },
+    "caption": {
+      "size_pt": 11.0,
+      "line_height_pt": 14.0,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink_muted",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": null,
+      "measured_median_pt": 11.0,
+      "measured_max_pt": null
+    }
+  },
+  "colors": {
+    "ground": "#FFFFFF",
+    "ground_alt": "#F6F6FA",
+    "ground_dark": "#1A1A24",
+    "ink": "#2E2E38",
+    "ink_muted": "#747480",
+    "ink_reversed": "#FFFFFF",
+    "accent": "#FFE600",
+    "accent_alt": "#C4C4CD",
+    "rule": "#C4C4CD",
+    "scrim": "#000000"
+  },
+  "archetypes": [],
+  "policy": {
+    "body_min_ratio": 0.0145,
+    "caption_min_ratio": 0.01,
+    "display_min_ratio": 0.023,
+    "absolute_floor_pt": 6.0
+  },
+  "body_face": "Arial",
+  "display_face": "Georgia",
+  "mono_face": "Consolas"
+}
