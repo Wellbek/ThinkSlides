@@ -750,8 +750,16 @@ def _autofit_scale(primitive: Primitive, context: PaintContext,
     """
     if not primitive.autofit or not primitive.runs:
         return 1.0
+    # The face matters now that measurement reads real advance widths: a
+    # block measured in Arial and drawn in something wider is a block that
+    # was judged to fit and does not.
+    face = (primitive.font or context.default_font
+            or context.type_scale.body_font)
     blocks = [
-        text_fit.TextBlock(text=run.text, font_size_pt=(run.size_pt or base_size))
+        text_fit.TextBlock(text=run.text,
+                           font_size_pt=(run.size_pt or base_size),
+                           family=(run.font or face),
+                           bold=bool(run.bold or primitive.bold))
         for run in primitive.runs
     ]
     # Zero insets, because ``_paint_text`` zeroes the frame's margins. Left at
@@ -798,7 +806,7 @@ MEASURE_SLACK_BOLD = 0.90
 
 
 def measure_text(text: str, size_pt: float, width_in: float,
-                 bold: bool = False) -> float:
+                 bold: bool = False, family: str = "") -> float:
     """
     The height a wrapped string needs at ``size_pt`` in ``width_in``.
 
@@ -814,7 +822,8 @@ def measure_text(text: str, size_pt: float, width_in: float,
     # Markers are four characters of syntax that render as one small digit;
     # measuring them as written would reserve room for text nobody sees.
     lines = text_fit.estimate_wrapped_lines(
-        strip_markers(str(text)), size_pt, max(1.0, width_in * 72.0 * slack)
+        strip_markers(str(text)), size_pt, max(1.0, width_in * 72.0 * slack),
+        family, bold,
     )
     return lines * size_pt * text_fit.LINE_HEIGHT_RATIO / 72.0
 
