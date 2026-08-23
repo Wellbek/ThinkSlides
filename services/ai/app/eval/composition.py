@@ -210,6 +210,49 @@ def alignment_score(obs: PageObservation) -> float:
     return max(0.0, min(1.0, (worst - len(clusters)) / (worst - best)))
 
 
+@dataclass(frozen=True)
+class GridView:
+    """A pack's grid in the terms ``grid_conformance`` reads.
+
+    The pack states its grid in inches because that is what a renderer needs;
+    the metrics work in fractions of the page because that is what makes two
+    publications on different canvases comparable. This is the one place the
+    two meet.
+    """
+
+    columns: int
+    margin_left: float
+    pitch: float
+    column_width: float
+
+    @classmethod
+    def from_pack(cls, grid, canvas) -> "GridView":
+        width = canvas.w_in
+        column = grid.column_width_in(canvas)
+        return cls(
+            columns=grid.columns,
+            margin_left=grid.margin.left / width,
+            pitch=(column + grid.gutter_in) / width,
+            column_width=column / width,
+        )
+
+    def tracks(self) -> list[tuple[float, float]]:
+        return [
+            (self.margin_left + i * self.pitch,
+             self.margin_left + i * self.pitch + self.column_width)
+            for i in range(self.columns)
+        ]
+
+    def snap(self, position: float) -> tuple[int, float]:
+        best, best_distance = 0, float("inf")
+        for index, (left, right) in enumerate(self.tracks()):
+            for candidate in (left, right):
+                distance = abs(position - candidate)
+                if distance < best_distance:
+                    best, best_distance = index, distance
+        return best, best_distance
+
+
 def grid_conformance(obs: PageObservation, grid) -> float:
     """Share of edge mass that lands on the grid the pack declares.
 
