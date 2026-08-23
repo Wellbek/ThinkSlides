@@ -1,0 +1,3038 @@
+{
+  "id": "bxsl-investor",
+  "version": "1",
+  "label": "Blackstone Secured Lending Fund 1Q26 Investor Presentation",
+  "source_note": "Dense 4:3 investor deck: nearly two charts a page, a full footnote apparatus, and an attribution line on most pages.",
+  "canvas": {
+    "w_in": 10.0,
+    "h_in": 7.5,
+    "bleed_in": 0.0,
+    "safe_in": 0.0
+  },
+  "grid": {
+    "columns": 7,
+    "gutter_in": 0.38320349799262243,
+    "margin": {
+      "top": 0.3,
+      "right": 0.5032034979926214,
+      "bottom": 0.3,
+      "left": 0.5
+    },
+    "baseline_in": 0.23333333333333334,
+    "rows": null,
+    "row_gutter_in": 0.0
+  },
+  "grid_confidence": {
+    "value": 0.8015618067768335,
+    "residual": 0.0,
+    "note": "7 columns, agreed by 1 of 5 pages; no single grid fits them all"
+  },
+  "rhythm": {
+    "unit_pt": 16.8,
+    "phase_pt": 3.1500000000000004,
+    "confidence": {
+      "value": 0.9527133759998159,
+      "residual": 0.011821656000046046,
+      "note": "128 body lines"
+    }
+  },
+  "spacing": {
+    "base_pt": 4.2,
+    "steps": [
+      0.5,
+      1.0,
+      1.5,
+      2.0,
+      3.0,
+      4.0,
+      6.0,
+      8.0
+    ],
+    "confidence": {
+      "value": 0.0,
+      "residual": 0.0,
+      "note": "no spacing ladder recovered; derived from the rhythm"
+    }
+  },
+  "type_roles": {
+    "body": {
+      "size_pt": 12.0,
+      "line_height_pt": 14.4,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 12.0,
+      "measured_median_pt": 12.0,
+      "measured_max_pt": 12.0
+    },
+    "headline": {
+      "size_pt": 28.0,
+      "line_height_pt": 36.4,
+      "weight": "bold",
+      "face": "display",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink_muted",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 28.0,
+      "measured_median_pt": 28.0,
+      "measured_max_pt": 28.0
+    },
+    "pullquote": {
+      "size_pt": 24.0,
+      "line_height_pt": 31.2,
+      "weight": "regular",
+      "face": "display",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 24.0,
+      "measured_median_pt": 24.0,
+      "measured_max_pt": 24.0
+    },
+    "standfirst": {
+      "size_pt": 22.0,
+      "line_height_pt": 28.6,
+      "weight": "bold",
+      "face": "display",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 22.0,
+      "measured_median_pt": 22.0,
+      "measured_max_pt": 22.0
+    },
+    "footnote": {
+      "size_pt": 7.0,
+      "line_height_pt": 8.4,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 7.0,
+      "measured_median_pt": 7.0,
+      "measured_max_pt": 7.0
+    },
+    "caption": {
+      "size_pt": 10.6,
+      "line_height_pt": 12.6,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 10.6,
+      "measured_median_pt": 10.6,
+      "measured_max_pt": 10.6
+    }
+  },
+  "colors": {
+    "ground": "#FFFFFF",
+    "ground_alt": "#4C9F8B",
+    "ground_dark": "#101820",
+    "ink": "#000000",
+    "ink_muted": "#595959",
+    "ink_reversed": "#FFFFFF",
+    "accent": "#006492",
+    "accent_alt": "#A5CD24",
+    "rule": "#D6D6DE",
+    "scrim": "#000000"
+  },
+  "archetypes": [
+    {
+      "id": "page-4",
+      "label": "exhibit panel",
+      "role": "content",
+      "frequency": 0.0,
+      "grid": null,
+      "grid_confidence": {
+        "value": 0.0,
+        "residual": 0.0,
+        "note": "this page is not on a recoverable grid"
+      },
+      "frames": [
+        {
+          "id": "exhibit",
+          "role": "panel",
+          "place": {
+            "kind": "frac",
+            "x": 0.2375,
+            "y": -0.1167,
+            "w": 0.7125,
+            "h": 0.0625
+          },
+          "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-0",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.8598055521647135,
+            "y": 0.9379776566116899,
+            "w": 0.06601282755533854,
+            "h": 0.017083740234375
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-1",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.05,
+            "y": 0.0381636796174226,
+            "w": 0.22182731628417968,
+            "h": 0.020444442607738353
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-2",
+          "role": "standfirst",
+          "place": {
+            "kind": "frac",
+            "x": 0.05,
+            "y": 0.10448259424280237,
+            "w": 0.8410680135091145,
+            "h": 0.04066666497124566
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-3",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.05483333269755045,
+            "y": 0.24592482955367476,
+            "w": 0.16555143462287056,
+            "h": 0.057111076072410304
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-4",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.2701666726006402,
+            "y": 0.24592482955367476,
+            "w": 0.1682016796535916,
+            "h": 0.057111076072410304
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-5",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.5041666666666667,
+            "y": 0.24592482955367476,
+            "w": 0.1797275119357639,
+            "h": 0.057111076072410304
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-6",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.7291388617621528,
+            "y": 0.24592482955367476,
+            "w": 0.1323563469780816,
+            "h": 0.057111076072410304
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "headline-7",
+          "role": "headline",
+          "place": {
+            "kind": "frac",
+            "x": 0.059833335876464847,
+            "y": 0.6613714712637442,
+            "w": 0.7638940811157227,
+            "h": 0.07456998471860532
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-8",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.05,
+            "y": 0.871639958134404,
+            "w": 0.8990653143988715,
+            "h": 0.0284444738317419
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-9",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.05576666726006402,
+            "y": 0.3571481492784288,
+            "w": 0.11118040084838868,
+            "h": 0.04888887758608217
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-10",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.2807361178927951,
+            "y": 0.3571481492784288,
+            "w": 0.11047901577419705,
+            "h": 0.04888887758608217
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-11",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.5056666480170355,
+            "y": 0.3571481492784288,
+            "w": 0.17316847907172309,
+            "h": 0.04888887758608217
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-12",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.7305972629123264,
+            "y": 0.3571481492784288,
+            "w": 0.1401505364312066,
+            "h": 0.04888887758608217
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-14",
+          "role": "figure",
+          "place": {
+            "kind": "frac",
+            "x": 0.050770833757188584,
+            "y": 0.4454259236653646,
+            "w": 0.19499998092651366,
+            "h": 0.1731111314561632
+          },
+          "z": 1,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-15",
+          "role": "figure",
+          "place": {
+            "kind": "frac",
+            "x": 0.5007222069634332,
+            "y": 0.4454259236653646,
+            "w": 0.1945694393581814,
+            "h": 0.17333334463614006
+          },
+          "z": 1,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-16",
+          "role": "figure",
+          "place": {
+            "kind": "frac",
+            "x": 0.27595833672417536,
+            "y": 0.4454259236653646,
+            "w": 0.1945694393581814,
+            "h": 0.17333334463614006
+          },
+          "z": 1,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-17",
+          "role": "figure",
+          "place": {
+            "kind": "frac",
+            "x": 0.725486077202691,
+            "y": 0.4454259236653646,
+            "w": 0.19500003390842013,
+            "h": 0.17333334463614006
+          },
+          "z": 1,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "footnote-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.13499999999999998,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 33,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.36666666666666664,
+          "min_chars": null,
+          "max_chars": 89,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-3",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 36,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-4",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 35,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-5",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 51,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-6",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 28,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "headline-7",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.4666666666666667,
+          "min_chars": null,
+          "max_chars": 43,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-8",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.11666666666666667,
+          "min_chars": null,
+          "max_chars": 557,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-9",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.2,
+          "min_chars": null,
+          "max_chars": 40,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-10",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.2,
+          "min_chars": null,
+          "max_chars": 39,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-11",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.2,
+          "min_chars": null,
+          "max_chars": 54,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-12",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.2,
+          "min_chars": null,
+          "max_chars": 43,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "figure-14",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "figure-15",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "figure-16",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "figure-17",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        4
+      ],
+      "note": "18 frames read from page 4"
+    },
+    {
+      "id": "page-8",
+      "label": "exhibit panel",
+      "role": "content",
+      "frequency": 0.0,
+      "grid": {
+        "columns": 3,
+        "gutter_in": 0.3601325751410589,
+        "margin": {
+          "top": 0.3,
+          "right": 0.5211325751410589,
+          "bottom": 0.3,
+          "left": 0.494
+        },
+        "baseline_in": 0.23333333333333334,
+        "rows": null,
+        "row_gutter_in": 0.0
+      },
+      "grid_confidence": {
+        "value": 0.7323448022773056,
+        "residual": 0.005146492855601773,
+        "note": "3 columns on this page"
+      },
+      "frames": [
+        {
+          "id": "exhibit",
+          "role": "panel",
+          "place": {
+            "kind": "frac",
+            "x": 0.0472,
+            "y": 0.3027,
+            "w": 0.9005,
+            "h": 0.4199
+          },
+          "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-0",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.8598055521647135,
+            "y": 0.9379776566116899,
+            "w": 0.06601282755533854,
+            "h": 0.017083740234375
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-1",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.05,
+            "y": 0.0381636796174226,
+            "w": 0.0895313474867079,
+            "h": 0.020444442607738353
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-2",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.04610000186496311,
+            "y": 0.7286140724464699,
+            "w": 0.901786740620931,
+            "h": 0.2307148121021412
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-3",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04940000110202365,
+            "y": 0.08002667603669343,
+            "w": 0.8995944446987576,
+            "h": 0.11978814160382306
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-4",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.06433333290947808,
+            "y": 0.606118830928096,
+            "w": 0.2450479613410102,
+            "h": 0.04570487693504051
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-5",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04940000110202365,
+            "y": 0.21339871441876446,
+            "w": 0.7689296192593045,
+            "h": 0.030396468551070602
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-6",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.07056666480170357,
+            "y": 0.3400956330475984,
+            "w": 0.16327379014756943,
+            "h": 0.0663722002947772
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-7",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.0729333347744412,
+            "y": 0.470629628499349,
+            "w": 0.10908534791734484,
+            "h": 0.06632885403103299
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-8",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.07149999936421712,
+            "y": 0.6084444399233218,
+            "w": 0.23609309196472167,
+            "h": 0.06632888228804977
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-9",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.37390276590983074,
+            "y": 0.3400956330475984,
+            "w": 0.20777096218532987,
+            "h": 0.0663722002947772
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-10",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.37466668023003474,
+            "y": 0.4712962680392795,
+            "w": 0.13624805874294704,
+            "h": 0.06632891054506655
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-11",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.3755277845594618,
+            "y": 0.6068518744574652,
+            "w": 0.15028135511610244,
+            "h": 0.0663288257740162
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-12",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.6753333197699652,
+            "y": 0.3400956330475984,
+            "w": 0.17394739786783855,
+            "h": 0.0663722002947772
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-13",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.6781389024522569,
+            "y": 0.4736851727520978,
+            "w": 0.14624226888020833,
+            "h": 0.06632891054506655
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-14",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.6767361111111111,
+            "y": 0.6068889476634838,
+            "w": 0.18175125122070312,
+            "h": 0.0663288257740162
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-15",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.048199998007880315,
+            "y": 0.25403453685619215,
+            "w": 0.5707039886050754,
+            "h": 0.042961035834418404
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-16",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.6577638838026258,
+            "y": 0.2497918588143808,
+            "w": 0.23849525451660156,
+            "h": 0.04288886741355613
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "footnote-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.13499999999999998,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.11666666666666667,
+          "min_chars": null,
+          "max_chars": 3819,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-3",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.24000000000000002,
+          "min_chars": null,
+          "max_chars": 492,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 96,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-5",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 75,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 49,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 33,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-8",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 64,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 57,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 39,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-11",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 42,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 54,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-13",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 44,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-14",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 49,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-15",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 147,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-16",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 102,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        8
+      ],
+      "note": "18 frames read from page 8"
+    },
+    {
+      "id": "page-12",
+      "label": "band row, exhibit panel",
+      "role": "content",
+      "frequency": 0.0,
+      "grid": {
+        "columns": 5,
+        "gutter_in": 0.3968312920464412,
+        "margin": {
+          "top": 0.3,
+          "right": 0.6418312920464408,
+          "bottom": 0.3,
+          "left": 0.53
+        },
+        "baseline_in": 0.23333333333333334,
+        "rows": null,
+        "row_gutter_in": 0.0
+      },
+      "grid_confidence": {
+        "value": 0.6509220977683116,
+        "residual": 0.005702476906149095,
+        "note": "5 columns on this page"
+      },
+      "frames": [
+        {
+          "id": "bands",
+          "role": "panel",
+          "place": {
+            "kind": "frac",
+            "x": 0.0489,
+            "y": 0.6677,
+            "w": 0.9007,
+            "h": 0.2129
+          },
+          "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "exhibit",
+          "role": "panel",
+          "place": {
+            "kind": "frac",
+            "x": 0.0489,
+            "y": 0.7721,
+            "w": 0.9007,
+            "h": 0.1324
+          },
+          "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-0",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.8598055521647135,
+            "y": 0.9379776566116899,
+            "w": 0.06601282755533854,
+            "h": 0.017083740234375
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-1",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.24006368849012588,
+            "y": 0.5215889259620949,
+            "w": 0.6968324025472005,
+            "h": 0.028686862521701387
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-2",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.24038321177164715,
+            "y": 0.30180384318033854,
+            "w": 0.030507130093044704,
+            "h": 0.01597663031684028
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-3",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.29706783294677735,
+            "y": 0.25460179646809894,
+            "w": 0.028302362230088977,
+            "h": 0.01597663031684028
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-4",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.35151312086317277,
+            "y": 0.2908864621762876,
+            "w": 0.08643820020887587,
+            "h": 0.01959802133065683
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-5",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.4628027598063151,
+            "y": 0.3090465686939381,
+            "w": 0.14041616651746963,
+            "h": 0.030497600414134837
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-6",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.6290250142415365,
+            "y": 0.3344316553186487,
+            "w": 0.0864195081922743,
+            "h": 0.01960695054796007
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-7",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.7411134507921007,
+            "y": 0.35986997816297744,
+            "w": 0.029081217447916665,
+            "h": 0.01597663031684028
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-8",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.7960459391276041,
+            "y": 0.3417276453088831,
+            "w": 0.14085015190972222,
+            "h": 0.03411896317093461
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-9",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.2406388388739692,
+            "y": 0.6788911607530382,
+            "w": 0.6927118725246854,
+            "h": 0.01597663031684028
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-10",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.4768620808919271,
+            "y": 0.7075638947663484,
+            "w": 0.23939446343315973,
+            "h": 0.015976573802806714
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-11",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.05,
+            "y": 0.0381636796174226,
+            "w": 0.2226552963256836,
+            "h": 0.020444442607738353
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-12",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04983333481682672,
+            "y": 0.09234147954870153,
+            "w": 0.5849361472659641,
+            "h": 0.029440003854257088
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-13",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04983333481682672,
+            "y": 0.13367481938114872,
+            "w": 0.6104472743140327,
+            "h": 0.029440010918511283
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-14",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.05043333371480306,
+            "y": 0.1911844324182581,
+            "w": 0.3953806718190511,
+            "h": 0.027147801717122395
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-15",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.04973333146837022,
+            "y": 0.915017756709346,
+            "w": 0.9017784754435222,
+            "h": 0.075111163104022
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-16",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.05299027231004503,
+            "y": 0.7917408695927373,
+            "w": 0.8811985704633924,
+            "h": 0.019597371419270832
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-17",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.05299027231004503,
+            "y": 0.8460161562319155,
+            "w": 0.8828265984853109,
+            "h": 0.019597371419270832
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "footnote-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.13499999999999998,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14333333333333334,
+          "min_chars": null,
+          "max_chars": 91,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14333333333333334,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-3",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14333333333333334,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14333333333333334,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14333333333333334,
+          "min_chars": null,
+          "max_chars": 21,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.145,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14333333333333334,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-8",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14333333333333334,
+          "min_chars": null,
+          "max_chars": 21,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14333333333333334,
+          "min_chars": null,
+          "max_chars": 91,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14333333333333334,
+          "min_chars": null,
+          "max_chars": 51,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-11",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 35,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-12",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.24000000000000002,
+          "min_chars": null,
+          "max_chars": 123,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-13",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.24000000000000002,
+          "min_chars": null,
+          "max_chars": 124,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-14",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 65,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-15",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.11666666666666667,
+          "min_chars": null,
+          "max_chars": 1065,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-16",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14666666666666667,
+          "min_chars": null,
+          "max_chars": 125,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-17",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.14666666666666667,
+          "min_chars": null,
+          "max_chars": 112,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        12
+      ],
+      "note": "20 frames read from page 12"
+    },
+    {
+      "id": "page-16",
+      "label": "exhibit panel",
+      "role": "content",
+      "frequency": 0.0,
+      "grid": {
+        "columns": 2,
+        "gutter_in": 0.48577163357204856,
+        "margin": {
+          "top": 0.3,
+          "right": 0.4787716335720471,
+          "bottom": 0.3,
+          "left": 0.497
+        },
+        "baseline_in": 0.23333333333333334,
+        "rows": null,
+        "row_gutter_in": 0.0
+      },
+      "grid_confidence": {
+        "value": 0.6797485895934686,
+        "residual": 0.013642235921662686,
+        "note": "2 columns on this page"
+      },
+      "frames": [
+        {
+          "id": "exhibit",
+          "role": "panel",
+          "place": {
+            "kind": "frac",
+            "x": 0.0497,
+            "y": 0.3448,
+            "w": 0.9001,
+            "h": 0.3807
+          },
+          "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-0",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.8598055521647135,
+            "y": 0.9379776566116899,
+            "w": 0.06601282755533854,
+            "h": 0.017083740234375
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-1",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.8318333095974393,
+            "y": 0.35616367481372974,
+            "w": 0.02662472195095486,
+            "h": 0.02044446026837384
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-2",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.6245972103542752,
+            "y": 0.41033034148039643,
+            "w": 0.02298465304904514,
+            "h": 0.02044446026837384
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-3",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.5730972290039062,
+            "y": 0.6684785630967882,
+            "w": 0.2884049309624566,
+            "h": 0.020444403754340278
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-4",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.05,
+            "y": 0.0381636796174226,
+            "w": 0.2864113065931532,
+            "h": 0.020444442607738353
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-5",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.04966666433546278,
+            "y": 0.7439473470052084,
+            "w": 0.9024561723073323,
+            "h": 0.23071492513020833
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-6",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04983333481682672,
+            "y": 0.09415631470856843,
+            "w": 0.8751974370744493,
+            "h": 0.05530664655897352
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "headline-7",
+          "role": "headline",
+          "place": {
+            "kind": "frac",
+            "x": 0.0798999998304579,
+            "y": 0.22150111728244357,
+            "w": 0.7030859417385525,
+            "h": 0.05177777608235677
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-8",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.0798999998304579,
+            "y": 0.2902026141131366,
+            "w": 0.18903302086724175,
+            "h": 0.04951666372793692
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-9",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.22083333333333333,
+            "y": 0.6645140471281828,
+            "w": 0.6416276719835069,
+            "h": 0.01955555103443287
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-10",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.5310277726915148,
+            "y": 0.2890548140914352,
+            "w": 0.36956308152940537,
+            "h": 0.027147787588614004
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-11",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.5310277726915148,
+            "y": 0.31927481757269965,
+            "w": 0.09683528476291232,
+            "h": 0.02044446026837384
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-12",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.3380277845594618,
+            "y": 0.41131182070131656,
+            "w": 0.02078200446234809,
+            "h": 0.02044446026837384
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-13",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.09099999533759223,
+            "y": 0.6645140471281828,
+            "w": 0.5583773189120822,
+            "h": 0.02470516628689236
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "footnote-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.13499999999999998,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-3",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 35,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 42,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.11666666666666667,
+          "min_chars": null,
+          "max_chars": 4132,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-6",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.24000000000000002,
+          "min_chars": null,
+          "max_chars": 190,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "headline-7",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.4666666666666667,
+          "min_chars": null,
+          "max_chars": 42,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-8",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 49,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-10",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 58,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-11",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 22,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-13",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 42,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        16
+      ],
+      "note": "15 frames read from page 16"
+    },
+    {
+      "id": "page-20",
+      "label": "rail, exhibit panel",
+      "role": "content",
+      "frequency": 0.0,
+      "grid": {
+        "columns": 7,
+        "gutter_in": 0.38320349799262243,
+        "margin": {
+          "top": 0.3,
+          "right": 0.5032034979926214,
+          "bottom": 0.3,
+          "left": 0.5
+        },
+        "baseline_in": 0.23333333333333334,
+        "rows": null,
+        "row_gutter_in": 0.0
+      },
+      "grid_confidence": {
+        "value": 0.8015618067768335,
+        "residual": 0.004552828185687974,
+        "note": "7 columns on this page"
+      },
+      "frames": [
+        {
+          "id": "panel-0",
+          "role": "panel",
+          "place": {
+            "kind": "frac",
+            "x": 0.0,
+            "y": 0.0,
+            "w": 0.625,
+            "h": 1.0
+          },
+          "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": "#FFFFFF",
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "rail-1",
+          "role": "rail",
+          "place": {
+            "kind": "frac",
+            "x": 0.7083,
+            "y": 0.0,
+            "w": 0.2917,
+            "h": 1.0
+          },
+          "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": "#FFFFFF",
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "exhibit",
+          "role": "panel",
+          "place": {
+            "kind": "frac",
+            "x": 0.7885,
+            "y": 0.1739,
+            "w": 0.1042,
+            "h": 0.507
+          },
+          "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-0",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.8598055521647135,
+            "y": 0.9379776566116899,
+            "w": 0.06601282755533854,
+            "h": 0.017083740234375
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-1",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.05,
+            "y": 0.03729304207695855,
+            "w": 0.3527441660563151,
+            "h": 0.021315080148202402
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-2",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.04890000025431315,
+            "y": 0.785114034016927,
+            "w": 0.9007796499464247,
+            "h": 0.15288153754340278
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-3",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.14243055979410807,
+            "y": 0.379688149911386,
+            "w": 0.04306316375732422,
+            "h": 0.018444428620515048
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-4",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.3152638965182834,
+            "y": 0.14698442529748987,
+            "w": 0.37702087826199004,
+            "h": 0.039018546210394967
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-5",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.4867638905843099,
+            "y": 0.15250296416106046,
+            "w": 0.031055789523654512,
+            "h": 0.01844444274902344
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-6",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.13303332858615452,
+            "y": 0.6944585164388021,
+            "w": 0.053650686475965714,
+            "h": 0.04288889567057292
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-7",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.2880972120496962,
+            "y": 0.6944585164388021,
+            "w": 0.08392270406087239,
+            "h": 0.04288889567057292
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-8",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.46356942918565536,
+            "y": 0.6944585164388021,
+            "w": 0.0729667239718967,
+            "h": 0.04288889567057292
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-9",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.6541666666666667,
+            "y": 0.6944585164388021,
+            "w": 0.03204663594563802,
+            "h": 0.04288889567057292
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-10",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.1857361051771376,
+            "y": 0.6944585164388021,
+            "w": 0.7388777626885308,
+            "h": 0.04288889567057292
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-11",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.7820277743869357,
+            "y": 0.2724103856969763,
+            "w": 0.11970011393229167,
+            "h": 0.018444428620515048
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-12",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.8061944749620226,
+            "y": 0.2946326079191985,
+            "w": 0.07052586873372396,
+            "h": 0.04066665084273727
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-13",
+          "role": "caption",
+          "place": {
+            "kind": "frac",
+            "x": 0.8186944749620225,
+            "y": 0.20778075324164497,
+            "w": 0.039535607231987846,
+            "h": 0.01844444274902344
+          },
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "footnote-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.13499999999999998,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 58,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.11666666666666667,
+          "min_chars": null,
+          "max_chars": 2566,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-3",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.16666666666666666,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.16666666666666666,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.16666666666666666,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 21,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 33,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-8",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 21,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 70,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-11",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.16666666666666666,
+          "min_chars": null,
+          "max_chars": 29,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.16666666666666666,
+          "min_chars": null,
+          "max_chars": 32,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-13",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.16666666666666666,
+          "min_chars": null,
+          "max_chars": 20,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        20
+      ],
+      "note": "17 frames read from page 20"
+    }
+  ],
+  "policy": {
+    "body_min_ratio": 0.021111111111111112,
+    "caption_min_ratio": 0.014444444444444446,
+    "display_min_ratio": 0.03333333333333333,
+    "absolute_floor_pt": 6.0
+  },
+  "body_face": "Guardian Sans TT",
+  "display_face": "Sanomat TT",
+  "mono_face": "Consolas"
+}

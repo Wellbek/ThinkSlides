@@ -166,6 +166,13 @@ class PageArchetype(_Model):
     label: str = ""
     role: Literal["cover", "section", "content", "exhibit", "closing", "appendix"] = "content"
     frequency: float = Field(default=0.0, ge=0.0, le=1.0)
+    # An archetype's own grid, when it has one the pack's does not describe.
+    # Measured across all five of EY's design pages, no single grid explains
+    # them: an executive-summary spread is on four columns, a chart page is
+    # on something else, and pooling the two recovers nothing. The grid is a
+    # property of the page pattern, not of the publication.
+    grid: Optional[GridSpec] = None
+    grid_confidence: Confidence = Confidence()
     frames: tuple[Frame, ...] = ()
     slots: tuple[SlotSpec, ...] = ()
     example_pages: tuple[int, ...] = ()
