@@ -25,7 +25,6 @@ from typing import Callable, Literal, Optional
 
 from app.design.geometry import check_page, resolve_page
 from app.design.pack import Pack
-from app.design.roles import type_role_for
 from app.design.schema import DesignDoc, Frame, Page, PatchOp, TextBlock
 
 Severity = Literal[1, 2, 3, 4, 5]
@@ -69,9 +68,13 @@ def overflow_findings(doc: DesignDoc, page: Page, pack: Pack) -> list[Finding]:
     for resolved in resolve_page(doc, page):
         frame = resolved.frame
         for block in _text_blocks(frame):
-            role = pack.type_roles.get(
-                type_role_for(frame.role, "text", pack)
-            )
+            # Read the role off the block, which is what the binder wrote and
+            # what the renderer will use. Re-deriving it here from the frame
+            # and a hardcoded "text" measured a pull-quote at body size: 16pt
+            # against the 32.4pt it is actually drawn at, so a block that
+            # overflowed its frame by 60% reported no finding at all and the
+            # repair loop had nothing to act on.
+            role = pack.type_roles.get(block.type_role)
             if role is None:
                 continue
             result = layout(
