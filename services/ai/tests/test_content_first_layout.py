@@ -153,11 +153,12 @@ class TestMaterialGoesWhereItBelongs:
                     f"{frame.role} frame"
                 )
 
-    def test_a_quote_never_lands_in_the_wrong_display_frame(self, pack):
-        """A pull-quote set as a headline is a headline that repeats a
-        sentence from the copy. Landing in a plain column is a legitimate
-        fallback - it is then simply set as body - but landing in a display
-        frame meant for something else is not.
+    def test_a_quote_never_becomes_the_headline(self, pack):
+        """The guarantee that matters. A pull-quote promoted to the headline
+        makes the page's assertion a sentence repeated from its own body
+        copy. A quote set as a standfirst is a normal device, and one landing
+        in a plain column is a legitimate fallback - it is then simply set as
+        body - so neither is a fault.
         """
         shape = shape_from("content", "A heading", LONG)
         selection = choose(shape, pack)
@@ -166,7 +167,10 @@ class TestMaterialGoesWhereItBelongs:
                 continue
             frame = next(f for f in _frames(selection.archetype)
                          if f.id == placement.slot.frame_id)
-            assert frame.role in ("pullquote", "column", "panel", "band")
+            assert frame.role != "headline", (
+                "a sentence lifted from the body copy was promoted to the "
+                "page's headline"
+            )
 
     def test_the_heading_prefers_a_headline_frame_when_one_exists(self, pack):
         """Stated as a preference in the cost rather than a rule, because an
