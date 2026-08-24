@@ -123,7 +123,8 @@ def layout(text: str, width_pt: float, height_pt: float, family: str,
            size_pt: float, *, line_height_pt: float = 0.0, bold: bool = False,
            italic: bool = False, tracking_per_mille: int = 0,
            first_baseline_pt: Optional[float] = None,
-           max_lines: Optional[int] = None) -> TextLayout:
+           max_lines: Optional[int] = None,
+           columns: int = 1, column_gap_pt: float = 12.0) -> TextLayout:
     """Set this text in this box, and say by how much it does not fit.
 
     Overflow is *reported*, never absorbed. The previous renderer's answer to
@@ -132,6 +133,14 @@ def layout(text: str, width_pt: float, height_pt: float, family: str,
     invisibly, so a page that was over-filled looked like a page that was
     correctly filled in slightly smaller type.
     """
+    # Setting in columns narrows the measure and multiplies the depth: the
+    # same copy in two columns wraps at half the width and needs half the
+    # height. Measuring it at full width reports a block that fits and draws
+    # one that overruns by a factor of two.
+    columns = max(1, int(columns))
+    if columns > 1:
+        width_pt = max(1.0, (width_pt - column_gap_pt * (columns - 1)) / columns)
+
     metrics = metrics_for(family, bold=bold, italic=italic)
     if line_height_pt <= 0:
         line_height_pt = (
@@ -161,7 +170,8 @@ def layout(text: str, width_pt: float, height_pt: float, family: str,
         boxes.append(LineBox(text=line, width_pt=width,
                              top_pt=baseline - ascent, baseline_pt=baseline))
 
-    used = (first - ascent) + len(raw) * line_height_pt if raw else 0.0
+    lines_per_column = -(-len(raw) // columns) if raw else 0
+    used = ((first - ascent) + lines_per_column * line_height_pt) if raw else 0.0
     return TextLayout(
         lines=tuple(boxes),
         height_pt=used,

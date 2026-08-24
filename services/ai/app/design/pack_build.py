@@ -90,6 +90,87 @@ def _page_blocks(page) -> list[dict]:
     return out
 
 
+def _merge_overlapping(blocks: list[dict], threshold: float = 0.25) -> list[dict]:
+    """Fuse text blocks that share space into the single slot they read as.
+
+    A PDF's text blocks overlap freely - a heading and its first line, a
+    label sitting inside a panel, two runs of one paragraph - and turning
+    each one into its own frame produces an archetype whose frames fight for
+    the same rectangle. What a reader sees as one area of type has to become
+    one slot, or every page built from the archetype has two blocks of copy
+    in the same place.
+    """
+    kept = [dict(b) for b in sorted(blocks, key=lambda b: -(b["w"] * b["h"]))]
+    # Merging two blocks can bring the result into contact with a third, so
+    # this runs to a fixed point rather than once over the list.
+    for _ in range(6):
+        merged_any = _merge_pass(kept, threshold)
+        if not merged_any:
+            break
+    return sorted(kept, key=lambda b: (b["y"], b["x"]))
+
+
+def _merge_pass(kept: list[dict], threshold: float) -> bool:
+    """One sweep. Returns whether anything merged."""
+    ordered = list(kept)
+    kept.clear()
+    changed = False
+    for block in ordered:
+        merged = False
+        for existing in kept:
+            overlap = _overlap_area(block, existing)
+            smaller = min(block["w"] * block["h"], existing["w"] * existing["h"])
+            if smaller > 0 and overlap / smaller > threshold:
+                right = max(existing["x"] + existing["w"], block["x"] + block["w"])
+                bottom = max(existing["y"] + existing["h"], block["y"] + block["h"])
+                existing["x"] = min(existing["x"], block["x"])
+                existing["y"] = min(existing["y"], block["y"])
+                existing["w"] = right - existing["x"]
+                existing["h"] = bottom - existing["y"]
+                existing["chars"] += block["chars"]
+                # The merged slot is named by its largest type, which is the
+                # role a reader would give the whole area.
+                existing["size"] = max(existing["size"], block["size"])
+                merged = True
+                changed = True
+                break
+        if not merged:
+            kept.append(dict(block))
+    return changed
+
+
+def _overlap_area(a: dict, b: dict) -> float:
+    dx = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
+    dy = min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"])
+    return dx * dy if dx > 0 and dy > 0 else 0.0
+
+
+# A slot holding more than this many characters is a column of copy, whatever
+# size the block that produced it happened to be set at.
+DISPLAY_MAX_CHARS = 180
+
+
+def _abstracted_role(block: dict, roles: dict[str, type_model.RungEvidence]) -> str:
+    """The role this slot plays, rather than the size it was traced at.
+
+    An archetype read straight off a page is a *trace*: every slot inherits
+    the exact size of the block that happened to be there. Reconstructing
+    that page works, because the same copy goes back into the same holes.
+    Generating against it does not - a three-hundred-character paragraph
+    bound into a slot traced from a thirty-point standfirst is set at thirty
+    points and swamps the page.
+    
+    So a slot's role is decided by what it *holds*, not by what it held. Only
+    a short slot can be a display role; anything carrying a paragraph is a
+    column of body copy however it was set in the reference.
+    """
+    role_name = _role_for_size(block["size"], roles)
+    if role_name in ("headline", "standfirst", "pullquote", "folio", "eyebrow"):
+        if block["chars"] > DISPLAY_MAX_CHARS:
+            return "body"
+    return role_name
+
+
 def _role_for_size(size: float, roles: dict[str, type_model.RungEvidence]) -> str:
     best, best_distance = "body", float("inf")
     for name, rung in roles.items():
@@ -128,20 +209,19 @@ def _archetype_for_page(page, page_number: int,
 
     structural = grammar_model.read_page(page, page_number)
     for index, region in enumerate(structural.regions):
+        rx, ry = _clamp(region.get("x", 0.0)), _clamp(region.get("y", 0.0))
+        rw, rh = _positive(region.get("w", 1.0)), _positive(region.get("h", 1.0))
         frames.append(Frame(
             id=f"{region.get('id') or f'region-{index}'}",
             role="rail" if region.get("kind") == "rail" else "panel",
-            place=FracPlace(
-                x=_clamp(region.get("x", 0.0)), y=_clamp(region.get("y", 0.0)),
-                w=_positive(region.get("w", 1.0)),
-                h=_positive(region.get("h", 1.0)),
-            ),
+            place=FracPlace(x=rx, y=ry, w=rw, h=rh),
+            bleed=_bleed_edges(rx, ry, rw, rh),
             ground=region.get("ground"),
             z=0,
         ))
 
-    for index, block in enumerate(_page_blocks(page)):
-        role_name = _role_for_size(block["size"], roles)
+    for index, block in enumerate(_merge_overlapping(_page_blocks(page))):
+        role_name = _abstracted_role(block, roles)
         frame_role = _FRAME_ROLE.get(role_name, "column")
         frame_id = f"{role_name}-{index}"
         frames.append(Frame(
@@ -154,7 +234,14 @@ def _archetype_for_page(page, page_number: int,
         slots.append(SlotSpec(
             frame_id=frame_id,
             accepts=("text",),
-            required=role_name in ("headline", "body"),
+            # Only the headline is required. An archetype read off a page
+            # with three body columns is not a template that demands three
+            # columns of copy - marking every one of them required means the
+            # archetype can only ever carry exactly what the page it came
+            # from carried, and nothing selects at all.
+            required=(role_name == "headline" and not any(
+                slot.required for slot in slots
+            )),
             prominence=min(1.0, block["size"] / 60.0),
             max_chars=max(20, int(block["chars"] * 1.4)),
         ))
@@ -162,12 +249,13 @@ def _archetype_for_page(page, page_number: int,
     for entry in page.get_images(full=True):
         for rect in page.get_image_rects(entry[0]):
             frame_id = f"figure-{len(frames)}"
+            fx, fy = _clamp(rect.x0 / width), _clamp(rect.y0 / height)
+            fw = _positive((rect.x1 - rect.x0) / width)
+            fh = _positive((rect.y1 - rect.y0) / height)
             frames.append(Frame(
                 id=frame_id, role="figure",
-                place=FracPlace(x=_clamp(rect.x0 / width),
-                                y=_clamp(rect.y0 / height),
-                                w=_positive((rect.x1 - rect.x0) / width),
-                                h=_positive((rect.y1 - rect.y0) / height)),
+                place=FracPlace(x=fx, y=fy, w=fw, h=fh),
+                bleed=_bleed_edges(fx, fy, fw, fh),
                 z=1,
             ))
             slots.append(SlotSpec(frame_id=frame_id, accepts=("figure",),
@@ -191,6 +279,29 @@ def _archetype_for_page(page, page_number: int,
         example_pages=(page_number,),
         note=f"{len(frames)} frames read from page {page_number}",
     )
+
+
+def _bleed_edges(x: float, y: float, w: float, h: float,
+                 tolerance: float = 0.005) -> tuple[str, ...]:
+    """Which edges of the trim this element reaches, and therefore bleeds off.
+
+    An element measured at 0.745..1.002 of the page width is not an element
+    that overshot by two thousandths; it is a panel that bleeds off the right
+    edge, which is how publications use the trim. Recording that as a bleed
+    rather than as an overshoot is what lets the frame be reproduced - and
+    what stops the geometry check from reporting a deliberate design device
+    as an error on every page that uses one.
+    """
+    edges = []
+    if x <= tolerance:
+        edges.append("left")
+    if y <= tolerance:
+        edges.append("top")
+    if x + w >= 1.0 - tolerance:
+        edges.append("right")
+    if y + h >= 1.0 - tolerance:
+        edges.append("bottom")
+    return tuple(edges)
 
 
 def _clamp(value: float) -> float:
