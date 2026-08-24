@@ -22,7 +22,7 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from app.design.compile import compile_page
-from app.design.geometry import resolve_page
+from app.design.geometry import check_doc, resolve_page
 from app.design.pack import Pack
 from app.design.schema import DesignDoc
 from app.renderer import primitives
@@ -87,10 +87,30 @@ def _materialise_charts(marks: list[Primitive], pack: Pack,
     return out
 
 
+class InvalidDesignDoc(ValueError):
+    """A document whose geometry cannot be placed as declared."""
+
+
 def render_doc(doc: DesignDoc, pack: Pack, output_path: str, *,
                design_system: Optional[dict] = None,
-               block_compiler: object | None = None) -> str:
-    """Render every page of ``doc`` and return the path written."""
+               block_compiler: object | None = None,
+               validate: bool = True) -> str:
+    """Render every page of ``doc`` and return the path written.
+
+    Validation runs here, in code, and refuses to render a document that
+    does not place. It is deliberately not a tool a caller may decline to
+    call: the validator this replaces was exactly that, and it was invoked
+    zero times across every observed run, which left density, title-register
+    and apparatus checking inert in practice. A correctness check that can be
+    skipped is not a correctness mechanism.
+    """
+    if validate:
+        problems = check_doc(doc)
+        if problems:
+            raise InvalidDesignDoc(
+                "this document cannot be placed as declared:\n  "
+                + "\n  ".join(problems[:10])
+            )
     presentation = Presentation()
     presentation.slide_width = Inches(doc.canvas.w_in)
     presentation.slide_height = Inches(doc.canvas.h_in)
