@@ -38,7 +38,7 @@ from app.design.pack import (
     SpacingScale,
     TypeRole,
 )
-from app.design.schema import Canvas, FracPlace, Frame, GridSpec, Insets
+from app.design.schema import Canvas, FracPlace, Frame, GridPlace, GridSpec, Insets
 from app.measure import color_roles as color_model
 from app.measure import grammar as grammar_model
 from app.measure import spacing as spacing_model
@@ -193,7 +193,8 @@ def _page_grid(page) -> object:
 
 def _archetype_for_page(page, page_number: int,
                         roles: dict[str, type_model.RungEvidence],
-                        canvas: Canvas, baseline_pt: float) -> PageArchetype:
+                        canvas: Canvas, baseline_pt: float,
+                        house_grid: Optional[GridSpec] = None) -> PageArchetype:
     """One page, read as a reusable pattern of frames.
 
     The structural regions come from ``grammar`` - the rails, panels and
@@ -263,6 +264,16 @@ def _archetype_for_page(page, page_number: int,
 
     label = ", ".join(structural.features) or "content"
     own_grid = _page_grid(page)
+    # Express content frames as column spans on whichever grid applies - the
+    # page's own where it has one, the house grid otherwise. A page with no
+    # recoverable grid of its own is exactly the page whose frames most need
+    # putting on one: left to its traced coordinates it aligns with nothing,
+    # including itself.
+    applied_grid = (_grid_spec(own_grid, canvas, baseline_pt)
+                    if own_grid is not None else house_grid)
+    if applied_grid is not None and applied_grid.columns > 1:
+        frames = [_snapped(frame, applied_grid, canvas, applied_grid)
+                  for frame in frames]
     return PageArchetype(
         id=f"page-{page_number}",
         label=label,
@@ -279,6 +290,47 @@ def _archetype_for_page(page, page_number: int,
         example_pages=(page_number,),
         note=f"{len(frames)} frames read from page {page_number}",
     )
+
+
+def _snapped(frame: Frame, _unused, canvas: Canvas,
+             page_grid: GridSpec) -> Frame:
+    """Re-express a traced content frame as a span of grid columns.
+
+    Nudging a traced frame onto the nearest track does not work, and it is
+    worth saying why: measured across one of EY's pages, not one of its
+    twenty-seven frames sat within two hundredths of a track, because the
+    grid is recovered from edge *mass* - a few large blocks decide it - while
+    most frames are small and sit wherever their copy happened to stop.
+
+    Alignment is most of what separates a typeset page from a slide: the
+    reference puts many elements on few vertical lines, and a literal trace
+    puts each one on its own. So a content frame is *rebuilt* as the column
+    span that best covers it, which puts it on the grid by construction
+    rather than by proximity.
+
+    Narrow furniture - a folio hung in the margin, a rule - keeps its
+    measured position: it was never on the grid in the first place.
+    """
+    place = frame.place
+    if not isinstance(place, FracPlace):
+        return frame
+    children = tuple(_snapped(c, _unused, canvas, page_grid)
+                     for c in frame.children)
+    column = page_grid.column_width_in(canvas) / canvas.w_in
+    if column <= 0 or place.w < column * 0.6:
+        return frame.model_copy(update={"children": children})
+
+    pitch = column + page_grid.gutter_in / canvas.w_in
+    margin = page_grid.margin.left / canvas.w_in
+    start = max(0, min(page_grid.columns - 1,
+                       int(round((place.x - margin) / pitch))))
+    span = max(1, min(page_grid.columns - start,
+                      int(round((place.w + page_grid.gutter_in / canvas.w_in)
+                                / pitch))))
+    return frame.model_copy(update={
+        "place": GridPlace(col=start, span=span, y=place.y, h=place.h),
+        "children": children,
+    })
 
 
 def _bleed_edges(x: float, y: float, w: float, h: float,
@@ -352,10 +404,20 @@ def from_pdf(pdf_path: str, pages: Sequence[int], *, pack_id: str,
 
     grid_spec = _grid_spec(grid, canvas, baseline_pt)
     type_map = _type_roles(roles, palette, base_pt)
+    # Built twice on purpose: the house grid is the one the pages agree on,
+    # which is not known until every page has been read, and pages with no
+    # grid of their own have to be expressed on it.
     archetypes = tuple(
         _archetype_for_page(page, number, roles, canvas, baseline_pt)
         for number, page in sample
     )
+    house = _grid_spec(grid, canvas, baseline_pt) if grid else _modal_grid(archetypes)[0]
+    if house is not None:
+        archetypes = tuple(
+            _archetype_for_page(page, number, roles, canvas, baseline_pt,
+                                house_grid=house)
+            for number, page in sample
+        )
     # The pack's grid is the one its pages most often agree on. Pooling every
     # page's edges and fitting once finds nothing, because the pages are not
     # all on the same grid; asking each page and taking the mode finds the
