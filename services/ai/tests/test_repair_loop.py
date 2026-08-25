@@ -207,3 +207,133 @@ class TestValidationCannotBeSkipped:
         out = str(tmp_path / "out.pptx")
         render_doc(doc, pack, out)
         assert os.path.exists(out)
+
+
+class TestAnAmbiguousOverlapCarriesItsOwnFix:
+    """The renderer refuses a document whose frames overlap at the same depth,
+    so a finding without a patch is a page the run cannot ship. That is not
+    hypothetical: a six-slide deck composed seven pages and rendered none of
+    them, because the packs are traced from real pages and some traces put two
+    content frames on top of each other."""
+
+    def _overlapping(self, pack):
+        page = Page(id="p", archetype="test", frames=(
+            Frame(id="a", role="column",
+                  place=FracPlace(x=0.1, y=0.1, w=0.5, h=0.5), z=2,
+                  content=(TextBlock(type_role="body", paragraphs=(
+                      Paragraph(runs=(Run(text="One."),)),
+                  )),)),
+            Frame(id="b", role="column",
+                  place=FracPlace(x=0.3, y=0.3, w=0.5, h=0.5), z=2,
+                  content=(TextBlock(type_role="body", paragraphs=(
+                      Paragraph(runs=(Run(text="Two."),)),
+                  )),)),
+        ))
+        doc = DesignDoc(pack=PackRef(id=pack.id), canvas=pack.canvas,
+                        grid=pack.grid, pages=(page,))
+        return doc, page
+
+    def test_the_overlap_is_reported(self, pack):
+        doc, page = self._overlapping(pack)
+        assert any(f.property == "geometry" for f in diagnose(doc, page, pack))
+
+    def test_the_finding_knows_what_to_do_about_it(self, pack):
+        doc, page = self._overlapping(pack)
+        finding = next(f for f in diagnose(doc, page, pack)
+                       if f.property == "geometry")
+        assert finding.patch is not None
+        assert finding.patch.op == "set_z"
+
+    def test_repairing_it_makes_the_page_placeable(self, pack):
+        from app.design.geometry import check_page
+
+        doc, page = self._overlapping(pack)
+        assert check_page(doc, page)
+        result = repair(doc, page, pack)
+        repaired_doc = doc.model_copy(update={"pages": (result.page,)})
+        assert check_page(repaired_doc, result.page) == []
+
+    def test_the_later_frame_is_the_one_lifted(self, pack):
+        """Either resolves the ambiguity; lifting the later one is the
+        convention that matches how the frames were declared."""
+        doc, page = self._overlapping(pack)
+        result = repair(doc, page, pack)
+        assert result.page.frame_by_id("b").z > result.page.frame_by_id("a").z
+
+    def test_a_frame_escaping_the_page_gets_no_invented_fix(self, pack):
+        """A different fault with a different answer. A patch here would be
+        the repair loop pretending to fix something."""
+        page = Page(id="p", archetype="test", frames=(
+            Frame(id="gone", role="column",
+                  place=FracPlace(x=1.4, y=1.4, w=0.5, h=0.5)),
+        ))
+        doc = DesignDoc(pack=PackRef(id=pack.id), canvas=pack.canvas,
+                        grid=pack.grid, pages=(page,))
+        findings = [f for f in diagnose(doc, page, pack)
+                    if f.property == "geometry"]
+        assert findings
+        assert all(f.patch is None for f in findings)
+
+
+class TestOverflowHasAMoveThatActuallyHelps:
+    """`set_columns` was the only answer to overset copy, and it is usually
+    the wrong one: a narrower measure produces disproportionately more lines,
+    so splitting a 500pt column in three takes a block from 360pt deep to
+    405pt. The gate then rejected it and the page shipped with its copy
+    running over the block beneath - text overlapping text in a rendered
+    deck, on a page that passed geometry validation."""
+
+    def test_the_patch_steps_down_the_pack_s_own_ramp(self, pack):
+        from app.design.repair import _next_smaller_role
+
+        assert _next_smaller_role(pack, "headline") is not None
+        smaller = _next_smaller_role(pack, "body")
+        if smaller is not None:
+            assert pack.role(smaller).size_pt < pack.role("body").size_pt
+
+    def test_the_smallest_rung_has_nowhere_to_go(self, pack):
+        from app.design.repair import _next_smaller_role
+
+        smallest = min(pack.type_roles, key=lambda n: pack.role(n).size_pt)
+        assert _next_smaller_role(pack, smallest) is None
+
+    def test_an_overset_block_is_offered_a_smaller_setting(self, pack):
+        doc, page = _overset_doc(pack)
+        finding = next(f for f in diagnose(doc, page, pack)
+                       if f.property == "overflow")
+        assert finding.patch is not None
+        assert finding.patch.op in ("set_type_role", "set_columns")
+
+    def test_setting_a_frame_smaller_changes_only_that_frame(self, pack):
+        doc, page = _overset_doc(pack)
+        smaller = min(pack.type_roles, key=lambda n: pack.role(n).size_pt)
+        result = apply_patch(page, PatchOp(
+            op="set_type_role",
+            args={"frame_id": "tiny", "type_role": smaller},
+        ))
+        block = result.frame_by_id("tiny").content[0]
+        assert block.type_role == smaller
+        assert page.frame_by_id("tiny").content[0].type_role == "body"
+
+    def test_the_gate_still_refuses_a_step_that_costs_more_than_it_saves(
+            self, pack):
+        """Stepping below the pack's legibility floor raises a legibility
+        finding, which raises the score, which the monotone gate refuses. The
+        mechanism that keeps a repair honest keeps it legible for free."""
+        doc, page = _overset_doc(pack)
+        result = repair(doc, page, pack)
+        assert result.after <= result.before
+
+    def test_a_real_page_that_oversets_is_repaired_where_it_can_be(self, pack):
+        from app.design.run import compose
+        from app.design.repair import diagnose as _diagnose
+
+        slides = [{"slideIndex": 0, "role": "content", "contents": [
+            {"type": "text", "runs": [{"text": "Cyber risks in 2026"}]},
+            {"type": "text", "runs": [{"text": line} for line in LONG]},
+        ]}]
+        composed = compose(slides, pack)
+        for page in composed.pages:
+            findings = _diagnose(composed, page, pack)
+            # Either the page is clean, or the loop tried and the gate held.
+            assert all(f.severity <= 5 for f in findings)

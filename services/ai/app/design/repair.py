@@ -97,23 +97,98 @@ def overflow_findings(doc: DesignDoc, page: Page, pack: Pack) -> list[Finding]:
                     # column in three takes a block from 360pt deep to 405pt.
                     # The monotone gate rejects it when that happens, which
                     # is the gate doing its job rather than a wasted round.
-                    patch=PatchOp(
-                        op="set_columns",
-                        args={"frame_id": frame.id,
-                              "columns": min(3, block.columns + 1)},
-                        reason="try more columns; kept only if the page improves",
-                    ),
+                    patch=_overflow_patch(pack, frame, block),
                 ))
     return findings
 
 
-def geometry_findings(doc: DesignDoc, page: Page) -> list[Finding]:
-    """Frames that overlap ambiguously or escape the page."""
-    return [
-        Finding(frame_id=_frame_in(problem), property="geometry",
-                observed=problem, expected="a placeable frame", severity=4)
-        for problem in check_page(doc, page)
+def _next_smaller_role(pack: Pack, current: str) -> Optional[str]:
+    """The largest rung of this pack's ramp below the one in use."""
+    here = pack.type_roles.get(current)
+    if here is None:
+        return None
+    smaller = [
+        (role.size_pt, name) for name, role in pack.type_roles.items()
+        if role.size_pt < here.size_pt
     ]
+    return max(smaller)[1] if smaller else None
+
+
+def _overflow_patch(pack: Pack, frame: Frame, block) -> PatchOp:
+    """What to try when a block does not fit the frame it is bound to.
+
+    Setting the copy one rung smaller is the move a typesetter makes, and it
+    is the one that actually helps: more columns produces disproportionately
+    more lines, so splitting a 500pt column in three takes a block from 360pt
+    deep to 405pt. Columns remain the fallback for a pack whose ramp has
+    nothing below the rung already in use.
+
+    Neither is applied on trust. The loop keeps a round only when the page's
+    score falls, so a step down that costs more in legibility than it saves
+    in overflow is reverted.
+    """
+    smaller = _next_smaller_role(pack, block.type_role)
+    if smaller is not None:
+        return PatchOp(
+            op="set_type_role",
+            args={"frame_id": frame.id, "type_role": smaller},
+            reason=f"set this copy at {smaller} so it fits; kept only if the "
+                   "page improves and stays above the pack's legibility floor",
+        )
+    return PatchOp(
+        op="set_columns",
+        args={"frame_id": frame.id, "columns": min(3, block.columns + 1)},
+        reason="try more columns; kept only if the page improves",
+    )
+
+
+def geometry_findings(doc: DesignDoc, page: Page) -> list[Finding]:
+    """Frames that overlap ambiguously or escape the page.
+
+    An ambiguous overlap carries its own fix. It has to: the renderer refuses
+    to place a document with one, so a page that reaches here without a patch
+    is a page the run cannot ship - and that is not hypothetical, it is how a
+    six-slide deck composed seven pages and then rendered none of them. The
+    packs are traced from real pages and some of those traces put two content
+    frames on top of each other; until they are rebuilt (#275) the repair loop
+    has to be able to say which one is in front.
+    """
+    findings = []
+    for problem in check_page(doc, page):
+        findings.append(Finding(
+            frame_id=_frame_in(problem), property="geometry",
+            observed=problem, expected="a placeable frame", severity=4,
+            patch=_depth_patch(page, problem),
+        ))
+    return findings
+
+
+def _depth_patch(page: Page, problem: str) -> Optional[PatchOp]:
+    """Lift the second of two frames that overlap at the same depth.
+
+    Only for overlap: a frame escaping the canvas is a different fault with a
+    different answer, and inventing a patch for it would be the repair loop
+    pretending to fix something.
+    """
+    if "overlap" not in problem:
+        return None
+    named = _frames_in(problem)
+    if len(named) < 2:
+        return None
+    frame = page.frame_by_id(named[1])
+    if frame is None:
+        return None
+    return PatchOp(
+        op="set_z",
+        args={"frame_id": named[1], "z": frame.z + 1},
+        reason="two frames overlap at the same depth; lift the later one so "
+               "the page says which is in front",
+    )
+
+
+def _frames_in(problem: str) -> list[str]:
+    """Every quoted frame id in a geometry message, in order."""
+    return problem.split("'")[1::2]
 
 
 def legibility_findings(page: Page, pack: Pack) -> list[Finding]:
@@ -202,6 +277,29 @@ def _drop_content(page: Page, args: dict) -> Page:
     return page.model_copy(update={"frames": _map_frames(page.frames, apply)})
 
 
+def _set_type_role(page: Page, args: dict) -> Page:
+    """Set one frame's text in a different rung of the pack's ramp.
+
+    The floor is not checked here, and does not need to be: setting a block
+    below what the pack considers legible raises a legibility finding, which
+    raises the score, which the monotone gate then refuses. The mechanism
+    that keeps a repair honest is the same one that keeps it legible.
+    """
+    frame_id = args["frame_id"]
+    role = str(args["type_role"])
+
+    def apply(frame: Frame) -> Frame:
+        if frame.id != frame_id or not frame.content:
+            return frame
+        return frame.model_copy(update={"content": tuple(
+            item.model_copy(update={"type_role": role})
+            if isinstance(item, TextBlock) else item
+            for item in frame.content
+        )})
+
+    return page.model_copy(update={"frames": _map_frames(page.frames, apply)})
+
+
 def _set_ground(page: Page, args: dict) -> Page:
     target, ground = args.get("frame_id"), str(args.get("ground") or "")
 
@@ -224,6 +322,7 @@ def _set_z(page: Page, args: dict) -> Page:
 
 PATCHES: dict[str, PatchFn] = {
     "set_columns": _set_columns,
+    "set_type_role": _set_type_role,
     "drop_content": _drop_content,
     "set_ground": _set_ground,
     "set_z": _set_z,
