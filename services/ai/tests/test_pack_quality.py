@@ -123,6 +123,69 @@ class TestEverySlotCanHoldTheTypeItIsSetIn:
             )
 
 
+class TestNoArchetypePlacesTwoFramesOnEachOther:
+    """The renderer refuses a document whose sibling frames overlap at the
+    same depth, so a pack carrying one composes pages that cannot ship. A
+    six-slide deck once composed seven pages and rendered none of them.
+
+    Overlap at *differing* depth is legitimate and is how publication pages
+    are built - type over an image, a figure under its caption - so this is
+    about ambiguity, not about overlap."""
+
+    def test_every_archetype_is_placeable(self, pack):
+        from app.design.geometry import check_page
+        from app.design.schema import DesignDoc, PackRef, Page
+
+        for archetype in pack.archetypes:
+            page = Page(id="p", archetype=archetype.id, grid=archetype.grid,
+                        frames=archetype.frames)
+            doc = DesignDoc(pack=PackRef(id=pack.id), canvas=pack.canvas,
+                            grid=archetype.grid or pack.grid, pages=(page,))
+            ambiguous = [p for p in check_page(doc, page) if "overlap" in p]
+            assert not ambiguous, f"{pack.id}/{archetype.id}: {ambiguous[0]}"
+
+    def test_a_feature_the_grammar_noticed_is_not_a_frame(self, pack):
+        """`exhibit` and `grid` are things the grammar reader *observed about*
+        a page, not areas of it. Emitted as frames they covered the whole
+        canvas, painted nothing, and collided with every real panel beneath
+        them - 100% overlap on WTI page 4. The observation lives in the
+        archetype's label instead."""
+        for archetype in pack.archetypes:
+            slotted = {slot.frame_id for slot in archetype.slots}
+            for frame in archetype.frames:
+                if frame.role not in ("panel", "rail", "band", "banner",
+                                      "bandRow", "grid"):
+                    continue
+                assert frame.ground or frame.scrim or frame.children \
+                    or frame.id in slotted, (
+                        f"{pack.id}/{archetype.id}/{frame.id} paints nothing "
+                        f"and holds nothing"
+                    )
+
+    def test_snapping_never_widens_a_frame_onto_its_neighbour(self, pack):
+        """Snapping rebuilds a traced frame as the column span that best
+        covers it, which is most of what puts a page on a grid - and which
+        widened a frame from 2.9in of ink to a full 5.4in column, straight
+        into whatever was beside it."""
+        from app.design.pack_build import (
+            SNAP_COLLISION_TOLERANCE, _overlap_share, _rect_of,
+        )
+
+        for archetype in pack.archetypes:
+            grid = archetype.grid or pack.grid
+            frames = list(archetype.frames)
+            for index, one in enumerate(frames):
+                for two in frames[index + 1:]:
+                    if one.z != two.z:
+                        continue
+                    share = _overlap_share(_rect_of(one, pack.canvas, grid),
+                                           _rect_of(two, pack.canvas, grid))
+                    assert share <= SNAP_COLLISION_TOLERANCE + 1e-6, (
+                        f"{pack.id}/{archetype.id}: {one.id} and {two.id} "
+                        f"share {share:.0%} at z={one.z}"
+                    )
+
+
 class TestAPageOfApparatusIsNotAContentArchetype:
     """BXSL's page 20 is an endnotes page. Its only text frames are captions
     and footnotes, so a deck bound to it had every paragraph set at seven

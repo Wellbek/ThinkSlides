@@ -178,22 +178,18 @@
       },
       "frames": [
         {
-          "id": "exhibit",
-          "role": "panel",
+          "id": "figure-0",
+          "role": "figure",
           "place": {
-            "kind": "grid",
-            "col": 1,
-            "span": 6,
-            "row": null,
-            "row_span": null,
-            "y": -0.1167,
-            "h": 0.0625
+            "kind": "frac",
+            "x": 0.050770833757188584,
+            "y": 0.4454259236653646,
+            "w": 0.19499998092651366,
+            "h": 0.1731111314561632
           },
           "type_role": null,
-          "z": 0,
-          "bleed": [
-            "top"
-          ],
+          "z": 1,
+          "bleed": [],
           "pad": null,
           "ground": null,
           "scrim": null,
@@ -205,13 +201,11 @@
           "id": "figure-1",
           "role": "figure",
           "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 2,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.5007222069634332,
             "y": 0.4454259236653646,
-            "h": 0.1731111314561632
+            "w": 0.1945694393581814,
+            "h": 0.17333334463614006
           },
           "type_role": null,
           "z": 1,
@@ -227,12 +221,10 @@
           "id": "figure-2",
           "role": "figure",
           "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 2,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.27595833672417536,
             "y": 0.4454259236653646,
+            "w": 0.1945694393581814,
             "h": 0.17333334463614006
           },
           "type_role": null,
@@ -247,28 +239,6 @@
         },
         {
           "id": "figure-3",
-          "role": "figure",
-          "place": {
-            "kind": "grid",
-            "col": 2,
-            "span": 2,
-            "row": null,
-            "row_span": null,
-            "y": 0.4454259236653646,
-            "h": 0.17333334463614006
-          },
-          "type_role": null,
-          "z": 1,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-4",
           "role": "figure",
           "place": {
             "kind": "grid",
@@ -337,13 +307,11 @@
           "id": "body-2",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 2,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.05483333269755045,
             "y": 0.24592482955367476,
-            "h": 0.057971014492753624
+            "w": 0.16555143462287056,
+            "h": 0.057111076072410304
           },
           "type_role": null,
           "z": 2,
@@ -359,13 +327,11 @@
           "id": "body-3",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 2,
-            "span": 2,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.2701666726006402,
             "y": 0.24592482955367476,
-            "h": 0.057971014492753624
+            "w": 0.1682016796535916,
+            "h": 0.057111076072410304
           },
           "type_role": null,
           "z": 2,
@@ -468,6 +434,19 @@
       ],
       "slots": [
         {
+          "frame_id": "figure-0",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
           "frame_id": "figure-1",
           "accepts": [
             "figure"
@@ -495,19 +474,6 @@
         },
         {
           "frame_id": "figure-3",
-          "accepts": [
-            "figure"
-          ],
-          "required": false,
-          "prominence": 0.6,
-          "min_chars": null,
-          "max_chars": null,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "figure-4",
           "accepts": [
             "figure"
           ],
@@ -627,7 +593,7 @@
       "example_pages": [
         4
       ],
-      "note": "13 frames read from page 4, set aside: 5 too narrow to set copy in"
+      "note": "12 frames read from page 4, set aside: 5 too narrow to set copy in"
     },
     {
       "id": "page-8",
@@ -654,37 +620,13 @@
       },
       "frames": [
         {
-          "id": "exhibit",
-          "role": "panel",
-          "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 3,
-            "row": null,
-            "row_span": null,
-            "y": 0.3027,
-            "h": 0.4199
-          },
-          "type_role": null,
-          "z": 0,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
           "id": "body-1",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 3,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.04940000110202365,
             "y": 0.08002667603669343,
+            "w": 0.8995944446987576,
             "h": 0.11978814160382306
           },
           "type_role": null,
@@ -701,12 +643,10 @@
           "id": "body-2",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 3,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.04940000110202365,
             "y": 0.21339871441876446,
+            "w": 0.7689296192593045,
             "h": 0.030396468551070602
           },
           "type_role": null,
@@ -1095,7 +1035,7 @@
       "example_pages": [
         8
       ],
-      "note": "13 frames read from page 8, set aside: 3 too narrow to set copy in"
+      "note": "12 frames read from page 8, set aside: 3 too narrow to set copy in"
     },
     {
       "id": "page-12",
@@ -1121,50 +1061,6 @@
         "note": "5 columns on this page"
       },
       "frames": [
-        {
-          "id": "bands",
-          "role": "panel",
-          "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 5,
-            "row": null,
-            "row_span": null,
-            "y": 0.6677,
-            "h": 0.2129
-          },
-          "type_role": null,
-          "z": 0,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "exhibit",
-          "role": "panel",
-          "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 5,
-            "row": null,
-            "row_span": null,
-            "y": 0.7721,
-            "h": 0.1324
-          },
-          "type_role": null,
-          "z": 0,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
         {
           "id": "caption-0",
           "role": "caption",
@@ -1521,7 +1417,7 @@
       "example_pages": [
         12
       ],
-      "note": "12 frames read from page 12, set aside: 7 too narrow to set copy in"
+      "note": "10 frames read from page 12, set aside: 7 too narrow to set copy in"
     },
     {
       "id": "page-16",
@@ -1547,28 +1443,6 @@
         "note": "2 columns on this page"
       },
       "frames": [
-        {
-          "id": "exhibit",
-          "role": "panel",
-          "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 2,
-            "row": null,
-            "row_span": null,
-            "y": 0.3448,
-            "h": 0.3807
-          },
-          "type_role": null,
-          "z": 0,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
         {
           "id": "caption-0",
           "role": "caption",
@@ -1617,13 +1491,11 @@
           "id": "headline-2",
           "role": "headline",
           "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 2,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.0798999998304579,
             "y": 0.22150111728244357,
-            "h": 0.07326892109500804
+            "w": 0.7030859417385525,
+            "h": 0.0674074074074074
           },
           "type_role": null,
           "z": 2,
@@ -1818,7 +1690,7 @@
       "example_pages": [
         16
       ],
-      "note": "8 frames read from page 16, set aside: 4 too narrow to set copy in"
+      "note": "7 frames read from page 16, set aside: 4 too narrow to set copy in"
     },
     {
       "id": "page-20",
@@ -1891,28 +1763,6 @@
           ],
           "pad": null,
           "ground": "#FFFFFF",
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "exhibit",
-          "role": "panel",
-          "place": {
-            "kind": "grid",
-            "col": 6,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.1739,
-            "h": 0.507
-          },
-          "type_role": null,
-          "z": 0,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
           "scrim": null,
           "clip": false,
           "children": [],
@@ -2064,7 +1914,7 @@
       "example_pages": [
         20
       ],
-      "note": "7 frames read from page 20, set aside: 6 too narrow to set copy in"
+      "note": "6 frames read from page 20, set aside: 6 too narrow to set copy in"
     }
   ],
   "policy": {

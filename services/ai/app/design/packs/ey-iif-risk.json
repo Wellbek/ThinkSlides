@@ -191,33 +191,7 @@
       },
       "frames": [
         {
-          "id": "exhibit",
-          "role": "panel",
-          "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": -0.001,
-            "h": 1.0019
-          },
-          "type_role": null,
-          "z": 0,
-          "bleed": [
-            "top",
-            "right",
-            "bottom"
-          ],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-1",
+          "id": "figure-0",
           "role": "figure",
           "place": {
             "kind": "grid",
@@ -243,7 +217,7 @@
           "content": []
         },
         {
-          "id": "figure-2",
+          "id": "figure-1",
           "role": "figure",
           "place": {
             "kind": "grid",
@@ -443,7 +417,7 @@
       ],
       "slots": [
         {
-          "frame_id": "figure-1",
+          "frame_id": "figure-0",
           "accepts": [
             "figure"
           ],
@@ -456,7 +430,7 @@
           "aspect_max": null
         },
         {
-          "frame_id": "figure-2",
+          "frame_id": "figure-1",
           "accepts": [
             "figure"
           ],
@@ -576,7 +550,7 @@
       "example_pages": [
         4
       ],
-      "note": "11 frames read from page 4, set aside: 2 in a figure"
+      "note": "10 frames read from page 4, set aside: 2 in a figure"
     },
     {
       "id": "page-8",
@@ -640,29 +614,7 @@
           "content": []
         },
         {
-          "id": "exhibit",
-          "role": "panel",
-          "place": {
-            "kind": "grid",
-            "col": 2,
-            "span": 2,
-            "row": null,
-            "row_span": null,
-            "y": 0.0407,
-            "h": 0.9205
-          },
-          "type_role": null,
-          "z": 0,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-3",
+          "id": "figure-2",
           "role": "figure",
           "place": {
             "kind": "grid",
@@ -687,13 +639,11 @@
           "id": "body-0",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 4,
-            "row": null,
-            "row_span": null,
-            "y": -0.0001525313765914352,
-            "h": 0.7820048309178744
+            "kind": "frac",
+            "x": 0.043452290693918864,
+            "y": 0.0,
+            "w": 0.9099381486574809,
+            "h": 0.739223791051794
           },
           "type_role": null,
           "z": 2,
@@ -709,13 +659,11 @@
           "id": "body-1",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 1,
-            "span": 1,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.28137089411417643,
             "y": 0.7390712596752026,
-            "h": 0.15539262559678818
+            "w": 0.18552074432373047,
+            "h": 0.15555555555555556
           },
           "type_role": null,
           "z": 2,
@@ -730,7 +678,7 @@
       ],
       "slots": [
         {
-          "frame_id": "figure-3",
+          "frame_id": "figure-2",
           "accepts": [
             "figure"
           ],
@@ -772,7 +720,7 @@
       "example_pages": [
         8
       ],
-      "note": "6 frames read from page 8"
+      "note": "5 frames read from page 8"
     },
     {
       "id": "page-12",
@@ -812,12 +760,10 @@
           "id": "body-2",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 1,
-            "span": 3,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.3638930320739746,
             "y": 0.14958007247359664,
+            "w": 0.553936227162679,
             "h": 0.0441166913067853
           },
           "type_role": null,
@@ -834,13 +780,11 @@
           "id": "body-3",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 1,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.04475249846776327,
             "y": 0.15023783931025753,
-            "h": 0.13595558449074074
+            "w": 0.2817400018374125,
+            "h": 0.13611111111111113
           },
           "type_role": null,
           "z": 2,
@@ -1014,7 +958,7 @@
             "x": 0.6886878967285156,
             "y": 0.50111083984375,
             "w": 0.10623188018798828,
-            "h": 0.03888888888888889
+            "h": 0.037037037037036966
           },
           "type_role": null,
           "z": 2,
@@ -1116,13 +1060,11 @@
           "id": "body-19",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 1,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.04475249846776327,
             "y": 0.79586752432364,
-            "h": 0.13595558449074074
+            "w": 0.2768466035525004,
+            "h": 0.13611111111111113
           },
           "type_role": null,
           "z": 2,
@@ -1363,51 +1305,7 @@
       },
       "frames": [
         {
-          "id": "grid",
-          "role": "panel",
-          "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 4,
-            "row": null,
-            "row_span": null,
-            "y": 0.5876,
-            "h": 0.2148
-          },
-          "type_role": null,
-          "z": 0,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "exhibit",
-          "role": "panel",
-          "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.149,
-            "h": 0.3892
-          },
-          "type_role": null,
-          "z": 0,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-2",
+          "id": "figure-0",
           "role": "figure",
           "place": {
             "kind": "grid",
@@ -1513,26 +1411,6 @@
           "content": []
         },
         {
-          "id": "body-5",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.6993449529012045,
-            "y": 0.26249980220088254,
-            "w": 0.08076864878336588,
-            "h": 0.019444444444444445
-          },
-          "type_role": null,
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
           "id": "body-9",
           "role": "column",
           "place": {
@@ -1573,26 +1451,6 @@
           "content": []
         },
         {
-          "id": "body-11",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.37581164042154946,
-            "y": 0.37993686817310474,
-            "w": 0.10175164540608723,
-            "h": 0.019444444444444445
-          },
-          "type_role": null,
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
           "id": "body-12",
           "role": "column",
           "place": {
@@ -1600,7 +1458,7 @@
             "x": 0.35887832641601564,
             "y": 0.3984553866916233,
             "w": 0.11867914199829102,
-            "h": 0.03888888888888889
+            "h": 0.03703703703703702
           },
           "type_role": null,
           "z": 2,
@@ -1744,13 +1602,11 @@
           "id": "body-20",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 1,
-            "span": 1,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.3449238141377767,
             "y": 0.627551778157552,
-            "h": 0.17482966670283565
+            "w": 0.27601321538289386,
+            "h": 0.175
           },
           "type_role": null,
           "z": 2,
@@ -1788,13 +1644,11 @@
           "id": "body-22",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 1,
-            "span": 1,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.3449238141377767,
             "y": 0.8149888215241609,
-            "h": 0.12681159420289853
+            "w": 0.26896912256876626,
+            "h": 0.11666666666666667
           },
           "type_role": null,
           "z": 2,
@@ -1809,7 +1663,7 @@
       ],
       "slots": [
         {
-          "frame_id": "figure-2",
+          "frame_id": "figure-0",
           "accepts": [
             "figure"
           ],
@@ -1874,19 +1728,6 @@
           "aspect_max": null
         },
         {
-          "frame_id": "body-5",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 20,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
           "frame_id": "body-9",
           "accepts": [
             "text"
@@ -1908,19 +1749,6 @@
           "prominence": 0.26666666666666666,
           "min_chars": null,
           "max_chars": 60,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-11",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 25,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2059,7 +1887,7 @@
       "example_pages": [
         16
       ],
-      "note": "21 frames read from page 16, set aside: 5 too narrow to set copy in"
+      "note": "17 frames read from page 16, set aside: 5 too narrow to set copy in, 2 lying under another frame"
     },
     {
       "id": "page-20",
@@ -2074,29 +1902,7 @@
       },
       "frames": [
         {
-          "id": "exhibit",
-          "role": "panel",
-          "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.149,
-            "h": 0.3892
-          },
-          "type_role": null,
-          "z": 0,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-1",
+          "id": "figure-0",
           "role": "figure",
           "place": {
             "kind": "grid",
@@ -2121,12 +1927,10 @@
           "id": "pullquote-0",
           "role": "pullquote",
           "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 4,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.04475088516871135,
             "y": 0.06283334096272787,
+            "w": 0.9086395541826884,
             "h": 0.053625156261302806
           },
           "type_role": null,
@@ -2187,13 +1991,11 @@
           "id": "body-3",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 1,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.6666860580444336,
             "y": 0.226203042489511,
-            "h": 0.021135265700483092
+            "w": 0.12509848276774088,
+            "h": 0.019444444444444445
           },
           "type_role": null,
           "z": 2,
@@ -2233,9 +2035,9 @@
           "place": {
             "kind": "frac",
             "x": 0.6824527104695638,
-            "y": 0.24472156100802953,
+            "y": 0.24564748693395544,
             "w": 0.10933335622151692,
-            "h": 0.03888888888888889
+            "h": 0.037962962962962976
           },
           "type_role": null,
           "z": 2,
@@ -2295,13 +2097,11 @@
           "id": "body-9",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 1,
-            "span": 1,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.36544698079427085,
             "y": 0.3799212137858073,
-            "h": 0.042270531400966184
+            "w": 0.2486666997273763,
+            "h": 0.03703703703703702
           },
           "type_role": null,
           "z": 2,
@@ -2407,7 +2207,7 @@
             "row": null,
             "row_span": null,
             "y": 0.49115984881365743,
-            "h": 0.042270531400966184
+            "h": 0.039488940154488734
           },
           "type_role": null,
           "z": 2,
@@ -2529,13 +2329,11 @@
           "id": "body-22",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 1,
-            "span": 3,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.34492565790812174,
             "y": 0.6752339115849247,
-            "h": 0.10567632850241547
+            "w": 0.5950995445251465,
+            "h": 0.09722222222222224
           },
           "type_role": null,
           "z": 2,
@@ -2573,13 +2371,11 @@
           "id": "body-24",
           "role": "column",
           "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 1,
-            "row": null,
-            "row_span": null,
+            "kind": "frac",
+            "x": 0.06606380144755046,
             "y": 0.8017184222186053,
-            "h": 0.10567632850241547
+            "w": 0.24750170707702637,
+            "h": 0.09722222222222224
           },
           "type_role": null,
           "z": 2,
@@ -2594,7 +2390,7 @@
       ],
       "slots": [
         {
-          "frame_id": "figure-1",
+          "frame_id": "figure-0",
           "accepts": [
             "figure"
           ],
@@ -2896,7 +2692,7 @@
       "example_pages": [
         20
       ],
-      "note": "24 frames read from page 20, set aside: 3 too narrow to set copy in"
+      "note": "23 frames read from page 20, set aside: 3 too narrow to set copy in"
     }
   ],
   "policy": {

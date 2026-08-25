@@ -328,6 +328,15 @@ def _archetype_for_page(page, page_number: int,
 
     structural = grammar_model.read_page(page, page_number)
     for index, region in enumerate(structural.regions):
+        if not region.get("ground"):
+            # A region that paints nothing and holds nothing is a *feature*
+            # the grammar reader noticed - "this page has an exhibit on it",
+            # "this page is on a grid" - not an area of the page. Emitted as a
+            # frame it covers the whole canvas, renders nothing, and collides
+            # with every real panel underneath it at the same depth: `grid`
+            # and `exhibit` overlapped `panel-0` by 100% on WTI page 4. The
+            # feature is already recorded in this archetype's label.
+            continue
         rx, ry = _clamp(region.get("x", 0.0)), _clamp(region.get("y", 0.0))
         rw, rh = _positive(region.get("w", 1.0)), _positive(region.get("h", 1.0))
         frames.append(Frame(
@@ -410,8 +419,7 @@ def _archetype_for_page(page, page_number: int,
     applied_grid = (_grid_spec(own_grid, canvas, baseline_pt)
                     if own_grid is not None else house_grid)
     if applied_grid is not None and applied_grid.columns > 1:
-        frames = [_snapped(frame, applied_grid, canvas, applied_grid)
-                  for frame in frames]
+        frames = _snap_all(frames, canvas, applied_grid)
     # Only now is a frame's real size known: snapping re-expresses it as a
     # span of columns, which can be narrower than the ink that was traced.
     frames, slots, dropped = _enforce_slot_floors(
@@ -419,6 +427,13 @@ def _archetype_for_page(page, page_number: int,
         applied_grid or house_grid, body_face,
     )
     set_aside["too narrow to set copy in"] += dropped
+    if applied_grid is not None or house_grid is not None:
+        frames, slots, collided = _separate_text_frames(
+            frames, slots, role_of, roles, canvas,
+            applied_grid or house_grid,
+        )
+        if collided:
+            set_aside["lying under another frame"] = collided
 
     return PageArchetype(
         id=f"page-{page_number}",
@@ -542,6 +557,170 @@ def _enforce_slot_floors(frames: list[Frame], slots: list[SlotSpec],
     kept_frames = [grown.get(f.id, f) for f in frames if f.id not in drop]
     kept_slots = [s for s in slots if s.frame_id not in drop]
     return kept_frames, kept_slots, len(drop)
+
+
+def _with_top_and_height(frame: Frame, top_in: float, height_in: float,
+                         canvas: Canvas, grid: GridSpec) -> Frame:
+    """The same frame, moved and resized in inches on its own placement kind."""
+    if isinstance(frame.place, GridPlace):
+        box = content_box(canvas, grid)
+        if box.height <= 0:
+            return frame
+        return frame.model_copy(update={"place": frame.place.model_copy(
+            update={"y": (top_in - box.top) / box.height,
+                    "h": height_in / box.height})})
+    return frame.model_copy(update={"place": frame.place.model_copy(
+        update={"y": max(0.0, top_in / canvas.h_in),
+                "h": max(1e-4, height_in / canvas.h_in)})})
+
+
+def _separate_text_frames(frames: list[Frame], slots: list[SlotSpec],
+                          role_of: dict[str, str],
+                          roles: dict[str, type_model.RungEvidence],
+                          canvas: Canvas,
+                          grid: GridSpec) -> tuple[list[Frame], list[SlotSpec], int]:
+    """Pull apart text frames that sit on each other.
+
+    Type over type is never a layering a publication intends, so unlike a
+    figure under a caption this is not resolved by giving one a different
+    depth - it is resolved by making them not overlap. Growing a frame to fit
+    its own line box can push it into the block beneath, and a few traced
+    blocks overlap by a sliver to begin with.
+
+    The frame with slack gives way: the upper one's bottom is pulled back to
+    the lower one's top when that still leaves it a full line, and failing
+    that the lower one's top is pushed down. Only when neither has room does a
+    frame go, and then it is the smaller - a frame lying under another is not
+    somewhere material can be sent anyway.
+    """
+    by_id = {frame.id: frame for frame in frames}
+    text_ids = [
+        slot.frame_id for slot in slots
+        if (not slot.accepts or "text" in slot.accepts)
+        and slot.frame_id in by_id
+    ]
+    dropped: set[str] = set()
+
+    def line_of(frame_id: str) -> float:
+        rung = roles.get(role_of.get(frame_id, "body"))
+        if rung is None:
+            return 0.0
+        return (rung.line_height_pt or rung.size_pt * 1.3) / 72.0
+
+    for _ in range(4):
+        moved = False
+        ordered = [i for i in text_ids if i not in dropped]
+        for position, first_id in enumerate(ordered):
+            for second_id in ordered[position + 1:]:
+                if first_id in dropped or second_id in dropped:
+                    continue
+                one, two = by_id[first_id], by_id[second_id]
+                if one.z != two.z:
+                    continue
+                a, b = _rect_of(one, canvas, grid), _rect_of(two, canvas, grid)
+                if _overlap_share(a, b) <= SNAP_COLLISION_TOLERANCE:
+                    continue
+                upper, lower = (one, two) if a[1] <= b[1] else (two, one)
+                top, bottom = _rect_of(upper, canvas, grid), _rect_of(lower, canvas, grid)
+
+                trimmed = bottom[1] - top[1]
+                if trimmed >= line_of(upper.id) - 1e-6:
+                    by_id[upper.id] = _with_top_and_height(
+                        upper, top[1], trimmed, canvas, grid)
+                    moved = True
+                    continue
+                pushed = bottom[3] - top[3]
+                if pushed >= line_of(lower.id) - 1e-6:
+                    by_id[lower.id] = _with_top_and_height(
+                        lower, top[3], pushed, canvas, grid)
+                    moved = True
+                    continue
+                smaller = min((one, two), key=lambda f: _area(
+                    _rect_of(f, canvas, grid)))
+                dropped.add(smaller.id)
+                moved = True
+        if not moved:
+            break
+
+    kept = [by_id[f.id] if f.id in by_id else f
+            for f in frames if f.id not in dropped]
+    return (kept, [s for s in slots if s.frame_id not in dropped],
+            len(dropped))
+
+
+def _rect_of(frame: Frame, canvas: Canvas,
+             grid: GridSpec) -> tuple[float, float, float, float]:
+    """This frame as (left, top, right, bottom) in inches."""
+    place = frame.place
+    if isinstance(place, GridPlace):
+        box = content_box(canvas, grid)
+        column = grid.column_width_in(canvas)
+        left = box.left + place.col * (column + grid.gutter_in)
+        width = place.span * column + max(0, place.span - 1) * grid.gutter_in
+        top = box.top + (place.y or 0.0) * box.height
+        height = (place.h or 0.0) * box.height
+    else:
+        left, top = place.x * canvas.w_in, place.y * canvas.h_in
+        width, height = place.w * canvas.w_in, place.h * canvas.h_in
+    return (left, top, left + width, top + height)
+
+
+def _overlap_share(a: tuple[float, float, float, float],
+                   b: tuple[float, float, float, float]) -> float:
+    """How much of the smaller of two rectangles the other covers."""
+    left, top = max(a[0], b[0]), max(a[1], b[1])
+    right, bottom = min(a[2], b[2]), min(a[3], b[3])
+    if right <= left or bottom <= top:
+        return 0.0
+    smaller = min((a[2] - a[0]) * (a[3] - a[1]),
+                  (b[2] - b[0]) * (b[3] - b[1]))
+    return ((right - left) * (bottom - top)) / smaller if smaller > 0 else 0.0
+
+
+# How much two frames may share before the overlap is called ambiguous. Kept
+# just under the renderer's own tolerance so a pack never ships a page the
+# renderer will refuse.
+SNAP_COLLISION_TOLERANCE = 0.01
+
+
+def _snap_all(frames: list[Frame], canvas: Canvas,
+              grid: GridSpec) -> list[Frame]:
+    """Snap what can be snapped without putting two frames on each other.
+
+    Snapping *widens* a frame to the columns it best covers - which is the
+    whole point, since alignment is most of what separates a typeset page
+    from a slide - but a frame widened from 2.9in of ink to a full 5.4in
+    column lands on whatever was beside it. That is where most of the
+    ambiguous overlaps in the shipped packs came from, and it is not a
+    trade worth making: a frame that cannot be put on the grid without
+    colliding keeps its measured position, which is what it had before.
+
+    Decided largest first, so the frames that carry the page's alignment get
+    the grid and the small ones give way.
+    """
+    order = sorted(
+        range(len(frames)),
+        key=lambda i: -_area(_rect_of(frames[i], canvas, grid)),
+    )
+    settled = list(frames)
+    for index in order:
+        candidate = _snapped(settled[index], None, canvas, grid)
+        if candidate is settled[index] or candidate.place == settled[index].place:
+            continue
+        rect = _rect_of(candidate, canvas, grid)
+        collides = any(
+            _overlap_share(rect, _rect_of(other, canvas, grid))
+            > SNAP_COLLISION_TOLERANCE
+            for position, other in enumerate(settled)
+            if position != index and other.z == candidate.z
+        )
+        if not collides:
+            settled[index] = candidate
+    return settled
+
+
+def _area(rect: tuple[float, float, float, float]) -> float:
+    return max(0.0, rect[2] - rect[0]) * max(0.0, rect[3] - rect[1])
 
 
 def _snapped(frame: Frame, _unused, canvas: Canvas,
