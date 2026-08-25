@@ -137,21 +137,37 @@ class TestTheCostDiscriminates:
 
 
 class TestMaterialGoesWhereItBelongs:
-    def test_a_paragraph_may_not_take_a_display_frame(self, pack):
+    def test_a_paragraph_may_not_take_a_headline_or_pullquote_frame(self, pack):
         """Not a tight fit - the wrong kind of thing. Infeasible rather than
         expensive, or the solver trades it against a rounding error and sets
-        a body paragraph at pull-quote size across the page."""
+        a body paragraph at pull-quote size across the page.
+
+        A standfirst is deliberately not in this set: see the test below."""
         shape = shape_from("content", "A heading", LONG)
         selection = choose(shape, pack)
         assert selection
         for placement in selection.placements:
             frame = next(f for f in _frames(selection.archetype)
                          if f.id == placement.slot.frame_id)
-            if frame.role in ("headline", "pullquote", "standfirst"):
+            if frame.role in ("headline", "pullquote"):
                 assert placement.item.role_hint in ("heading", "quote"), (
                     f"{placement.item.text[:40]!r} was bound into a "
                     f"{frame.role} frame"
                 )
+
+    def test_a_standfirst_accepts_ordinary_prose(self, pack):
+        """A standfirst is a lead paragraph, so body copy is exactly what
+        belongs in it. It was grouped with headline and pullquote as a frame
+        that refuses prose, which left the slot standing empty on every page
+        that had one and gave a cover's subtitle nowhere to go."""
+        from app.design.material import MaterialItem
+        from app.design.select import RESTRICTED_FRAME_ROLES, _role_compatible
+
+        paragraph = MaterialItem(id="p", kind="text", text=LONG[0])
+        assert _role_compatible("standfirst", paragraph)
+        assert not _role_compatible("headline", paragraph)
+        assert not _role_compatible("pullquote", paragraph)
+        assert "standfirst" not in RESTRICTED_FRAME_ROLES
 
     def test_a_quote_never_becomes_the_headline(self, pack):
         """The guarantee that matters. A pull-quote promoted to the headline

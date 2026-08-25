@@ -37,6 +37,14 @@ W_CAPACITY = 2.0
 W_ASPECT = 1.0
 W_DENSITY = 2.5
 W_RHYTHM = 0.8
+# Material has an order, and the assignment did not know it. Minimising each
+# pairing independently put paragraph one in a caption slot at the top of the
+# page, paragraph two in the right-hand column and paragraph three at the
+# bottom left, which reads as three fragments rather than as a page. This
+# prefers the k-th paragraph to land in the k-th text slot in reading order -
+# the one sequencing statement that is still pairwise, and so still solvable
+# exactly by the assignment.
+W_SEQUENCE = 2.2
 # Overflow is not one cost among several. A page whose copy runs off the
 # bottom is not a slightly worse page, it is a broken one, and averaging its
 # strain in with everything else lets an archetype win on the strength of
@@ -88,12 +96,19 @@ class Selection:
 # the wrong kind of thing, and the difference has to be infeasible rather
 # than expensive or the solver will trade it against a rounding error.
 DISPLAY_FRAME_ROLES = frozenset({"headline", "pullquote", "standfirst"})
+
+# The two frames that refuse ordinary prose. A standfirst is deliberately not
+# among them: it is a *lead paragraph*, so body copy is exactly what belongs
+# in it. Grouping it with the other two meant a cover's subtitle had nowhere
+# to go, and the slot sat empty on every page that had one.
+RESTRICTED_FRAME_ROLES = frozenset({"headline", "pullquote"})
+
 _HINT_FOR_FRAME = {"headline": "heading", "pullquote": "quote",
-                   "standfirst": "heading"}
+                   "standfirst": "body"}
 
 
 def _role_compatible(frame_role: str, item: MaterialItem) -> bool:
-    if frame_role not in DISPLAY_FRAME_ROLES:
+    if frame_role not in RESTRICTED_FRAME_ROLES:
         # A heading may sit in a plain column when the archetype has no
         # headline frame; that is a compromise, not an error.
         return True
@@ -138,9 +153,53 @@ def _walk(frames):
         yield from frame.walk()
 
 
+def _slot_origin(archetype: PageArchetype, slot: SlotSpec, pack: Pack,
+                 grid: GridSpec) -> Optional[tuple[float, float]]:
+    """Where this slot starts on the page, as (top, left) in inches."""
+    frame = _slot_frame(archetype, slot)
+    if frame is None:
+        return None
+    canvas = pack.canvas
+    if isinstance(frame.place, GridPlace):
+        box = content_box(canvas, grid)
+        column = grid.column_width_in(canvas)
+        left = box.left + frame.place.col * (column + grid.gutter_in)
+        top = box.top + (frame.place.y or 0.0) * box.height
+        return (top, left)
+    place: FracPlace = frame.place
+    return (place.y * canvas.h_in, place.x * canvas.w_in)
+
+
+def reading_order(archetype: PageArchetype, pack: Pack,
+                  grid: GridSpec) -> dict[str, float]:
+    """Each text slot's place in the page's reading order, normalised to 0..1.
+
+    Down and then across, which is how a column grid is read. A slot whose
+    frame cannot be located is left out rather than guessed at.
+    """
+    located = []
+    for slot in archetype.slots:
+        if slot.accepts and "text" not in slot.accepts:
+            continue
+        origin = _slot_origin(archetype, slot, pack, grid)
+        if origin is None:
+            continue
+        located.append((origin, slot.frame_id))
+    if len(located) < 2:
+        return {frame_id: 0.0 for _, frame_id in located}
+    # Banded by row before being read across, so two slots a hair apart
+    # vertically are not ordered by that hair.
+    band = max(0.02 * pack.canvas.h_in, grid.baseline_in * 2 or 0.0)
+    located.sort(key=lambda entry: (round(entry[0][0] / band) if band else
+                                    entry[0][0], entry[0][1]))
+    last = len(located) - 1
+    return {frame_id: index / last for index, (_, frame_id) in enumerate(located)}
+
+
 def overflow_of(item: MaterialItem, pack: Pack,
                 size: Optional[tuple[float, float]],
-                frame_role: str = "column") -> float:
+                frame_role: str = "column",
+                type_role: Optional[str] = None) -> float:
     """How far past its slot this item's copy runs, as a share of the slot."""
     if size is None or item.kind not in _TEXT_KINDS:
         return 0.0
@@ -149,7 +208,8 @@ def overflow_of(item: MaterialItem, pack: Pack,
         return 1.0
     from app.renderer.typeset.shape import layout
 
-    role = pack.type_roles.get(type_role_for(frame_role, item.kind, pack))
+    role = pack.type_roles.get(
+        type_role_for(frame_role, item.kind, pack, type_role))
     if role is None:
         return 0.0
     result = layout(item.text, width_in * 72.0, height_in * 72.0,
@@ -160,7 +220,8 @@ def overflow_of(item: MaterialItem, pack: Pack,
 
 def capacity_strain(item: MaterialItem, slot: SlotSpec, pack: Pack,
                     size: Optional[tuple[float, float]],
-                    frame_role: str = "column") -> float:
+                    frame_role: str = "column",
+                    type_role: Optional[str] = None) -> float:
     """How badly this item over- or under-fills this slot.
 
     Measured with the real typesetter rather than by character count, so the
@@ -179,7 +240,8 @@ def capacity_strain(item: MaterialItem, slot: SlotSpec, pack: Pack,
 
     from app.renderer.typeset.shape import layout
 
-    role = pack.type_roles.get(type_role_for(frame_role, item.kind, pack))
+    role = pack.type_roles.get(
+        type_role_for(frame_role, item.kind, pack, type_role))
     if role is None:
         return 0.5
     result = layout(
@@ -212,7 +274,9 @@ def aspect_penalty(item: MaterialItem,
 
 
 def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,
-              archetype: PageArchetype, grid: GridSpec) -> float:
+              archetype: PageArchetype, grid: GridSpec, *,
+              item_order: Optional[float] = None,
+              slot_order: Optional[float] = None) -> float:
     """What it costs to put this item in this slot."""
     if not _accepts(slot, item):
         return INFEASIBLE
@@ -222,7 +286,8 @@ def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,
         return INFEASIBLE
     size = _slot_rect(archetype, slot, pack, grid)
     cost = (
-        W_CAPACITY * capacity_strain(item, slot, pack, size, frame_role)
+        W_CAPACITY * capacity_strain(item, slot, pack, size, frame_role,
+                                     frame.type_role if frame else None)
         + W_ASPECT * aspect_penalty(item, size)
     )
     # Prominent material belongs in prominent slots. Stated as a preference
@@ -241,6 +306,8 @@ def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,
         cost += min(2.0, (item.chars - slot.max_chars) / max(1, slot.max_chars))
     if slot.min_chars and item.chars < slot.min_chars:
         cost += 0.3
+    if item_order is not None and slot_order is not None:
+        cost += W_SEQUENCE * abs(item_order - slot_order)
     if slot.required and _suits(slot, item):
         cost -= REQUIRED_BONUS
     return cost
@@ -281,8 +348,23 @@ def fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
     if not slots or not items:
         return None
 
+    slot_order = reading_order(archetype, pack, grid)
+    # Only the body prose is sequenced. A heading, a quote or an exhibit is
+    # placed by what it *is*, and ordering it against the paragraphs would
+    # drag the heading toward the middle of the page.
+    body = [item for item in items
+            if item.kind == "text" and item.role_hint == "body"]
+    item_order = {
+        item.id: (index / (len(body) - 1) if len(body) > 1 else 0.0)
+        for index, item in enumerate(body)
+    }
     cost = [
-        [pair_cost(item, slot, pack, archetype, grid) for slot in slots]
+        [
+            pair_cost(item, slot, pack, archetype, grid,
+                      item_order=item_order.get(item.id),
+                      slot_order=slot_order.get(slot.frame_id))
+            for slot in slots
+        ]
         for item in items
     ]
     assignment = solve(cost)
@@ -335,6 +417,8 @@ def fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
             p.item, pack, _slot_rect(archetype, p.slot, pack, grid),
             (_slot_frame(archetype, p.slot).role
              if _slot_frame(archetype, p.slot) else "column"),
+            (_slot_frame(archetype, p.slot).type_role
+             if _slot_frame(archetype, p.slot) else None),
         )
         for p in placements
     )
