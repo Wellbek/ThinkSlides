@@ -2607,6 +2607,22 @@
       "note": "12 frames read from page 22, set aside: 1 in a figure, 2 too narrow to set copy in; traced from page 22, one of 2 pages the publication sets this way"
     }
   ],
+  "vocabulary_gaps": [],
+  "illustration": {
+    "kind": "photographic",
+    "treatment": "muted",
+    "placement": "inset",
+    "style_note": "",
+    "palette_roles": [
+      "accent",
+      "ink"
+    ],
+    "confidence": {
+      "value": 0.348,
+      "residual": 0.0,
+      "note": "19 images, median saturation 0.37, 32% bleeding"
+    }
+  },
   "policy": {
     "body_min_ratio": 0.014074074074074074,
     "caption_min_ratio": 0.00962962962962963,

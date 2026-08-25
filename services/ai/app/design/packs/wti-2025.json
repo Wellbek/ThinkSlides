@@ -1866,6 +1866,22 @@
       "note": "14 frames read from page 7, set aside: 5 in a figure; traced from page 7, one of 2 pages the publication sets this way"
     }
   ],
+  "vocabulary_gaps": [],
+  "illustration": {
+    "kind": "photographic",
+    "treatment": "mono",
+    "placement": "bleed",
+    "style_note": "",
+    "palette_roles": [
+      "accent",
+      "ink"
+    ],
+    "confidence": {
+      "value": 1.0,
+      "residual": 0.0,
+      "note": "11 images, median saturation 0.00, 91% bleeding"
+    }
+  },
   "policy": {
     "body_min_ratio": 0.011994949494949494,
     "caption_min_ratio": 0.008207070707070708,

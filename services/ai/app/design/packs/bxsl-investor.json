@@ -2552,6 +2552,22 @@
       "note": "10 frames read from page 17, set aside: 16 too narrow to set copy in; traced from page 17, one of 2 pages the publication sets this way"
     }
   ],
+  "vocabulary_gaps": [],
+  "illustration": {
+    "kind": "photographic",
+    "treatment": "full",
+    "placement": "inset",
+    "style_note": "",
+    "palette_roles": [
+      "accent",
+      "ink"
+    ],
+    "confidence": {
+      "value": 0.0,
+      "residual": 0.0,
+      "note": "only 1 image(s) across the sampled pages; too few to read a treatment from"
+    }
+  },
   "policy": {
     "body_min_ratio": 0.019351851851851853,
     "caption_min_ratio": 0.013240740740740742,

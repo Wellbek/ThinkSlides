@@ -201,6 +201,37 @@ class LegibilityPolicy(_Model):
         return max(self.absolute_floor_pt, ratio * canvas.h_in * 72.0)
 
 
+class Illustration(_Model):
+    """How a publication treats its imagery, as one statement for a whole deck.
+
+    Illustration was decided per slide: `generate_image` composed a prompt
+    from the run's design direction and every other image path decided for
+    itself. Two pages of one deck could come back in unrelated treatments,
+    and nothing said they should not - a deck's imagery is as much part of how
+    it reads as its palette, and the palette has lived in the pack since the
+    beginning.
+
+    `confidence` is why this is a measurement rather than a preference. A
+    publication whose pages carry two photographs tells us very little, and a
+    treatment asserted from that is a treatment invented. Below the threshold
+    the pack says so and the default is used, in the open.
+    """
+
+    # What imagery *is* here: a photograph, a flat illustration, a diagram.
+    kind: Literal["photographic", "illustrated", "diagrammatic", "none"] = "photographic"
+    # How it is finished. `duotone` and `mono` are the two a publication most
+    # often uses to make stock imagery look like its own.
+    treatment: Literal["full", "duotone", "mono", "muted"] = "full"
+    # Where it sits: bleeding off the page, or inset within the grid.
+    placement: Literal["bleed", "inset"] = "inset"
+    # The one sentence handed to an image provider, so every generated image
+    # in a deck is asked for in the same terms.
+    style_note: str = ""
+    # Which colour roles imagery leans on, in order.
+    palette_roles: tuple[str, ...] = ("accent", "ink")
+    confidence: Confidence = Confidence()
+
+
 class Pack(_Model):
     """A publication's visual grammar, ready to generate against."""
 
@@ -222,6 +253,7 @@ class Pack(_Model):
     # reading - and so nothing downstream mistakes "not recovered" for
     # "not used".
     vocabulary_gaps: tuple[str, ...] = ()
+    illustration: Illustration = Illustration()
     policy: LegibilityPolicy = LegibilityPolicy()
     body_face: str = "Arial"
     display_face: str = "Arial"

@@ -29,6 +29,7 @@ import fitz
 
 from app.design.pack import (
     ColorRoles,
+    Illustration,
     Confidence,
     LegibilityPolicy,
     Pack,
@@ -42,6 +43,7 @@ from app.design.geometry import content_box
 from app.design.schema import Canvas, FracPlace, Frame, GridPlace, GridSpec, Insets
 from app.measure import clusters as clusters_model
 from app.measure import color_roles as color_model
+from app.measure import illustration as illustration_model
 from app.measure import grammar as grammar_model
 from app.measure import spacing as spacing_model
 from app.measure import type_roles as type_model
@@ -1167,6 +1169,7 @@ def from_pdf(pdf_path: str, pages: Optional[Sequence[int]] = None, *,
         ),
         type_roles=type_map,
         colors=_colors(palette),
+        illustration=_read_illustration(sample, canvas),
         archetypes=archetypes,
         body_face=type_model.clean_face(body_face) or "Arial",
         display_face=type_model.clean_face(pairing or display_face) or "Arial",
@@ -1243,6 +1246,82 @@ def _type_roles(roles: dict[str, type_model.RungEvidence],
     if "body" not in out:
         out["body"] = TypeRole(size_pt=14.0, line_height_pt=18.0)
     return out
+
+
+# How many pixels of one image to sample. Enough to read a treatment from,
+# few enough that reading twenty images costs nothing worth measuring.
+ILLUSTRATION_SAMPLE = 400
+
+
+def _read_illustration(sample, canvas: Canvas) -> Illustration:
+    """How this publication treats its imagery, read from its imagery.
+
+    A deck's illustration is as much part of how it reads as its palette, and
+    the palette has been measured from the reference since the beginning while
+    illustration was decided per slide.
+    """
+    readings = []
+    for _, page in sample:
+        width, height = float(page.rect.width), float(page.rect.height)
+        for entry in page.get_images(full=True):
+            rects = page.get_image_rects(entry[0])
+            if not rects:
+                continue
+            rect = rects[0]
+            bleeds = (
+                rect.x0 / width <= illustration_model.BLEED_TOLERANCE
+                or rect.y0 / height <= illustration_model.BLEED_TOLERANCE
+                or rect.x1 / width >= 1 - illustration_model.BLEED_TOLERANCE
+                or rect.y1 / height >= 1 - illustration_model.BLEED_TOLERANCE
+            )
+            pixels = _sample_pixels(page, entry[0])
+            if pixels:
+                readings.append(illustration_model.read_image(
+                    pixels, bleeds=bleeds))
+
+    reading = illustration_model.recover(readings)
+    return Illustration(
+        treatment=reading.treatment,
+        placement=reading.placement,
+        style_note=_style_note(reading),
+        confidence=Confidence(value=reading.confidence, note=reading.note),
+    )
+
+
+def _sample_pixels(page, xref: int):
+    """A handful of an image's pixels, or nothing when it will not open."""
+    try:
+        import fitz as _fitz
+
+        pixmap = _fitz.Pixmap(page.parent, xref)
+        if pixmap.alpha or pixmap.n > 3:
+            pixmap = _fitz.Pixmap(_fitz.csRGB, pixmap)
+        if pixmap.n < 3 or pixmap.width < 2 or pixmap.height < 2:
+            return []
+        data = pixmap.samples
+        stride = max(1, (pixmap.width * pixmap.height) // ILLUSTRATION_SAMPLE)
+        out = []
+        for index in range(0, pixmap.width * pixmap.height, stride):
+            offset = index * pixmap.n
+            if offset + 2 < len(data):
+                out.append((data[offset], data[offset + 1], data[offset + 2]))
+        return out
+    except Exception:
+        return []
+
+
+def _style_note(reading) -> str:
+    """Anything worth telling a provider that the treatment does not already
+    say.
+
+    Deliberately empty for now. The sentence handed to a provider is composed
+    from the treatment and the placement in `renderer/illustration.py`, and a
+    note repeating them produced "desaturated, muted colour, inset within the
+    page's margins, desaturated, muted colour, inset within the page's
+    margins". This is where a hand-edited pack can add what was actually
+    observed and could not be measured.
+    """
+    return ""
 
 
 def _colors(palette: dict[str, str]) -> ColorRoles:
