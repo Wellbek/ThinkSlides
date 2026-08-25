@@ -201,3 +201,110 @@ class TestNothingExecutes:
                '</svg>')
         [prim] = to_primitives(svg, _box(), palette=PALETTE)
         assert prim.fill == "#000000"
+
+
+class TestAModelCanDrawItsOwnFigure:
+    """`build_diagram` has eight kinds and they are on-brand by construction.
+    This is what a page reaches for when none of the eight is the shape of the
+    idea - and it is the most expressive figure tool with the fewest
+    guard-rails, so the guard-rails matter."""
+
+    FIGURE = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">'
+              '<rect x="10" y="10" width="60" height="40" fill="accent"/>'
+              '<text x="40" y="35" text-anchor="middle" font-size="10" '
+              'fill="background">Draft</text>'
+              '<path d="M70,30 L120,30" stroke="text"/></svg>')
+
+    def _run(self, **kwargs):
+        import asyncio
+
+        from app.agent.tools.draw_svg import DrawSvgTool
+
+        return asyncio.run(DrawSvgTool.run(**kwargs))
+
+    def test_a_figure_becomes_a_diagram_block(self):
+        result = self._run(slide_index=2, svg=self.FIGURE)
+        assert result.success
+        block = result.data["blocks"][0]
+        assert block["type"] == "diagram"
+        assert block["diagram"]["format"] == "svg"
+
+    def test_it_is_refused_while_the_model_can_still_try_again(self):
+        """A figure that fails silently at render is a hole in a page nobody
+        can explain."""
+        result = self._run(slide_index=0,
+                           svg='<svg xmlns="http://www.w3.org/2000/svg"/>')
+        assert not result.success
+        assert "viewBox" in result.error
+
+    def test_an_enormous_figure_is_refused_with_a_reason(self):
+        """A diagram needing more than the cap is a diagram that should have
+        been several."""
+        result = self._run(slide_index=0, svg="x" * 20000)
+        assert not result.success
+        assert "build_diagram" in result.error
+
+    def test_a_figure_that_draws_nothing_is_refused(self):
+        result = self._run(
+            slide_index=0,
+            svg=('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+                 '<script>x()</script></svg>'))
+        assert not result.success
+
+    def test_the_description_says_when_not_to_use_it(self):
+        """The most expressive tool becomes the default unless its description
+        says otherwise, and a deck whose every figure is hand-drawn has no
+        house style left."""
+        from app.agent.tools.draw_svg import WHEN_NOT_TO
+
+        for alternative in ("build_diagram", "build_chart"):
+            assert alternative in WHEN_NOT_TO
+
+    def test_it_is_offered_alongside_the_other_visual_tools(self):
+        from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
+
+        assert "draw_svg" in BUILD_VISUAL_TOOLS
+
+
+class TestAFigureIsColouredByRoleNotByHex:
+    """A model choosing its own hex values produces a deck of figures, each in
+    a slightly different blue."""
+
+    PALETTE = {"primary": "#1F4E78", "accent": "#FF7F50",
+               "background": "#FFFFFF", "text": "#1A1A1A"}
+
+    def test_a_role_name_resolves_to_the_decks_colour(self):
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50">'
+               '<rect x="5" y="5" width="40" height="30" fill="primary"/></svg>')
+        [prim] = to_primitives(svg, _box(), palette=self.PALETTE)
+        assert prim.fill == "#1F4E78"
+
+    def test_a_colour_outside_the_palette_is_mapped_to_the_nearest_role(self):
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50">'
+               '<rect x="5" y="5" width="40" height="30" fill="#7C4DFF"/></svg>')
+        [prim] = to_primitives(svg, _box(), palette=self.PALETTE)
+        assert prim.fill in self.PALETTE.values()
+        assert prim.fill != "#7C4DFF"
+
+    def test_a_block_renders_through_the_same_hook_as_a_typed_diagram(self):
+        """It is the same thing to a page: a graphic occupying a rect, in the
+        deck's colours."""
+        from app.design_system import get_default_design_system
+        from app.renderer.pptx_renderer import PPTXRenderer
+
+        renderer = PPTXRenderer(design_system=get_default_design_system())
+        block = {"type": "diagram", "diagram": {"format": "svg", "svg": (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50">'
+            '<rect x="5" y="5" width="40" height="30" fill="primary"/></svg>')}}
+        marks = renderer._compiler()._compile_diagram(block, _box(), "f")
+        assert len(marks) == 1
+        assert marks[0].kind == "path"
+
+    def test_an_unimportable_block_draws_nothing_rather_than_raising(self):
+        from app.design_system import get_default_design_system
+        from app.renderer.pptx_renderer import PPTXRenderer
+
+        renderer = PPTXRenderer(design_system=get_default_design_system())
+        block = {"type": "diagram",
+                 "diagram": {"format": "svg", "svg": "<not-svg/>"}}
+        assert renderer._compiler()._compile_diagram(block, _box(), "f") == []

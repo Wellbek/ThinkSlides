@@ -1139,4 +1139,4 @@ async def _route_to_figure_provider(chart: dict, renderer: str) -> str:
 
 
 BUILD_VISUAL_TOOLS = ("build_chart", "build_chart_grid", "build_table",
-                      "build_key_metrics", "build_diagram")
+                      "build_key_metrics", "build_diagram", "draw_svg")

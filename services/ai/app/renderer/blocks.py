@@ -39,6 +39,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from app import colors
+from app.observability.logging import get_logger
 from app.renderer import apparatus, diagrams, icons, primitives
 from app.renderer.deck_theme import SlideStyle
 from app.renderer.layout import PositionConfig
@@ -523,6 +524,27 @@ class BlockCompiler:
         the colours and sizes the drawing uses, which is the same translation
         every other block does.
         """
+        drawn = (item.get("diagram") or {}) if isinstance(item, dict) else {}
+        if str(drawn.get("format") or "").lower() == "svg":
+            # A figure the typed vocabulary cannot express, drawn as an SVG
+            # and imported as shapes. It goes through the same block hook as
+            # the eight typed kinds because it is the same thing to a page: a
+            # graphic occupying a rect, in the deck's colours.
+            from app.renderer.svg.importer import UnsupportedSVG, to_primitives
+
+            try:
+                return to_primitives(
+                    str(drawn.get("svg") or ""), rect,
+                    palette=self._palette_by_role(), prefix=prefix,
+                    body_font=self.type_scale.body_font,
+                )
+            except UnsupportedSVG as exc:
+                # Named rather than swallowed. A figure that silently did not
+                # draw is a hole in a page nobody can explain.
+                get_logger(__name__).warning("svg_figure_refused",
+                                             error=str(exc))
+                return []
+
         return diagrams.compile_diagram(
             item, rect,
             palette=self._diagram_palette(),
@@ -533,6 +555,15 @@ class BlockCompiler:
             ),
             prefix=prefix,
         )
+
+    def _palette_by_role(self) -> dict[str, str]:
+        """The deck's palette keyed by role, which is what recolouring wants."""
+        entries = ((self.design_system or {}).get("palette") or {}).get("colors") or []
+        return {
+            str(entry.get("name")): str(entry.get("value"))
+            for entry in entries
+            if isinstance(entry, dict) and colors.parse_hex(entry.get("value"))
+        }
 
     def _diagram_palette(self) -> "diagrams.DiagramPalette":
         """The deck's colours, in the shape a diagram draws from."""

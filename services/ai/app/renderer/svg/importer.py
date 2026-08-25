@@ -158,6 +158,22 @@ def _is_neutral(value: str) -> bool:
     return max(r, g, b) - min(r, g, b) < MIN_CHROMA
 
 
+def paint_of(value: Optional[str],
+             palette: Optional[dict[str, str]]) -> Optional[str]:
+    """A paint value, resolving a palette role name before anything else.
+
+    `draw_svg` asks the model to colour a figure by naming one of the deck's
+    roles - `fill="accent"` - so that a figure is in the deck's palette by
+    construction rather than by a model guessing hex values and producing a
+    deck of figures each in a slightly different blue. Honouring that contract
+    is this function; without it every role name fell through to black.
+    """
+    text = (value or "").strip()
+    if palette and text in palette:
+        return _colour(palette[text])
+    return _colour(text)
+
+
 def _style(element: ElementTree.Element) -> dict[str, str]:
     """Presentation attributes and the `style` attribute, merged."""
     out = {key: value for key, value in element.attrib.items()
@@ -190,6 +206,15 @@ def recolour(value: Optional[str], palette: Optional[dict[str, str]]) -> Optiona
 
     role = nearest_role(value, palette)
     return palette.get(role, value) if role else value
+
+
+def _resolve(value: Optional[str],
+             palette: Optional[dict[str, str]]) -> Optional[str]:
+    """The colour this paint value means, in the deck's palette."""
+    text = (value or "").strip()
+    if palette and text in palette:
+        return _colour(palette[text])
+    return recolour(_colour(text), palette)
 
 
 def _points_in(subpath: SubPath, box: ViewBox) -> tuple[tuple[float, float], ...]:
@@ -292,8 +317,10 @@ def to_primitives(svg: str, box: PositionConfig, *,
         if any(_local(a.tag) in FORBIDDEN_TAGS for a in _ancestors(root, element)):
             continue
         style = _style(element)
-        fill = recolour(_colour(style.get("fill")), palette)
-        stroke = recolour(_colour(style.get("stroke")), palette)
+        # A role name is already the deck's colour, so it is not remapped;
+        # anything else is matched to the nearest role.
+        fill = _resolve(style.get("fill"), palette)
+        stroke = _resolve(style.get("stroke"), palette)
 
         if tag == "text":
             text = _text_of(element)
@@ -366,7 +393,7 @@ def _ground_under(text_element, root, view: ViewBox,
         tag = _local(element.tag)
         if tag not in ("rect", "circle", "ellipse", "polygon", "path"):
             continue
-        fill = recolour(_colour(_style(element).get("fill")), palette)
+        fill = _resolve(_style(element).get("fill"), palette)
         if not fill:
             continue
         bounds = _bounds_of(tag, element)
