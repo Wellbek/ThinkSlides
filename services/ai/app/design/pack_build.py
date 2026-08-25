@@ -40,6 +40,7 @@ from app.design.pack import (
 )
 from app.design.geometry import content_box
 from app.design.schema import Canvas, FracPlace, Frame, GridPlace, GridSpec, Insets
+from app.measure import clusters as clusters_model
 from app.measure import color_roles as color_model
 from app.measure import grammar as grammar_model
 from app.measure import spacing as spacing_model
@@ -428,6 +429,14 @@ def _archetype_for_page(page, page_number: int,
     )
     set_aside["too narrow to set copy in"] += dropped
     if applied_grid is not None or house_grid is not None:
+        # Artwork only. A ground panel raised out of its own layer lands at
+        # the same depth as the type above it, which is the very ambiguity
+        # this is meant to remove: WTI's `panel-0` came forward to z=2 and
+        # covered `body-12`. Grounds no longer collide anyway, now that the
+        # feature regions that used to blanket the page are not frames.
+        frames = _layer_overlapping(
+            frames, canvas, applied_grid or house_grid, frozenset({"figure"}),
+        )
         frames, slots, collided = _separate_text_frames(
             frames, slots, role_of, roles, canvas,
             applied_grid or house_grid,
@@ -572,6 +581,35 @@ def _with_top_and_height(frame: Frame, top_in: float, height_in: float,
     return frame.model_copy(update={"place": frame.place.model_copy(
         update={"y": max(0.0, top_in / canvas.h_in),
                 "h": max(1e-4, height_in / canvas.h_in)})})
+
+
+def _layer_overlapping(frames: list[Frame], canvas: Canvas,
+                       grid: GridSpec, roles: frozenset[str]) -> list[Frame]:
+    """Give overlapping frames of these roles a depth each.
+
+    Unlike type over type, artwork over artwork is a layering a publication
+    means: WTI's cover is three images stacked into one picture. The trace
+    flattened them onto one depth, which the renderer refuses as ambiguous.
+    Largest first, so the biggest sits at the back and each thing placed on
+    top of it comes forward.
+    """
+    indexed = [(index, frame) for index, frame in enumerate(frames)
+               if frame.role in roles]
+    if len(indexed) < 2:
+        return frames
+    indexed.sort(key=lambda entry: -_area(_rect_of(entry[1], canvas, grid)))
+    settled = list(frames)
+    placed: list[tuple[tuple[float, float, float, float], int]] = []
+    for index, frame in indexed:
+        rect = _rect_of(frame, canvas, grid)
+        depth = frame.z
+        for other_rect, other_z in placed:
+            if (_overlap_share(rect, other_rect) > SNAP_COLLISION_TOLERANCE
+                    and depth <= other_z):
+                depth = other_z + 1
+        settled[index] = frame.model_copy(update={"z": depth})
+        placed.append((rect, depth))
+    return settled
 
 
 def _separate_text_frames(frames: list[Frame], slots: list[SlotSpec],
@@ -795,17 +833,245 @@ def _positive(value: float) -> float:
     return max(0.001, min(3.0, float(value)))
 
 
-def from_pdf(pdf_path: str, pages: Sequence[int], *, pack_id: str,
-             label: str = "", note: str = "") -> Pack:
-    """Read a publication into a pack. Design-split pages only."""
+# How a cluster's label maps onto the kind of page it is. Anything not named
+# here carries the deck's material and is content.
+_ROLE_FOR_LABEL = {
+    clusters_model.COVER: "cover",
+    clusters_model.DIVIDER: "section",
+    clusters_model.EXHIBIT: "exhibit",
+}
+
+# A readable id for an archetype, from what the cluster is rather than from
+# which page it happened to be traced off. `page-12` says nothing about what
+# the page does; `card-row` does.
+_SLUG = {
+    clusters_model.COVER: "cover",
+    clusters_model.DIVIDER: "divider",
+    clusters_model.SPLIT_CANVAS: "split-canvas",
+    clusters_model.EXHIBIT: "exhibit",
+    clusters_model.CARD_ROW: "card-row",
+    clusters_model.MATRIX: "matrix",
+    clusters_model.ROW_BANDS: "row-bands",
+    clusters_model.TEXT_PAGE: "text-page",
+}
+
+# A cluster this small is one page that looked like nothing else, not a
+# pattern the publication repeats.
+MIN_CLUSTER_PAGES = 2
+# ...unless too few clusters clear that bar, in which case the biggest
+# singletons are taken so a pack is not left with nothing to compose from.
+MIN_ARCHETYPES = 4
+# And a ceiling, so a long deck does not produce a pack nobody can review.
+MAX_ARCHETYPES = 8
+# How many pages of one cluster to trace before picking the best of them.
+CANDIDATES_PER_CLUSTER = 3
+
+
+def _one_per_cluster(archetypes: Sequence[PageArchetype],
+                     plan: Sequence) -> tuple[PageArchetype, ...]:
+    """Keep the best-carrying page of each group, named for what the group is.
+
+    The frequency each archetype ends up with is the share of the
+    publication's pages that look like it. That number was zero on every
+    archetype of every shipped pack, which quietly disabled two things that
+    depend on it: ties break toward the page the house uses most, and the
+    selector discourages running the same archetype twice so a deck
+    reproduces the house's *mix* rather than its single best-fitting page.
+    """
+    by_page = {page: archetype for archetype in archetypes
+               for page in archetype.example_pages}
+    chosen: list[PageArchetype] = []
+    used: set[str] = set()
+    for cluster, group, frequency in plan:
+        candidates = [by_page[p] for p in group[:CANDIDATES_PER_CLUSTER]
+                      if p in by_page]
+        if not candidates:
+            continue
+        best = max(candidates, key=_archetype_richness)
+        slug = _SLUG.get(cluster.label, "page")
+        identifier = slug
+        suffix = 2
+        while identifier in used:
+            identifier = f"{slug}-{suffix}"
+            suffix += 1
+        used.add(identifier)
+        role = _ROLE_FOR_LABEL.get(cluster.label, "content")
+        if best.role == "appendix" and cluster.label not in _ROLE_FOR_LABEL:
+            # A page with nowhere for copy is a page of apparatus - unless the
+            # clustering already said what it is. WTI's covers are entirely
+            # image and carry no copy at all, and calling one an appendix both
+            # mislabels it and costs the pack the only real opener it has.
+            role = "appendix"
+        chosen.append(best.model_copy(update={
+            "id": identifier,
+            "label": cluster.label,
+            "role": role,
+            "frequency": round(min(1.0, frequency), 4),
+            "example_pages": tuple(group),
+            "note": (f"{best.note}; traced from page {best.example_pages[0]}, "
+                     f"one of {len(group)} pages the publication sets this way"),
+        }))
+    return tuple(chosen)
+
+
+# A grid, a baseline rhythm and a spacing ladder are properties of the
+# publication's *ordinary* page, so they are measured on the pages that most
+# look alike rather than on everything. Pooling every page halves the reading:
+# EY's 21.0pt rhythm comes back as 10.5pt over all its pages, because covers
+# and dividers contribute gaps that a smaller unit "explains" better. Five is
+# the sample size these recoveries were calibrated at.
+TOKEN_SAMPLE = 5
+
+# How many pages of each kind the type ramp and the palette look at. Every
+# kind, so the ramp sees every rung; a couple of each, so one page's quirk
+# does not become a rung of its own.
+RAMP_PAGES_PER_CLUSTER = 2
+
+# An opener and a divider carry almost no body copy, so they say nothing about
+# the measure or the rhythm and a great deal that is misleading.
+_NOT_ORDINARY = frozenset({clusters_model.COVER, clusters_model.DIVIDER})
+
+
+def _ramp_pages(plan: Sequence, fallback: Sequence[int]) -> list[int]:
+    """The pages the type ramp and palette are read from.
+
+    A different sample from the grid and the rhythm, because it answers a
+    different question. A measure and a baseline are properties of the
+    publication's ordinary page, and are read from a handful of pages that
+    look alike. A *ramp* is a property of the publication as a whole - it has
+    to see the headline, the standfirst, the caption and the footnote, and
+    those do not all appear on one kind of page. Read only from BXSL's
+    commonest pages, which are exhibits, the ramp came back with no headline
+    and no standfirst at all.
+
+    One page per kind of page, which is what the clustering is for.
+    """
+    if not plan:
+        return list(fallback)
+    seen: list[int] = []
+    for cluster, group, _ in plan:
+        if cluster.label in _NOT_ORDINARY:
+            # A cover's word-mark and a divider's section numeral are display
+            # type, not rungs of the ramp that sets the publication's copy -
+            # and the `display` rung already covers them. Reading EY's
+            # dividers in gave the pack a 387pt "headline", which is a third
+            # of the page, and dragged every rung beneath it out of place.
+            continue
+        for page in group[:RAMP_PAGES_PER_CLUSTER]:
+            if page not in seen:
+                seen.append(page)
+    return sorted(seen) or list(fallback)
+
+
+def _token_pages(plan: Sequence, fallback: Sequence[int]) -> list[int]:
+    """The pages the house's grid, rhythm and spacing ladder are read from."""
+    if not plan:
+        return list(fallback)
+    ordinary = [entry for entry in plan
+                if entry[0].label not in _NOT_ORDINARY] or list(plan)
+    ordinary.sort(key=lambda entry: -len(entry[1]))
+    chosen = list(ordinary[0][1][:TOKEN_SAMPLE])
+    for cluster, group, _ in ordinary[1:]:
+        if len(chosen) >= 3:
+            break
+        chosen.extend(p for p in group if p not in chosen)
+    return sorted(chosen[:TOKEN_SAMPLE]) or list(fallback)
+
+
+def _archetype_richness(archetype: PageArchetype) -> tuple:
+    """How good a representative of its cluster this traced page is.
+
+    A page whose headline is missing cannot state its own argument, so that
+    comes first; then how much of the deck's material it could carry; then
+    how many places it has to put it. Sorting by this rather than taking the
+    cluster's centroid-nearest page is the difference between an archetype
+    that can hold a slide and one that happens to sit in the middle.
+    """
+    frames = {frame.id: frame for frame in _walk_frames(archetype.frames)}
+    has_headline = any(f.role == "headline" for f in frames.values())
+    text_slots = [
+        slot for slot in archetype.slots
+        if (not slot.accepts or "text" in slot.accepts)
+        and frames.get(slot.frame_id) is not None
+        and frames[slot.frame_id].role in COPY_FRAME_ROLES
+    ]
+    capacity = sum(slot.max_chars or 0 for slot in text_slots)
+    figures = sum(1 for slot in archetype.slots
+                  if slot.accepts and "figure" in slot.accepts)
+    return (has_headline, capacity, len(text_slots), figures)
+
+
+def _walk_frames(frames):
+    for frame in frames:
+        yield from frame.walk()
+
+
+def _cluster_plan(pdf_path: str, exclude: Sequence[int]) -> list:
+    """Which pages to trace, grouped by the kind of page they are.
+
+    The pack this replaces was built from five page numbers written down by
+    hand, so every archetype was a trace of one specific page and the pack
+    described those five pages and nothing else. `measure.clusters` already
+    groups a publication's pages by what they look like - it was only ever
+    feeding an eval fixture - so the groups become the archetypes and the
+    pages inside a group become candidates for representing it.
+    """
+    survey = clusters_model.survey_pdf(pdf_path)
+    held_out = set(exclude)
+    groups = []
+    for cluster in survey.clusters:
+        pages = [p for p in cluster.pages if p not in held_out]
+        if pages:
+            groups.append((cluster, pages))
+    groups.sort(key=lambda entry: -len(entry[1]))
+
+    kept = [g for g in groups if len(g[1]) >= MIN_CLUSTER_PAGES]
+    for group in groups:
+        if len(kept) >= MIN_ARCHETYPES:
+            break
+        if group not in kept:
+            kept.append(group)
+    considered = sum(len(pages) for _, pages in groups) or 1
+    return [(cluster, pages, len(pages) / considered)
+            for cluster, pages in kept[:MAX_ARCHETYPES]]
+
+
+def from_pdf(pdf_path: str, pages: Optional[Sequence[int]] = None, *,
+             pack_id: str, label: str = "", note: str = "",
+             exclude_pages: Sequence[int] = ()) -> Pack:
+    """Read a publication into a pack.
+
+    With no ``pages`` the publication's own pages are clustered by what they
+    look like and each group becomes one archetype, which is the point: a
+    pack built from five page numbers written down by hand describes those
+    five pages and cannot compose a sixth. ``exclude_pages`` is the held-out
+    validation set, and nothing in it is read - a pack fitted to the pages it
+    will later be scored against is not measuring anything.
+
+    An explicit ``pages`` list still works, and still means "trace exactly
+    these", which is what the reference profiles need.
+    """
+    plan = None if pages else _cluster_plan(pdf_path, exclude_pages)
     doc = fitz.open(pdf_path)
+    if plan is not None:
+        pages = sorted({page for _, group, _ in plan for page in group})
     sample = [(number, doc[number - 1]) for number in pages]
+    # Two samples, deliberately. The archetypes come from every clustered
+    # page, because the point is to describe more compositions than a handful
+    # of pages can show. The house's grid, rhythm, spacing ladder, type ramp
+    # and palette come from its ordinary page instead: pooling covers and
+    # dividers in with the body pages turns EY's 21.0pt rhythm into 10.5pt,
+    # because those pages contribute gaps a smaller unit explains better.
+    token_pages = _token_pages(plan, pages) if plan is not None else list(pages)
+    tokens = [(number, doc[number - 1]) for number in token_pages]
+    ramp_pages = _ramp_pages(plan, pages) if plan is not None else list(pages)
+    ramp = [(number, doc[number - 1]) for number in ramp_pages]
     first = sample[0][1]
     width, height = float(first.rect.width), float(first.rect.height)
     canvas = Canvas(w_in=width / 72.0, h_in=height / 72.0)
 
     boxes = []
-    for _, page in sample:
+    for _, page in tokens:
         for block in _page_blocks(page):
             boxes.append((block["x"] * width, block["y"] * height,
                           (block["x"] + block["w"]) * width,
@@ -813,21 +1079,21 @@ def from_pdf(pdf_path: str, pages: Sequence[int], *, pack_id: str,
     grid = recover_grid(edges_from_boxes(boxes, width))
 
     rhythm_columns: list[list[float]] = []
-    for _, page in sample:
+    for _, page in tokens:
         rhythm_columns.extend(columns_from_page(page))
     rhythm = recover_rhythm(rhythm_columns)
 
     gaps: list[float] = []
-    for _, page in sample:
+    for _, page in tokens:
         gaps.extend(spacing_model.gaps_from_page(page))
     spacing = spacing_model.recover_spacing(gaps)
 
-    rungs = type_model.read_rungs(sample)
+    rungs = type_model.read_rungs(ramp)
     roles = type_model.assign_roles(rungs)
     body_face, display_face = type_model.faces_for(roles)
     pairing = type_model.pairing_face(roles)
 
-    evidence, _ = color_model.read_colors(sample)
+    evidence, _ = color_model.read_colors(ramp)
     palette = color_model.assign_roles(evidence)
 
     baseline_pt = rhythm.unit_pt if rhythm else 0.0
@@ -850,6 +1116,8 @@ def from_pdf(pdf_path: str, pages: Sequence[int], *, pack_id: str,
                                 house_grid=house, body_face=body_face)
             for number, page in sample
         )
+    if plan is not None:
+        archetypes = _one_per_cluster(archetypes, plan)
     # The pack's grid is the one its pages most often agree on. Pooling every
     # page's edges and fitting once finds nothing, because the pages are not
     # all on the same grid; asking each page and taking the mode finds the

@@ -48,15 +48,16 @@ class TestEveryPackCanBuildAWholeDeck:
     were traced from sampled *design* pages. A deck needs an opener and a
     closer too, and `fit` correctly refuses a role that does not exist."""
 
-    def test_the_shipped_packs_alone_have_no_opener(self):
-        import json
-        import os
-
-        path = os.path.join(run.PACK_DIR, "ey-iif-risk.json")
-        with open(path) as handle:
-            from app.design.pack import Pack
-            raw = Pack.model_validate(json.load(handle))
-        assert {a.role for a in raw.archetypes} == {"content"}
+    def test_a_publication_that_never_shows_an_opener_gets_one_composed(self):
+        """EY recovers a real divider from its own pages and WTI a real
+        cover, now that archetypes come from clustering rather than from five
+        page numbers. Neither publication shows a *closing* page, so that one
+        is still composed - which is the case this exists for."""
+        for pack_id in run.available():
+            roles = {a.role for a in run.load(pack_id).archetypes}
+            assert "closing" in roles
+        composed = vocabulary.composed_ids(run.load("ey-iif-risk"))
+        assert any(c.endswith("closing") for c in composed)
 
     def test_loading_supplies_the_missing_roles(self, pack):
         roles = {archetype.role for archetype in pack.archetypes}
@@ -81,8 +82,14 @@ class TestEveryPackCanBuildAWholeDeck:
 
 
 class TestTheDisplayRungIsDerivedAndBounded:
-    def test_an_opener_is_set_larger_than_a_page_headline(self, pack):
-        assert pack.type_roles["display"].size_pt > pack.type_roles["headline"].size_pt
+    def test_an_opener_is_set_larger_than_the_ramp_s_top_rung(self, pack):
+        """Not "larger than the headline": a pack need not have a rung named
+        headline. EY's content pages set their assertion in a pull-quote, so
+        its recovered ramp tops out there, and a check that demanded a
+        headline would report a defect in a publication that has none."""
+        top = max(role.size_pt for name, role in pack.type_roles.items()
+                  if name != vocabulary.DISPLAY_ROLE)
+        assert pack.type_roles["display"].size_pt >= top
 
     def test_it_stays_inside_a_share_of_the_page(self, pack):
         """WTI's headline/standfirst ratio is 2.94. Unclamped that sets a
@@ -92,18 +99,28 @@ class TestTheDisplayRungIsDerivedAndBounded:
 
     def test_the_frame_and_not_the_pack_carries_the_override(self, pack):
         """Scaling the pack's own headline role would move every content page
-        with it. The cover's frame asks for the rung instead."""
-        cover = next(a for a in pack.archetypes if a.role == "cover")
-        headline = next(f for a_frames in [cover.frames] for f in a_frames
-                        if f.role == "headline")
-        assert headline.type_role == vocabulary.DISPLAY_ROLE
+        with it. A composed opener's frame asks for the rung instead.
+
+        Only composed openers: WTI recovers a real cover from its own pages,
+        and a traced frame is set in whatever the publication set it in."""
+        composed = [a for a in pack.archetypes
+                    if a.id in vocabulary.composed_ids(pack)
+                    and a.role in ("cover", "closing", "section")]
+        assert composed
+        for archetype in composed:
+            headline = next(f for f in archetype.frames
+                            if f.role == "headline")
+            assert headline.type_role == vocabulary.DISPLAY_ROLE
 
     def test_measurement_and_drawing_read_the_same_override(self, pack):
         """The bug this guards against set a block at one size and measured it
         at another, so a page overflowed while reporting that it fit."""
         from app.design.roles import type_role_for
 
-        assert type_role_for("headline", "text", pack) == "headline"
+        # Without an override the frame's own role decides, falling back to
+        # body where the pack has no such rung - EY has no `headline`.
+        expected = "headline" if "headline" in pack.type_roles else "body"
+        assert type_role_for("headline", "text", pack) == expected
         assert type_role_for("headline", "text", pack, "display") == "display"
 
 

@@ -314,12 +314,79 @@ def ensure(pack: Pack) -> Pack:
     have = {archetype.role for archetype in pack.archetypes}
     missing = [role for role in REQUIRED_ROLES if role not in have]
     if not missing:
-        return pack
+        return pack.model_copy(update={"vocabulary_gaps": gaps(pack)})
     pack = with_display(pack)
     composed = [compose_for(pack, role) for role in missing]
-    return pack.model_copy(update={
+    filled = pack.model_copy(update={
         "archetypes": pack.archetypes + tuple(a for a in composed if a),
     })
+    return filled.model_copy(update={"vocabulary_gaps": gaps(filled)})
+
+
+# What a deck needs to be built at all, beyond the three page roles. Each is
+# a question about capability rather than about a label: not "is there a page
+# called a two-column page" but "is there anywhere two columns of copy could
+# go".
+CAPABILITIES = ("a page that states an assertion prominently",
+                "a page that sets copy in more than one column",
+                "a page that can carry an exhibit")
+
+
+def _states_an_assertion(pack: Pack, archetype: PageArchetype) -> bool:
+    """Whether this page has somewhere prominent to put its own claim.
+
+    Deliberately not "has a headline frame". EY sets its assertion in a
+    pull-quote beside a section label - that is the house, not a defect, and
+    a check that insisted on the word `headline` would report a gap in a
+    publication that has no such gap.
+    """
+    from app.design.select import DISPLAY_FRAME_ROLES
+
+    frames = {f.id: f for frame in archetype.frames for f in frame.walk()}
+    return any(
+        frames[slot.frame_id].role in DISPLAY_FRAME_ROLES
+        for slot in archetype.slots if slot.frame_id in frames
+    )
+
+
+def _sets_columns(pack: Pack, archetype: PageArchetype) -> bool:
+    from app.design.pack_build import COPY_FRAME_ROLES
+
+    frames = {f.id: f for frame in archetype.frames for f in frame.walk()}
+    columns = [
+        slot for slot in archetype.slots
+        if slot.frame_id in frames
+        and frames[slot.frame_id].role in COPY_FRAME_ROLES
+        and (not slot.accepts or "text" in slot.accepts)
+    ]
+    return len(columns) >= 2
+
+
+def _carries_an_exhibit(pack: Pack, archetype: PageArchetype) -> bool:
+    return any(slot.accepts and "figure" in slot.accepts
+               for slot in archetype.slots)
+
+
+_CHECKS = (_states_an_assertion, _sets_columns, _carries_an_exhibit)
+
+
+def gaps(pack: Pack) -> tuple[str, ...]:
+    """What this pack cannot do, in the words of what it is for.
+
+    Reported rather than papered over. A composed opener is a reasonable
+    stand-in for one a publication never showed us; a publication that never
+    shows a page carrying an exhibit is telling us something about itself,
+    and inventing one would be inventing house style.
+    """
+    usable = [a for a in pack.archetypes if a.role in ("content", "exhibit")]
+    missing = []
+    for name, check in zip(CAPABILITIES, _CHECKS):
+        if not any(check(pack, archetype) for archetype in usable):
+            missing.append(name)
+    for role in REQUIRED_ROLES:
+        if not any(a.role == role for a in pack.archetypes):
+            missing.append(f"a {role} page")
+    return tuple(missing)
 
 
 def composed_ids(pack: Pack) -> tuple[str, ...]:

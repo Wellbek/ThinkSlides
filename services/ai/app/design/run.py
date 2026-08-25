@@ -29,6 +29,7 @@ material than any archetype holds becomes two pages.
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import json
 import os
@@ -234,7 +235,12 @@ def _split(shape: MaterialShape) -> tuple[MaterialShape, MaterialShape]:
     cut = max(1, len(texts) // 2)
     first = shape_from(shape.role, shape.heading, texts[:cut],
                        exhibits=exhibits, citations=shape.citations)
-    second = shape_from("content", "", texts[cut:], figures=figures)
+    # The continuation keeps the heading. Dropping it left the second page
+    # with nothing whose role is "heading", and an archetype that requires a
+    # headline then refuses it - so a page that had to be split could not be
+    # placed at all. Repeating the heading on a continued page is also what a
+    # publication does.
+    second = shape_from("content", shape.heading, texts[cut:], figures=figures)
     return first, second
 
 
@@ -250,12 +256,25 @@ def _place(shape: MaterialShape, pack: Pack,
     while pending:
         current = pending.pop(0)
         selection = choose(current, pack, previous_archetype=last)
+        if selection is None and current.role != "content":
+            # An opener carrying a page of copy is a content page in
+            # practice, and a pack whose real cover is a full-bleed
+            # photograph - WTI's is - has nowhere to put that copy. Falling
+            # back is better than refusing: the page still gets composed, in
+            # the archetype that can actually hold it.
+            current = dataclasses.replace(current, role="content")
+            selection = choose(current, pack, previous_archetype=last)
         if selection is not None:
             placed.append((current, selection))
             last = selection.archetype.id
             continue
+        # Only the body counts: a heading is not a paragraph the page can be
+        # divided at, and counting it meant a shape with one paragraph left
+        # looked divisible, split into itself plus nothing, and went round
+        # again until the cap.
         if splits >= ceiling or len(
-                [i for i in current.items if i.kind == "text"]) < 2:
+                [i for i in current.items
+                 if i.kind == "text" and i.role_hint != "heading"]) < 2:
             raise Unplaceable(
                 f"no archetype in pack {pack.id!r} can carry a page of "
                 f"{current.total_chars} characters in "

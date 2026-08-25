@@ -216,6 +216,12 @@ class Pack(_Model):
     type_roles: dict[str, TypeRole] = Field(default_factory=dict)
     colors: ColorRoles = ColorRoles()
     archetypes: tuple[PageArchetype, ...] = ()
+    # Kinds of page this publication never showed us, named rather than
+    # silently absent. A pack that is missing a divider should say so, so a
+    # designer reading it knows the gap is in the source and not in the
+    # reading - and so nothing downstream mistakes "not recovered" for
+    # "not used".
+    vocabulary_gaps: tuple[str, ...] = ()
     policy: LegibilityPolicy = LegibilityPolicy()
     body_face: str = "Arial"
     display_face: str = "Arial"

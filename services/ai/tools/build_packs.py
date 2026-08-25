@@ -27,7 +27,12 @@ def main() -> int:
         if not path:
             print(f"skip {entry.id}: pdf not on this machine", file=sys.stderr)
             continue
-        pack = from_pdf(path, entry.design_pages, pack_id=entry.id,
+        # No page list: the publication's own pages are clustered and each
+        # group becomes an archetype. The held-out validation set is the one
+        # thing that is never read - a pack fitted to the pages it will later
+        # be scored against measures nothing.
+        pack = from_pdf(path, pack_id=entry.id,
+                        exclude_pages=entry.active_validation_pages(),
                         label=entry.title, note=entry.note)
         target = os.path.join(OUT, f"{entry.id}.json")
         with open(target, "w") as handle:

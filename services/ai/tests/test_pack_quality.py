@@ -191,9 +191,16 @@ class TestAPageOfApparatusIsNotAContentArchetype:
     and footnotes, so a deck bound to it had every paragraph set at seven
     points. It is a real page of the publication and a useless archetype."""
 
-    def test_a_page_with_nowhere_for_copy_is_recorded_as_such(self):
-        pack = run.load("bxsl-investor")
-        assert pack.archetype("page-20").role == "appendix"
+    def test_a_page_with_nowhere_for_copy_is_recorded_as_such(self, pack):
+        """Every archetype offered for content has somewhere content can go.
+        A page of endnotes is recorded as an appendix instead."""
+        for archetype in pack.archetypes:
+            if archetype.role not in ("content", "exhibit"):
+                continue
+            assert _carries_copy(archetype.frames, archetype.slots), (
+                f"{pack.id}/{archetype.id} is offered content and has "
+                f"nowhere to put it"
+            )
 
     def test_carries_copy_wants_a_frame_copy_could_go_in(self):
         from app.design.pack import SlotSpec
@@ -207,16 +214,17 @@ class TestAPageOfApparatusIsNotAContentArchetype:
         slots.append(SlotSpec(frame_id="c", accepts=("text",)))
         assert _carries_copy([footnote, column], slots)
 
-    def test_content_does_not_go_on_an_appendix_page(self):
+    def test_content_does_not_go_on_an_appendix_page(self, pack):
         from app.design.material import shape_from
         from app.design.select import fit
 
-        pack = run.load("bxsl-investor")
         shape = shape_from("content", "A heading", [
             "The results of our inaugural survey demonstrate the risks.",
             "Many of the most pressing risks relate to profound shifts.",
         ])
-        assert fit(shape, pack.archetype("page-20"), pack) is None
+        for archetype in pack.archetypes:
+            if archetype.role == "appendix":
+                assert fit(shape, archetype, pack) is None
 
     def test_an_apparatus_frame_refuses_the_deck_s_material(self):
         from app.design.material import MaterialItem
@@ -324,3 +332,78 @@ class TestAGeneratedPageReadsInOrder:
             name = type_role_for(frame.role, placement.item.kind, pack,
                                  frame.type_role)
             assert check(pack, name, pack.role(name).size_pt) is None
+
+
+class TestAnArchetypeIsAPatternNotATrace:
+    """Every archetype was one specific page, abstracted, and the ids said so:
+    `page-4`, `page-8`, `page-12`. Five sampled pages became five archetypes,
+    so a pack described those five pages and could not compose a sixth. The
+    publication's own pages are clustered by what they look like now, and each
+    group becomes one archetype represented by whichever of its pages carries
+    the most."""
+
+    def test_ids_say_what_the_page_does(self, pack):
+        for archetype in pack.archetypes:
+            assert not archetype.id.startswith("page-"), (
+                f"{pack.id}/{archetype.id} is named after the page it was "
+                f"traced from rather than after what it is"
+            )
+
+    def test_an_archetype_stands_for_more_than_the_page_it_came_from(self, pack):
+        """At least one archetype represents several pages. A pack where every
+        archetype covers exactly one page has not recovered a pattern."""
+        traced = [a for a in pack.archetypes if a.example_pages]
+        assert traced
+        assert any(len(a.example_pages) > 1 for a in traced)
+
+    def test_frequency_is_the_share_of_pages_that_look_like_it(self, pack):
+        """Zero on every archetype of every pack before this, which quietly
+        disabled both things that read it: ties break toward the page the
+        house uses most, and the selector discourages running the same
+        archetype twice so a deck reproduces the house's *mix*."""
+        traced = [a for a in pack.archetypes if a.example_pages]
+        assert any(a.frequency > 0 for a in traced)
+        for archetype in traced:
+            assert 0.0 <= archetype.frequency <= 1.0
+
+    def test_a_page_can_state_its_own_assertion(self, pack):
+        """#268's gate. Deliberately not "has a headline frame": EY sets its
+        assertion in a pull-quote beside a section label, which is the house
+        rather than a defect."""
+        from app.design.vocabulary import _states_an_assertion
+
+        usable = [a for a in pack.archetypes if a.role in ("content", "exhibit")]
+        assert any(_states_an_assertion(pack, a) for a in usable)
+
+    def test_a_page_can_carry_a_page_of_material(self, pack):
+        """The other half of the gate. An archetype that states an assertion
+        and holds two sentences is not a content page."""
+        usable = [a for a in pack.archetypes if a.role in ("content", "exhibit")]
+        best = max(
+            sum(s.max_chars or 0 for s in a.slots
+                if not s.accepts or "text" in s.accepts)
+            for a in usable
+        )
+        assert best >= 900, f"{pack.id} tops out at {best} characters a page"
+
+    def test_what_the_publication_never_showed_is_named(self, pack):
+        """A gap is reported rather than papered over: a pack missing a
+        divider should say so, so a designer knows the gap is in the source
+        and not in the reading."""
+        from app.design.vocabulary import gaps
+
+        assert pack.vocabulary_gaps == gaps(pack)
+
+    def test_a_pack_with_nothing_in_it_declares_every_gap(self, pack):
+        from app.design.vocabulary import CAPABILITIES, gaps
+
+        bare = pack.model_copy(update={"archetypes": ()})
+        reported = gaps(bare)
+        for capability in CAPABILITIES:
+            assert capability in reported
+
+    def test_the_house_mix_is_reproducible(self, pack):
+        """A deck should look like the publication's *range* of pages, so the
+        pack has to offer more than one composition to choose between."""
+        usable = [a for a in pack.archetypes if a.role in ("content", "exhibit")]
+        assert len(usable) >= 2

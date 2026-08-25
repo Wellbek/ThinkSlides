@@ -286,7 +286,11 @@ class TestOverflowHasAMoveThatActuallyHelps:
     def test_the_patch_steps_down_the_pack_s_own_ramp(self, pack):
         from app.design.repair import _next_smaller_role
 
-        assert _next_smaller_role(pack, "headline") is not None
+        # The pack's largest rung, whatever it is named. A pack need not have
+        # one called `headline`: EY's content pages set their assertion in a
+        # pull-quote, so that is where its recovered ramp tops out.
+        largest = max(pack.type_roles, key=lambda n: pack.role(n).size_pt)
+        assert _next_smaller_role(pack, largest) is not None
         smaller = _next_smaller_role(pack, "body")
         if smaller is not None:
             assert pack.role(smaller).size_pt < pack.role("body").size_pt
