@@ -28,7 +28,7 @@ from app.design.select import Selection
 
 
 def _type_role(frame: Frame, pack: Pack, item: MaterialItem) -> str:
-    return type_role_for(frame.role, item.kind, pack)
+    return type_role_for(frame.role, item.kind, pack, frame.type_role)
 
 
 def _text_block(frame: Frame, pack: Pack, item: MaterialItem) -> TextBlock:

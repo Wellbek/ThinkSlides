@@ -24,13 +24,18 @@ FRAME_TYPE_ROLE = {
 }
 
 
-def type_role_for(frame_role: str, item_kind: str, pack) -> str:
+def type_role_for(frame_role: str, item_kind: str, pack,
+                  override: str | None = None) -> str:
     """The pack type role this item takes in a frame of this role.
 
-    A quote is always set as a pull-quote where the pack has one; otherwise
-    the frame decides, falling back to body when the pack does not define
-    the role the frame asks for.
+    An explicit frame override wins, because explicit is what it means: a
+    cover's headline frame asking for the display rung is stating something
+    the frame role cannot. Otherwise a quote is always set as a pull-quote
+    where the pack has one, and failing that the frame decides, falling back
+    to body when the pack does not define the role the frame asks for.
     """
+    if override and override in pack.type_roles:
+        return override
     if item_kind == "quote" and "pullquote" in pack.type_roles:
         return "pullquote"
     wanted = FRAME_TYPE_ROLE.get(frame_role, "body")

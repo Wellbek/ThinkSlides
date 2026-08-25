@@ -298,6 +298,13 @@ class Frame(_Model):
     id: str = Field(min_length=1)
     role: str = "panel"
     place: Place
+    # Which rung of the pack's type ramp this frame's text is set in, when the
+    # frame's role does not imply the right one. A cover's headline is set
+    # larger than a page's headline in every publication, and without this the
+    # only ways to say so are to scale the pack (which moves every content
+    # page too) or to invent a frame role for a size (which confuses what a
+    # frame *is* with how big its type is).
+    type_role: Optional[str] = None
     z: int = 0
     bleed: tuple[BleedEdge, ...] = ()
     pad: Optional[int] = Field(default=None, ge=0)
