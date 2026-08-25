@@ -193,6 +193,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     from app.agent.tools.design_slide_content import DesignSlideContentTool
     from app.agent.tools.validate_slide_json import ValidateSlideJsonTool
     from app.agent.tools.build_diagram import BuildDiagramTool
+    from app.agent.tools.build_mermaid import BuildMermaidTool
     from app.agent.tools.draw_svg import DrawSvgTool
     from app.agent.tools.compose_regions import ComposeSlideRegionsTool
     from app.agent.tools.select_source_image import SelectSourceImageTool
@@ -213,6 +214,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     BuildChartTool.register(registry)
     BuildChartGridTool.register(registry)
     BuildDiagramTool.register(registry)
+    BuildMermaidTool.register(registry)
     DrawSvgTool.register(registry)
     BuildTableTool.register(registry)
     BuildKeyMetricsTool.register(registry)

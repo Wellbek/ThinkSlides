@@ -51,3 +51,7 @@ openpyxl==3.1.2
 PyPDF2==3.0.1
 PyMuPDF==1.24.7
 matplotlib==3.9.0
+# Chromium, for laying out a Mermaid diagram. Declared because it was
+# installed in the venv and in no manifest, which is the state where
+# something works on one machine and nowhere else.
+playwright==1.61.0

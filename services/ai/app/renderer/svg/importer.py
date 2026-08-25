@@ -31,6 +31,7 @@ places to run code from.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -75,6 +76,74 @@ class ViewBox:
     @property
     def aspect(self) -> float:
         return self.width / self.height if self.height else 1.0
+
+
+# The identity transform, as (a, b, c, d, e, f) in SVG's own order:
+#   x' = a.x + c.y + e
+#   y' = b.x + d.y + f
+IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+_TRANSFORM = re.compile(r"(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)")
+
+
+def _multiply(outer, inner):
+    """Two transforms, composed. Outer applies after inner, as SVG nests."""
+    a1, b1, c1, d1, e1, f1 = outer
+    a2, b2, c2, d2, e2, f2 = inner
+    return (
+        a1 * a2 + c1 * b2,
+        b1 * a2 + d1 * b2,
+        a1 * c2 + c1 * d2,
+        b1 * c2 + d1 * d2,
+        a1 * e2 + c1 * f2 + e1,
+        b1 * e2 + d1 * f2 + f1,
+    )
+
+
+def parse_transform(value):
+    """An SVG `transform` attribute as a matrix.
+
+    Mermaid positions every node and every edge label with nested
+    `<g transform="translate(...)">`, so a reader that ignores transforms
+    imports a diagram with everything piled at the origin. Real-world SVG uses
+    them everywhere; this is not a Mermaid concession.
+    """
+    result = IDENTITY
+    for name, raw in _TRANSFORM.findall(value or ""):
+        numbers = [float(n) for n in
+                   re.findall(r"-?\d*\.?\d+(?:[eE][-+]?\d+)?", raw)]
+        if name == "matrix" and len(numbers) >= 6:
+            step = tuple(numbers[:6])
+        elif name == "translate" and numbers:
+            step = (1.0, 0.0, 0.0, 1.0, numbers[0],
+                    numbers[1] if len(numbers) > 1 else 0.0)
+        elif name == "scale" and numbers:
+            sx = numbers[0]
+            sy = numbers[1] if len(numbers) > 1 else sx
+            step = (sx, 0.0, 0.0, sy, 0.0, 0.0)
+        elif name == "rotate" and numbers:
+            angle = math.radians(numbers[0])
+            cos, sin = math.cos(angle), math.sin(angle)
+            step = (cos, sin, -sin, cos, 0.0, 0.0)
+            if len(numbers) >= 3:
+                cx, cy = numbers[1], numbers[2]
+                step = _multiply(
+                    (1.0, 0.0, 0.0, 1.0, cx, cy),
+                    _multiply(step, (1.0, 0.0, 0.0, 1.0, -cx, -cy)))
+        elif name == "skewX" and numbers:
+            step = (1.0, 0.0, math.tan(math.radians(numbers[0])), 1.0, 0.0, 0.0)
+        elif name == "skewY" and numbers:
+            step = (1.0, math.tan(math.radians(numbers[0])), 0.0, 1.0, 0.0, 0.0)
+        else:
+            continue
+        result = _multiply(result, step)
+    return result
+
+
+def apply_transform(matrix, point):
+    a, b, c, d, e, f = matrix
+    x, y = point
+    return (a * x + c * y + e, b * x + d * y + f)
 
 
 def _local(tag: str) -> str:
@@ -174,16 +243,66 @@ def paint_of(value: Optional[str],
     return _colour(text)
 
 
-def _style(element: ElementTree.Element) -> dict[str, str]:
-    """Presentation attributes and the `style` attribute, merged."""
-    out = {key: value for key, value in element.attrib.items()
-           if key in ("fill", "stroke", "stroke-width", "font-size",
-                      "font-family", "font-weight", "text-anchor",
-                      "fill-opacity", "opacity")}
+_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.S)
+
+PAINT_PROPERTIES = ("fill", "stroke", "stroke-width", "font-size",
+                    "font-family", "font-weight", "text-anchor",
+                    "fill-opacity", "opacity", "color")
+
+
+def read_stylesheet(root: ElementTree.Element) -> dict[str, dict[str, str]]:
+    """Class rules from the document's own `<style>` blocks.
+
+    Mermaid paints almost nothing with presentation attributes - its nodes and
+    edges are styled by class - so a reader that looks only at attributes
+    imports a diagram in which every shape defaulted to black and every label
+    lost the contrast it was drawn for.
+
+    Two selector forms are read: a bare class, and a class scoped to the
+    document's own root id - `#d .node`, which is the only form Mermaid emits
+    and which every element in that document matches anyway. Anything deeper
+    is skipped: a descendant or attribute selector needs a real cascade to
+    resolve, and half a cascade applied confidently is worse than none.
+    """
+    root_id = root.get("id") or ""
+    sheet: dict[str, dict[str, str]] = {}
+    for element in root.iter():
+        if _local(element.tag) != "style":
+            continue
+        for selectors, body in _RULE.findall(element.text or ""):
+            declarations = {}
+            for declaration in body.split(";"):
+                if ":" in declaration:
+                    key, _, value = declaration.partition(":")
+                    key = key.strip()
+                    if key in PAINT_PROPERTIES:
+                        declarations[key] = value.strip().rstrip("!important").strip()
+            if not declarations:
+                continue
+            for selector in selectors.split(","):
+                selector = selector.strip()
+                if root_id and selector.startswith(f"#{root_id} "):
+                    selector = selector[len(root_id) + 2:].strip()
+                if re.fullmatch(r"\.[A-Za-z0-9_-]+", selector):
+                    sheet.setdefault(selector[1:], {}).update(declarations)
+    return sheet
+
+
+def _style(element: ElementTree.Element,
+           sheet: Optional[dict[str, dict[str, str]]] = None,
+           inherited: Optional[dict[str, str]] = None) -> dict[str, str]:
+    """What paints this element: inherited, then class, then attribute, then
+    inline - which is the order CSS itself resolves them in."""
+    out = dict(inherited or {})
+    for name in (element.get("class") or "").split():
+        out.update((sheet or {}).get(name, {}))
+    out.update({key: value for key, value in element.attrib.items()
+                if key in PAINT_PROPERTIES})
     for declaration in (element.get("style") or "").split(";"):
         if ":" in declaration:
             key, _, value = declaration.partition(":")
-            out[key.strip()] = value.strip()
+            if key.strip() in PAINT_PROPERTIES:
+                out[key.strip()] = value.strip()
     return out
 
 
@@ -309,14 +428,11 @@ def to_primitives(svg: str, box: PositionConfig, *,
     )
     tolerance = max(view.width, view.height) * FLATNESS
 
+    sheet = read_stylesheet(root)
     primitives: list[Primitive] = []
-    for index, element in enumerate(root.iter()):
+    for index, (element, matrix, style) in enumerate(
+            _walk(root, IDENTITY, sheet, {})):
         tag = _local(element.tag)
-        if tag in FORBIDDEN_TAGS:
-            continue
-        if any(_local(a.tag) in FORBIDDEN_TAGS for a in _ancestors(root, element)):
-            continue
-        style = _style(element)
         # A role name is already the deck's colour, so it is not remapped;
         # anything else is matched to the nearest role.
         fill = _resolve(style.get("fill"), palette)
@@ -328,13 +444,19 @@ def to_primitives(svg: str, box: PositionConfig, *,
                 continue
             primitives.append(_text_primitive(
                 element, text, frame, view, style, fill or "#000000",
-                f"{prefix}-t{index}", body_font,
-                ground=_ground_under(element, root, view, palette)))
+                f"{prefix}-t{index}", body_font, matrix=matrix,
+                ground=_ground_under(element, root, view, palette,
+                                     sheet)))
             continue
 
         subpaths = _subpaths_for(tag, element, tolerance)
         if not subpaths:
             continue
+        subpaths = [
+            SubPath(points=[apply_transform(matrix, p) for p in sub.points],
+                    closed=sub.closed)
+            for sub in subpaths
+        ]
         if fill is None and stroke is None:
             # An SVG with no paint attribute fills black by default, and a
             # shape drawn in nothing at all is invisible rather than absent.
@@ -349,16 +471,28 @@ def to_primitives(svg: str, box: PositionConfig, *,
     return primitives
 
 
-def _ancestors(root: ElementTree.Element,
-               target: ElementTree.Element) -> list[ElementTree.Element]:
-    """The chain above an element, so a child of <script> is dropped too."""
-    parents = {child: parent for parent in root.iter() for child in parent}
-    chain = []
-    current = parents.get(target)
-    while current is not None:
-        chain.append(current)
-        current = parents.get(current)
-    return chain
+# Properties a child inherits from its parent when it says nothing itself,
+# which is how an SVG group colours everything inside it at once.
+INHERITED = ("fill", "stroke", "stroke-width", "font-size", "font-family",
+             "font-weight", "text-anchor", "color")
+
+
+def _walk(element: ElementTree.Element, matrix, sheet, inherited):
+    """Every element worth drawing, with the transform and paint that reach it.
+
+    A forbidden element takes its whole subtree with it, which is the point of
+    walking rather than iterating: a `<text>` inside a `<foreignObject>` is
+    smuggled HTML, not a label.
+    """
+    tag = _local(element.tag)
+    if tag in FORBIDDEN_TAGS:
+        return
+    here = _multiply(matrix, parse_transform(element.get("transform")))
+    style = _style(element, sheet, inherited)
+    yield element, here, style
+    passed = {key: value for key, value in style.items() if key in INHERITED}
+    for child in element:
+        yield from _walk(child, here, sheet, passed)
 
 
 def _subpaths_for(tag: str, element: ElementTree.Element,
@@ -379,7 +513,8 @@ def _subpaths_for(tag: str, element: ElementTree.Element,
 
 
 def _ground_under(text_element, root, view: ViewBox,
-                  palette: Optional[dict[str, str]]) -> Optional[str]:
+                  palette: Optional[dict[str, str]],
+                  sheet: Optional[dict] = None) -> Optional[str]:
     """What a label sits on, so the contrast guard judges it correctly.
 
     A white label over a green node is readable; told the slide is white, the
@@ -393,7 +528,7 @@ def _ground_under(text_element, root, view: ViewBox,
         tag = _local(element.tag)
         if tag not in ("rect", "circle", "ellipse", "polygon", "path"):
             continue
-        fill = _resolve(_style(element).get("fill"), palette)
+        fill = _resolve(_style(element, sheet).get("fill"), palette)
         if not fill:
             continue
         bounds = _bounds_of(tag, element)
@@ -424,10 +559,11 @@ def _bounds_of(tag: str, element) -> Optional[tuple[float, float, float, float]]
 
 
 def _text_primitive(element, text, frame, view, style, colour,
-                    identifier, body_font, ground=None) -> Primitive:
+                    identifier, body_font, matrix=IDENTITY,
+                    ground=None) -> Primitive:
     """A label, as live text rather than as an outline of one."""
-    x = _length(element.get("x"), 0.0)
-    y = _length(element.get("y"), 0.0)
+    x, y = apply_transform(matrix, (_length(element.get("x"), 0.0),
+                                    _length(element.get("y"), 0.0)))
     size = _length(style.get("font-size"), 12.0)
     anchor = (style.get("text-anchor") or "start").strip()
     # SVG positions text by its baseline; a PowerPoint box is positioned by
