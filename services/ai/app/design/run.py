@@ -65,6 +65,29 @@ FIGURE_KINDS = {"image"}
 MIN_SPLITS = 4
 
 
+def natural_aspect(block: dict) -> Optional[float]:
+    """The shape a figure wants, read from the figure itself.
+
+    An SVG says so in its viewBox, which is why a Mermaid graph is rendered
+    to SVG *before* the page is composed rather than after: a figure whose
+    shape is unknown until it is drawn cannot be given a slot that suits it.
+    """
+    drawn = (block or {}).get("diagram") or {}
+    if str(drawn.get("format") or "").lower() != "svg":
+        return None
+    try:
+        from xml.etree import ElementTree
+
+        from app.renderer.svg.importer import read_viewbox
+
+        view = read_viewbox(ElementTree.fromstring(str(drawn.get("svg") or "")))
+        return view.aspect if view.aspect > 0 else None
+    except Exception:
+        # A figure that will not parse has no shape to declare, and the
+        # renderer refuses it by name later. Nothing is guessed here.
+        return None
+
+
 class Unplaceable(RuntimeError):
     """No archetype in this pack can carry this material, even split."""
 
@@ -205,6 +228,13 @@ def material_from(slide: dict, *, index: int = 0, total: int = 1) -> MaterialSha
         elif kind in EXHIBIT_KINDS:
             payload = dict(block)
             payload["kind"] = EXHIBIT_KINDS[kind]
+            aspect = natural_aspect(block)
+            if aspect:
+                # Declared before placement, so the selector can prefer a slot
+                # the figure actually fits. Without it a wide graph lands in a
+                # tall slot and is cropped or letterboxed, and the cost of
+                # that is discovered at render when nothing can act on it.
+                payload["aspect"] = aspect
             exhibits.append(payload)
         elif kind in FIGURE_KINDS:
             figures.append(dict(block))

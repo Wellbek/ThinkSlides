@@ -238,6 +238,14 @@ class Exhibit(_Model):
     exhibit_kind: Literal["chart", "table", "diagram", "metrics", "block"]
     payload: dict
     caption: Optional[TextBlock] = None
+    # The shape the exhibit itself wants, declared before it is placed. A
+    # drawn graph knows its own aspect from its viewBox, and a slot nothing
+    # like that shape crops it or letterboxes it - a cost worth counting while
+    # a slot is being chosen rather than discovering at render.
+    aspect: Optional[float] = Field(default=None, gt=0)
+    # What to do when the slot is the wrong shape anyway: letterbox, crop, or
+    # stretch. The repair loop's one move for a figure that does not fit.
+    fit: Literal["cover", "contain", "fill"] = "contain"
 
 
 class Rule(_Model):

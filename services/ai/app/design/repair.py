@@ -25,7 +25,9 @@ from typing import Callable, Literal, Optional
 
 from app.design.geometry import check_page, resolve_page
 from app.design.pack import Pack
-from app.design.schema import DesignDoc, Frame, Page, PatchOp, TextBlock
+from app.design.schema import (
+    DesignDoc, Exhibit, Figure, Frame, Page, PatchOp, TextBlock,
+)
 
 Severity = Literal[1, 2, 3, 4, 5]
 
@@ -211,12 +213,76 @@ def legibility_findings(page: Page, pack: Pack) -> list[Finding]:
     return findings
 
 
+# A figure smaller than this share of the canvas is not a figure a reader can
+# follow, whatever it contains. Stated as a share because a diagram's
+# legibility is about how big it is on the page, not how many inches it is.
+MIN_FIGURE_SHARE = 0.06
+
+# How far a figure's slot may be from the figure's own shape before the crop
+# or the letterbox is worth acting on. An octave either way.
+MAX_ASPECT_DRIFT = 2.0
+
+
+def figure_findings(doc: DesignDoc, page: Page, pack: Pack) -> list[Finding]:
+    """Figures too small to read, and figures in a slot the wrong shape.
+
+    The selector already prefers a slot whose aspect suits a figure. This is
+    what is left when no slot suited it: the page was composed anyway, and a
+    graph squeezed into a column is a graph nobody can follow.
+    """
+    findings: list[Finding] = []
+    canvas_area = pack.canvas.w_in * pack.canvas.h_in
+    if canvas_area <= 0:
+        return findings
+    for resolved in resolve_page(doc, page):
+        frame = resolved.frame
+        if frame.role != "figure":
+            continue
+        area = resolved.rect.width * resolved.rect.height
+        share = area / canvas_area
+        if share < MIN_FIGURE_SHARE:
+            findings.append(Finding(
+                frame_id=frame.id, property="figure_scale",
+                observed=f"{share:.1%} of the page",
+                expected=f"at least {MIN_FIGURE_SHARE:.0%}, or it is a figure "
+                         f"nobody can read",
+                severity=4,
+            ))
+        aspect = _declared_aspect(frame)
+        if aspect and resolved.rect.height > 0:
+            slot = resolved.rect.width / resolved.rect.height
+            if slot > 0 and max(aspect / slot, slot / aspect) > MAX_ASPECT_DRIFT:
+                findings.append(Finding(
+                    frame_id=frame.id, property="figure_aspect",
+                    observed=f"a {aspect:.1f}:1 figure in a {slot:.1f}:1 slot",
+                    expected="a slot the figure fits, or letterboxing rather "
+                             "than a crop",
+                    severity=3,
+                    patch=PatchOp(
+                        op="set_fit", args={"frame_id": frame.id,
+                                            "fit": "contain"},
+                        reason="letterbox rather than crop; kept only if the "
+                               "page improves",
+                    ),
+                ))
+    return findings
+
+
+def _declared_aspect(frame: Frame) -> Optional[float]:
+    for item in frame.content:
+        aspect = getattr(item, "aspect", None)
+        if aspect:
+            return float(aspect)
+    return None
+
+
 def diagnose(doc: DesignDoc, page: Page, pack: Pack) -> list[Finding]:
     """Everything measurably wrong with this page, worst first."""
     findings = (
         geometry_findings(doc, page)
         + overflow_findings(doc, page, pack)
         + legibility_findings(page, pack)
+        + figure_findings(doc, page, pack)
     )
     return sorted(findings, key=lambda f: -f.severity)
 
@@ -300,6 +366,30 @@ def _set_type_role(page: Page, args: dict) -> Page:
     return page.model_copy(update={"frames": _map_frames(page.frames, apply)})
 
 
+def _set_fit(page: Page, args: dict) -> Page:
+    """How a figure fills its slot: cropped, letterboxed, or stretched.
+
+    The one thing that can actually be done about a figure in a slot the wrong
+    shape, once the page is composed. Choosing a different slot is not a patch
+    - it is a different page - so what is left is deciding whether the reader
+    loses the edges of the figure or gains some white space, and white space
+    is the lesser loss.
+    """
+    frame_id = args["frame_id"]
+    fit = str(args.get("fit") or "contain")
+
+    def apply(frame: Frame) -> Frame:
+        if frame.id != frame_id or not frame.content:
+            return frame
+        return frame.model_copy(update={"content": tuple(
+            item.model_copy(update={"fit": fit})
+            if isinstance(item, (Figure, Exhibit)) else item
+            for item in frame.content
+        )})
+
+    return page.model_copy(update={"frames": _map_frames(page.frames, apply)})
+
+
 def _set_ground(page: Page, args: dict) -> Page:
     target, ground = args.get("frame_id"), str(args.get("ground") or "")
 
@@ -323,6 +413,7 @@ def _set_z(page: Page, args: dict) -> Page:
 PATCHES: dict[str, PatchFn] = {
     "set_columns": _set_columns,
     "set_type_role": _set_type_role,
+    "set_fit": _set_fit,
     "drop_content": _drop_content,
     "set_ground": _set_ground,
     "set_z": _set_z,

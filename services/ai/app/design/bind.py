@@ -48,7 +48,10 @@ def _content_for(frame: Frame, pack: Pack, item: MaterialItem):
         return Figure(source=payload.get("source", payload), fit="cover",
                       alt_text=str(payload.get("altText", "")))
     payload = dict(item.payload or {})
-    return Exhibit(exhibit_kind=item.kind, payload=payload)
+    # The shape the exhibit declared travels with it, so the repair loop can
+    # see that a wide graph landed in a tall slot.
+    return Exhibit(exhibit_kind=item.kind, payload=payload,
+                   aspect=item.aspect)
 
 
 def _fill(frames: tuple[Frame, ...], contents: dict[str, list],
