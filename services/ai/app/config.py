@@ -66,6 +66,17 @@ class Settings(BaseSettings):
     jwt_secret: str = "thinkslides-dev-jwt-secret-change-in-production"
     jwt_algorithm: str = "HS256"
 
+    # ── Design language ─────────────────────────
+    # Whether a run with no uploaded template composes its pages against a
+    # design language pack instead of filling one of eight stock Office
+    # layouts. The path is complete and renders end to end; what is not yet
+    # good enough to put in front of every user is the *packs*, which are
+    # traced from reference PDFs and carry chart labels and page furniture as
+    # content slots (#275). Turning this on before that is fixed trades one
+    # kind of bad page for another, so it is opt-in until the pack gate
+    # passes.
+    design_language_enabled: bool = False
+
     # `extra="ignore"` is load-bearing, not tidiness. `.env` at the repo root
     # is the single file the setup docs tell you to create, and it carries the
     # web and orchestrator settings too (PORT, AI_SERVICE_URL,

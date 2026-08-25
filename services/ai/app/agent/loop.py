@@ -527,6 +527,12 @@ class WorkingState:
     def __init__(self) -> None:
         self.accumulated_slides: list[dict] = []
         self.presentation_structure: dict | None = None
+        # The design language pack this run composes against, by id. Set once
+        # the plan exists (the choice is measured against the deck's own
+        # material) and only when no template was uploaded - an uploaded
+        # template keeps the template-faithful path, which is the promise
+        # made to a customer who supplied one.
+        self.pack_id: str | None = None
         # slide_index -> the select_layout result for that slide. Lets the
         # loop auto-supply design_slide_content's layout_info instead of
         # requiring the LLM to copy the full layout object it just received
@@ -1058,6 +1064,7 @@ class AgentLoop:
         # written. Both are published on the run context because the validator
         # cannot be handed them as tool arguments - see run_context.
         self._design_system_token = None
+        self._pack_token = None
         self._material_token = None
         # Set from the conversation in _run: the consultation checkpoints are
         # enforced, so the user's "just build it" has to be able to lift them.
@@ -1307,6 +1314,7 @@ class AgentLoop:
         state_dict = {
             "accumulated_slides": self.working_state.accumulated_slides,
             "presentation_structure": self.working_state.presentation_structure,
+            "pack_id": self.working_state.pack_id,
             "selected_layouts": self.working_state.selected_layouts,
             "selected_images": self.working_state.selected_images,
             "current_step_index": self.working_state.current_step_index,
@@ -1376,6 +1384,9 @@ class AgentLoop:
             state_dict = json.loads(state_json)
             self.working_state.accumulated_slides = state_dict.get("accumulated_slides", [])
             self.working_state.presentation_structure = state_dict.get("presentation_structure")
+            # A resumed run composes in the language it started in. Re-choosing
+            # would let a deck change house style halfway through.
+            self.working_state.pack_id = state_dict.get("pack_id")
             # JSON round-trips dict keys as strings; slide_index is looked up
             # as an int everywhere else, so convert back on load.
             self.working_state.selected_layouts = {
@@ -1510,6 +1521,9 @@ class AgentLoop:
             if self._design_system_token is not None:
                 run_context.reset_design_system(self._design_system_token)
                 self._design_system_token = None
+            if self._pack_token is not None:
+                run_context.reset_pack(self._pack_token)
+                self._pack_token = None
             if self._material_token is not None:
                 run_context.reset_slide_material(self._material_token)
                 self._material_token = None
@@ -1753,6 +1767,59 @@ class AgentLoop:
         async for event in self._closing_message(context, chat_messages):
             yield event
     # ── The phases the loop drives itself ─────────────────────────────────
+
+    def _resolve_pack(self, structure: dict, context: dict) -> None:
+        """Put this run on a design language pack, when it should be on one.
+
+        A run with an uploaded template is not: that customer was promised
+        their own template, and the XML-clone renderer is what keeps that
+        promise. A run without one used to fall through to eight hardcoded
+        Office layouts chosen by substring match, which is why every deck
+        with no template looked identical. It composes against a pack
+        instead.
+
+        Chosen here rather than at the design pause because the choice is
+        measured against the deck's own material, and the material is what
+        the plan describes.
+        """
+        from app.config import settings
+
+        if not settings.design_language_enabled:
+            return
+        design_system = context.get("design_system") or {}
+        if str(design_system.get("sourceType") or "default") != "default":
+            return
+        try:
+            from app.design import run as design_run
+
+            if self.working_state.pack_id:
+                # A resumed run already chose; it just has to be reinstalled,
+                # because a ContextVar does not survive the process.
+                if self._pack_token is None:
+                    self._install_pack(
+                        design_run.load(self.working_state.pack_id),
+                        design_system,
+                    )
+                return
+            pack = design_run.for_plan(structure)
+        except Exception as exc:   # a pack must never fail a run
+            logger.warning("pack_selection_failed", error=str(exc))
+            return
+        if pack is None:
+            return
+        self.working_state.pack_id = pack.id
+        self._install_pack(pack, design_system)
+        logger.info("pack_selected", pack=pack.id,
+                    archetypes=len(pack.archetypes))
+
+    def _install_pack(self, pack, design_system: dict | None) -> None:
+        """Make the pack, wearing the user's chosen colours, visible to tools."""
+        from app.design import run as design_run
+
+        dressed = design_run.overlay(pack, design_system)
+        if self._pack_token is not None:
+            run_context.reset_pack(self._pack_token)
+        self._pack_token = run_context.set_pack(dressed)
 
     async def _ensure_design_system(
         self, context: dict, session_id: uuid.UUID
@@ -2215,6 +2282,8 @@ class AgentLoop:
         # servers said they belong in. Added rather than merged into the phase
         # table because the second half is not known until the run starts.
         offered = phase.tools | self.mcp_tools_by_phase.get(phase.name, frozenset())
+        if self.working_state.pack_id:
+            offered = offered - pipeline.TEMPLATE_GEOMETRY_TOOLS
         schemas = [
             schema for schema in self.registry.get_function_schemas()
             if _schema_name(schema) in offered
@@ -2734,7 +2803,17 @@ class AgentLoop:
                     "slide is carried over unchanged automatically."
                 )
 
-            if slide_index is not None and slide_index not in ws.selected_layouts:
+            # A run composing against a design language pack has no layout to
+            # select: which archetype carries a page is decided in code, after
+            # the material for it exists, and `select_layout` is not even
+            # offered. Demanding one here left the model with a precondition
+            # it could not satisfy, and the draft phase span on
+            # `select_source_image` until it ran out of turns.
+            if (
+                not ws.pack_id
+                and slide_index is not None
+                and slide_index not in ws.selected_layouts
+            ):
                 return (
                     f"No layout has been selected for slide {slide_index} yet. Call "
                     f"select_layout for slide_index={slide_index} first - its result "
@@ -3249,6 +3328,7 @@ class AgentLoop:
                         )
                         structure["deviations"] = deviations
                     self.working_state.presentation_structure = structure
+                    self._resolve_pack(structure, context)
 
             if fn_name == "design_slide_content":
                 if tool_result.data and "slideIndex" in tool_result.data:
