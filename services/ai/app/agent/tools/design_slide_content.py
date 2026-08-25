@@ -287,6 +287,31 @@ Design System Context:
                     f"  Available sources:\n{numbered}"
                 )
 
+            # The on-page apparatus, which is a different thing from the
+            # deck-wide reference trail above: sourceRef numbers a run for the
+            # appendix, sourceLine says on this page where its figures came
+            # from. The renderer and validate_slide_json have supported both
+            # for as long as they have existed, and nothing here ever told the
+            # model they were available - so decks built on researched figures
+            # carried them with no attribution anywhere on the page.
+            apparatus_guidance = ""
+            if findings:
+                apparatus_guidance = (
+                    "\n- A page that states figures says where they came from. "
+                    "Put a short attribution in \"sourceLine\" - \"Source: \" and "
+                    "the publications behind this slide's numbers, named, not "
+                    "URLs. One line, under the content.\n"
+                    "- Where a figure needs a caveat rather than a source - a "
+                    "definition, a restated basis, a period that differs - put "
+                    "it in \"footnotes\": an array of short lines, and mark the "
+                    "run it belongs to with [^1], [^2] in its text, numbered in "
+                    "the order the footnotes are listed. Every marker needs its "
+                    "footnote and every footnote needs its marker; a marker "
+                    "pointing at nothing is rejected at validation. Use these "
+                    "only where they earn their place - a page of your own "
+                    "framing needs neither."
+                )
+
             # The flat "there is no image-generation step" was true, and is
             # now true only when no image provider is configured. Saying it
             # unconditionally on a workspace that HAS one would have the model
@@ -328,6 +353,22 @@ Design System Context:
                     rendered=title_register, reason=register_note,
                 )
 
+            # A run composing against a design language pack does not fill
+            # placeholders: which archetype carries this page, and where each
+            # piece of material sits on it, is decided in code once the
+            # material exists. Telling the model about placeholder indices it
+            # cannot use invites it to emit geometry that is then discarded,
+            # and asking it for bullets produces bullets - which is precisely
+            # the output this whole path exists to stop producing.
+            pack = run_context.get_pack()
+            placement_rules, page_info = _placement_guidance(
+                pack, title_idx, body_idx, layout_name, ph_text
+            )
+            shape_example = _shape_example(
+                pack, slide_index, layout, layout_name, section,
+                title_register, title_idx, body_idx,
+            )
+
             prompt = f"""{today_line()}
 
 Generate content for a single presentation slide.
@@ -337,47 +378,18 @@ Slide Outline:
 
 Key points to cover on this slide:
 {kp_list}
-{density_info}{grammar_info}
-Selected Layout: {layout_name}
-Available Placeholders:
-{ph_text}
-Resolved placeholder indices: title={title_idx}, body={body_idx}
+{density_info}{grammar_info}{apparatus_guidance}
+{page_info}
 {ds_info}
 {image_info}
 {visual_info}
 
 Return a JSON object with this exact structure:
-{{
-  "slideIndex": {slide_index},
-  "layoutId": "{layout.get('layoutId', '1')}",
-  "layoutName": "{layout_name}",
-  "section": "{section}",
-  "titleRegister": "{title_register}",
-  "contents": [
-    {{
-      "type": "text",
-      "placeholderIdx": {title_idx},
-      "runs": [
-        {{"text": "Slide title here", "bold": true, "bullet": false, "level": 0}}
-      ]
-    }},
-    {{
-      "type": "text",
-      "placeholderIdx": {body_idx},
-      "runs": [
-        {{"text": "First key point as a concise sentence", "bold": false, "bullet": true, "level": 0}},
-        {{"text": "Second key point as a concise sentence", "bold": false, "bullet": true, "level": 0}},
-        {{"text": "Third key point as a concise sentence", "bold": false, "bullet": true, "level": 0}}
-      ]
-    }}
-  ],
-  "notes": "Speaker notes for this slide"
-}}
+{shape_example}
 
 Rules:
 {register_guidance}
-- Put the slide title in the title placeholder (placeholderIdx={title_idx}).
-- Put EVERY key point listed above into the body placeholder (placeholderIdx={body_idx}) as its OWN bullet run - one run per key point, with bullet: true and level: 0. Never collapse multiple key points into a single bullet or drop points to save space.
+{placement_rules}
 - {detail_guidance}
 - Only use "image" type when an image was supplied above - either a pre-vetted source image (source: "selected") or one built by generate_image. {image_rule}
 - Use "table" type for tbl placeholders (or any content placeholder, if no dedicated table placeholder exists) when the content is genuinely tabular (comparisons, structured data with 2+ rows and 2+ columns) - do not force prose bullet points into a table, and do not use a table for anything that reads better as bullets. Shape: {{type: "table", placeholderIdx: N, table: {{headerRow: true, rows: [["Column A", "Column B"], ["Row 1 value", "Row 1 value"], ["Row 2 value", "Row 2 value"]]}}}}. Every row must have the same number of cells as the header row. Keep cell text short (a few words) - tables are rendered at a fixed size, not auto-expanded.
@@ -419,6 +431,15 @@ Rules:
             slide_data.setdefault("layoutId", layout.get("layoutId", "1"))
             slide_data.setdefault("layoutName", layout_name)
             slide_data.setdefault("contents", [])
+            if pack is not None:
+                # What kind of page this is, from the plan rather than from
+                # where it happens to sit. A deck's section divider is in the
+                # middle, so inferring the role from the index gets it wrong
+                # for every page that is not the first or the last.
+                from app.design.run import ROLE_FOR_CONTENT_TYPE
+
+                slide_data.setdefault("role", ROLE_FOR_CONTENT_TYPE.get(
+                    str(outline.get("contentType") or ""), "content"))
             carry_archetype(slide_data, outline)
 
             # A "chart" content item is never legitimate here, whether a
@@ -473,6 +494,102 @@ Rules:
             )
         except Exception as e:
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
+
+def _placement_guidance(pack, title_idx: int, body_idx: int,
+                        layout_name: str, ph_text: str) -> tuple[str, str]:
+    """What to tell the model about where its words will go.
+
+    Two different answers, because the two paths put them there differently.
+    On an uploaded template the model addresses placeholders by index. On a
+    design language pack it does not address anything: it says what the page
+    is about, and `app/design/select.py` decides which archetype carries it
+    and which slot each piece of material sits in. Handing that model
+    placeholder indices would invite geometry it cannot control, and asking
+    it for bullets would get bullets - the exact output the pack path exists
+    to stop producing.
+    """
+    if pack is None:
+        return (
+            f"- Put the slide title in the title placeholder "
+            f"(placeholderIdx={title_idx}).\n"
+            f"- Put EVERY key point listed above into the body placeholder "
+            f"(placeholderIdx={body_idx}) as its OWN bullet run - one run per "
+            f"key point, with bullet: true and level: 0. Never collapse "
+            f"multiple key points into a single bullet or drop points to save "
+            f"space.",
+            f"Selected Layout: {layout_name}\n"
+            f"Available Placeholders:\n{ph_text}\n"
+            f"Resolved placeholder indices: title={title_idx}, body={body_idx}",
+        )
+    return (
+        "- This deck is set in a measured design language, and the page is "
+        "composed for you: which page pattern carries this slide, and where "
+        "each piece of material sits on it, is decided from the material "
+        "itself after you write it. Do not emit placeholder indices, "
+        "positions or sizes - they are ignored.\n"
+        "- Write the heading as one text block of a single run. Write the "
+        "body as one text block whose runs are complete sentences, one run "
+        "per point, with bullet: false - these are set as paragraphs of a "
+        "publication, not as bullets.\n"
+        "- Every key point listed above must appear. Nothing is dropped to "
+        "make a page fit: a page with more material than its pattern holds is "
+        "split across two pages automatically.",
+        f"Design language: {pack.id} ("
+        f"{len(pack.archetypes)} page patterns, "
+        f"{pack.grid.columns}-column grid). The composition is measured from "
+        f"a real publication; your job is the words.",
+    )
+
+
+def _shape_example(pack, slide_index: int, layout: dict, layout_name: str,
+                   section: str, title_register: str,
+                   title_idx: int, body_idx: int) -> str:
+    """The JSON shape to return, in whichever path this run is on."""
+    if pack is None:
+        return (
+            "{\n"
+            f'  "slideIndex": {slide_index},\n'
+            f'  "layoutId": "{layout.get("layoutId", "1")}",\n'
+            f'  "layoutName": "{layout_name}",\n'
+            f'  "section": "{section}",\n'
+            f'  "titleRegister": "{title_register}",\n'
+            '  "contents": [\n'
+            '    {\n'
+            '      "type": "text",\n'
+            f'      "placeholderIdx": {title_idx},\n'
+            '      "runs": [\n'
+            '        {"text": "Slide title here", "bold": true, "bullet": false, "level": 0}\n'
+            '      ]\n'
+            '    },\n'
+            '    {\n'
+            '      "type": "text",\n'
+            f'      "placeholderIdx": {body_idx},\n'
+            '      "runs": [\n'
+            '        {"text": "First key point as a concise sentence", "bold": false, "bullet": true, "level": 0},\n'
+            '        {"text": "Second key point as a concise sentence", "bold": false, "bullet": true, "level": 0},\n'
+            '        {"text": "Third key point as a concise sentence", "bold": false, "bullet": true, "level": 0}\n'
+            '      ]\n'
+            '    }\n'
+            '  ],\n'
+            '  "notes": "Speaker notes for this slide"\n'
+            "}"
+        )
+    return (
+        "{\n"
+        f'  "slideIndex": {slide_index},\n'
+        f'  "section": "{section}",\n'
+        f'  "titleRegister": "{title_register}",\n'
+        '  "contents": [\n'
+        '    {"type": "text", "runs": [{"text": "<the slide heading>"}]},\n'
+        '    {"type": "text", "runs": [\n'
+        '      {"text": "<the first point, as a complete sentence>", "bullet": false},\n'
+        '      {"text": "<the second point, as a complete sentence>", "bullet": false}\n'
+        '    ]}\n'
+        '  ],\n'
+        '  "notes": "Speaker notes for this slide"\n'
+        "}"
+    )
+
 
 def _describe_visual(block: dict) -> str:
     """One line naming what a prepared visual actually shows."""

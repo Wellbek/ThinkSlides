@@ -69,6 +69,14 @@ _slide_material: ContextVar[dict | None] = ContextVar(
     "thinkslides_slide_material", default=None
 )
 
+# The design language pack this run composes against, when it has one. A run
+# on an uploaded template has none and keeps the template-faithful path; a run
+# with no template has one, and every page is laid out by `app/design` rather
+# than by filling a stock Office layout's placeholders. Carried here for the
+# same reason the design system is: it is far too large to make the model
+# copy back, and nothing about it is the model's to decide.
+_pack: ContextVar[object | None] = ContextVar("thinkslides_pack", default=None)
+
 
 def set_include_sources(enabled: bool) -> Token:
     """Install whether this run cites its sources in the document."""
@@ -110,6 +118,20 @@ def get_design_system() -> dict | None:
 
 def reset_design_system(token: Token) -> None:
     _design_system.reset(token)
+
+
+def set_pack(pack: object | None) -> Token:
+    """Install the design language pack this run composes against."""
+    return _pack.set(pack)
+
+
+def get_pack():
+    """The run's pack, or None when this run is on an uploaded template."""
+    return _pack.get()
+
+
+def reset_pack(token: Token) -> None:
+    _pack.reset(token)
 
 
 def set_slide_material(material: dict | None) -> Token:

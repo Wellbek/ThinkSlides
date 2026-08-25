@@ -15,6 +15,7 @@ from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession
 from app import ai_settings
 from app.agent import run_context
+from app.llm import usage
 from app.agent.event_types import ALL_EVENT_TYPES
 from app.agent.redact import redact_binary
 from app.agent.registry import get_registry, ToolResult
@@ -527,6 +528,24 @@ class WorkingState:
     def __init__(self) -> None:
         self.accumulated_slides: list[dict] = []
         self.presentation_structure: dict | None = None
+        # The design language pack this run composes against, by id. Set once
+        # the plan exists (the choice is measured against the deck's own
+        # material) and only when no template was uploaded - an uploaded
+        # template keeps the template-faithful path, which is the promise
+        # made to a customer who supplied one.
+        self.pack_id: str | None = None
+        # Figures the deck states that nothing this run retrieved carries.
+        # Reported, not removed: the copy is the user's to keep, and what they
+        # should not have is a page asserting a measurement with no record of
+        # where it came from.
+        self.unsupported_figures: list[str] = []
+        # What the outline's headlines do, read end to end. Recorded so the
+        # drafting phase can be told which pages to fix rather than handed a
+        # grade it cannot act on.
+        self.arc: dict | None = None
+        # The uploaded sources, kept as text so a figure can be traced to an
+        # offset inside one rather than merely to the file it was in.
+        self.document_texts: list[dict] = []
         # slide_index -> the select_layout result for that slide. Lets the
         # loop auto-supply design_slide_content's layout_info instead of
         # requiring the LLM to copy the full layout object it just received
@@ -1035,6 +1054,27 @@ class WorkingState:
         self.phase_turns = {}
 
 
+def _visual_asserts_figures(fn_name: str, fn_args: dict) -> bool:
+    """Whether this visual would present a number as measured.
+
+    Every builder but one does, by construction: a chart, a chart grid, a
+    table and a metric row exist to carry figures. A diagram carries
+    structure, and only carries figures when its nodes were given a value or
+    a date - a funnel with counts in it, a timeline of dated events. A flow
+    of named steps asserts nothing that could be wrong.
+    """
+    if fn_name != "build_diagram":
+        return True
+    items = fn_args.get("items")
+    if not isinstance(items, list):
+        return False
+    return any(
+        str((item or {}).get(field) or "").strip()
+        for item in items if isinstance(item, dict)
+        for field in ("value", "date")
+    )
+
+
 class AgentLoop:
     """
     ReAct agent loop that orchestrates presentation generation.
@@ -1119,6 +1159,7 @@ class AgentLoop:
         self.include_sources = include_sources
         self.search_config: ai_settings.SearchConfig | None = None
         self._search_token = None
+        self._usage_token = None
         self._provider_token = None
         self._vision_token = None
         self._citation_tokens: list = []
@@ -1127,6 +1168,7 @@ class AgentLoop:
         # written. Both are published on the run context because the validator
         # cannot be handed them as tool arguments - see run_context.
         self._design_system_token = None
+        self._pack_token = None
         self._material_token = None
         # Set from the conversation in _run: the consultation checkpoints are
         # enforced, so the user's "just build it" has to be able to lift them.
@@ -1201,6 +1243,10 @@ class AgentLoop:
         # reasoning - and require_chat_provider is what makes its absence an
         # error rather than a silent fallback.
         self._provider_token = run_context.set_chat_provider(self.llm)
+        # Start counting. Nothing counted tokens before, which made every
+        # question about what a run cost unanswerable and every claim about it
+        # a guess.
+        self._usage_token = usage.start()
 
         # The qualitative pass in validate_rendered_output looks at rendered
         # pages, and it was reaching for the process-wide, environment-built
@@ -1220,13 +1266,22 @@ class AgentLoop:
                 reason=str(e),
             )
 
+        # Resolved whatever the mode is. A Simple run needs to know whether
+        # there is a backend to research *with* before it can offer the user
+        # the upgrade - and resolving this only in Deep mode made that offer
+        # unreachable: `_can_offer_research` requires a search config, which
+        # only existed once Deep was already on. Every Simple run therefore
+        # declined to ask, however plainly its brief stood on facts.
+        config, reason = ai_settings.resolve_search_config(row)
+        self.search_config = config
         if self.mode == MODE_DEEP:
-            config, reason = ai_settings.resolve_search_config(row)
             if config is None:
                 logger.info("deep_mode_downgraded", reason=reason)
                 self.mode = MODE_SIMPLE
             else:
-                self.search_config = config
+                # Only a Deep run publishes it to the run context: that is what
+                # puts web_search within reach, and a Simple run knowing a
+                # backend exists must not be a Simple run using it.
                 self._search_token = run_context.set_search_config(config)
 
         await self._connect_mcp_servers()
@@ -1367,6 +1422,7 @@ class AgentLoop:
         state_dict = {
             "accumulated_slides": self.working_state.accumulated_slides,
             "presentation_structure": self.working_state.presentation_structure,
+            "pack_id": self.working_state.pack_id,
             "selected_layouts": self.working_state.selected_layouts,
             "selected_images": self.working_state.selected_images,
             "current_step_index": self.working_state.current_step_index,
@@ -1437,6 +1493,9 @@ class AgentLoop:
             state_dict = json.loads(state_json)
             self.working_state.accumulated_slides = state_dict.get("accumulated_slides", [])
             self.working_state.presentation_structure = state_dict.get("presentation_structure")
+            # A resumed run composes in the language it started in. Re-choosing
+            # would let a deck change house style halfway through.
+            self.working_state.pack_id = state_dict.get("pack_id")
             # JSON round-trips dict keys as strings; slide_index is looked up
             # as an int everywhere else, so convert back on load.
             self.working_state.selected_layouts = {
@@ -1541,6 +1600,7 @@ class AgentLoop:
         try:
             async for event in self._run(session_id):
                 yield event
+            self._log_usage(session_id)
         except AINotConfiguredError as e:
             # A workspace with no model configured cannot generate anything.
             # Said once, plainly, with a code the interface can act on - rather
@@ -1556,6 +1616,9 @@ class AgentLoop:
                 "timestamp": _iso_now(),
             })
         finally:
+            if self._usage_token is not None:
+                usage.reset(self._usage_token)
+                self._usage_token = None
             if self._search_token is not None:
                 run_context.reset_search_config(self._search_token)
                 self._search_token = None
@@ -1574,6 +1637,9 @@ class AgentLoop:
             if self._design_system_token is not None:
                 run_context.reset_design_system(self._design_system_token)
                 self._design_system_token = None
+            if self._pack_token is not None:
+                run_context.reset_pack(self._pack_token)
+                self._pack_token = None
             if self._material_token is not None:
                 run_context.reset_slide_material(self._material_token)
                 self._material_token = None
@@ -1827,6 +1893,147 @@ class AgentLoop:
         async for event in self._closing_message(context, chat_messages):
             yield event
     # ── The phases the loop drives itself ─────────────────────────────────
+
+    def _read_the_arc(self, structure: dict) -> None:
+        """Read the outline as an argument and record where it breaks.
+
+        `app/titles.py` has always stated the property - a reader who reads
+        only the headlines has read the argument - and nothing enforced it, so
+        a deck could pass every per-page check and still be "Market Analysis
+        Presentation" followed by "Key Aspects of the Market".
+
+        The shape of an argument, not its truth. Whether a deck is right is
+        not something code decides, and a number pretending otherwise is a
+        number people would quote.
+        """
+        from app import narrative
+
+        slides = (structure or {}).get("slides") or []
+        if not slides:
+            return
+        report = narrative.read_arc(slides)
+        self.working_state.arc = report.to_dict()
+        if report.argues:
+            return
+        logger.info(
+            "outline_does_not_argue",
+            claim_share=round(report.claim_share, 3),
+            breaks=[b.describe() for b in report.breaks[:5]],
+        )
+
+    def _ground_the_deck(self) -> None:
+        """Tie every figure the deck states to the span it came from.
+
+        In code, before the render, and not offered as a tool. The check this
+        follows was a tool the model could decline to call and never did, so
+        density, title-register and apparatus checking were all inert in
+        practice.
+
+        A figure with nothing behind it is reported rather than removed. The
+        deck is the user's and the copy is theirs to keep; what they should
+        not have is a page asserting a measurement while the run has no record
+        of where it came from.
+        """
+        from app.grounding.check import ground
+
+        slides = self.working_state.accumulated_slides
+        if not slides:
+            return
+        evidence = self._evidence()
+        claims, gaps = ground(slides, evidence)
+        self.working_state.unsupported_figures = [g.describe() for g in gaps]
+        logger.info(
+            "deck_grounded",
+            spans=len(evidence.spans),
+            claims=len(claims),
+            unsupported=len(gaps),
+            examples=[g.describe() for g in gaps[:3]],
+        )
+
+    def _evidence(self):
+        """Every span this run has to support its claims with."""
+        from app.grounding.claim import Evidence
+
+        evidence = Evidence.from_research(run_context.get_research_findings())
+        for source in self.working_state.document_texts:
+            evidence = evidence + Evidence.from_document(
+                source.get("text") or "",
+                source_id=source.get("id") or "",
+                title=source.get("title") or "",
+            )
+        return evidence
+
+    def _log_usage(self, session_id: uuid.UUID) -> None:
+        """What this run spent, per model.
+
+        Counted rather than priced. A token count is a fact the provider
+        returned; a price is a number that changes without warning and would
+        be stale in the repository within a month, so the cost of a run is a
+        multiplication anyone can do against whatever the current rates are.
+        """
+        spent = usage.current()
+        if spent is None or not spent.by_model:
+            return
+        logger.info(
+            "run_usage",
+            session_id=str(session_id),
+            calls=spent.calls,
+            total_tokens=spent.total_tokens,
+            models=spent.to_dict()["models"],
+        )
+
+    def _resolve_pack(self, structure: dict, context: dict) -> None:
+        """Put this run on a design language pack, when it should be on one.
+
+        A run with an uploaded template is not: that customer was promised
+        their own template, and the XML-clone renderer is what keeps that
+        promise. A run without one used to fall through to eight hardcoded
+        Office layouts chosen by substring match, which is why every deck
+        with no template looked identical. It composes against a pack
+        instead.
+
+        Chosen here rather than at the design pause because the choice is
+        measured against the deck's own material, and the material is what
+        the plan describes.
+        """
+        from app.config import settings
+
+        if not settings.design_language_enabled:
+            return
+        design_system = context.get("design_system") or {}
+        if str(design_system.get("sourceType") or "default") != "default":
+            return
+        try:
+            from app.design import run as design_run
+
+            if self.working_state.pack_id:
+                # A resumed run already chose; it just has to be reinstalled,
+                # because a ContextVar does not survive the process.
+                if self._pack_token is None:
+                    self._install_pack(
+                        design_run.load(self.working_state.pack_id),
+                        design_system,
+                    )
+                return
+            pack = design_run.for_plan(structure)
+        except Exception as exc:   # a pack must never fail a run
+            logger.warning("pack_selection_failed", error=str(exc))
+            return
+        if pack is None:
+            return
+        self.working_state.pack_id = pack.id
+        self._install_pack(pack, design_system)
+        logger.info("pack_selected", pack=pack.id,
+                    archetypes=len(pack.archetypes))
+
+    def _install_pack(self, pack, design_system: dict | None) -> None:
+        """Make the pack, wearing the user's chosen colours, visible to tools."""
+        from app.design import run as design_run
+
+        dressed = design_run.overlay(pack, design_system)
+        if self._pack_token is not None:
+            run_context.reset_pack(self._pack_token)
+        self._pack_token = run_context.set_pack(dressed)
 
     async def _ensure_design_system(
         self, context: dict, session_id: uuid.UUID
@@ -2157,6 +2364,7 @@ class AgentLoop:
         self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
     ) -> AsyncIterator[tuple[str, object]]:
         """Render the deck as it currently stands."""
+        self._ground_the_deck()
         structure = self.working_state.presentation_structure or {}
         tool_result = None
         async for kind, payload in self._call_tool(
@@ -2289,6 +2497,8 @@ class AgentLoop:
         # servers said they belong in. Added rather than merged into the phase
         # table because the second half is not known until the run starts.
         offered = phase.tools | self.mcp_tools_by_phase.get(phase.name, frozenset())
+        if self.working_state.pack_id:
+            offered = offered - pipeline.TEMPLATE_GEOMETRY_TOOLS
         schemas = [
             schema for schema in self.registry.get_function_schemas()
             if _schema_name(schema) in offered
@@ -2596,6 +2806,30 @@ class AgentLoop:
             "row for figures; a block for content with a shape), then "
             f"design_slide_content for slide_index={index}. This slide only."
             + self._structure_directive()
+            + self._arc_directive(index)
+        )
+
+    def _arc_directive(self, index: int) -> str:
+        """What the arc check found wrong with *this* page, if anything.
+
+        Named per page rather than reported as a grade, because a grade is not
+        something a model can act on - "your deck does not argue anything" has
+        no next move in it, and "slide 4 ends on a topic label where a
+        position belongs" has exactly one.
+        """
+        arc = self.working_state.arc or {}
+        mine = [b for b in arc.get("breaks") or []
+                if b.get("slideIndex") == index]
+        if not mine:
+            return ""
+        lines = "\n".join(
+            f"- {b.get('observed')}; expected {b.get('expected')}"
+            for b in mine
+        )
+        return (
+            "\nThe outline check flagged this page's headline:\n" + lines
+            + "\nWrite a headline that states what this page found, so a "
+              "reader who reads only the headlines has read the argument."
         )
 
     def _structure_directive(self) -> str:
@@ -2759,7 +2993,15 @@ class AgentLoop:
         # The backstop for a run with nothing behind its figures: the deck still
         # gets built, but a number nobody can check does not get an axis and a
         # legend. Text can be hedged on the slide; a chart cannot.
-        if fn_name in BUILD_VISUAL_TOOLS and not self._has_grounding():
+        #
+        # A diagram is only caught by this when it actually carries figures.
+        # "Request goes to the load balancer, then the application server,
+        # then the database" states no measurement, and it is usually the
+        # user's own architecture described in their own brief - so blocking
+        # it left process and architecture decks, the ones that most need a
+        # diagram and have no numbers at all, falling back to bullet lists.
+        if (fn_name in BUILD_VISUAL_TOOLS and not self._has_grounding()
+                and _visual_asserts_figures(fn_name, fn_args)):
             return (
                 "There is no source behind this figure - no research was run and no "
                 "document was uploaded, so any number here would come from memory. "
@@ -2804,7 +3046,17 @@ class AgentLoop:
                     "slide is carried over unchanged automatically."
                 )
 
-            if slide_index is not None and slide_index not in ws.selected_layouts:
+            # A run composing against a design language pack has no layout to
+            # select: which archetype carries a page is decided in code, after
+            # the material for it exists, and `select_layout` is not even
+            # offered. Demanding one here left the model with a precondition
+            # it could not satisfy, and the draft phase span on
+            # `select_source_image` until it ran out of turns.
+            if (
+                not ws.pack_id
+                and slide_index is not None
+                and slide_index not in ws.selected_layouts
+            ):
                 return (
                     f"No layout has been selected for slide {slide_index} yet. Call "
                     f"select_layout for slide_index={slide_index} first - its result "
@@ -3335,6 +3587,8 @@ class AgentLoop:
                         )
                         structure["deviations"] = deviations
                     self.working_state.presentation_structure = structure
+                    self._resolve_pack(structure, context)
+                    self._read_the_arc(structure)
 
             if fn_name == "design_slide_content":
                 if tool_result.data and "slideIndex" in tool_result.data:
@@ -3431,6 +3685,18 @@ class AgentLoop:
             # Catalog embedded images extracted from the user's own
             # documents (PDF/DOCX) - see analyze_document. Reused,
             # never generated.
+            if fn_name == "analyze_document" and tool_result.data:
+                source_text = tool_result.data.get("sourceText") or ""
+                if source_text:
+                    # Kept so a figure can be traced to an offset inside the
+                    # document rather than merely to the file it came from.
+                    self.working_state.document_texts.append({
+                        "id": tool_result.data.get("document_path") or "",
+                        "title": os.path.basename(
+                            tool_result.data.get("document_path") or ""),
+                        "text": source_text,
+                    })
+
             if fn_name == "analyze_document" and tool_result.data and tool_result.data.get("images"):
                 image_catalog = context.setdefault("imageCatalog", [])
                 image_catalog.extend(tool_result.data["images"])

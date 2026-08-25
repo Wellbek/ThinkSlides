@@ -51,7 +51,18 @@ _REJECTION_MARKERS = (
     "unrecognized request argument",
     "unknown parameter",
     "is not supported with this model",
+    "are not supported for",
     "does not support",
+    # Anthropic and the Zhipu-compatible endpoints word the same complaint
+    # differently. Every provider a user can configure has to be able to say
+    # "not that parameter" in a way this recognises, or the adapter helps
+    # only the providers it was first written against.
+    "extra inputs are not permitted",
+    "unexpected keyword argument",
+    "invalid parameter",
+    "invalid_request_error",
+    "not allowed",
+    "is not permitted",
 )
 
 # Removing one of these leaves a request that cannot mean anything, so a
@@ -61,6 +72,14 @@ ESSENTIAL_PARAMS = frozenset({"model", "messages", "input"})
 _QUOTED_NAME_RE = re.compile(r"['\"`]([A-Za-z_][A-Za-z0-9_.]*)['\"`]")
 _REPLACEMENT_RE = re.compile(
     r"\buse\s+['\"`]([A-Za-z_][A-Za-z0-9_.]*)['\"`]\s+instead", re.IGNORECASE
+)
+# "...or set reasoning_effort to 'none'". A third kind of instruction: not a
+# parameter to rename or drop, but one to send at a particular value - and
+# one we never sent at all, so there is nothing in the request to blame and
+# the rename/drop machinery has nothing to act on.
+_PIN_RE = re.compile(
+    r"\bset\s+['\"`]?([A-Za-z_][A-Za-z0-9_.]*)['\"`]?\s+to\s+['\"`]([^'\"`]+)['\"`]",
+    re.IGNORECASE,
 )
 
 
@@ -101,6 +120,17 @@ def rejected_parameter(exc: Exception, sent: dict[str, Any]) -> str | None:
     for candidate in _QUOTED_NAME_RE.findall(text):
         if candidate in sent:
             return candidate
+    # Not every provider quotes the name. Anthropic and the Zhipu-compatible
+    # endpoints often write it bare - "temperature is not allowed" - and a
+    # rejection nobody can attribute is a rejection nobody can act on. Only
+    # whole words, only parameters this request actually sent, and never one
+    # the request cannot mean anything without.
+    lowered = text.lower()
+    for candidate in sent:
+        if candidate in ESSENTIAL_PARAMS:
+            continue
+        if re.search(rf"\b{re.escape(candidate.lower())}\b", lowered):
+            return candidate
     return None
 
 
@@ -108,6 +138,21 @@ def suggested_replacement(exc: Exception) -> str | None:
     """The parameter the API told us to use instead, when it named one."""
     match = _REPLACEMENT_RE.search(str(exc))
     return match.group(1) if match else None
+
+
+def demanded_value(exc: Exception) -> tuple[str, str] | None:
+    """A parameter the API told us to send at a specific value.
+
+    The reasoning models reject function tools unless ``reasoning_effort`` is
+    ``none``, and say so in the message. Nothing in the request names that
+    parameter - we never sent it - so this is the only place the instruction
+    can be picked up.
+    """
+    match = _PIN_RE.search(str(exc))
+    if not match:
+        return None
+    name, value = match.group(1), match.group(2).strip()
+    return (name, value) if name and value else None
 
 
 @dataclass
@@ -123,6 +168,8 @@ class ParameterCompatibility:
     # turned out to be wrong too. Guards against renaming A to B, being told
     # to use A, and oscillating forever.
     rejected: set[str] = field(default_factory=set)
+    # Parameters this model insists on receiving at a particular value.
+    pins: dict[str, Any] = field(default_factory=dict)
 
     def apply(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Rewrite a request with everything learned so far.
@@ -143,6 +190,12 @@ class ParameterCompatibility:
                 out[name] = value
             else:
                 extra_body[wire] = value
+
+        for name, value in self.pins.items():
+            if name in self.dropped:
+                continue
+            out.pop(name, None)
+            extra_body[name] = value
 
         if extra_body:
             out["extra_body"] = extra_body
@@ -165,6 +218,16 @@ class ParameterCompatibility:
         anything ``apply`` moved into ``extra_body`` - the API blames the name
         it received, not the one the caller wrote.
         """
+        # A demanded value is checked first: it is the only instruction that
+        # can concern a parameter the request never carried, so there is
+        # nothing for the rename/drop path to find and it would give up.
+        demanded = demanded_value(exc)
+        if demanded is not None:
+            name, value = demanded
+            if name not in ESSENTIAL_PARAMS and self.pins.get(name) != value:
+                self.pins[name] = value
+                return True
+
         name = rejected_parameter(exc, _wire_names(sent))
         if name is None or name in self.dropped or name in ESSENTIAL_PARAMS:
             return False
@@ -226,6 +289,7 @@ async def create_with_compatible_params(
                 model=model,
                 renames=dict(compat.renames),
                 dropped=sorted(compat.dropped),
+                pinned=dict(compat.pins),
                 error=str(exc)[:200],
             )
 

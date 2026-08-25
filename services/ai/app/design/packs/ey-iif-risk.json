@@ -1,0 +1,2635 @@
+{
+  "id": "ey-iif-risk",
+  "version": "1",
+  "label": "EY/IIF Global Insurance Risk Management Survey (March 2023)",
+  "source_note": "Editorial consulting report. Section-labelled openers with the assertion in a pull-quote beside them, so its informative-title share is genuinely low - that is the house, not a bad deck.",
+  "canvas": {
+    "w_in": 26.666666666666668,
+    "h_in": 15.0,
+    "bleed_in": 0.0,
+    "safe_in": 0.0
+  },
+  "grid": {
+    "columns": 6,
+    "gutter_in": 0.7201147664388019,
+    "margin": {
+      "top": 0.6,
+      "right": 2.0321147664388013,
+      "bottom": 0.6,
+      "left": 3.514666666666666
+    },
+    "baseline_in": 0.2916666666666667,
+    "rows": null,
+    "row_gutter_in": 0.0
+  },
+  "grid_confidence": {
+    "value": 0.7361237422571704,
+    "residual": 0.0,
+    "note": "6 columns, agreed by 1 of 4 pages; no single grid fits them all"
+  },
+  "rhythm": {
+    "unit_pt": 21.0,
+    "phase_pt": 17.0625,
+    "confidence": {
+      "value": 0.9047270275297591,
+      "residual": 0.02381824311756022,
+      "note": "251 body lines"
+    }
+  },
+  "spacing": {
+    "base_pt": 4.5,
+    "steps": [
+      0.5,
+      1.0,
+      1.5,
+      2.0,
+      3.0,
+      4.0,
+      6.0,
+      8.0,
+      12.0
+    ],
+    "confidence": {
+      "value": 0.6274509803921569,
+      "residual": 0.0,
+      "note": "51 gaps"
+    }
+  },
+  "type_roles": {
+    "body": {
+      "size_pt": 16.0,
+      "line_height_pt": 21.0,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 16.0,
+      "measured_median_pt": 16.0,
+      "measured_max_pt": 16.0
+    },
+    "eyebrow": {
+      "size_pt": 11.0,
+      "line_height_pt": 12.0,
+      "weight": "light",
+      "face": "body",
+      "case": "upper",
+      "tracking_per_mille": 0,
+      "color_role": "ink_muted",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 11.0,
+      "measured_median_pt": 11.0,
+      "measured_max_pt": 11.0
+    },
+    "pullquote": {
+      "size_pt": 26.0,
+      "line_height_pt": 34.0,
+      "weight": "light",
+      "face": "display",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 26.0,
+      "measured_median_pt": 26.0,
+      "measured_max_pt": 26.0
+    },
+    "standfirst": {
+      "size_pt": 21.0,
+      "line_height_pt": 27.0,
+      "weight": "regular",
+      "face": "display",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 21.0,
+      "measured_median_pt": 21.0,
+      "measured_max_pt": 21.0
+    },
+    "caption": {
+      "size_pt": 15.0,
+      "line_height_pt": 19.5,
+      "weight": "regular",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 15.0,
+      "measured_median_pt": 15.0,
+      "measured_max_pt": 15.0
+    }
+  },
+  "colors": {
+    "ground": "#F6F6FA",
+    "ground_alt": "#F4F4F6",
+    "ground_dark": "#000000",
+    "ink": "#2E2E38",
+    "ink_muted": "#747480",
+    "ink_reversed": "#F6F6FA",
+    "accent": "#FFE600",
+    "accent_alt": "#188CE5",
+    "rule": "#D6D6DE",
+    "scrim": "#000000"
+  },
+  "archetypes": [
+    {
+      "id": "card-row",
+      "label": "card row",
+      "role": "content",
+      "frequency": 0.2162,
+      "grid": null,
+      "grid_confidence": {
+        "value": 0.0,
+        "residual": 0.0,
+        "note": "this page is not on a recoverable grid"
+      },
+      "frames": [
+        {
+          "id": "pullquote-0",
+          "role": "pullquote",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.06283334096272787,
+            "h": 0.043500003108271845
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-2",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 4,
+            "row": null,
+            "row_span": null,
+            "y": 0.14958007247359664,
+            "h": 0.0441166913067853
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-3",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04475249846776327,
+            "y": 0.15023783931025753,
+            "w": 0.2817400018374125,
+            "h": 0.13611111111111113
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-4",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 4,
+            "row": null,
+            "row_span": null,
+            "y": 0.22769976015444154,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-5",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.28454813074182583,
+            "h": 0.06340579710144927
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-6",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04475249846776327,
+            "y": 0.2988008004647714,
+            "w": 0.2705491423606873,
+            "h": 0.11666666666666667
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-7",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 4,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.3122958430537471,
+            "h": 0.021135265700483092
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-9",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 4,
+            "row": null,
+            "row_span": null,
+            "y": 0.3781081305609809,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-10",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04475249846776327,
+            "y": 0.4279267205132378,
+            "w": 0.28332240184148155,
+            "h": 0.11666666666666667
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-11",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 4,
+            "row": null,
+            "row_span": null,
+            "y": 0.4626085352014612,
+            "h": 0.021135265700483092
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-12",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 4,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.50111083984375,
+            "h": 0.04035424372232283
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-13",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.5196293583622685,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-14",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.6819629033406576,
+            "y": 0.538147876880787,
+            "w": 0.11295585632324219,
+            "h": 0.03888888888888889
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-16",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.5570526688187211,
+            "h": 0.12681159420289853
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-18",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.6861786453812211,
+            "h": 0.10567632850241547
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-19",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04475249846776327,
+            "y": 0.79586752432364,
+            "w": 0.2768466035525004,
+            "h": 0.13611111111111113
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "pullquote-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": 22,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.3,
+          "min_chars": null,
+          "max_chars": 276,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-3",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 420,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 124,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 60,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 335,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 46,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 130,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 350,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-11",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 123,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 26,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-13",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 62,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-14",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 28,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-16",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 340,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-18",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 276,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-19",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 414,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        12,
+        15,
+        16,
+        20,
+        23,
+        25,
+        26,
+        37
+      ],
+      "note": "16 frames read from page 12, set aside: 4 too narrow to set copy in; traced from page 12, one of 8 pages the publication sets this way"
+    },
+    {
+      "id": "card-row-2",
+      "label": "card row",
+      "role": "content",
+      "frequency": 0.1081,
+      "grid": null,
+      "grid_confidence": {
+        "value": 0.0,
+        "residual": 0.0,
+        "note": "this page is not on a recoverable grid"
+      },
+      "frames": [
+        {
+          "id": "panel-0",
+          "role": "panel",
+          "place": {
+            "kind": "frac",
+            "x": 0.0,
+            "y": 0.0,
+            "w": 0.9167,
+            "h": 1.0
+          },
+          "type_role": null,
+          "z": 0,
+          "bleed": [
+            "left",
+            "top",
+            "bottom"
+          ],
+          "pad": null,
+          "ground": "#FFFFFF",
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "rail-1",
+          "role": "rail",
+          "place": {
+            "kind": "frac",
+            "x": 0.9167,
+            "y": 0.0,
+            "w": 0.0833,
+            "h": 1.0
+          },
+          "type_role": null,
+          "z": 0,
+          "bleed": [
+            "top",
+            "right",
+            "bottom"
+          ],
+          "pad": null,
+          "ground": "#AB3B8B",
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-2",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 4,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": -0.0009905779803240742,
+            "h": 1.0019264503761574
+          },
+          "type_role": null,
+          "z": 1,
+          "bleed": [
+            "top",
+            "right",
+            "bottom"
+          ],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-0",
+          "role": "pullquote",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 6,
+            "row": null,
+            "row_span": null,
+            "y": 0.06283334096272787,
+            "h": 0.06843800322061191
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-1",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.16208007247359665,
+            "h": 0.06633337515371818
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-2",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.1627378393102575,
+            "h": 0.10567632850241547
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-4",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.2721252158836082,
+            "h": 0.021135265700483092
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-5",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.28341344197591145,
+            "h": 0.02191667909975405
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-6",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.4361840565999349,
+            "y": 0.3402769583242911,
+            "w": 0.09834747314453125,
+            "h": 0.019444444444444445
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-7",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.3475879527904369,
+            "h": 0.021135265700483092
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-8",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.43875436782836913,
+            "y": 0.35972140276873554,
+            "w": 0.09577417373657227,
+            "h": 0.037962962962962914
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-9",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.39583251387984664,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-10",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.4236521120424624,
+            "h": 0.021135265700483092
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-11",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.4256305694580078,
+            "y": 0.4700827421965422,
+            "w": 0.10890000661214193,
+            "h": 0.019444444444444445
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-12",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.4886012889720776,
+            "h": 0.03926645669000342
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-13",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.49003267641420717,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-14",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.40937223434448244,
+            "y": 0.5256383260091145,
+            "w": 0.12515668869018554,
+            "h": 0.03888888888888889
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-17",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.5721251876265915,
+            "h": 0.021135265700483092
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-18",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.5998883847837095,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-19",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.4195305824279785,
+            "y": 0.6369254218207465,
+            "w": 0.11499910354614258,
+            "h": 0.09722222222222224
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-20",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.6480212741427951,
+            "h": 0.021135265700483092
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-21",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.6868471498842592,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-22",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.085454527537028,
+            "y": 0.7238841869212963,
+            "w": 0.12178250948588053,
+            "h": 0.03703703703703702
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-23",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.13212119738260905,
+            "y": 0.7609212239583333,
+            "w": 0.07294418017069498,
+            "h": 0.019444444444444445
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-24",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.7668956050166378,
+            "h": 0.12681159420289853
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-25",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.08191285133361817,
+            "y": 0.7992549189814815,
+            "w": 0.25060833295186363,
+            "h": 0.020474073621961804
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "figure-2",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": 139,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.3,
+          "min_chars": null,
+          "max_chars": 210,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 328,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 57,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.3,
+          "min_chars": null,
+          "max_chars": 73,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 24,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 54,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-8",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 23,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 26,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 52,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-11",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 27,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 29,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-13",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 59,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-14",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 31,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-17",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 50,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-18",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 28,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-19",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 112,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-20",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 42,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-21",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 31,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-22",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 30,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-23",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 18,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-24",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 415,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-25",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 62,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        13,
+        19,
+        27,
+        33
+      ],
+      "note": "26 frames read from page 19, set aside: 2 in a figure, 1 too narrow to set copy in; traced from page 19, one of 4 pages the publication sets this way"
+    },
+    {
+      "id": "divider",
+      "label": "divider",
+      "role": "section",
+      "frequency": 0.0811,
+      "grid": {
+        "columns": 6,
+        "gutter_in": 0.7201147664388019,
+        "margin": {
+          "top": 0.6,
+          "right": 2.0321147664388013,
+          "bottom": 0.6,
+          "left": 3.514666666666666
+        },
+        "baseline_in": 0.2916666666666667,
+        "rows": null,
+        "row_gutter_in": 0.0
+      },
+      "grid_confidence": {
+        "value": 0.7361237422571704,
+        "residual": 0.009853789548636267,
+        "note": "6 columns on this page"
+      },
+      "frames": [
+        {
+          "id": "figure-0",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 6,
+            "row": null,
+            "row_span": null,
+            "y": 0.04037464283130787,
+            "h": 0.9206229881004051
+          },
+          "type_role": null,
+          "z": 1,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-0",
+          "role": "pullquote",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.06283334096272787,
+            "h": 0.043500003108271845
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-1",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.26240151723225913,
+            "y": 0.07235936765317563,
+            "w": 0.6150502522786458,
+            "h": 0.22037037037037036
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-3",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.04475249846776327,
+            "y": 0.2038980554651331,
+            "w": 0.17846020460128784,
+            "h": 0.23501115021882235
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-4",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 5,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.2875897725423177,
+            "h": 0.12681159420289853
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-5",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 4,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.2876193858959057,
+            "h": 0.12681159420289853
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-6",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 3,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.2876489992494936,
+            "h": 0.08454106280193237
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-7",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.2876786126030816,
+            "h": 0.10567632850241547
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-8",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.28773783931025754,
+            "h": 0.17482966670283565
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-9",
+          "role": "pullquote",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 5,
+            "row": null,
+            "row_span": null,
+            "y": 0.48066688820167824,
+            "h": 0.21615312364366318
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-10",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.820134989420573,
+            "y": 0.6949084246600116,
+            "w": 0.11734434763590494,
+            "h": 0.11666666666666667
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-11",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.6807016372680664,
+            "y": 0.6949676513671875,
+            "w": 0.10916347503662109,
+            "h": 0.175
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-12",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.5412682851155599,
+            "y": 0.6949972647207755,
+            "w": 0.1128149668375651,
+            "h": 0.11666666666666667
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-13",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.40135157903035484,
+            "y": 0.6950268780743635,
+            "w": 0.1088166872660319,
+            "h": 0.11666666666666667
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-14",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.2624099095662435,
+            "y": 0.6950564914279513,
+            "w": 0.11344998677571615,
+            "h": 0.11666666666666667
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "figure-0",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": 22,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 1.0,
+          "min_chars": null,
+          "max_chars": 564,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-3",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.8666666666666667,
+          "min_chars": null,
+          "max_chars": 189,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 130,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 135,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 78,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 116,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-8",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 224,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 1.0,
+          "min_chars": null,
+          "max_chars": 606,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 145,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-11",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 216,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 140,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-13",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 135,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-14",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 140,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        17,
+        30,
+        39
+      ],
+      "note": "15 frames read from page 39, set aside: 1 too narrow to set copy in; traced from page 39, one of 3 pages the publication sets this way"
+    },
+    {
+      "id": "row-bands",
+      "label": "row bands",
+      "role": "content",
+      "frequency": 0.0541,
+      "grid": null,
+      "grid_confidence": {
+        "value": 0.0,
+        "residual": 0.0,
+        "note": "this page is not on a recoverable grid"
+      },
+      "frames": [
+        {
+          "id": "figure-0",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 3,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.04073158546730324,
+            "h": 0.9202648021556713
+          },
+          "type_role": null,
+          "z": 1,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-0",
+          "role": "pullquote",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 6,
+            "row": null,
+            "row_span": null,
+            "y": 0.06283334096272787,
+            "h": 0.06843800322061191
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-2",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.06606374979019165,
+            "y": 0.1627378393102575,
+            "w": 0.35849412679672243,
+            "h": 0.09722222222222224
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-3",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.2724267182526765,
+            "h": 0.08454106280193237
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-4",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.38708007247359666,
+            "h": 0.0441166913067853
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-5",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.46730276037145546,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-6",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.5232151172779225,
+            "h": 0.021135265700483092
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-7",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.10845971902211507,
+            "y": 0.541733635796441,
+            "w": 0.10520749886830648,
+            "h": 0.03888888888888889
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-9",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.6159246939199942,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-10",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.6895719740125869,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-12",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.7639986956561053,
+            "h": 0.042270531400966184
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-13",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.11730936368306479,
+            "y": 0.8010357326931423,
+            "w": 0.09395998318990072,
+            "h": 0.019444444444444445
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "figure-0",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": 139,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 356,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-3",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 273,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.3,
+          "min_chars": null,
+          "max_chars": 170,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 58,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 24,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 26,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 58,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 63,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 62,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-13",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26666666666666666,
+          "min_chars": null,
+          "max_chars": 23,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        22,
+        38
+      ],
+      "note": "12 frames read from page 22, set aside: 1 in a figure, 2 too narrow to set copy in; traced from page 22, one of 2 pages the publication sets this way"
+    }
+  ],
+  "vocabulary_gaps": [],
+  "illustration": {
+    "kind": "photographic",
+    "treatment": "muted",
+    "placement": "inset",
+    "style_note": "",
+    "palette_roles": [
+      "accent",
+      "ink"
+    ],
+    "confidence": {
+      "value": 0.348,
+      "residual": 0.0,
+      "note": "19 images, median saturation 0.37, 32% bleeding"
+    }
+  },
+  "policy": {
+    "body_min_ratio": 0.014074074074074074,
+    "caption_min_ratio": 0.00962962962962963,
+    "display_min_ratio": 0.022222222222222223,
+    "absolute_floor_pt": 6.0
+  },
+  "body_face": "EYInterstate",
+  "display_face": "Georgia",
+  "mono_face": "Consolas"
+}

@@ -212,3 +212,51 @@ class TestTheOfferRidesInTheConsultation:
         assert len(question["questions"]) == 1
         assert question["questions"][0]["options"] == [DEEP_RESEARCH_YES, DEEP_RESEARCH_NO]
         assert events[-1]["paused"] is True
+
+
+class TestADiagramIsNotAFigure:
+    """
+    The ungrounded-figures backstop covers the builders that present a number
+    as measured. A diagram presents structure.
+
+    "The request reaches the load balancer, then the application server, then
+    the database" asserts no measurement, and it is usually the user's own
+    architecture read back from their own brief. Blocking it meant process and
+    architecture decks - the ones that most need a diagram and have no figures
+    at all - silently fell back to three bullets and half an empty page, with
+    the refusal reaching the model as advice about unverifiable numbers.
+
+    A diagram that was given values or dates is a different thing, and is
+    still caught.
+    """
+
+    def _blocked(self, fn_args: dict, tool: str = "build_diagram") -> bool:
+        loop = AgentLoop(db=None, mode=MODE_SIMPLE)
+        assert loop._has_grounding() is False
+        message = loop._check_precondition(tool, fn_args)
+        return bool(message and "no source behind this figure" in message)
+
+    def test_a_flow_of_named_steps_is_allowed(self):
+        assert self._blocked({"items": [
+            {"label": "Request", "detail": "the user's device"},
+            {"label": "Load balancer"},
+            {"label": "Application server"},
+        ]}) is False
+
+    def test_a_timeline_carrying_dates_is_still_caught(self):
+        assert self._blocked({"items": [
+            {"label": "Pilot", "date": "Q1 2026"},
+            {"label": "Rollout", "date": "Q3 2026"},
+        ]}) is True
+
+    def test_a_funnel_carrying_counts_is_still_caught(self):
+        assert self._blocked({"items": [
+            {"label": "Visitors", "value": "120,000"},
+            {"label": "Signups", "value": "4,300"},
+        ]}) is True
+
+    def test_a_chart_is_caught_whatever_it_carries(self):
+        assert self._blocked({"items": []}, tool="build_chart") is True
+
+    def test_a_table_is_caught_whatever_it_carries(self):
+        assert self._blocked({"items": []}, tool="build_table") is True

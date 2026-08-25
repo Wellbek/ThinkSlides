@@ -138,3 +138,64 @@ class TestScoringAgainstTheLibrary:
         for name in library:
             assert name in text
         assert "Nearest exemplar" in text
+
+
+class TestAimingAtOneRegister:
+    """
+    The nearest exemplar answers "what does this deck resemble". A run aimed at
+    a register needs the other question - "how close did it get to the one it
+    was aiming at" - and those are different cards precisely when the deck
+    drifted, which is when the answer matters most. Iterating on the nearest
+    card instead would let a deck aimed at an investor register score well by
+    quietly becoming a magazine.
+    """
+
+    def _library(self):
+        return reference.load_exemplar_library()
+
+    def test_the_aimed_at_card_is_returned_even_when_it_is_not_nearest(self):
+        library = self._library()
+        result = scorecard.score_library(library["wti-2025"], library)
+        assert result.best.reference == "wti-2025"
+        aimed = result.card_for("bxsl-investor")
+        assert aimed is not None
+        assert aimed.reference == "bxsl-investor"
+        assert aimed is not result.best
+
+    def test_asking_for_an_exemplar_that_was_not_scored_gives_nothing(self):
+        library = self._library()
+        result = scorecard.score_library(library["ey-iif-risk"], library)
+        assert result.card_for("not-an-exemplar") is None
+
+    def test_the_markdown_says_so_when_the_deck_drifted(self):
+        library = self._library()
+        text = scorecard.score_library(
+            library["wti-2025"], library
+        ).to_markdown("bxsl-investor")
+        assert "aimed at" in text
+        assert "drift is the finding" in text
+
+    def test_no_drift_note_when_the_deck_landed_on_its_target(self):
+        library = self._library()
+        text = scorecard.score_library(
+            library["bxsl-investor"], library
+        ).to_markdown("bxsl-investor")
+        assert "drift is the finding" not in text
+        assert "The register this run aimed at" in text
+
+
+class TestTheCliRefusesAnUnknownTarget:
+    """A render and a vision call are spent before the library is consulted,
+    so an unknown --against has to fail on the way in, not on the way out."""
+
+    def test_an_unknown_target_names_the_ones_that_exist(self):
+        from app.eval.__main__ import _assert_known_exemplar
+
+        with pytest.raises(SystemExit) as excinfo:
+            _assert_known_exemplar("mckinsey-investor")
+        assert "bxsl-investor" in str(excinfo.value)
+
+    def test_no_target_is_allowed(self):
+        from app.eval.__main__ import _assert_known_exemplar
+
+        _assert_known_exemplar(None)

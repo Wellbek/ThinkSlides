@@ -58,7 +58,8 @@ from app.renderer.xml_utils import describe_picture
 # The five marks. Anything a slide can carry is one of these; there is no
 # sixth, which is why an open primitive layer is a bounded commitment rather
 # than an ever-growing vocabulary.
-PRIMITIVE_KINDS = frozenset({"text", "rect", "line", "ellipse", "image"})
+PRIMITIVE_KINDS = frozenset({"text", "rect", "line", "ellipse", "image",
+                             "path"})
 
 ALIGNMENTS = {
     "left": PP_ALIGN.LEFT,
@@ -142,6 +143,10 @@ class TextRunSpec:
     # A true superscript, set as a baseline offset rather than a smaller font
     # or a Unicode glyph, so it scales with the type around it.
     superscript: bool = False
+    # Set by a type role rather than by an author: an eyebrow in small caps
+    # with open tracking is a house style, not a per-run decision.
+    smallcaps: bool = False
+    tracking_per_mille: Optional[int] = None
 
     @classmethod
     def from_dict(cls, data: Any) -> "TextRunSpec":
@@ -159,6 +164,11 @@ class TextRunSpec:
             font=str(data["fontName"]) if data.get("fontName") else None,
             break_before=bool(data.get("breakBefore", False)),
             superscript=bool(data.get("superscript", False)),
+            smallcaps=bool(data.get("smallcaps", False)),
+            tracking_per_mille=(
+                int(data["trackingPerMille"])
+                if data.get("trackingPerMille") is not None else None
+            ),
         )
 
 
@@ -183,6 +193,37 @@ class Primitive:
     image: Optional[dict] = None
     end: Optional[tuple[float, float]] = None    # line end, absolute inches
     alt_text: str = ""
+    # ── typographic and geometric control the DesignDoc layer needs ────────
+    # A picture is stretched into its box unless it says otherwise, which
+    # distorts any photograph whose aspect does not match its slot - and no
+    # slot's aspect is chosen to match a photograph. "cover" crops instead,
+    # around a focal point; "contain" letterboxes.
+    fill_alpha: float = 1.0
+    fit: str = "fill"                            # fill | cover | contain
+    focal: tuple[float, float] = (0.5, 0.5)
+    crop: Optional[tuple[float, float, float, float]] = None  # l,t,r,b fractions
+    rotation_deg: float = 0.0
+    # Per-mille of the em: OOXML's a:rPr/@spc, in the unit it actually wants.
+    tracking_per_mille: Optional[int] = None
+    smallcaps: bool = False
+    # Exact leading, so a page can hold a baseline rhythm rather than
+    # whatever line spacing each box happened to inherit.
+    line_spacing_pt: Optional[float] = None
+    space_before_pt: float = 0.0
+    space_after_pt: float = 0.0
+    # Native multi-column text (a:bodyPr/@numCol), which stays editable.
+    columns: int = 1
+    column_gap_pt: float = 0.0
+    # A freeform outline, as subpaths of points in fractions of this
+    # primitive's own box. Fractions rather than inches so a figure can be
+    # placed and scaled without re-flattening the curve it came from.
+    subpaths: tuple[tuple[tuple[float, float], ...], ...] = ()
+    closed: tuple[bool, ...] = ()
+    # What this mark actually sits on, when that is not the slide's own
+    # ground. The contrast guard reads it: a white label over a green node is
+    # readable, and flipping it to dark because the *slide* is white is how an
+    # imported diagram loses its knockout type.
+    ground: Optional[str] = None
     # Deck furniture rather than slide content: named with the chrome prefix
     # so every downstream measurement keeps ignoring it.
     chrome: bool = False
@@ -328,7 +369,35 @@ def paint(slide, primitive: Primitive, context: PaintContext):
                           else content_shape_name(primitive.id))
         except (AttributeError, ValueError):
             pass
+        if primitive.rotation_deg:
+            try:
+                shape.rotation = primitive.rotation_deg
+            except (AttributeError, ValueError):
+                pass
     return shape
+
+
+def reorder_by_z(shapes_and_z: Sequence[tuple[object, int]]) -> None:
+    """Repaint order, after the fact, by declared z.
+
+    ``send_to_back`` already moves one shape in the tree; this generalises it
+    to a full ordering, which is what a page with layered frames needs. The
+    sort is stable, so shapes at equal z keep the order they were painted -
+    a page renders the same way twice.
+    """
+    ordered = sorted(range(len(shapes_and_z)),
+                     key=lambda i: (shapes_and_z[i][1], i))
+    for shape, _ in shapes_and_z:
+        element = getattr(shape, "_element", None)
+        if element is None:
+            return
+    for index in ordered:
+        shape = shapes_and_z[index][0]
+        element = shape._element
+        parent = element.getparent()
+        if parent is not None:
+            parent.remove(element)
+            parent.append(element)
 
 
 def _paint_text(slide, primitive: Primitive, context: PaintContext):
@@ -348,15 +417,19 @@ def _paint_text(slide, primitive: Primitive, context: PaintContext):
     base_size = primitive.size_pt or context.default_size_pt
     scale = _autofit_scale(primitive, context, base_size)
 
+    _apply_columns(frame, primitive)
+
     paragraph = frame.paragraphs[0]
     paragraph.alignment = ALIGNMENTS.get(primitive.align, PP_ALIGN.LEFT)
     _suppress_bullet(paragraph)
+    _apply_paragraph_rhythm(paragraph, primitive, scale, first=True)
 
     for index, run_spec in enumerate(primitive.runs):
         if index and run_spec.break_before:
             paragraph = frame.add_paragraph()
             paragraph.alignment = ALIGNMENTS.get(primitive.align, PP_ALIGN.LEFT)
             _suppress_bullet(paragraph)
+            _apply_paragraph_rhythm(paragraph, primitive, scale, first=False)
         run = paragraph.add_run()
         run.text = run_spec.text
         run.font.size = Pt(max(6.0, (run_spec.size_pt or base_size) * scale))
@@ -371,21 +444,65 @@ def _paint_text(slide, primitive: Primitive, context: PaintContext):
         preferred = run_spec.color or primitive.color or context.default_color
         try:
             run.font.color.rgb = _hex_to_rgbcolor(
-                colors.readable_on(context.ground, preferred)
+                colors.readable_on(primitive.ground or context.ground, preferred)
             )
         except ValueError:
             pass
         # Several stock Office layouts declare cap="all"; a block inheriting it
         # renders SHOUTED.
-        run._r.get_or_add_rPr().set("cap", "none")
+        rpr = run._r.get_or_add_rPr()
+        rpr.set("cap", "none")
+        if run_spec.smallcaps or primitive.smallcaps:
+            rpr.set("cap", "small")
+        tracking = run_spec.tracking_per_mille
+        if tracking is None:
+            tracking = primitive.tracking_per_mille
+        if tracking:
+            # OOXML counts character spacing in 1/100 pt, and a per-mille of
+            # the em at this size is what a type role actually specifies.
+            size_pt = (run_spec.size_pt or base_size) * scale
+            rpr.set("spc", str(int(round(size_pt * tracking / 10.0))))
         if run_spec.superscript:
             from app.renderer.apparatus import apply_superscript
 
             apply_superscript(run)
 
     if primitive.fill:
-        _apply_fill(box, primitive.fill)
+        _apply_fill(box, primitive.fill, primitive.fill_alpha)
     return box
+
+
+def _apply_columns(frame, primitive: Primitive) -> None:
+    """Native multi-column text, which stays editable in PowerPoint.
+
+    A story set in two columns is one text box with numCol=2, not two boxes
+    the author has to keep in step - and PowerPoint reflows it correctly
+    when the reader edits the copy.
+    """
+    if primitive.columns <= 1:
+        return
+    body = frame._txBody.bodyPr
+    body.set("numCol", str(int(primitive.columns)))
+    if primitive.column_gap_pt:
+        body.set("spcCol", str(int(round(primitive.column_gap_pt * 12700))))
+
+
+def _apply_paragraph_rhythm(paragraph, primitive: Primitive, scale: float,
+                            *, first: bool) -> None:
+    """Exact leading and paragraph spacing, in points.
+
+    The primitive layer previously set no paragraph spacing at all, so every
+    block took whatever leading it inherited and no page could hold a
+    baseline rhythm. Stated in points rather than as a multiple because a
+    rhythm is a fixed distance down the page, not a ratio of each block's
+    own size.
+    """
+    if primitive.line_spacing_pt:
+        paragraph.line_spacing = Pt(primitive.line_spacing_pt * scale)
+    if primitive.space_after_pt:
+        paragraph.space_after = Pt(primitive.space_after_pt * scale)
+    if primitive.space_before_pt and not first:
+        paragraph.space_before = Pt(primitive.space_before_pt * scale)
 
 
 def _paint_rect(slide, primitive: Primitive, context: PaintContext):
@@ -404,7 +521,7 @@ def _paint_autoshape(slide, primitive: Primitive, shape_type):
         Inches(max(MIN_MARK_IN, primitive.box.height)),
     )
     if primitive.fill:
-        _apply_fill(shape, primitive.fill)
+        _apply_fill(shape, primitive.fill, primitive.fill_alpha)
     else:
         shape.fill.background()
     if primitive.stroke and primitive.stroke_pt > 0:
@@ -436,30 +553,158 @@ def _paint_line(slide, primitive: Primitive, context: PaintContext):
     return connector
 
 
+def _natural_aspect(data: bytes) -> Optional[float]:
+    """Width over height of the actual image, or None if it will not open."""
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        with Image.open(BytesIO(data)) as img:
+            width, height = img.size
+        return (width / height) if height else None
+    except Exception:
+        return None
+
+
+def cover_crop(image_aspect: float, box_aspect: float,
+               focal: tuple[float, float]) -> tuple[float, float, float, float]:
+    """The crop that makes an image fill a box without distorting it.
+
+    Returned as (left, top, right, bottom) fractions of the original, which
+    is the unit python-pptx's ``picture.crop_*`` wants. The focal point
+    decides which part survives: a portrait cropped to a landscape slot
+    should keep the face, and the centre is only the right answer when
+    nothing better is known.
+    """
+    if image_aspect <= 0 or box_aspect <= 0:
+        return (0.0, 0.0, 0.0, 0.0)
+    if image_aspect > box_aspect:
+        visible = box_aspect / image_aspect
+        excess = max(0.0, 1.0 - visible)
+        left = min(max(focal[0] - visible / 2.0, 0.0), excess)
+        return (left, 0.0, excess - left, 0.0)
+    visible = image_aspect / box_aspect
+    excess = max(0.0, 1.0 - visible)
+    top = min(max(focal[1] - visible / 2.0, 0.0), excess)
+    return (0.0, top, 0.0, excess - top)
+
+
+def _contain_box(image_aspect: float, box) -> "PositionConfig":
+    """The largest rectangle of the image's aspect that fits inside the box."""
+    from app.renderer.layout import PositionConfig
+
+    if image_aspect <= 0:
+        return box
+    box_aspect = box.width / box.height if box.height else image_aspect
+    if image_aspect > box_aspect:
+        width = box.width
+        height = width / image_aspect
+    else:
+        height = box.height
+        width = height * image_aspect
+    return PositionConfig(
+        left=box.left + (box.width - width) / 2.0,
+        top=box.top + (box.height - height) / 2.0,
+        width=width,
+        height=height,
+    )
+
+
 def _paint_image(slide, primitive: Primitive, context: PaintContext):
     from app.renderer.pptx_renderer import _resolve_image_bytes
 
     data = _resolve_image_bytes(primitive.image or {})
     if not data:
         return None
+
+    box = primitive.box
+    crop = primitive.crop
+    if primitive.fit in ("cover", "contain"):
+        aspect = _natural_aspect(data)
+        if aspect:
+            if primitive.fit == "contain":
+                box = _contain_box(aspect, box)
+            elif crop is None:
+                box_aspect = (box.width / box.height) if box.height else aspect
+                crop = cover_crop(aspect, box_aspect, primitive.focal)
+
     handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     try:
         handle.write(data)
         handle.close()
         picture = slide.shapes.add_picture(
             handle.name,
-            Inches(primitive.box.left), Inches(primitive.box.top),
-            Inches(max(MIN_MARK_IN, primitive.box.width)),
-            Inches(max(MIN_MARK_IN, primitive.box.height)),
+            Inches(box.left), Inches(box.top),
+            Inches(max(MIN_MARK_IN, box.width)),
+            Inches(max(MIN_MARK_IN, box.height)),
         )
     finally:
         os.unlink(handle.name)
+
+    if crop:
+        left, top, right, bottom = crop
+        picture.crop_left = max(0.0, min(0.95, left))
+        picture.crop_top = max(0.0, min(0.95, top))
+        picture.crop_right = max(0.0, min(0.95, right))
+        picture.crop_bottom = max(0.0, min(0.95, bottom))
     describe_picture(picture, primitive.alt_text)
     return picture
 
 
+def _paint_path(slide, primitive: Primitive, context: PaintContext):
+    """A freeform outline, as a real PowerPoint shape.
+
+    `build_freeform` takes line segments and nothing else, which is why the
+    curve was flattened upstream. What comes out is a shape a user can select,
+    recolour and reshape - not a picture of one, which is the whole point of
+    importing an SVG rather than rasterising it.
+
+    Each subpath becomes its own shape. PowerPoint's freeform builder has one
+    start point and no way to lift the pen, so a figure drawn as several
+    disjoint outlines cannot be one shape without joining strokes that the
+    original kept apart.
+    """
+    shapes = []
+    left, top = primitive.box.left, primitive.box.top
+    width, height = primitive.box.width, primitive.box.height
+    for index, points in enumerate(primitive.subpaths):
+        if len(points) < 2:
+            continue
+        closed = (primitive.closed[index]
+                  if index < len(primitive.closed) else False)
+
+        def at(point):
+            return (Inches(left + point[0] * width),
+                    Inches(top + point[1] * height))
+
+        first = at(points[0])
+        builder = slide.shapes.build_freeform(first[0], first[1])
+        builder.add_line_segments([at(p) for p in points[1:]], close=closed)
+        try:
+            shape = builder.convert_to_shape()
+        except Exception:
+            continue
+        _apply_fill(shape, primitive.fill if closed else None,
+                    primitive.fill_alpha)
+        if primitive.stroke:
+            try:
+                shape.line.color.rgb = _hex_to_rgbcolor(primitive.stroke)
+                shape.line.width = Pt(max(0.25, primitive.stroke_pt or 0.75))
+            except ValueError:
+                pass
+        else:
+            shape.line.fill.background()
+        _drop_theme_style(shape)
+        if primitive.alt_text:
+            describe_picture(shape, primitive.alt_text)
+        shapes.append(shape)
+    return shapes[0] if shapes else None
+
+
 _PAINTERS = {
     "text": _paint_text,
+    "path": _paint_path,
     "rect": _paint_rect,
     "ellipse": _paint_ellipse,
     "line": _paint_line,
@@ -500,11 +745,33 @@ def send_to_back(shapes: Sequence) -> None:
         tree.insert(_SPTREE_HEADER_ELEMENTS + offset, element)
 
 
-def _apply_fill(shape, color_hex: str) -> None:
+def _apply_fill(shape, color_hex: str, alpha: float = 1.0) -> None:
+    """Solid fill, optionally translucent.
+
+    Translucency is written as OOXML rather than through python-pptx, which
+    exposes no alpha. It is needed for exactly one thing and that thing is
+    not decoration: a scrim over a photograph, so type on top of it stays
+    legible whatever the image happens to be doing underneath.
+    """
     try:
         shape.fill.solid()
         shape.fill.fore_color.rgb = _hex_to_rgbcolor(color_hex)
     except (ValueError, AttributeError):
+        return
+    if alpha >= 1.0:
+        return
+    try:
+        from pptx.oxml.ns import qn
+
+        srgb = shape.fill.fore_color._xFill.find(qn("a:srgbClr"))
+        if srgb is None:
+            return
+        for existing in srgb.findall(qn("a:alpha")):
+            srgb.remove(existing)
+        node = srgb.makeelement(qn("a:alpha"), {})
+        node.set("val", str(int(round(max(0.0, min(1.0, alpha)) * 100000))))
+        srgb.append(node)
+    except Exception:
         pass
 
 
@@ -545,8 +812,16 @@ def _autofit_scale(primitive: Primitive, context: PaintContext,
     """
     if not primitive.autofit or not primitive.runs:
         return 1.0
+    # The face matters now that measurement reads real advance widths: a
+    # block measured in Arial and drawn in something wider is a block that
+    # was judged to fit and does not.
+    face = (primitive.font or context.default_font
+            or context.type_scale.body_font)
     blocks = [
-        text_fit.TextBlock(text=run.text, font_size_pt=(run.size_pt or base_size))
+        text_fit.TextBlock(text=run.text,
+                           font_size_pt=(run.size_pt or base_size),
+                           family=(run.font or face),
+                           bold=bool(run.bold or primitive.bold))
         for run in primitive.runs
     ]
     # Zero insets, because ``_paint_text`` zeroes the frame's margins. Left at
@@ -593,7 +868,7 @@ MEASURE_SLACK_BOLD = 0.90
 
 
 def measure_text(text: str, size_pt: float, width_in: float,
-                 bold: bool = False) -> float:
+                 bold: bool = False, family: str = "") -> float:
     """
     The height a wrapped string needs at ``size_pt`` in ``width_in``.
 
@@ -609,7 +884,8 @@ def measure_text(text: str, size_pt: float, width_in: float,
     # Markers are four characters of syntax that render as one small digit;
     # measuring them as written would reserve room for text nobody sees.
     lines = text_fit.estimate_wrapped_lines(
-        strip_markers(str(text)), size_pt, max(1.0, width_in * 72.0 * slack)
+        strip_markers(str(text)), size_pt, max(1.0, width_in * 72.0 * slack),
+        family, bold,
     )
     return lines * size_pt * text_fit.LINE_HEIGHT_RATIO / 72.0
 
