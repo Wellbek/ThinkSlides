@@ -625,6 +625,10 @@ class WorkingState:
         # a second pause that has not happened yet.
         self.offered_directions: bool = False
         self.chosen_direction: dict | None = None
+        # True when the direction was picked on the user's behalf because
+        # they answered the question without naming one. Drives the wording of
+        # the announcement, so the choice is visible rather than silent.
+        self.direction_deferred: bool = False
         # What was offered, so the reply can be resolved back to a bundle.
         self.proposed_directions: list[dict] = []
         # What the run understood the request to be, from the intake step: the
@@ -1017,6 +1021,7 @@ class WorkingState:
         self.offered_deep_research = False
         self.offered_directions = False
         self.chosen_direction = None
+        self.direction_deferred = False
         self.proposed_directions = []
         self.brief = None
         self.scouted = False
@@ -1367,6 +1372,7 @@ class AgentLoop:
             "consulted_before_planning": self.working_state.consulted_before_planning,
             "offered_directions": self.working_state.offered_directions,
             "chosen_direction": self.working_state.chosen_direction,
+            "direction_deferred": self.working_state.direction_deferred,
             "proposed_directions": self.working_state.proposed_directions,
             "reviewed_outline_with_user": self.working_state.reviewed_outline_with_user,
             "offered_deep_research": self.working_state.offered_deep_research,
@@ -1444,6 +1450,9 @@ class AgentLoop:
                 "offered_directions", False
             )
             self.working_state.chosen_direction = state_dict.get("chosen_direction")
+            self.working_state.direction_deferred = state_dict.get(
+                "direction_deferred", False
+            )
             self.working_state.proposed_directions = state_dict.get(
                 "proposed_directions", []
             )
@@ -1644,12 +1653,22 @@ class AgentLoop:
             context["design_system"] = chosen.get("designSystem") or {}
             run_context.set_design_system(context["design_system"])
             self._clean_up_direction_previews(session_id, chosen.get("id"))
+            # Said out loud, and said differently when it was not their pick:
+            # choosing on someone's behalf is only acceptable if they can see
+            # it happened and can say otherwise.
+            lead = (
+                f"You left the look to me, so I am building in the "
+                f"{chosen.get('name') or 'recommended'} direction"
+                if self.working_state.direction_deferred
+                else f"Building in the {chosen.get('name') or 'chosen'} direction"
+            )
             yield _event("thought", "content_analysis", {
                 "content": (
-                    f"Building in the {chosen.get('name') or 'chosen'} direction: "
-                    f"{chosen.get('rationale') or ''}".strip()
+                    f"{lead}: {chosen.get('rationale') or ''}".strip()
                     + (f" Recoloured to {recoloured}, as you asked."
                        if recoloured else "")
+                    + (" Say the word if you would rather have one of the others."
+                       if self.working_state.direction_deferred else "")
                 ),
                 "timestamp": _iso_now(),
             }, step="design")
@@ -3662,9 +3681,26 @@ class AgentLoop:
         The card sends the direction's name *and* its id, so the id is what
         this matches on and the name is only the fallback - two directions can
         be named similarly, and a user typing a reply of their own will send
-        neither. A reply that matches nothing leaves the run on whatever
-        design system it already had, which is the safe direction: an
-        unrecognised answer must not silently pick one.
+        neither.
+
+        A reply that names none of them used to resolve to nothing, on the
+        principle that an unrecognised answer must not silently pick one. The
+        principle is right; the outcome was not. The guard on
+        ``finalize_and_render_pptx`` refuses unless a direction was chosen, a
+        template was supplied, or autonomy was recorded - so a user who
+        answered the question in their own words ("Yes, proceed with your
+        recommendation") wedged the run: the guard told the model to ask a
+        question it had already asked and had answered, and nothing could
+        satisfy it. Three finished slides were binned and the user was told
+        nothing was generated.
+
+        So a reply that names no direction is read as deferring the choice.
+        The guard exists so nobody is surprised by a look they were never
+        asked about, and once they have been asked and have replied that
+        condition is met, whatever words they used. What answers the original
+        principle is that the pick is no longer *silent*: ``direction_deferred``
+        is set, and the caller says out loud which direction it used and that
+        it chose on the user's behalf.
         """
         ws = self.working_state
         if not ws.offered_directions or ws.chosen_direction is not None:
@@ -3686,7 +3722,33 @@ class AgentLoop:
             name = str(direction.get("name") or "").strip().lower()
             if name and name in said:
                 return direction
+
+        # Answered, but not with a direction. Only once there is a reply that
+        # arrived *after* the offer - before that the run is still waiting,
+        # and defaulting then would pick a look nobody had seen.
+        if self._replied_since_directions_were_offered(chat_messages):
+            ws.direction_deferred = True
+            return offered[0]
         return None
+
+    def _replied_since_directions_were_offered(self, chat_messages: list[dict]) -> bool:
+        """Whether the user has said anything since the directions went out.
+
+        The run pauses on that question and only resumes when a message
+        arrives, so with directions offered and none chosen, a user message at
+        the end of the transcript is the answer to it.
+        """
+        for message in reversed(chat_messages):
+            role = message.get("role")
+            if role == "user":
+                return bool(str(message.get("content") or "").strip())
+            if role == "assistant":
+                # The newest turn is the agent's, so the question is still
+                # outstanding. Walking past it would find the brief that
+                # started the run and read it as an answer to a question it
+                # predates.
+                return False
+        return False
 
     def _apply_colour_choice(
         self, chosen: dict, chat_messages: list[dict]

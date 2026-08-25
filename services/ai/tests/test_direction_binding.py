@@ -129,13 +129,37 @@ class TestTheChoiceGovernsTheRun:
 
         assert chosen["designSystem"]["marker"] == "clean"
 
-    def test_an_answer_matching_nothing_leaves_the_run_alone(self):
-        """An unrecognised reply must not silently pick a direction."""
+    def test_an_answer_matching_nothing_is_read_as_deferring_the_choice(self):
+        """
+        This used to resolve to None, so that an unrecognised reply could not
+        silently pick a direction. The principle stands; the outcome did not.
+        The render guard refuses unless a direction was chosen, so a user who
+        answered in their own words wedged the run and got no deck at all -
+        see #258.
+
+        The pick is no longer silent: `direction_deferred` is set and the run
+        announces which direction it used and that it chose on the user's
+        behalf. Note this reply also asks for a colour, which
+        `_apply_colour_choice` then applies to the direction picked here.
+        """
         loop = self._offered(_loop())
 
-        assert loop._resolve_direction_choice(
+        chosen = loop._resolve_direction_choice(
             [{"role": "user", "content": "actually make it purple"}]
-        ) is None
+        )
+
+        assert chosen is not None
+        assert loop.working_state.direction_deferred is True
+
+    def test_a_deferral_is_only_read_once_the_user_has_actually_replied(self):
+        """The guard still fires while the question is outstanding: defaulting
+        then would pick a look nobody has been shown the question for."""
+        loop = self._offered(_loop())
+
+        assert loop._resolve_direction_choice([
+            {"role": "user", "content": "build me a deck"},
+            {"role": "assistant", "content": "Which direction shall I use?"},
+        ]) is None
 
     def test_a_choice_already_made_is_not_remade(self):
         loop = self._offered(_loop())
