@@ -202,12 +202,61 @@
             "y": -0.001,
             "h": 1.0019
           },
+          "type_role": null,
           "z": 0,
           "bleed": [
             "top",
             "right",
             "bottom"
           ],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-1",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 3,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": -0.0010233561197916666,
+            "h": 1.0019332320601853
+          },
+          "type_role": null,
+          "z": 1,
+          "bleed": [
+            "top",
+            "right",
+            "bottom"
+          ],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-2",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.3740432174117477,
+            "h": 0.26444815176504627
+          },
+          "type_role": null,
+          "z": 1,
+          "bleed": [],
           "pad": null,
           "ground": null,
           "scrim": null,
@@ -227,46 +276,7 @@
             "y": 0.06283334096272787,
             "h": 0.043500003108271845
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "eyebrow-1",
-          "role": "eyebrow",
-          "place": {
-            "kind": "frac",
-            "x": 0.9296269734700521,
-            "y": 0.09206500583224826,
-            "w": 0.023763465881347656,
-            "h": 0.02439349139178241
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "standfirst-2",
-          "role": "standfirst",
-          "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.1563304759837963,
-            "h": 0.22034996880425348
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -286,8 +296,9 @@
             "row": null,
             "row_span": null,
             "y": 0.19973138879846644,
-            "h": 0.12022594875759549
+            "h": 0.1247987117552335
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -307,8 +318,9 @@
             "row": null,
             "row_span": null,
             "y": 0.2025601139775029,
-            "h": 0.09708150227864583
+            "h": 0.10567632850241547
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -330,6 +342,7 @@
             "y": 0.20273785061306424,
             "h": 0.13595558449074074
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -349,8 +362,9 @@
             "row": null,
             "row_span": null,
             "y": 0.31224899291992186,
-            "h": 0.25257785938404226
+            "h": 0.25362318840579706
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -372,6 +386,7 @@
             "y": 0.3513008117675781,
             "h": 0.13595561274775753
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -393,6 +408,7 @@
             "y": 0.4998638011791088,
             "h": 0.233140790020978
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -412,55 +428,10 @@
             "row": null,
             "row_span": null,
             "y": 0.6923376577871817,
-            "h": 0.1932657312463831
+            "h": 0.20128824476650561
           },
+          "type_role": null,
           "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-11",
-          "role": "figure",
-          "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": -0.0010233561197916666,
-            "h": 1.0019332320601853
-          },
-          "z": 1,
-          "bleed": [
-            "top",
-            "right",
-            "bottom"
-          ],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-12",
-          "role": "figure",
-          "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.3740432174117477,
-            "h": 0.26444815176504627
-          },
-          "z": 1,
           "bleed": [],
           "pad": null,
           "ground": null,
@@ -472,6 +443,32 @@
       ],
       "slots": [
         {
+          "frame_id": "figure-1",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "figure-2",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
           "frame_id": "pullquote-0",
           "accepts": [
             "text"
@@ -479,33 +476,7 @@
           "required": false,
           "prominence": 0.6,
           "min_chars": null,
-          "max_chars": 79,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "eyebrow-1",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.18333333333333332,
-          "min_chars": null,
-          "max_chars": 21,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "standfirst-2",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.43333333333333335,
-          "min_chars": null,
-          "max_chars": 183,
+          "max_chars": 17,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -518,7 +489,7 @@
           "required": true,
           "prominence": 0.8666666666666667,
           "min_chars": null,
-          "max_chars": 22,
+          "max_chars": 18,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -531,7 +502,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 329,
+          "max_chars": 200,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -544,7 +515,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 505,
+          "max_chars": 300,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -557,7 +528,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 877,
+          "max_chars": 600,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -570,7 +541,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 429,
+          "max_chars": 294,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -583,7 +554,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 835,
+          "max_chars": 550,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -596,33 +567,7 @@
           "required": false,
           "prominence": 0.39166666666666666,
           "min_chars": null,
-          "max_chars": 242,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "figure-11",
-          "accepts": [
-            "figure"
-          ],
-          "required": false,
-          "prominence": 0.6,
-          "min_chars": null,
-          "max_chars": null,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "figure-12",
-          "accepts": [
-            "figure"
-          ],
-          "required": false,
-          "prominence": 0.6,
-          "min_chars": null,
-          "max_chars": null,
+          "max_chars": 110,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -631,7 +576,7 @@
       "example_pages": [
         4
       ],
-      "note": "13 frames read from page 4"
+      "note": "11 frames read from page 4, set aside: 2 in a figure"
     },
     {
       "id": "page-8",
@@ -657,6 +602,7 @@
             "y": 0.0,
             "h": 1.0
           },
+          "type_role": null,
           "z": 0,
           "bleed": [
             "left",
@@ -680,6 +626,7 @@
             "w": 0.0833,
             "h": 1.0
           },
+          "type_role": null,
           "z": 0,
           "bleed": [
             "top",
@@ -704,7 +651,30 @@
             "y": 0.0407,
             "h": 0.9205
           },
+          "type_role": null,
           "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-3",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.04066778112340857,
+            "h": 0.9204914799442998
+          },
+          "type_role": null,
+          "z": 1,
           "bleed": [],
           "pad": null,
           "ground": null,
@@ -723,8 +693,9 @@
             "row": null,
             "row_span": null,
             "y": -0.0001525313765914352,
-            "h": 0.7764490198206019
+            "h": 0.7820048309178744
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -746,28 +717,8 @@
             "y": 0.7390712596752026,
             "h": 0.15539262559678818
           },
+          "type_role": null,
           "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-5",
-          "role": "figure",
-          "place": {
-            "kind": "grid",
-            "col": 2,
-            "span": 2,
-            "row": null,
-            "row_span": null,
-            "y": 0.04066778112340857,
-            "h": 0.9204914799442998
-          },
-          "z": 1,
           "bleed": [],
           "pad": null,
           "ground": null,
@@ -779,6 +730,19 @@
       ],
       "slots": [
         {
+          "frame_id": "figure-3",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
           "frame_id": "body-0",
           "accepts": [
             "text"
@@ -786,7 +750,7 @@
           "required": false,
           "prominence": 1.0,
           "min_chars": null,
-          "max_chars": 1619,
+          "max_chars": 8853,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -799,20 +763,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 523,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "figure-5",
-          "accepts": [
-            "figure"
-          ],
-          "required": false,
-          "prominence": 0.6,
-          "min_chars": null,
-          "max_chars": null,
+          "max_chars": 322,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -847,25 +798,7 @@
             "y": 0.06283334096272787,
             "h": 0.043500003108271845
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "eyebrow-1",
-          "role": "eyebrow",
-          "place": {
-            "kind": "frac",
-            "x": 0.9296269734700521,
-            "y": 0.09206500583224826,
-            "w": 0.023763465881347656,
-            "h": 0.02439349139178241
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -887,6 +820,7 @@
             "y": 0.14958007247359664,
             "h": 0.0441166913067853
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -908,6 +842,7 @@
             "y": 0.15023783931025753,
             "h": 0.13595558449074074
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -927,8 +862,9 @@
             "row": null,
             "row_span": null,
             "y": 0.22769976015444154,
-            "h": 0.03785185637297456
+            "h": 0.042270531400966184
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -948,8 +884,9 @@
             "row": null,
             "row_span": null,
             "y": 0.28454813074182583,
-            "h": 0.056370374891493054
+            "h": 0.06340579710144927
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -969,8 +906,9 @@
             "row": null,
             "row_span": null,
             "y": 0.2988008004647714,
-            "h": 0.1165185433846933
+            "h": 0.12681159420289853
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -990,27 +928,9 @@
             "row": null,
             "row_span": null,
             "y": 0.3122958430537471,
-            "h": 0.01936295120804398
+            "h": 0.021135265700483092
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-8",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.45390872955322265,
-            "y": 0.34010368629738136,
-            "w": 0.03444999059041341,
-            "h": 0.01933333785445602
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1030,8 +950,9 @@
             "row": null,
             "row_span": null,
             "y": 0.3781081305609809,
-            "h": 0.0378518563729745
+            "h": 0.042270531400966184
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1051,8 +972,9 @@
             "row": null,
             "row_span": null,
             "y": 0.4279267205132378,
-            "h": 0.11651857164171008
+            "h": 0.12681159420289853
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1072,8 +994,9 @@
             "row": null,
             "row_span": null,
             "y": 0.4626085352014612,
-            "h": 0.02047410187897859
+            "h": 0.021135265700483092
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1091,8 +1014,9 @@
             "x": 0.6886878967285156,
             "y": 0.50111083984375,
             "w": 0.10623188018798828,
-            "h": 0.037851856372974536
+            "h": 0.03888888888888889
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1112,8 +1036,9 @@
             "row": null,
             "row_span": null,
             "y": 0.5196293583622685,
-            "h": 0.0378518563729745
+            "h": 0.042270531400966184
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1131,27 +1056,9 @@
             "x": 0.6819629033406576,
             "y": 0.538147876880787,
             "w": 0.11295585632324219,
-            "h": 0.037851856372974536
+            "h": 0.03888888888888889
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-15",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.43674208323160807,
-            "y": 0.5566663953993055,
-            "w": 0.051616668701171875,
-            "h": 0.01933333785445602
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1171,27 +1078,9 @@
             "row": null,
             "row_span": null,
             "y": 0.5570526688187211,
-            "h": 0.11651859989872686
+            "h": 0.12681159420289853
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-17",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.7461295445760091,
-            "y": 0.5751849139178241,
-            "w": 0.0466149648030599,
-            "h": 0.01933333785445602
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1211,8 +1100,9 @@
             "row": null,
             "row_span": null,
             "y": 0.6861786453812211,
-            "h": 0.09708150227864583
+            "h": 0.10567632850241547
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1234,6 +1124,7 @@
             "y": 0.79586752432364,
             "h": 0.13595558449074074
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1253,20 +1144,7 @@
           "required": false,
           "prominence": 0.6,
           "min_chars": null,
-          "max_chars": 79,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "eyebrow-1",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.18333333333333332,
-          "min_chars": null,
-          "max_chars": 21,
+          "max_chars": 17,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1279,7 +1157,7 @@
           "required": false,
           "prominence": 0.3,
           "min_chars": null,
-          "max_chars": 219,
+          "max_chars": 276,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1292,7 +1170,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 715,
+          "max_chars": 420,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1305,7 +1183,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 118,
+          "max_chars": 124,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1318,7 +1196,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 121,
+          "max_chars": 60,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1331,7 +1209,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 526,
+          "max_chars": 335,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1344,20 +1222,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 28,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-8",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 20,
+          "max_chars": 46,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1370,7 +1235,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 95,
+          "max_chars": 130,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1383,7 +1248,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 548,
+          "max_chars": 350,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1396,7 +1261,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 64,
+          "max_chars": 123,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1409,7 +1274,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 77,
+          "max_chars": 26,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1422,7 +1287,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 95,
+          "max_chars": 62,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1435,20 +1300,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 75,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-15",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 21,
+          "max_chars": 28,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1461,20 +1313,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 583,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-17",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 20,
+          "max_chars": 340,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1487,7 +1326,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 470,
+          "max_chars": 276,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1500,7 +1339,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 631,
+          "max_chars": 414,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1509,7 +1348,7 @@
       "example_pages": [
         12
       ],
-      "note": "20 frames read from page 12"
+      "note": "16 frames read from page 12, set aside: 4 too narrow to set copy in"
     },
     {
       "id": "page-16",
@@ -1535,6 +1374,7 @@
             "y": 0.5876,
             "h": 0.2148
           },
+          "type_role": null,
           "z": 0,
           "bleed": [],
           "pad": null,
@@ -1556,7 +1396,30 @@
             "y": 0.149,
             "h": 0.3892
           },
+          "type_role": null,
           "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-2",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.14900532475224249,
+            "h": 0.389232748526114
+          },
+          "type_role": null,
+          "z": 1,
           "bleed": [],
           "pad": null,
           "ground": null,
@@ -1577,25 +1440,7 @@
             "y": 0.06283334096272787,
             "h": 0.043500003108271845
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "eyebrow-1",
-          "role": "eyebrow",
-          "place": {
-            "kind": "frac",
-            "x": 0.9296269734700521,
-            "y": 0.09206500583224826,
-            "w": 0.023763465881347656,
-            "h": 0.02439349139178241
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1617,6 +1462,7 @@
             "y": 0.14541340580693,
             "h": 0.0441166913067853
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1634,8 +1480,9 @@
             "x": 0.6596282958984375,
             "y": 0.243981283682364,
             "w": 0.12049249013264975,
-            "h": 0.01933333785445602
+            "h": 0.019444444444444445
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1653,8 +1500,9 @@
             "x": 0.35845330556233723,
             "y": 0.2530183297616464,
             "w": 0.11910823186238607,
-            "h": 0.037851856372974536
+            "h": 0.03888888888888889
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1672,65 +1520,9 @@
             "x": 0.6993449529012045,
             "y": 0.26249980220088254,
             "w": 0.08076864878336588,
-            "h": 0.01933333785445602
+            "h": 0.019444444444444445
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-6",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.712969970703125,
-            "y": 0.281018320719401,
-            "w": 0.06497675577799479,
-            "h": 0.01933333785445602
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-7",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.42061163584391276,
-            "y": 0.29005536679868343,
-            "w": 0.05478248596191406,
-            "h": 0.01933333785445602
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-8",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.7263783137003581,
-            "y": 0.29953683923791957,
-            "w": 0.0515682856241862,
-            "h": 0.01933333785445602
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1748,8 +1540,9 @@
             "x": 0.36270329157511394,
             "y": 0.36141834965458625,
             "w": 0.11486336390177408,
-            "h": 0.01933333785445602
+            "h": 0.019444444444444445
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1767,8 +1560,9 @@
             "x": 0.6596282958984375,
             "y": 0.3714331450285735,
             "w": 0.12048683166503907,
-            "h": 0.056370374891493054
+            "h": 0.058333333333333334
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1786,8 +1580,9 @@
             "x": 0.37581164042154946,
             "y": 0.37993686817310474,
             "w": 0.10175164540608723,
-            "h": 0.01933333785445602
+            "h": 0.019444444444444445
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1805,27 +1600,9 @@
             "x": 0.35887832641601564,
             "y": 0.3984553866916233,
             "w": 0.11867914199829102,
-            "h": 0.037851856372974536
+            "h": 0.03888888888888889
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-13",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.721078364054362,
-            "y": 0.4269887005841291,
-            "w": 0.056868362426757815,
-            "h": 0.01933333785445602
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1843,8 +1620,9 @@
             "x": 0.3618366559346517,
             "y": 0.4354924237286603,
             "w": 0.11354169845581055,
-            "h": 0.01933333785445602
+            "h": 0.019444444444444445
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1864,8 +1642,9 @@
             "row": null,
             "row_span": null,
             "y": 0.518297944245515,
-            "h": 0.01933333785445602
+            "h": 0.021135265700483092
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1885,6 +1664,7 @@
             "w": 0.08787408272425333,
             "h": 0.02535552978515625
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1906,6 +1686,7 @@
             "y": 0.5865101001880787,
             "h": 0.02535552978515625
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1925,8 +1706,9 @@
             "row": null,
             "row_span": null,
             "y": 0.5876407199435764,
-            "h": 0.1165185433846933
+            "h": 0.12681159420289853
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1948,6 +1730,7 @@
             "y": 0.627551778157552,
             "h": 0.17482966670283565
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1969,6 +1752,7 @@
             "y": 0.627551778157552,
             "h": 0.17482966670283565
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1988,8 +1772,9 @@
             "row": null,
             "row_span": null,
             "y": 0.8149888215241609,
-            "h": 0.09708150227864583
+            "h": 0.10567632850241547
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2009,30 +1794,10 @@
             "row": null,
             "row_span": null,
             "y": 0.8149888215241609,
-            "h": 0.11651859989872686
+            "h": 0.12681159420289853
           },
+          "type_role": null,
           "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-25",
-          "role": "figure",
-          "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.14900532475224249,
-            "h": 0.389232748526114
-          },
-          "z": 1,
           "bleed": [],
           "pad": null,
           "ground": null,
@@ -2044,6 +1809,19 @@
       ],
       "slots": [
         {
+          "frame_id": "figure-2",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
           "frame_id": "pullquote-0",
           "accepts": [
             "text"
@@ -2051,20 +1829,7 @@
           "required": false,
           "prominence": 0.6,
           "min_chars": null,
-          "max_chars": 79,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "eyebrow-1",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.18333333333333332,
-          "min_chars": null,
-          "max_chars": 21,
+          "max_chars": 17,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2077,7 +1842,7 @@
           "required": false,
           "prominence": 0.3,
           "min_chars": null,
-          "max_chars": 273,
+          "max_chars": 258,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2103,52 +1868,13 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 78,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-5",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
           "max_chars": 29,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
         },
         {
-          "frame_id": "body-6",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 22,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-7",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 22,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-8",
+          "frame_id": "body-5",
           "accepts": [
             "text"
           ],
@@ -2168,7 +1894,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 43,
+          "max_chars": 28,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2181,7 +1907,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 95,
+          "max_chars": 60,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2194,7 +1920,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 37,
+          "max_chars": 25,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2207,20 +1933,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 79,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-13",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 20,
+          "max_chars": 29,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2233,7 +1946,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 42,
+          "max_chars": 28,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2246,7 +1959,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 79,
+          "max_chars": 88,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2259,7 +1972,7 @@
           "required": false,
           "prominence": 0.35,
           "min_chars": null,
-          "max_chars": 25,
+          "max_chars": 21,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2272,7 +1985,7 @@
           "required": false,
           "prominence": 0.35,
           "min_chars": null,
-          "max_chars": 53,
+          "max_chars": 49,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2285,7 +1998,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 558,
+          "max_chars": 350,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2298,7 +2011,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 712,
+          "max_chars": 464,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2311,7 +2024,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 919,
+          "max_chars": 552,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2324,7 +2037,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 417,
+          "max_chars": 232,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2337,20 +2050,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 520,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "figure-25",
-          "accepts": [
-            "figure"
-          ],
-          "required": false,
-          "prominence": 0.6,
-          "min_chars": null,
-          "max_chars": null,
+          "max_chars": 335,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2359,7 +2059,7 @@
       "example_pages": [
         16
       ],
-      "note": "26 frames read from page 16"
+      "note": "21 frames read from page 16, set aside: 5 too narrow to set copy in"
     },
     {
       "id": "page-20",
@@ -2385,7 +2085,30 @@
             "y": 0.149,
             "h": 0.3892
           },
+          "type_role": null,
           "z": 0,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-1",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.149040448224103,
+            "h": 0.3891599867078993
+          },
+          "type_role": null,
+          "z": 1,
           "bleed": [],
           "pad": null,
           "ground": null,
@@ -2406,6 +2129,7 @@
             "y": 0.06283334096272787,
             "h": 0.053625156261302806
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2427,6 +2151,7 @@
             "y": 0.14541340580693,
             "h": 0.0441166913067853
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2448,6 +2173,7 @@
             "y": 0.14541340580693,
             "h": 0.0441166913067853
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2467,8 +2193,9 @@
             "row": null,
             "row_span": null,
             "y": 0.226203042489511,
-            "h": 0.01933333785445602
+            "h": 0.021135265700483092
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2488,8 +2215,9 @@
             "row": null,
             "row_span": null,
             "y": 0.22729545875831886,
-            "h": 0.037851856372974536
+            "h": 0.042270531400966184
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2507,27 +2235,9 @@
             "x": 0.6824527104695638,
             "y": 0.24472156100802953,
             "w": 0.10933335622151692,
-            "h": 0.037851856372974536
+            "h": 0.03888888888888889
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-6",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.7485360463460287,
-            "y": 0.28175859804506653,
-            "w": 0.041079203287760414,
-            "h": 0.01933333785445602
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2547,8 +2257,9 @@
             "row": null,
             "row_span": null,
             "y": 0.30825073807327835,
-            "h": 0.03785185637297456
+            "h": 0.042270531400966184
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2568,8 +2279,9 @@
             "row": null,
             "row_span": null,
             "y": 0.3224220275878906,
-            "h": 0.056370374891493054
+            "h": 0.06340579710144927
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2589,8 +2301,9 @@
             "row": null,
             "row_span": null,
             "y": 0.3799212137858073,
-            "h": 0.037851856372974536
+            "h": 0.042270531400966184
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2610,8 +2323,9 @@
             "row": null,
             "row_span": null,
             "y": 0.409381753427011,
-            "h": 0.03785185637297456
+            "h": 0.042270531400966184
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2629,27 +2343,9 @@
             "x": 0.3831303278605143,
             "y": 0.4169582508228443,
             "w": 0.10363664627075195,
-            "h": 0.01933333785445602
+            "h": 0.019444444444444445
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-12",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.7408016840616862,
-            "y": 0.44641879046404803,
-            "w": 0.048800086975097655,
-            "h": 0.01933333785445602
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2667,8 +2363,9 @@
             "x": 0.37660646438598633,
             "y": 0.46963972868742765,
             "w": 0.11207831700642903,
-            "h": 0.0193333661114728
+            "h": 0.019444444444444445
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2688,8 +2385,9 @@
             "row": null,
             "row_span": null,
             "y": 0.488158275462963,
-            "h": 0.056370374891493054
+            "h": 0.06340579710144927
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2709,8 +2407,9 @@
             "row": null,
             "row_span": null,
             "y": 0.49115984881365743,
-            "h": 0.03785185637297456
+            "h": 0.042270531400966184
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2728,8 +2427,9 @@
             "x": 0.6924506505330403,
             "y": 0.5281968858506945,
             "w": 0.09742488861083984,
-            "h": 0.01933333785445602
+            "h": 0.019444444444444445
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2749,8 +2449,9 @@
             "row": null,
             "row_span": null,
             "y": 0.5597955209237558,
-            "h": 0.037851856372974536
+            "h": 0.042270531400966184
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2770,6 +2471,7 @@
             "w": 0.11410657564798991,
             "h": 0.02535552978515625
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2789,27 +2491,9 @@
             "row": null,
             "row_span": null,
             "y": 0.5873787773980035,
-            "h": 0.0378518563729745
+            "h": 0.042270531400966184
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-20",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.45043980280558266,
-            "y": 0.5968325579607928,
-            "w": 0.03607749938964844,
-            "h": 0.01933333785445602
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2829,8 +2513,9 @@
             "row": null,
             "row_span": null,
             "y": 0.627551778157552,
-            "h": 0.07764446117259838
+            "h": 0.08454106280193237
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2850,8 +2535,9 @@
             "row": null,
             "row_span": null,
             "y": 0.6752339115849247,
-            "h": 0.09708150227864583
+            "h": 0.10567632850241547
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2873,6 +2559,7 @@
             "y": 0.7353989777741609,
             "h": 0.05063329626012732
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2892,30 +2579,10 @@
             "row": null,
             "row_span": null,
             "y": 0.8017184222186053,
-            "h": 0.09708150227864583
+            "h": 0.10567632850241547
           },
+          "type_role": null,
           "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-26",
-          "role": "figure",
-          "place": {
-            "kind": "grid",
-            "col": 0,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.149040448224103,
-            "h": 0.3891599867078993
-          },
-          "z": 1,
           "bleed": [],
           "pad": null,
           "ground": null,
@@ -2927,6 +2594,19 @@
       ],
       "slots": [
         {
+          "frame_id": "figure-1",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
           "frame_id": "pullquote-0",
           "accepts": [
             "text"
@@ -2934,7 +2614,7 @@
           "required": false,
           "prominence": 0.6,
           "min_chars": null,
-          "max_chars": 100,
+          "max_chars": 112,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2947,7 +2627,7 @@
           "required": false,
           "prominence": 0.3,
           "min_chars": null,
-          "max_chars": 135,
+          "max_chars": 132,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2960,7 +2640,7 @@
           "required": false,
           "prominence": 0.3,
           "min_chars": null,
-          "max_chars": 159,
+          "max_chars": 128,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2973,7 +2653,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 46,
+          "max_chars": 31,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2986,7 +2666,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 81,
+          "max_chars": 60,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2999,20 +2679,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 75,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-6",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 20,
+          "max_chars": 27,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3025,7 +2692,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 86,
+          "max_chars": 59,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3038,7 +2705,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 135,
+          "max_chars": 126,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3051,7 +2718,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 86,
+          "max_chars": 62,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3064,7 +2731,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 84,
+          "max_chars": 60,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3077,20 +2744,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 37,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-12",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 20,
+          "max_chars": 25,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3103,7 +2757,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 40,
+          "max_chars": 28,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3116,7 +2770,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 130,
+          "max_chars": 62,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3129,7 +2783,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 84,
+          "max_chars": 59,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3142,7 +2796,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 35,
+          "max_chars": 24,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3155,7 +2809,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 68,
+          "max_chars": 54,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3168,7 +2822,7 @@
           "required": false,
           "prominence": 0.35,
           "min_chars": null,
-          "max_chars": 30,
+          "max_chars": 28,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3187,19 +2841,6 @@
           "aspect_max": null
         },
         {
-          "frame_id": "body-20",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.26666666666666666,
-          "min_chars": null,
-          "max_chars": 20,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
           "frame_id": "body-21",
           "accepts": [
             "text"
@@ -3207,7 +2848,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 309,
+          "max_chars": 180,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3220,7 +2861,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 1047,
+          "max_chars": 592,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3233,7 +2874,7 @@
           "required": false,
           "prominence": 0.35,
           "min_chars": null,
-          "max_chars": 79,
+          "max_chars": 118,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3246,20 +2887,7 @@
           "required": false,
           "prominence": 0.26666666666666666,
           "min_chars": null,
-          "max_chars": 385,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "figure-26",
-          "accepts": [
-            "figure"
-          ],
-          "required": false,
-          "prominence": 0.6,
-          "min_chars": null,
-          "max_chars": null,
+          "max_chars": 244,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3268,7 +2896,7 @@
       "example_pages": [
         20
       ],
-      "note": "27 frames read from page 20"
+      "note": "24 frames read from page 20, set aside: 3 too narrow to set copy in"
     }
   ],
   "policy": {

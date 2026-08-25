@@ -38,6 +38,7 @@ from app.design.pack import (
     SpacingScale,
     TypeRole,
 )
+from app.design.geometry import content_box
 from app.design.schema import Canvas, FracPlace, Frame, GridPlace, GridSpec, Insets
 from app.measure import color_roles as color_model
 from app.measure import grammar as grammar_model
@@ -52,6 +53,23 @@ MIN_BLOCK_WIDTH = 0.02
 # How close a block's edges have to sit to a grid track before the archetype
 # records it as a grid frame rather than a free one.
 GRID_SNAP = 0.012
+
+# The narrowest a slot may be and still be offered body copy, in characters
+# of that pack's own body face at its own size. Below this a slot is a label,
+# not a measure: it is a chart's tick, a data callout, a page number. Offering
+# it as somewhere to put a paragraph is how a generated page ended up with its
+# copy scattered into the positions a chart's axis used to occupy.
+MIN_MEASURE_CHARS = 18
+
+# How much of a text block has to sit inside a figure before it is read as
+# that figure's own furniture rather than as a sibling of it. Labels sit
+# wholly within the chart they annotate; a caption sits below it.
+FIGURE_CONTAINMENT = 0.7
+
+# A figure covering more of the page than this is a background, not an
+# illustration, and the type over it is the page's copy rather than its
+# furniture. Without this a full-bleed image swallows every block on the page.
+FIGURE_IS_BACKGROUND = 0.55
 
 # Type role -> the frame role that carries it.
 _FRAME_ROLE = {
@@ -180,6 +198,105 @@ def _role_for_size(size: float, roles: dict[str, type_model.RungEvidence]) -> st
     return best
 
 
+def _char_width_pt(role_name: str, roles: dict[str, type_model.RungEvidence],
+                   face: str) -> float:
+    """The average advance of this role's face at its own size, in points.
+
+    Measured from the font rather than estimated. A chars-per-line constant
+    is wrong by nearly a factor of two between narrow and wide copy, and the
+    number it produces is what decides whether a slot is a measure or a
+    label.
+    """
+    rung = roles.get(role_name)
+    if rung is None or rung.size_pt <= 0:
+        return 0.0
+    from app.renderer.typeset.fonts import width_pt
+
+    sample = ("The quick brown fox jumps over the lazy dog and keeps going "
+              "until the line is comfortably longer than any measure")
+    return width_pt(sample, face, rung.size_pt) / len(sample)
+
+
+def _capacity_chars(block: dict, role_name: str,
+                    roles: dict[str, type_model.RungEvidence],
+                    face: str, width_pt_page: float,
+                    height_pt_page: float) -> int:
+    """How much copy this slot actually holds, at the role it is set in.
+
+    The capacity used to be `chars * 1.4` - the amount of text that happened
+    to be there on the day, inflated a little. That is a description of the
+    reference page, not of the frame, and the two disagree wildly: a slot
+    traced from a nine-character label reported room for twenty characters
+    while measuring an inch and a half wide. Every later stage reads this
+    number, so it has to describe the frame.
+    """
+    rung = roles.get(role_name)
+    per_char = _char_width_pt(role_name, roles, face)
+    if rung is None or per_char <= 0:
+        return max(20, int(block["chars"] * 1.4))
+    width = block["w"] * width_pt_page
+    height = block["h"] * height_pt_page
+    # The leading that was measured on the page, which is what the pack will
+    # carry, so the capacity and the typesetter agree. And the line count is
+    # floored, not rounded: a frame 1.6 lines tall holds one line. Rounding it
+    # to two is how a slot advertised 490 characters and overflowed by 138
+    # points when they were set in it.
+    line_height = rung.line_height_pt or rung.size_pt * 1.3
+    lines = max(1, int(height / line_height))
+    return max(1, int(width / per_char) * lines)
+
+
+def _is_a_measure(block: dict, roles: dict[str, type_model.RungEvidence],
+                  face: str, width_pt_page: float) -> bool:
+    """Whether copy could be set in this slot at all.
+
+    Asked against the pack's *body* face, whatever the block was set in,
+    because the question is whether a paragraph could go here - not whether
+    the label that was here fits.
+    """
+    per_char = _char_width_pt("body", roles, face)
+    if per_char <= 0:
+        return True
+    return (block["w"] * width_pt_page) / per_char >= MIN_MEASURE_CHARS
+
+
+def _figure_rects(page) -> list[tuple[float, float, float, float]]:
+    """Every raster figure on the page, as fractions, backgrounds excluded."""
+    width, height = float(page.rect.width), float(page.rect.height)
+    out = []
+    for entry in page.get_images(full=True):
+        for rect in page.get_image_rects(entry[0]):
+            x0, y0 = rect.x0 / width, rect.y0 / height
+            x1, y1 = rect.x1 / width, rect.y1 / height
+            if (x1 - x0) * (y1 - y0) > FIGURE_IS_BACKGROUND:
+                continue
+            out.append((x0, y0, x1, y1))
+    return out
+
+
+def _inside_a_figure(block: dict,
+                     figures: Sequence[tuple[float, float, float, float]]) -> bool:
+    """Whether this text belongs to a figure rather than beside one.
+
+    A chart's tick labels and data callouts sit wholly inside the chart they
+    annotate. Traced as siblings they become content slots, and the page then
+    offers a paragraph the position an axis label used to occupy.
+    """
+    area = block["w"] * block["h"]
+    if area <= 0:
+        return False
+    for x0, y0, x1, y1 in figures:
+        left = max(block["x"], x0)
+        top = max(block["y"], y0)
+        right = min(block["x"] + block["w"], x1)
+        bottom = min(block["y"] + block["h"], y1)
+        if right <= left or bottom <= top:
+            continue
+        if ((right - left) * (bottom - top)) / area >= FIGURE_CONTAINMENT:
+            return True
+    return False
+
+
 def _page_grid(page) -> object:
     """The grid this one page is set on, recovered from its own edges."""
     width = float(page.rect.width)
@@ -194,7 +311,8 @@ def _page_grid(page) -> object:
 def _archetype_for_page(page, page_number: int,
                         roles: dict[str, type_model.RungEvidence],
                         canvas: Canvas, baseline_pt: float,
-                        house_grid: Optional[GridSpec] = None) -> PageArchetype:
+                        house_grid: Optional[GridSpec] = None,
+                        body_face: str = "Arial") -> PageArchetype:
     """One page, read as a reusable pattern of frames.
 
     The structural regions come from ``grammar`` - the rails, panels and
@@ -221,10 +339,44 @@ def _archetype_for_page(page, page_number: int,
             z=0,
         ))
 
+    # Figures are read first because what is inside one is that figure's own
+    # furniture, not a sibling of it.
+    figures = _figure_rects(page)
+    for entry in page.get_images(full=True):
+        for rect in page.get_image_rects(entry[0]):
+            frame_id = f"figure-{len(frames)}"
+            fx, fy = _clamp(rect.x0 / width), _clamp(rect.y0 / height)
+            fw = _positive((rect.x1 - rect.x0) / width)
+            fh = _positive((rect.y1 - rect.y0) / height)
+            frames.append(Frame(
+                id=frame_id, role="figure",
+                place=FracPlace(x=fx, y=fy, w=fw, h=fh),
+                bleed=_bleed_edges(fx, fy, fw, fh),
+                z=1,
+            ))
+            slots.append(SlotSpec(frame_id=frame_id, accepts=("figure",),
+                                  prominence=0.6))
+
+    set_aside = {"in a figure": 0, "too narrow to set copy in": 0,
+                 "page furniture": 0}
+    role_of: dict[str, str] = {}
     for index, block in enumerate(_merge_overlapping(_page_blocks(page))):
         role_name = _abstracted_role(block, roles)
+        if _inside_a_figure(block, figures):
+            set_aside["in a figure"] += 1
+            continue
+        if role_name == "folio":
+            # A page number is chrome. It is the same on every page, it is
+            # not somewhere the deck's material goes, and traced as a slot it
+            # is one more tiny box competing for a paragraph.
+            set_aside["page furniture"] += 1
+            continue
+        if not _is_a_measure(block, roles, body_face, width):
+            set_aside["too narrow to set copy in"] += 1
+            continue
         frame_role = _FRAME_ROLE.get(role_name, "column")
         frame_id = f"{role_name}-{index}"
+        role_of[frame_id] = role_name
         frames.append(Frame(
             id=frame_id,
             role=frame_role,
@@ -244,23 +396,9 @@ def _archetype_for_page(page, page_number: int,
                 slot.required for slot in slots
             )),
             prominence=min(1.0, block["size"] / 60.0),
-            max_chars=max(20, int(block["chars"] * 1.4)),
+            max_chars=_capacity_chars(block, role_name, roles, body_face,
+                                      width, height),
         ))
-
-    for entry in page.get_images(full=True):
-        for rect in page.get_image_rects(entry[0]):
-            frame_id = f"figure-{len(frames)}"
-            fx, fy = _clamp(rect.x0 / width), _clamp(rect.y0 / height)
-            fw = _positive((rect.x1 - rect.x0) / width)
-            fh = _positive((rect.y1 - rect.y0) / height)
-            frames.append(Frame(
-                id=frame_id, role="figure",
-                place=FracPlace(x=fx, y=fy, w=fw, h=fh),
-                bleed=_bleed_edges(fx, fy, fw, fh),
-                z=1,
-            ))
-            slots.append(SlotSpec(frame_id=frame_id, accepts=("figure",),
-                                  prominence=0.6))
 
     label = ", ".join(structural.features) or "content"
     own_grid = _page_grid(page)
@@ -274,10 +412,23 @@ def _archetype_for_page(page, page_number: int,
     if applied_grid is not None and applied_grid.columns > 1:
         frames = [_snapped(frame, applied_grid, canvas, applied_grid)
                   for frame in frames]
+    # Only now is a frame's real size known: snapping re-expresses it as a
+    # span of columns, which can be narrower than the ink that was traced.
+    frames, slots, dropped = _enforce_slot_floors(
+        frames, slots, role_of, roles, canvas,
+        applied_grid or house_grid, body_face,
+    )
+    set_aside["too narrow to set copy in"] += dropped
+
     return PageArchetype(
         id=f"page-{page_number}",
         label=label,
-        role="content",
+        # A page whose only text frames are captions and footnotes is a page
+        # of apparatus - endnotes, a disclaimer, a glossary. It is a real page
+        # of the publication and a useless archetype: bound to a deck's
+        # material it sets every paragraph at footnote size. Recorded as what
+        # it is so the selector will not offer it content.
+        role="content" if _carries_copy(frames, slots) else "appendix",
         grid=_grid_spec(own_grid, canvas, baseline_pt) if own_grid else None,
         grid_confidence=Confidence(
             value=own_grid.edge_snap if own_grid else 0.0,
@@ -288,8 +439,109 @@ def _archetype_for_page(page, page_number: int,
         frames=tuple(frames),
         slots=tuple(slots),
         example_pages=(page_number,),
-        note=f"{len(frames)} frames read from page {page_number}",
+        note=(f"{len(frames)} frames read from page {page_number}"
+              + (", set aside: " + ", ".join(
+                  f"{count} {reason}"
+                  for reason, count in set_aside.items() if count)
+                 if any(set_aside.values()) else "")),
     )
+
+
+# The frame roles a page's own material can be set in. A page with none of
+# them cannot carry a deck, whatever else it has on it.
+COPY_FRAME_ROLES = frozenset({"column", "headline", "standfirst", "pullquote",
+                              "band", "bandRow", "statRow", "marginNote"})
+
+
+def _carries_copy(frames: Sequence[Frame], slots: Sequence[SlotSpec]) -> bool:
+    """Whether this page has anywhere the deck's own copy could go."""
+    by_id = {frame.id: frame for frame in frames}
+    for slot in slots:
+        if slot.accepts and "text" not in slot.accepts:
+            continue
+        frame = by_id.get(slot.frame_id)
+        if frame is not None and frame.role in COPY_FRAME_ROLES:
+            return True
+    return False
+
+
+def _enforce_slot_floors(frames: list[Frame], slots: list[SlotSpec],
+                         role_of: dict[str, str],
+                         roles: dict[str, type_model.RungEvidence],
+                         canvas: Canvas, grid: Optional[GridSpec],
+                         body_face: str) -> tuple[list[Frame], list[SlotSpec], int]:
+    """Make every text slot big enough to hold the type it is set in.
+
+    Two corrections, and both have to happen here rather than when the block
+    was read, because snapping to the grid is what finally decides a frame's
+    width.
+
+    A frame is traced at the height of its *ink*, and ink is shorter than the
+    line box around it: a single line of 16pt type inks about 11pt and needs
+    21pt of leading. So every single-line frame came out too short for the one
+    line it holds, which is most of what "this slot cannot hold a line of its
+    own body copy" was measuring. Frames are grown to their type's line box.
+    Growing downward is safe in a way that widening is not - it runs into the
+    whitespace under the line - and any residual collision is a geometry
+    finding the repair loop can act on.
+
+    A frame narrower than a real measure is a label, whatever it was traced
+    from, and it is dropped along with its slot rather than left as somewhere
+    a paragraph might be sent.
+    """
+    if grid is None:
+        return frames, slots, 0
+    box = content_box(canvas, grid)
+    column = grid.column_width_in(canvas)
+    per_char = _char_width_pt("body", roles, body_face)
+    floor_in = (MIN_MEASURE_CHARS * per_char / 72.0) if per_char > 0 else 0.0
+
+    by_id = {frame.id: frame for frame in frames}
+    drop: set[str] = set()
+    grown: dict[str, Frame] = {}
+
+    for slot in slots:
+        if slot.accepts and "text" not in slot.accepts:
+            continue
+        frame = by_id.get(slot.frame_id)
+        if frame is None:
+            continue
+        role = roles.get(role_of.get(frame.id, "body"))
+        if isinstance(frame.place, GridPlace):
+            width = (frame.place.span * column
+                     + max(0, frame.place.span - 1) * grid.gutter_in)
+            height = (frame.place.h or 0.0) * box.height
+        else:
+            width = frame.place.w * canvas.w_in
+            height = frame.place.h * canvas.h_in
+
+        if floor_in > 0 and width < floor_in:
+            drop.add(frame.id)
+            continue
+        if role is None or box.height <= 0 or height <= 0:
+            continue
+        # One line box of this role, in inches, at the leading that was
+        # *measured* on the page - which is what the pack will carry, so the
+        # frame and the type it holds agree exactly rather than nearly. EY's
+        # body leads at 21.0pt against a 16pt size; assuming 1.3 puts it at
+        # 20.8 and leaves every single-line body frame a fifth of a point
+        # short of the line inside it.
+        line_in = (role.line_height_pt or role.size_pt * 1.3) / 72.0
+        lines = max(1, round(height / line_in))
+        needed = lines * line_in
+        if needed > height:
+            if isinstance(frame.place, GridPlace):
+                grown[frame.id] = frame.model_copy(update={
+                    "place": frame.place.model_copy(update={
+                        "h": needed / box.height})})
+            else:
+                grown[frame.id] = frame.model_copy(update={
+                    "place": frame.place.model_copy(update={
+                        "h": min(1.0, needed / canvas.h_in)})})
+
+    kept_frames = [grown.get(f.id, f) for f in frames if f.id not in drop]
+    kept_slots = [s for s in slots if s.frame_id not in drop]
+    return kept_frames, kept_slots, len(drop)
 
 
 def _snapped(frame: Frame, _unused, canvas: Canvas,
@@ -408,14 +660,15 @@ def from_pdf(pdf_path: str, pages: Sequence[int], *, pack_id: str,
     # which is not known until every page has been read, and pages with no
     # grid of their own have to be expressed on it.
     archetypes = tuple(
-        _archetype_for_page(page, number, roles, canvas, baseline_pt)
+        _archetype_for_page(page, number, roles, canvas, baseline_pt,
+                            body_face=body_face)
         for number, page in sample
     )
     house = _grid_spec(grid, canvas, baseline_pt) if grid else _modal_grid(archetypes)[0]
     if house is not None:
         archetypes = tuple(
             _archetype_for_page(page, number, roles, canvas, baseline_pt,
-                                house_grid=house)
+                                house_grid=house, body_face=body_face)
             for number, page in sample
         )
     # The pack's grid is the one its pages most often agree on. Pooling every

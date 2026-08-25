@@ -55,10 +55,13 @@ EXHIBIT_KINDS = {
 }
 FIGURE_KINDS = {"image"}
 
-# A page is split rather than truncated, but not indefinitely: material that
-# still will not place after this many splits is a caller error worth
-# reporting, not something to keep halving.
-MAX_SPLITS = 4
+# A page is split rather than truncated, but not indefinitely. The bound comes
+# from the material rather than being a fixed number: a page can never need
+# more parts than it has paragraphs, and a fixed cap of four refused eighteen
+# paragraphs that simply needed five pages. Termination does not rest on this
+# anyway - each split strictly reduces the item count of both halves, and a
+# part too small to divide reports rather than looping.
+MIN_SPLITS = 4
 
 
 class Unplaceable(RuntimeError):
@@ -241,6 +244,8 @@ def _place(shape: MaterialShape, pack: Pack,
     pending = [shape]
     placed: list[tuple[MaterialShape, object]] = []
     splits = 0
+    ceiling = max(MIN_SPLITS,
+                  len([i for i in shape.items if i.kind == "text"]))
     last = previous
     while pending:
         current = pending.pop(0)
@@ -249,7 +254,7 @@ def _place(shape: MaterialShape, pack: Pack,
             placed.append((current, selection))
             last = selection.archetype.id
             continue
-        if splits >= MAX_SPLITS or len(
+        if splits >= ceiling or len(
                 [i for i in current.items if i.kind == "text"]) < 2:
             raise Unplaceable(
                 f"no archetype in pack {pack.id!r} can carry a page of "

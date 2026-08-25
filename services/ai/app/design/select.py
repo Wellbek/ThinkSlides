@@ -101,14 +101,26 @@ DISPLAY_FRAME_ROLES = frozenset({"headline", "pullquote", "standfirst"})
 # among them: it is a *lead paragraph*, so body copy is exactly what belongs
 # in it. Grouping it with the other two meant a cover's subtitle had nowhere
 # to go, and the slot sat empty on every page that had one.
-RESTRICTED_FRAME_ROLES = frozenset({"headline", "pullquote"})
+DISPLAY_ONLY_FRAME_ROLES = frozenset({"headline", "pullquote"})
+
+# The page's apparatus. These are filled by the apparatus system from the
+# deck's own sources and folios, never by the material the deck is about.
+# Without this a paragraph is bound into a footnote frame and set at seven
+# points: BXSL's page 20 is an endnotes page whose only text frames are
+# captions and footnotes, and every paragraph of a generated page landed in
+# one of them.
+APPARATUS_FRAME_ROLES = frozenset({"footnotes", "sourceLine", "folio"})
+
+RESTRICTED_FRAME_ROLES = DISPLAY_ONLY_FRAME_ROLES | APPARATUS_FRAME_ROLES
 
 _HINT_FOR_FRAME = {"headline": "heading", "pullquote": "quote",
                    "standfirst": "body"}
 
 
 def _role_compatible(frame_role: str, item: MaterialItem) -> bool:
-    if frame_role not in RESTRICTED_FRAME_ROLES:
+    if frame_role in APPARATUS_FRAME_ROLES:
+        return False
+    if frame_role not in DISPLAY_ONLY_FRAME_ROLES:
         # A heading may sit in a plain column when the archetype has no
         # headline frame; that is a compromise, not an error.
         return True
@@ -337,6 +349,13 @@ def fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
     """
     if archetype.role != shape.role and shape.role in ("cover", "section",
                                                        "closing"):
+        return None
+    # A page of endnotes is a real page of the publication and a useless
+    # archetype: it has no column, headline or standfirst, so binding a deck's
+    # material to it sets every paragraph at footnote size. Such pages are
+    # recorded as `appendix` when the pack is built, and content does not go
+    # on them.
+    if shape.role == "content" and archetype.role not in ("content", "exhibit"):
         return None
 
     grid = archetype.grid or pack.grid

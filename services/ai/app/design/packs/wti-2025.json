@@ -140,7 +140,7 @@
   "colors": {
     "ground": "#FFFFFF",
     "ground_alt": "#F4F4F6",
-    "ground_dark": "#2B4570",
+    "ground_dark": "#30436D",
     "ink": "#000000",
     "ink_muted": "#6B6B76",
     "ink_reversed": "#FFFFFF",
@@ -174,6 +174,7 @@
             "y": 0.0,
             "h": 1.0
           },
+          "type_role": null,
           "z": 0,
           "bleed": [
             "left",
@@ -199,6 +200,7 @@
             "y": 0.0,
             "h": 1.0
           },
+          "type_role": null,
           "z": 0,
           "bleed": [
             "top",
@@ -223,6 +225,7 @@
             "y": 0.0,
             "h": 1.0
           },
+          "type_role": null,
           "z": 0,
           "bleed": [
             "top",
@@ -248,6 +251,7 @@
             "y": 0.2888,
             "h": 0.2379
           },
+          "type_role": null,
           "z": 0,
           "bleed": [],
           "pad": null,
@@ -269,7 +273,34 @@
             "y": -0.0018,
             "h": 1.0036
           },
+          "type_role": null,
           "z": 0,
+          "bleed": [
+            "top",
+            "right",
+            "bottom"
+          ],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-5",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": -0.0018183390299479167,
+            "h": 1.003636369801531
+          },
+          "type_role": null,
+          "z": 1,
           "bleed": [
             "top",
             "right",
@@ -292,29 +323,9 @@
             "row": null,
             "row_span": null,
             "y": 0.02220919637969046,
-            "h": 0.017184344204989346
+            "h": 0.01784145805884936
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "headline-1",
-          "role": "headline",
-          "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.06620969194354433,
-            "h": 0.18469697297221482
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -334,46 +345,9 @@
             "row": null,
             "row_span": null,
             "y": 0.0901320968011413,
-            "h": 0.20632575256655913
+            "h": 0.24703557312252963
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "pullquote-3",
-          "role": "pullquote",
-          "place": {
-            "kind": "frac",
-            "x": 0.6362414391212214,
-            "y": 0.13509276418974905,
-            "w": 0.03417016322316687,
-            "h": 0.05104180538293087
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-4",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.5973668316610499,
-            "y": 0.2739272454772333,
-            "w": 0.10588931414036969,
-            "h": 0.031600008107194995
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -395,65 +369,7 @@
             "y": 0.28877462521947994,
             "h": 0.14832070861199886
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-6",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.6031236835554534,
-            "y": 0.30423027578026357,
-            "w": 0.09437625860077103,
-            "h": 0.016448492955679846
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-7",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.6055079940097784,
-            "y": 0.3193817909317787,
-            "w": 0.08960374819686989,
-            "h": 0.016448512221827652
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "standfirst-8",
-          "role": "standfirst",
-          "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.33345883302014284,
-            "h": 0.12436622080176768
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -473,27 +389,9 @@
             "row": null,
             "row_span": null,
             "y": 0.4279782844312263,
-            "h": 0.2464898619988952
+            "h": 0.24978041282389105
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "pullquote-10",
-          "role": "pullquote",
-          "place": {
-            "kind": "frac",
-            "x": 0.6348709904290493,
-            "y": 0.42933820474027384,
-            "w": 0.03417011335784314,
-            "h": 0.05104180538293087
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -513,8 +411,9 @@
             "row": null,
             "row_span": null,
             "y": 0.44439331208816685,
-            "h": 0.08234848638977667
+            "h": 0.0892072902942468
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -534,46 +433,9 @@
             "row": null,
             "row_span": null,
             "y": 0.5337241201689749,
-            "h": 0.06625000154129182
+            "h": 0.07136583223539744
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-13",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.5985174241408803,
-            "y": 0.5681727245600536,
-            "w": 0.09982259912428514,
-            "h": 0.016448512221827652
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-14",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.6155213499380872,
-            "y": 0.5833242397115688,
-            "w": 0.06582890928181168,
-            "h": 0.016448512221827652
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -593,128 +455,9 @@
             "row": null,
             "row_span": null,
             "y": 0.6072720999669547,
-            "h": 0.08234848638977667
+            "h": 0.0892072902942468
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "pullquote-16",
-          "role": "pullquote",
-          "place": {
-            "kind": "frac",
-            "x": 0.6360189400467218,
-            "y": 0.7240642200816761,
-            "w": 0.03417016322316687,
-            "h": 0.05104180538293087
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-17",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.74019617816202,
-            "y": 0.7936616377397017,
-            "w": 0.0482685862023846,
-            "h": 0.013353521173650568
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-18",
-          "role": "caption",
-          "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.8114595509538747,
-            "h": 0.03759596082899305
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-19",
-          "role": "caption",
-          "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.8534999808879814,
-            "h": 0.03759596082899305
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-20",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.5969874562780841,
-            "y": 0.8628988554983428,
-            "w": 0.1065481347975388,
-            "h": 0.046751542524857956
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-21",
-          "role": "caption",
-          "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.895540410822088,
-            "h": 0.061838323419744316
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -734,8 +477,9 @@
             "row": null,
             "row_span": null,
             "y": 0.9319192134972775,
-            "h": 0.025474702469026198
+            "h": 0.027448397013614404
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -755,35 +499,11 @@
             "row": null,
             "row_span": null,
             "y": 0.9635347308534564,
-            "h": 0.01669195926550663
+            "h": 0.01784145805884936
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-29",
-          "role": "figure",
-          "place": {
-            "kind": "grid",
-            "col": 2,
-            "span": 2,
-            "row": null,
-            "row_span": null,
-            "y": -0.0018183390299479167,
-            "h": 1.003636369801531
-          },
-          "z": 1,
-          "bleed": [
-            "top",
-            "right",
-            "bottom"
-          ],
           "pad": null,
           "ground": null,
           "scrim": null,
@@ -794,6 +514,19 @@
       ],
       "slots": [
         {
+          "frame_id": "figure-5",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
           "frame_id": "body-0",
           "accepts": [
             "text"
@@ -801,20 +534,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 49,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "headline-1",
-          "accepts": [
-            "text"
-          ],
-          "required": true,
-          "prominence": 0.6666666666666666,
-          "min_chars": null,
-          "max_chars": 56,
+          "max_chars": 37,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -824,36 +544,10 @@
           "accepts": [
             "text"
           ],
-          "required": false,
+          "required": true,
           "prominence": 1.0,
           "min_chars": null,
-          "max_chars": 43,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "pullquote-3",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.5366666666666667,
-          "min_chars": null,
-          "max_chars": 20,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-4",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.16,
-          "min_chars": null,
-          "max_chars": 68,
+          "max_chars": 32,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -866,46 +560,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 1194,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-6",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.16,
-          "min_chars": null,
-          "max_chars": 33,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-7",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.16,
-          "min_chars": null,
-          "max_chars": 32,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "standfirst-8",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.2833333333333333,
-          "min_chars": null,
-          "max_chars": 156,
+          "max_chars": 936,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -918,20 +573,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 1059,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "pullquote-10",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.5366666666666667,
-          "min_chars": null,
-          "max_chars": 20,
+          "max_chars": 750,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -944,7 +586,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 294,
+          "max_chars": 245,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -957,33 +599,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 270,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-13",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.16,
-          "min_chars": null,
-          "max_chars": 37,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-14",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.16,
-          "min_chars": null,
-          "max_chars": 23,
+          "max_chars": 196,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -996,85 +612,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 372,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "pullquote-16",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.5366666666666667,
-          "min_chars": null,
-          "max_chars": 20,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-17",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 23,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-18",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 210,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-19",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 254,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-20",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.16,
-          "min_chars": null,
-          "max_chars": 106,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-21",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 441,
+          "max_chars": 255,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1087,7 +625,7 @@
           "required": false,
           "prominence": 0.13333333333333333,
           "min_chars": null,
-          "max_chars": 298,
+          "max_chars": 282,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1100,20 +638,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 20,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "figure-29",
-          "accepts": [
-            "figure"
-          ],
-          "required": false,
-          "prominence": 0.6,
-          "min_chars": null,
-          "max_chars": null,
+          "max_chars": 224,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1122,7 +647,7 @@
       "example_pages": [
         4
       ],
-      "note": "30 frames read from page 4"
+      "note": "15 frames read from page 4, set aside: 15 in a figure"
     },
     {
       "id": "page-8",
@@ -1148,6 +673,7 @@
             "y": 0.0,
             "h": 1.0
           },
+          "type_role": null,
           "z": 0,
           "bleed": [
             "left",
@@ -1173,6 +699,7 @@
             "y": 0.0,
             "h": 1.0
           },
+          "type_role": null,
           "z": 0,
           "bleed": [
             "top",
@@ -1197,6 +724,7 @@
             "y": 0.0,
             "h": 1.0
           },
+          "type_role": null,
           "z": 0,
           "bleed": [
             "top",
@@ -1221,6 +749,7 @@
             "y": 0.0,
             "h": 1.0
           },
+          "type_role": null,
           "z": 0,
           "bleed": [
             "top",
@@ -1246,7 +775,34 @@
             "y": -0.0014,
             "h": 1.003
           },
+          "type_role": null,
           "z": 0,
+          "bleed": [
+            "top",
+            "right",
+            "bottom"
+          ],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "figure-5",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": -0.0014392583057133838,
+            "h": 1.0030302567915483
+          },
+          "type_role": null,
+          "z": 1,
           "bleed": [
             "top",
             "right",
@@ -1269,29 +825,9 @@
             "row": null,
             "row_span": null,
             "y": 0.02220919637969046,
-            "h": 0.017184344204989346
+            "h": 0.01784145805884936
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "headline-1",
-          "role": "headline",
-          "place": {
-            "kind": "grid",
-            "col": 2,
-            "span": 2,
-            "row": null,
-            "row_span": null,
-            "y": 0.043535362590443,
-            "h": 0.12409091236615422
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1311,8 +847,9 @@
             "row": null,
             "row_span": null,
             "y": 0.0901819383255159,
-            "h": 0.24648991016426472
+            "h": 0.24978041282389105
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1334,6 +871,7 @@
             "y": 0.10468160263215652,
             "h": 0.028376261393229168
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1353,86 +891,9 @@
             "row": null,
             "row_span": null,
             "y": 0.13043920921556879,
-            "h": 0.3137274944421017
+            "h": 0.3211462450592885
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "standfirst-5",
-          "role": "standfirst",
-          "place": {
-            "kind": "grid",
-            "col": 2,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.16836262712574968,
-            "h": 0.12435851434264521
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-6",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8154603546740962,
-            "y": 0.25570478343000314,
-            "w": 0.0791883780286203,
-            "h": 0.01414433874265112
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-7",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8389052846073325,
-            "y": 0.2898934104225852,
-            "w": 0.0540365580639808,
-            "h": 0.026954535282019413
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-8",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8380880916819853,
-            "y": 0.33386970288825757,
-            "w": 0.1112026638454861,
-            "h": 0.03998353746202257
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1454,44 +915,7 @@
             "y": 0.3439698267464686,
             "h": 0.16441919346048375
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-10",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8380880916819853,
-            "y": 0.3755626485805319,
-            "w": 0.11328384299683415,
-            "h": 0.03998353746202257
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-11",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8380880916819853,
-            "y": 0.4149728640161379,
-            "w": 0.09849817612591912,
-            "h": 0.03998353746202257
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1511,8 +935,9 @@
             "row": null,
             "row_span": null,
             "y": 0.46665126145488084,
-            "h": 0.016691920733211015
+            "h": 0.01784145805884936
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1532,25 +957,7 @@
             "w": 0.09592323053896037,
             "h": 0.016691920733211015
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-14",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8192534103892208,
-            "y": 0.4883707219904119,
-            "w": 0.08118558397480086,
-            "h": 0.014144319476503315
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1572,25 +979,7 @@
             "y": 0.5156869984636403,
             "h": 0.16459597963275333
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-16",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8380880916819853,
-            "y": 0.5266994900173612,
-            "w": 0.11294565637127246,
-            "h": 0.03998353746202257
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1612,25 +1001,7 @@
             "y": 0.5549196956133602,
             "h": 0.028376261393229168
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-18",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8376496757557189,
-            "y": 0.5736040828203914,
-            "w": 0.111541748046875,
-            "h": 0.026954496749723802
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1650,48 +1021,9 @@
             "row": null,
             "row_span": null,
             "y": 0.5806772636644768,
-            "h": 0.2086792377510456
+            "h": 0.21409749670619233
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-20",
-          "role": "caption",
-          "place": {
-            "kind": "grid",
-            "col": 3,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.6130142982559975,
-            "h": 0.026954496749723802
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-21",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8380880916819853,
-            "y": 0.6547072439482717,
-            "w": 0.09354076510161356,
-            "h": 0.027173360188802082
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1713,6 +1045,7 @@
             "y": 0.6874041316485164,
             "h": 0.16441923199277936
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1732,65 +1065,9 @@
             "row": null,
             "row_span": null,
             "y": 0.7966873477203678,
-            "h": 0.01669195926550663
+            "h": 0.01784145805884936
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "body-24",
-          "role": "column",
-          "place": {
-            "kind": "frac",
-            "x": 0.2806679719413807,
-            "y": 0.8118388628718829,
-            "w": 0.06273531446269914,
-            "h": 0.01669195926550663
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-25",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8043656692006229,
-            "y": 0.9210097187697285,
-            "w": 0.06142779580907884,
-            "h": 0.02680853641394413
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-26",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.5294117647058824,
-            "y": 0.9262373953154592,
-            "w": 0.04568690879672181,
-            "h": 0.013353521173650568
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1810,29 +1087,9 @@
             "row": null,
             "row_span": null,
             "y": 0.927284163658065,
-            "h": 0.011684379192313762
+            "h": 0.013724198506807202
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-28",
-          "role": "caption",
-          "place": {
-            "kind": "grid",
-            "col": 2,
-            "span": 1,
-            "row": null,
-            "row_span": null,
-            "y": 0.9440353085296322,
-            "h": 0.013353521173650568
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -1852,35 +1109,11 @@
             "row": null,
             "row_span": null,
             "y": 0.9635347308534564,
-            "h": 0.01669195926550663
+            "h": 0.01784145805884936
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "figure-35",
-          "role": "figure",
-          "place": {
-            "kind": "grid",
-            "col": 2,
-            "span": 2,
-            "row": null,
-            "row_span": null,
-            "y": -0.0014392583057133838,
-            "h": 1.0030302567915483
-          },
-          "z": 1,
-          "bleed": [
-            "top",
-            "right",
-            "bottom"
-          ],
           "pad": null,
           "ground": null,
           "scrim": null,
@@ -1891,6 +1124,19 @@
       ],
       "slots": [
         {
+          "frame_id": "figure-5",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
           "frame_id": "body-0",
           "accepts": [
             "text"
@@ -1898,20 +1144,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 49,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "headline-1",
-          "accepts": [
-            "text"
-          ],
-          "required": true,
-          "prominence": 0.6666666666666666,
-          "min_chars": null,
-          "max_chars": 78,
+          "max_chars": 37,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1924,7 +1157,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 1069,
+          "max_chars": 750,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1937,7 +1170,7 @@
           "required": false,
           "prominence": 0.2833333333333333,
           "min_chars": null,
-          "max_chars": 26,
+          "max_chars": 17,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -1950,59 +1183,7 @@
           "required": false,
           "prominence": 0.2833333333333333,
           "min_chars": null,
-          "max_chars": 443,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "standfirst-5",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.2833333333333333,
-          "min_chars": null,
-          "max_chars": 144,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-6",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 32,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-7",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 51,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-8",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 118,
+          "max_chars": 874,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2015,33 +1196,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 666,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-10",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 105,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-11",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 112,
+          "max_chars": 510,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2054,7 +1209,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 70,
+          "max_chars": 45,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2067,20 +1222,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 39,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-14",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 33,
+          "max_chars": 24,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2093,20 +1235,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 700,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-16",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 98,
+          "max_chars": 510,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2119,20 +1248,7 @@
           "required": false,
           "prominence": 0.2833333333333333,
           "min_chars": null,
-          "max_chars": 40,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-18",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 103,
+          "max_chars": 24,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2145,33 +1261,7 @@
           "required": false,
           "prominence": 0.2833333333333333,
           "min_chars": null,
-          "max_chars": 278,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-20",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 107,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-21",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 67,
+          "max_chars": 528,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2184,7 +1274,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 674,
+          "max_chars": 510,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2197,46 +1287,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 62,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "body-24",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.16666666666666666,
-          "min_chars": null,
-          "max_chars": 25,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-25",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13833333333333334,
-          "min_chars": null,
-          "max_chars": 54,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-26",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 22,
+          "max_chars": 42,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2249,20 +1300,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 141,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-28",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 116,
+          "max_chars": 89,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2275,20 +1313,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 20,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "figure-35",
-          "accepts": [
-            "figure"
-          ],
-          "required": false,
-          "prominence": 0.6,
-          "min_chars": null,
-          "max_chars": null,
+          "max_chars": 224,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -2297,7 +1322,7 @@
       "example_pages": [
         8
       ],
-      "note": "36 frames read from page 8"
+      "note": "20 frames read from page 8, set aside: 15 in a figure, 1 too narrow to set copy in"
     },
     {
       "id": "page-12",
@@ -2333,8 +1358,9 @@
             "row": null,
             "row_span": null,
             "y": 0.02220919637969046,
-            "h": 0.017184344204989346
+            "h": 0.01784145805884936
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2352,8 +1378,9 @@
             "x": 0.058823529411764705,
             "y": 0.07780192596743805,
             "w": 0.08052287382238052,
-            "h": 0.03174242347177833
+            "h": 0.032828282828282825
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2373,8 +1400,9 @@
             "row": null,
             "row_span": null,
             "y": 0.07780192596743805,
-            "h": 0.03174242347177833
+            "h": 0.03568291611769872
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2396,6 +1424,7 @@
             "y": 0.14546552330556542,
             "h": 0.0750554980653705
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2415,8 +1444,9 @@
             "row": null,
             "row_span": null,
             "y": 0.14568648675475457,
-            "h": 0.04956312853880603
+            "h": 0.05489679402722881
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2438,6 +1468,7 @@
             "y": 0.1502785152859158,
             "h": 0.013747475363991478
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2457,6 +1488,7 @@
             "w": 0.09395883597579657,
             "h": 0.013353540439798374
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2476,63 +1508,7 @@
             "w": 0.09762672972834967,
             "h": 0.038606065692323624
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-8",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.6356209150326797,
-            "y": 0.1973189536971275,
-            "w": 0.05862810720805249,
-            "h": 0.051232328318586255
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-9",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.7410130718954249,
-            "y": 0.1973189536971275,
-            "w": 0.04192870894288705,
-            "h": 0.038606065692323624
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-10",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8462091583052492,
-            "y": 0.1973189536971275,
-            "w": 0.044947804968341505,
-            "h": 0.06385859094484887
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2552,8 +1528,9 @@
             "row": null,
             "row_span": null,
             "y": 0.20859683643687854,
-            "h": 0.04979542048290522
+            "h": 0.05489679402722881
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2575,25 +1552,7 @@
             "y": 0.23386700948079428,
             "h": 0.10031557564783578
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-13",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.7410130718954249,
-            "y": 0.24782400420217804,
-            "w": 0.054000006781684026,
-            "h": 0.19012123647362295
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2615,25 +1574,7 @@
             "y": 0.2717281495681917,
             "h": 0.0750554980653705
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-15",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8462091583052492,
-            "y": 0.2730765294547033,
-            "w": 0.05892136517693015,
-            "h": 0.15224244859483507
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2655,6 +1596,7 @@
             "y": 0.3474857445919152,
             "h": 0.12554164847942315
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2674,8 +1616,9 @@
             "row": null,
             "row_span": null,
             "y": 0.3601120072181779,
-            "h": 0.04979540121675742
+            "h": 0.05489679402722881
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2695,8 +1638,9 @@
             "row": null,
             "row_span": null,
             "y": 0.423243320349491,
-            "h": 0.04979540121675742
+            "h": 0.05489679402722881
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2716,6 +1660,7 @@
             "w": 0.08922222860498366,
             "h": 0.10173739808978456
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2735,44 +1680,7 @@
             "w": 0.07410525652318219,
             "h": 0.05123234758473406
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-21",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.7410130718954249,
-            "y": 0.4675411648220486,
-            "w": 0.05350334815729677,
-            "h": 0.03860608495847143
-          },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-22",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.8462091583052492,
-            "y": 0.4675411648220486,
-            "w": 0.060111151801215276,
-            "h": 0.06385861021099669
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2794,6 +1702,7 @@
             "y": 0.4863746334808041,
             "h": 0.07503659797437263
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2813,27 +1722,9 @@
             "row": null,
             "row_span": null,
             "y": 0.4863746334808041,
-            "h": 0.06242544000799006
+            "h": 0.068620992534036
           },
-          "z": 2,
-          "bleed": [],
-          "pad": null,
-          "ground": null,
-          "scrim": null,
-          "clip": false,
-          "children": [],
-          "content": []
-        },
-        {
-          "id": "caption-25",
-          "role": "caption",
-          "place": {
-            "kind": "frac",
-            "x": 0.7410130718954249,
-            "y": 0.5180462153270992,
-            "w": 0.06933339436848958,
-            "h": 0.19012119794132734
-          },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2853,6 +1744,7 @@
             "w": 0.0752154580907884,
             "h": 0.15224241006253947
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2874,6 +1766,7 @@
             "y": 0.5621322092383799,
             "h": 0.0750554787992227
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2893,8 +1786,9 @@
             "row": null,
             "row_span": null,
             "y": 0.5749794160476839,
-            "h": 0.0369368659125434
+            "h": 0.04117259552042161
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2914,8 +1808,9 @@
             "row": null,
             "row_span": null,
             "y": 0.6254844665527344,
-            "h": 0.011684340660018151
+            "h": 0.013724198506807202
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2935,8 +1830,9 @@
             "row": null,
             "row_span": null,
             "y": 0.6505160090899227,
-            "h": 0.037157848627880366
+            "h": 0.04117259552042161
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2958,6 +1854,7 @@
             "y": 0.6505335798167219,
             "h": 0.07505559439610954
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2977,8 +1874,9 @@
             "row": null,
             "row_span": null,
             "y": 0.7010210595949732,
-            "h": 0.04978411125414299
+            "h": 0.05489679402722881
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -2998,8 +1896,9 @@
             "row": null,
             "row_span": null,
             "y": 0.738899847473761,
-            "h": 0.049795516813644254
+            "h": 0.05489679402722881
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -3019,8 +1918,9 @@
             "row": null,
             "row_span": null,
             "y": 0.7641523727262863,
-            "h": 0.037157848627880366
+            "h": 0.04117259552042161
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -3040,8 +1940,9 @@
             "row": null,
             "row_span": null,
             "y": 0.8022521047881155,
-            "h": 0.04957457263060291
+            "h": 0.05489679402722881
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -3061,8 +1962,9 @@
             "row": null,
             "row_span": null,
             "y": 0.8146574232313368,
-            "h": 0.024531586001617738
+            "h": 0.027448397013614404
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -3084,6 +1986,7 @@
             "y": 0.8525362111101247,
             "h": 0.08768563318734217
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -3103,8 +2006,9 @@
             "row": null,
             "row_span": null,
             "y": 0.8653834179194286,
-            "h": 0.062204534357244316
+            "h": 0.068620992534036
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -3124,8 +2028,9 @@
             "row": null,
             "row_span": null,
             "y": 0.9635347308534564,
-            "h": 0.01669195926550663
+            "h": 0.01784145805884936
           },
+          "type_role": null,
           "z": 2,
           "bleed": [],
           "pad": null,
@@ -3145,7 +2050,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 49,
+          "max_chars": 37,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3158,7 +2063,7 @@
           "required": false,
           "prominence": 0.3333333333333333,
           "min_chars": null,
-          "max_chars": 20,
+          "max_chars": 10,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3171,7 +2076,7 @@
           "required": false,
           "prominence": 0.3333333333333333,
           "min_chars": null,
-          "max_chars": 37,
+          "max_chars": 21,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3184,7 +2089,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 541,
+          "max_chars": 350,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3197,7 +2102,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 371,
+          "max_chars": 207,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3210,7 +2115,7 @@
           "required": false,
           "prominence": 0.13333333333333333,
           "min_chars": null,
-          "max_chars": 49,
+          "max_chars": 87,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3223,7 +2128,7 @@
           "required": false,
           "prominence": 0.13333333333333333,
           "min_chars": null,
-          "max_chars": 47,
+          "max_chars": 34,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3236,46 +2141,7 @@
           "required": false,
           "prominence": 0.13333333333333333,
           "min_chars": null,
-          "max_chars": 114,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-8",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 89,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-9",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 43,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-10",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 86,
+          "max_chars": 105,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3288,7 +2154,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 268,
+          "max_chars": 213,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3301,20 +2167,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 730,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-13",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 271,
+          "max_chars": 504,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3327,20 +2180,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 567,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-15",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 197,
+          "max_chars": 360,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3353,7 +2193,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 928,
+          "max_chars": 648,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3366,7 +2206,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 345,
+          "max_chars": 210,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3379,7 +2219,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 253,
+          "max_chars": 213,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3392,7 +2232,7 @@
           "required": false,
           "prominence": 0.13333333333333333,
           "min_chars": null,
-          "max_chars": 224,
+          "max_chars": 256,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3405,33 +2245,7 @@
           "required": false,
           "prominence": 0.13333333333333333,
           "min_chars": null,
-          "max_chars": 117,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-21",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 57,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-22",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 114,
+          "max_chars": 108,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3444,7 +2258,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 484,
+          "max_chars": 350,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3457,20 +2271,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 354,
-          "max_lines": null,
-          "aspect_min": null,
-          "aspect_max": null
-        },
-        {
-          "frame_id": "caption-25",
-          "accepts": [
-            "text"
-          ],
-          "required": false,
-          "prominence": 0.13333333333333333,
-          "min_chars": null,
-          "max_chars": 362,
+          "max_chars": 284,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3483,7 +2284,7 @@
           "required": false,
           "prominence": 0.13333333333333333,
           "min_chars": null,
-          "max_chars": 274,
+          "max_chars": 324,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3496,7 +2297,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 534,
+          "max_chars": 365,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3509,7 +2310,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 243,
+          "max_chars": 142,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3522,7 +2323,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 79,
+          "max_chars": 52,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3535,7 +2336,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 236,
+          "max_chars": 146,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3548,7 +2349,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 576,
+          "max_chars": 360,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3561,7 +2362,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 376,
+          "max_chars": 204,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3574,7 +2375,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 275,
+          "max_chars": 210,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3587,7 +2388,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 275,
+          "max_chars": 144,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3600,7 +2401,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 397,
+          "max_chars": 213,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3613,7 +2414,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 198,
+          "max_chars": 72,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3626,7 +2427,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 715,
+          "max_chars": 420,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3639,7 +2440,7 @@
           "required": false,
           "prominence": 0.11666666666666667,
           "min_chars": null,
-          "max_chars": 446,
+          "max_chars": 288,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3652,7 +2453,7 @@
           "required": false,
           "prominence": 0.16666666666666666,
           "min_chars": null,
-          "max_chars": 20,
+          "max_chars": 224,
           "max_lines": null,
           "aspect_min": null,
           "aspect_max": null
@@ -3661,7 +2462,7 @@
       "example_pages": [
         12
       ],
-      "note": "40 frames read from page 12"
+      "note": "32 frames read from page 12, set aside: 8 too narrow to set copy in"
     }
   ],
   "policy": {
