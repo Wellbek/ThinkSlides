@@ -344,3 +344,60 @@ class TestTheSemanticColoursBelongToTheDeck:
 
         assert style.waterfall_rise_color == "#2E9AA6"
         assert style.waterfall_fall_color == "#C0553B"
+
+
+class TestHidingTheCategoryAxisKeepsTheCategoryNames:
+    """
+    A deck that hides its axes still has to say which bar is which.
+
+    ``chartCategoryAxis: false`` is a minimalist convention - no rule, no tick
+    marks - and it was also switching off the tick *labels*, which are the
+    only thing naming the bars. A researched three-segment forecast rendered
+    as three unlabelled rectangles under an axis titled "Market Segments":
+    every number on the page was correct and the chart said nothing.
+
+    The two axes are not symmetric. A value axis is redundant on a chart that
+    prints its values on the bars; a category axis never is.
+    """
+
+    CATEGORIES = ["IT Spending", "AI Spending", "Semiconductor Market"]
+
+    def _axes_labels(self, show_category_axis: bool) -> list[str]:
+        import matplotlib.pyplot as plt
+
+        from app.design_system import get_default_design_system
+
+        design = get_default_design_system()
+        design.setdefault("dataViz", {})["chartCategoryAxis"] = show_category_axis
+
+        drawn: list[list[str]] = []
+        original = plt.Figure.savefig
+
+        def capture(fig, *args, **kwargs):
+            for ax in fig.get_axes():
+                drawn.append([
+                    t.get_text() for t in ax.get_xticklabels() if t.get_visible()
+                ])
+            return original(fig, *args, **kwargs)
+
+        plt.Figure.savefig = capture
+        try:
+            render_chart_to_png(
+                {
+                    "chartType": "bar",
+                    "categories": self.CATEGORIES,
+                    "series": [{"name": "Growth", "values": [14.2, 47.0, 52.8]}],
+                },
+                design, 11.0, 4.0, dpi=72,
+            )
+        finally:
+            plt.Figure.savefig = original
+        return [label for group in drawn for label in group if label]
+
+    def test_the_names_are_drawn_when_the_axis_is_hidden(self):
+        labels = self._axes_labels(show_category_axis=False)
+        assert set(self.CATEGORIES) <= set(labels), labels
+
+    def test_the_names_are_drawn_when_the_axis_is_shown(self):
+        labels = self._axes_labels(show_category_axis=True)
+        assert set(self.CATEGORIES) <= set(labels), labels

@@ -271,6 +271,17 @@ def compose_prompt(subject: str, refs: list[str], design_system: dict | None) ->
     no sense in which the picture came from the deck.
     """
     style = _style_of(design_system)
+    # The deck's own illustration style, when it is on a pack that measured
+    # one. Illustration was decided per slide before this, so two pages of one
+    # deck could come back in unrelated treatments.
+    from app.agent import run_context as _run_context
+    from app.renderer import illustration as _illustration
+
+    pack = _run_context.get_pack()
+    if pack is not None:
+        house = _illustration.style_for(pack, design_system)
+        if house.measured:
+            style = house.for_provider()
     context = "; ".join(ref for ref in refs[:3] if ref)
     parts = [subject.rstrip(". ") + "."]
     if context:

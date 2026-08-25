@@ -24,6 +24,7 @@ from app.config import settings
 from app.llm.catalog import PROVIDERS_BY_ID
 from app.llm.openai_compat import create_with_compatible_params
 from app.llm.retry_notices import REASON_RATE_LIMIT, RetryNotice, publish_retry_notice
+from app.llm import usage
 from app.observability.logging import get_logger
 import asyncio
 import inspect
@@ -244,6 +245,10 @@ class LLMProvider(ABC):
 class ZhipuProvider(LLMProvider):
     """Zhipu GLM provider using the zhipuai SDK."""
 
+    # A class attribute so it is present on an instance built without running
+    # __init__, which is how the event-loop tests construct one.
+    base_url: str = ""
+
     def __init__(
         self,
         model: str | None = None,
@@ -256,6 +261,9 @@ class ZhipuProvider(LLMProvider):
             kwargs["base_url"] = base_url
         self.client = ZhipuAI(**kwargs)
         self.model = model or settings.zhipu_model
+        # Kept so what the adapter learns is cached per endpoint: a custom
+        # base_url may be a proxy in front of an entirely different model.
+        self.base_url = base_url or ""
 
     async def chat(
         self,
@@ -286,13 +294,27 @@ class ZhipuProvider(LLMProvider):
             # The future is built inside the lambda so each retry gets a fresh
             # one rather than re-awaiting a future that already failed.
             loop = asyncio.get_running_loop()
-            response = await _with_rate_limit_retry(
-                lambda: loop.run_in_executor(
-                    None,
-                    lambda: self.client.chat.completions.create(**kwargs),
-                ),
-                provider="zhipu",
-                model=self.model,
+
+            async def send(sent: dict[str, Any]):
+                return await _with_rate_limit_retry(
+                    lambda: loop.run_in_executor(
+                        None,
+                        lambda: self.client.chat.completions.create(**sent),
+                    ),
+                    provider="zhipu",
+                    model=self.model,
+                )
+
+            # Through the same adapter the OpenAI path uses. A user who
+            # configures a GLM model that has stopped taking one of these
+            # parameters should get a deck, not a run that fails on the
+            # parameter - and which model that is cannot be known from its
+            # name, which is the whole reason the adapter learns instead of
+            # keeping a list.
+            response = await create_with_compatible_params(
+                send, kwargs,
+                endpoint=self.base_url or "zhipu",
+                provider="zhipu", model=self.model,
             )
         except Exception as e:
             logger.error("zhipu_api_error", error=str(e), model=self.model)
@@ -325,6 +347,7 @@ class ZhipuProvider(LLMProvider):
                     },
                 })
 
+        usage.record("zhipu", self.model, response)
         logger.info(
             "llm_call_completed",
             provider="zhipu",
@@ -414,6 +437,7 @@ class AzureOpenAIProvider(LLMProvider):
                     },
                 })
 
+        usage.record("azure_openai", self.deployment, response)
         logger.info(
             "llm_call_completed",
             provider="azure_openai",
@@ -486,6 +510,7 @@ class OpenAIProvider(LLMProvider):
             raise
 
         result = _parse_openai_choice(response)
+        usage.record("openai", self.model, response)
         logger.info(
             "llm_call_completed",
             provider="openai",
@@ -546,10 +571,21 @@ class AnthropicProvider(LLMProvider):
             kwargs["tools"] = anthropic_tools_from_openai(tools)
 
         try:
-            response = await _with_rate_limit_retry(
-                lambda: self.client.messages.create(**kwargs),
-                provider="anthropic",
-                model=self.model,
+            async def send(sent: dict[str, Any]):
+                return await _with_rate_limit_retry(
+                    lambda: self.client.messages.create(**sent),
+                    provider="anthropic",
+                    model=self.model,
+                )
+
+            # Anthropic's request shape is not OpenAI's, but the adapter is
+            # not about a shape - it is about a model rejecting a parameter
+            # and saying so. A Claude model that stops taking one of these
+            # should cost a round trip, not the run.
+            response = await create_with_compatible_params(
+                send, kwargs,
+                endpoint=str(getattr(self.client, "base_url", "") or "anthropic"),
+                provider="anthropic", model=self.model,
             )
         except Exception as e:
             logger.error("anthropic_api_error", error=str(e), model=self.model)
@@ -574,6 +610,7 @@ class AnthropicProvider(LLMProvider):
             }
 
         result = anthropic_response_to_openai(response)
+        usage.record("anthropic", self.model, response)
         logger.info(
             "llm_call_completed",
             provider="anthropic",

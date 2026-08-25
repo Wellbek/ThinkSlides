@@ -10,6 +10,7 @@ from __future__ import annotations
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._json_extract import coerce_json_arg
 from app.agent import run_context
+from app.design.run import Unplaceable
 from app.renderer.citations import apply_source_citations
 from app.renderer.pptx_renderer import PPTXRenderer
 from app.renderer.preview_generator import PreviewGenerator
@@ -139,18 +140,46 @@ class FinalizeAndRenderPptxTool:
             last_error = None
             max_retries = 3
 
+            # A run composing against a design language pack lays its pages
+            # out rather than filling placeholders. Both paths end in a real
+            # .pptx with live, editable text; what differs is where the
+            # geometry comes from. An uploaded template has no pack, and
+            # keeps the XML-clone path that makes it faithful.
+            pack = run_context.get_pack()
+
             for attempt in range(1, max_retries + 1):
                 try:
-                    renderer = PPTXRenderer(
-                        template_path=template_path if template_path and os.path.exists(template_path) else None,
-                        color_theme=color_theme or None,
-                        design_system=design_system,
-                    )
-                    result_path = renderer.render(
-                        slides=slides,
-                        metadata=metadata,
-                        output_path=output_path,
-                    )
+                    if pack is not None:
+                        try:
+                            result_path = cls._render_composed(
+                                slides, pack, metadata, output_path,
+                                design_system,
+                            )
+                        except Unplaceable as exc:
+                            # Material no archetype can carry, even split.
+                            # Retrying is pointless - the answer is
+                            # deterministic - and shipping nothing is worse
+                            # for the user than shipping a plainer deck, so
+                            # this drops to the template renderer. Loudly:
+                            # a pack that cannot carry ordinary material is a
+                            # defect in the pack, and it has to be visible.
+                            logger.warning(
+                                "pack_could_not_place_deck",
+                                pack=pack.id, slides=len(slides),
+                                error=str(exc),
+                            )
+                            pack = None
+                    if pack is None:
+                        renderer = PPTXRenderer(
+                            template_path=template_path if template_path and os.path.exists(template_path) else None,
+                            color_theme=color_theme or None,
+                            design_system=design_system,
+                        )
+                        result_path = renderer.render(
+                            slides=slides,
+                            metadata=metadata,
+                            output_path=output_path,
+                        )
 
                     # Verify the file was created
                     if not os.path.exists(result_path) or os.path.getsize(result_path) == 0:
@@ -324,6 +353,28 @@ class FinalizeAndRenderPptxTool:
             # runs, and that must never be undone by an asset-extraction bug.
             logger.warning("slide_asset_persist_failed", session_id=session_id, error=str(e))
             return []
+
+    @classmethod
+    def _render_composed(cls, slides: list, pack, metadata: dict,
+                         output_path: str, design_system: dict) -> str:
+        """Lay the deck out in its pack and render it.
+
+        Composition, repair and validation all run here, in code. The
+        validator this replaces was a tool the model could decline to call,
+        and it was called zero times across every observed run.
+        """
+        from app.design.run import compose
+        from app.renderer.designdoc_renderer import render_doc
+
+        doc = compose(slides, pack, title=str(metadata.get("title") or ""))
+        logger.info(
+            "designdoc_composed",
+            pack=pack.id,
+            slides=len(slides),
+            pages=len(doc.pages),
+            archetypes=sorted({page.archetype for page in doc.pages}),
+        )
+        return render_doc(doc, pack, output_path, design_system=design_system)
 
     @classmethod
     def _generate_markdown_fallback(cls, slides: list[dict], metadata: dict) -> str:

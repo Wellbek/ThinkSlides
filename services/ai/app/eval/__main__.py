@@ -5,8 +5,9 @@ Command line for the style-fidelity harness.
     python -m app.eval build-exemplars          # remeasure the exemplar library
     python -m app.eval score deck.pptx          # score a rendered deck
     python -m app.eval score deck.pptx --library  # ...against every exemplar
+    python -m app.eval score deck.pptx --against bxsl-investor  # ...against one
     python -m app.eval baseline                 # score the built-in fixture decks
-    python -m app.eval judge deck.pptx          # look at it, and adjudicate
+    python -m app.eval judge deck.pptx --org UUID  # look at it, and adjudicate
 
 ``baseline`` is the one that matters for the epic: run it on ``main`` before
 any of the work lands, keep the scorecard, and every later run is a diff
@@ -83,6 +84,18 @@ def _judgement_markdown(call) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _assert_known_exemplar(exemplar_id: str | None) -> None:
+    """Fail on an unknown --against before a render and a vision call are spent."""
+    if exemplar_id is None:
+        return
+    known = list(reference.load_exemplar_library().keys())
+    if exemplar_id not in known:
+        raise SystemExit(
+            f"unknown exemplar {exemplar_id!r}; the library holds "
+            + ", ".join(sorted(known))
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.eval")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -105,6 +118,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     score_cmd.add_argument("--split", default=reference.VALIDATION_SPLIT,
                            choices=[reference.DESIGN_SPLIT, reference.VALIDATION_SPLIT])
+    score_cmd.add_argument(
+        "--against", default=None,
+        help="exemplar id this run was aimed at, so the headline number is "
+             "the distance to that register rather than to whichever one the "
+             "deck happens to be nearest. Implies --library.",
+    )
     score_cmd.add_argument("--out", default=DEFAULT_OUTPUT_DIR)
 
     judge_cmd = sub.add_parser(
@@ -119,10 +138,15 @@ def main(argv: list[str] | None = None) -> int:
     judge_cmd.add_argument("--pages", type=int, default=None,
                            help="how many pages of the deck to look at")
     judge_cmd.add_argument(
-        "--org", default=None,
+        "--against", default=None,
+        help="exemplar id this run was aimed at; the eye is reconciled with "
+             "that register's score rather than the nearest one's.",
+    )
+    judge_cmd.add_argument(
+        "--org", required=True,
         help="organisation UUID whose configured model should do the looking. "
              "Settings is the source of the model, same as for the agent; "
-             "without this the process singleton is used instead.",
+             "there is no environment fallback.",
     )
 
     baseline = sub.add_parser("baseline", help="score the fixture decks")
@@ -147,11 +171,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "score":
         name = args.name or os.path.splitext(os.path.basename(args.pptx))[0]
-        if args.library:
+        if args.library or args.against:
+            _assert_known_exemplar(args.against)
             result = _score_pptx_library(args.pptx, name, args.split)
-            print(result.to_markdown())
-            if result.best:
-                json_path, md_path = scorecard.write(result.best, args.out)
+            print(result.to_markdown(args.against))
+            headline = (result.card_for(args.against) if args.against
+                        else result.best)
+            if headline:
+                json_path, md_path = scorecard.write(headline, args.out)
                 print(f"wrote {json_path}\nwrote {md_path}")
             return 0
         card = _score_pptx(args.pptx, name, args.split)
@@ -165,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
 
         from app.eval import visual_judge
 
+        _assert_known_exemplar(args.against)
         name = args.name or os.path.splitext(os.path.basename(args.pptx))[0]
         work_dir = tempfile.mkdtemp(prefix="thinkslides_judge_cli_")
         try:
@@ -177,7 +205,8 @@ def main(argv: list[str] | None = None) -> int:
             result = scorecard.score_library(
                 generated, reference.load_exemplar_library(args.split)
             )
-            best = result.best
+            best = (result.card_for(args.against) if args.against
+                    else result.best)
             import uuid as _uuid
 
             verdict = asyncio.run(visual_judge.judge_pdf(
@@ -189,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
             shutil.rmtree(work_dir, ignore_errors=True)
 
         call = visual_judge.adjudicate(verdict, best.style_score if best else None)
-        print(result.to_markdown())
+        print(result.to_markdown(args.against))
         print(_judgement_markdown(call))
         return 0
 

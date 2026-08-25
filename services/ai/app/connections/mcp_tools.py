@@ -30,6 +30,7 @@ server is for, so they say.
 from __future__ import annotations
 
 import asyncio
+import re
 import json
 from dataclasses import dataclass, field
 
@@ -249,6 +250,40 @@ def _parameters(tool: mcp.McpTool) -> list[ToolParameter]:
     return parameters
 
 
+# How much of a result has to look like a document before it is read as one.
+# Detected on content, never on a tool's name: a server called "diagrams" may
+# return prose, and one called "lookup" may return a figure.
+_SVG_OPEN = re.compile(r"<svg\b", re.IGNORECASE)
+
+
+def _svg_figure(text: str) -> str | None:
+    """The SVG document in this result, if the result is one.
+
+    Only a whole document, and only one that the importer will actually
+    accept. A result that merely mentions SVG, or contains a fragment, is
+    text - and treating it as a figure would put a broken picture on a page
+    in place of an answer.
+    """
+    candidate = (text or "").strip()
+    if not candidate or not _SVG_OPEN.search(candidate):
+        return None
+    start = candidate.lower().find("<svg")
+    end = candidate.lower().rfind("</svg>")
+    if start < 0 or end < 0:
+        return None
+    document = candidate[start:end + len("</svg>")]
+    try:
+        from app.renderer.layout import PositionConfig
+        from app.renderer.svg.importer import to_primitives
+
+        if not to_primitives(document, PositionConfig(left=0, top=0,
+                                                      width=6, height=4)):
+            return None
+    except Exception:
+        return None
+    return document
+
+
 def _caller(server: DiscoveredServer, tool: mcp.McpTool):
     """The async function the registry invokes for one discovered tool."""
 
@@ -268,6 +303,23 @@ def _caller(server: DiscoveredServer, tool: mcp.McpTool):
         text = _flatten(result)
         if result.get("isError"):
             return ToolResult(success=False, error=text or "The tool reported an error.")
+
+        figure = _svg_figure(text)
+        if figure is not None:
+            # A server that returns a drawn figure is a figure source like any
+            # other, so it goes through the same importer and arrives as
+            # native shapes in the deck's palette. Pasting it as a flat
+            # picture instead would be a silent downgrade - the kind nobody
+            # notices until a user tries to recolour it.
+            logger.info("mcp_svg_figure", server=server.slug, tool=tool.name,
+                        chars=len(figure))
+            return ToolResult(success=True, data={
+                "server": server.label,
+                "blocks": [{"type": "diagram",
+                            "diagram": {"format": "svg", "svg": figure}}],
+                "text": "The server returned a figure, which has been "
+                        "attached to this slide as editable shapes.",
+            })
         return ToolResult(success=True, data={"text": text, "server": server.label})
 
     return run

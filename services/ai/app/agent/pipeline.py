@@ -57,6 +57,17 @@ SLIDE_TOOLS = frozenset({
     *BLOCK_BUILDER_TOOLS,
 })
 
+# The two tools that exist to decide *where things go* on a template's page.
+# A run composing against a design language pack does not use them: the whole
+# point of that path is that the model never emits geometry, it says what the
+# page is about and the pack's archetypes decide the rest. Leaving them
+# offered would be worse than useless - a model that can see a way to place a
+# box will place one, and then two systems are deciding the same thing.
+TEMPLATE_GEOMETRY_TOOLS = frozenset({
+    "select_layout",
+    "compose_slide_regions",
+})
+
 
 @dataclass(frozen=True)
 class Phase:

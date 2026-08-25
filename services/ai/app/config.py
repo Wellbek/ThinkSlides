@@ -66,6 +66,19 @@ class Settings(BaseSettings):
     jwt_secret: str = "thinkslides-dev-jwt-secret-change-in-production"
     jwt_algorithm: str = "HS256"
 
+    # ── Design language ─────────────────────────
+    # Whether a run with no uploaded template composes its pages against a
+    # design language pack instead of filling one of eight stock Office
+    # layouts. It was opt-in while the packs were not yet fit to put in front
+    # of a user: they were traced from reference PDFs and carried chart axis
+    # labels and page numbers as content slots (#275), described pages the
+    # renderer refuses to place (#276), and were traces of five specific pages
+    # rather than recovered patterns (#268). All three now pass their own
+    # gates, asserted against the shipped packs in tests/test_pack_quality.py,
+    # so this is on. An uploaded template is unaffected either way - that run
+    # keeps the template-faithful path.
+    design_language_enabled: bool = True
+
     # `extra="ignore"` is load-bearing, not tidiness. `.env` at the repo root
     # is the single file the setup docs tell you to create, and it carries the
     # web and orchestrator settings too (PORT, AI_SERVICE_URL,

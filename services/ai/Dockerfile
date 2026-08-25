@@ -11,6 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Chromium, and only Chromium: a Mermaid diagram is laid out in a browser
+# because laying out a graph is the problem Mermaid already solved. Nothing
+# else in this service needs one - composition and export are native - so the
+# blast radius of a browser failure is one figure, not a deck.
+RUN playwright install --with-deps chromium
+
 COPY app/ ./app/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
