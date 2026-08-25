@@ -35,6 +35,7 @@ from app.llm.provider import (
     _is_rate_limit_error,
     _is_request_too_large,
     build_chat_provider,
+    build_vision_provider,
 )
 from app.llm.retry_notices import (
     REASON_TRANSIENT,
@@ -1119,6 +1120,7 @@ class AgentLoop:
         self.search_config: ai_settings.SearchConfig | None = None
         self._search_token = None
         self._provider_token = None
+        self._vision_token = None
         self._citation_tokens: list = []
         # The density budget's two channels: the design system the budget is
         # read from, and how much material stood behind each slide when it was
@@ -1199,6 +1201,24 @@ class AgentLoop:
         # reasoning - and require_chat_provider is what makes its absence an
         # error rather than a silent fallback.
         self._provider_token = run_context.set_chat_provider(self.llm)
+
+        # The qualitative pass in validate_rendered_output looks at rendered
+        # pages, and it was reaching for the process-wide, environment-built
+        # vision provider - the same footgun require_chat_provider exists to
+        # close, one layer down. Built from the workspace's own credentials so
+        # the Settings choice applies to what looks at the deck too. Best
+        # effort: a provider with no vision support leaves this None, and the
+        # qualitative pass skips rather than failing the run.
+        try:
+            self._vision_token = run_context.set_vision_provider(
+                build_vision_provider(credentials)
+            )
+        except ValueError as e:
+            logger.info(
+                "vision_provider_unavailable",
+                provider=credentials.provider,
+                reason=str(e),
+            )
 
         if self.mode == MODE_DEEP:
             config, reason = ai_settings.resolve_search_config(row)
@@ -1542,6 +1562,9 @@ class AgentLoop:
             if self._provider_token is not None:
                 run_context.reset_chat_provider(self._provider_token)
                 self._provider_token = None
+            if self._vision_token is not None:
+                run_context.reset_vision_provider(self._vision_token)
+                self._vision_token = None
             if self._image_token is not None:
                 run_context.reset_image_connection(self._image_token)
                 self._image_token = None

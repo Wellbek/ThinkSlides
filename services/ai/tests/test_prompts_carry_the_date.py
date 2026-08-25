@@ -35,6 +35,13 @@ _EXEMPT = {
     # fixed, minimal answer. A date paragraph would both cost tokens on every
     # click of "Test model" and give the model something else to reply with.
     "api/settings.py": "fixed-answer credential probe, generates no content",
+    # The visual judge grades craft from rendered pixels - hierarchy,
+    # composition, whether a chart is labelled. It writes no content and
+    # reasons about nothing time-bound, so there is no year for it to get
+    # wrong. It is also an eval-harness call rather than part of a run, so a
+    # date paragraph would only add tokens to a call made many times over an
+    # iteration.
+    "eval/visual_judge.py": "grades rendered pages, generates no content",
 }
 
 

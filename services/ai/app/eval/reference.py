@@ -32,6 +32,7 @@ from app.measure.structure import count_blocks_in_pdf
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 REFERENCE_PROFILE_PATH = os.path.join(FIXTURE_DIR, "reference_profile.json")
+EXEMPLAR_DIR = os.path.join(FIXTURE_DIR, "exemplars")
 
 DESIGN_SPLIT = "design"
 VALIDATION_SPLIT = "validation"
@@ -185,3 +186,102 @@ def build_reference_profile(pdf_path: Optional[str] = None) -> str:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
     return REFERENCE_PROFILE_PATH
+
+
+# --------------------------------------------------------------------------
+# The exemplar library
+# --------------------------------------------------------------------------
+#
+# Deliberately only the DeckProfile, not the survey / grammar / archetypes the
+# primary reference carries. Those feed *generation* - the grammar the planner
+# composes against, the archetypes the layout step picks from - and are tuned
+# to one deck on purpose. What the library is for is *comparison*: a spread of
+# what good looks like, so a generated deck can be scored against the nearest
+# excellent thing rather than against one house's numbers.
+
+
+def exemplar_profile_path(exemplar_id: str) -> str:
+    return os.path.join(EXEMPLAR_DIR, f"{exemplar_id}.json")
+
+
+def available_exemplars() -> list[str]:
+    """Exemplars whose measured profile is committed and loadable."""
+    return [
+        entry.id for entry in corpus.EXEMPLARS
+        if os.path.exists(exemplar_profile_path(entry.id))
+    ]
+
+
+def load_exemplar_profile(exemplar_id: str,
+                          split: str = VALIDATION_SPLIT) -> DeckProfile:
+    """
+    One exemplar's committed profile for one half of its split.
+
+    Falls back to the design split when the exemplar has no validation set.
+    That is not a fudge: an exemplar with nothing held out (see WTI in
+    ``corpus``) still describes a real publication worth being compared
+    against - it just cannot claim to be measuring generalisation, which is
+    recorded on the exemplar rather than hidden here.
+    """
+    path = exemplar_profile_path(exemplar_id)
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    profiles = data.get("profiles") or {}
+    if split not in profiles:
+        if split == VALIDATION_SPLIT and DESIGN_SPLIT in profiles:
+            return DeckProfile.from_dict(profiles[DESIGN_SPLIT])
+        raise KeyError(f"no {split!r} profile in {path}")
+    return DeckProfile.from_dict(profiles[split])
+
+
+def load_exemplar_library(split: str = VALIDATION_SPLIT) -> dict[str, DeckProfile]:
+    """Every committed exemplar profile, keyed by id.
+
+    The primary reference is included under its own id, so the library is the
+    whole of what the harness considers excellent rather than "the reference,
+    plus some others".
+    """
+    library = {"mckinsey-tech-trends": load_reference_profile(split)}
+    for exemplar_id in available_exemplars():
+        library[exemplar_id] = load_exemplar_profile(exemplar_id, split)
+    return library
+
+
+def build_exemplar_profile(exemplar_id: str,
+                           pdf_path: Optional[str] = None) -> str:
+    """Measure one exemplar and write its committed fixture."""
+    corpus.assert_exemplar_splits_are_disjoint()
+    entry = corpus.exemplar(exemplar_id)
+    path = pdf_path or corpus.find_exemplar_pdf(exemplar_id)
+    if not path:
+        raise FileNotFoundError(
+            f"{exemplar_id} PDF not found - set THINKSLIDES_EXEMPLAR_DIR or "
+            f"place {entry.filenames[0]!r} in ~/Downloads"
+        )
+
+    profiles = {
+        DESIGN_SPLIT: profile_pdf(path, f"{exemplar_id}-design", entry.design_pages),
+    }
+    validation = entry.active_validation_pages()
+    if validation:
+        profiles[VALIDATION_SPLIT] = profile_pdf(
+            path, f"{exemplar_id}-validation", validation
+        )
+
+    payload = {
+        "id": entry.id,
+        "title": entry.title,
+        "note": entry.note,
+        "source": os.path.basename(path),
+        "pageCount": entry.page_count,
+        "pageSizePt": list(entry.page_size_pt),
+        "designPages": list(entry.design_pages),
+        "validationPages": list(validation),
+        "profiles": {name: profile.to_dict() for name, profile in profiles.items()},
+    }
+    os.makedirs(EXEMPLAR_DIR, exist_ok=True)
+    out = exemplar_profile_path(exemplar_id)
+    with open(out, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    return out

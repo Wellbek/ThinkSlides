@@ -116,7 +116,20 @@ CHART_LINE_MAX_THICKNESS_PX = 3
 SIGNATURE_COLS = 12
 SIGNATURE_ROWS = 8
 
-_SOURCE_LINE_RE = re.compile(r"^\s*sources?\s*[::]", re.IGNORECASE)
+# The line that says where the page's figures came from. Publications spell
+# this several ways and only one of them is the word "source": an investor
+# deck opens it "Note:", a survey report "Survey question:", a research piece
+# "Methodology:". Matching only "Source:" scored decks that visibly carry an
+# attribution line at zero, which made the metric a test of one house's
+# vocabulary rather than of whether the page attributes its numbers.
+#
+# Still deliberately narrow: an apparatus keyword, at the start of the line,
+# followed by a colon. Loosening it to any sentence that mentions data would
+# start counting body copy.
+_SOURCE_LINE_RE = re.compile(
+    r"^\s*(sources?|notes?|data|methodology|survey\s+questions?|definitions?)\s*[::]",
+    re.IGNORECASE,
+)
 _PAGE_NUMBER_RE = re.compile(r"^\s*\d{1,3}\s*$")
 _FOOTNOTE_MARKER_RE = re.compile(r"^[\d*†‡]{1,2}$")
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’\-%$.]*")
