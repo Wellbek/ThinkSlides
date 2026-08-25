@@ -534,6 +534,18 @@ class WorkingState:
         # template keeps the template-faithful path, which is the promise
         # made to a customer who supplied one.
         self.pack_id: str | None = None
+        # Figures the deck states that nothing this run retrieved carries.
+        # Reported, not removed: the copy is the user's to keep, and what they
+        # should not have is a page asserting a measurement with no record of
+        # where it came from.
+        self.unsupported_figures: list[str] = []
+        # What the outline's headlines do, read end to end. Recorded so the
+        # drafting phase can be told which pages to fix rather than handed a
+        # grade it cannot act on.
+        self.arc: dict | None = None
+        # The uploaded sources, kept as text so a figure can be traced to an
+        # offset inside one rather than merely to the file it was in.
+        self.document_texts: list[dict] = []
         # slide_index -> the select_layout result for that slide. Lets the
         # loop auto-supply design_slide_content's layout_info instead of
         # requiring the LLM to copy the full layout object it just received
@@ -1778,6 +1790,75 @@ class AgentLoop:
             yield event
     # ── The phases the loop drives itself ─────────────────────────────────
 
+    def _read_the_arc(self, structure: dict) -> None:
+        """Read the outline as an argument and record where it breaks.
+
+        `app/titles.py` has always stated the property - a reader who reads
+        only the headlines has read the argument - and nothing enforced it, so
+        a deck could pass every per-page check and still be "Market Analysis
+        Presentation" followed by "Key Aspects of the Market".
+
+        The shape of an argument, not its truth. Whether a deck is right is
+        not something code decides, and a number pretending otherwise is a
+        number people would quote.
+        """
+        from app import narrative
+
+        slides = (structure or {}).get("slides") or []
+        if not slides:
+            return
+        report = narrative.read_arc(slides)
+        self.working_state.arc = report.to_dict()
+        if report.argues:
+            return
+        logger.info(
+            "outline_does_not_argue",
+            claim_share=round(report.claim_share, 3),
+            breaks=[b.describe() for b in report.breaks[:5]],
+        )
+
+    def _ground_the_deck(self) -> None:
+        """Tie every figure the deck states to the span it came from.
+
+        In code, before the render, and not offered as a tool. The check this
+        follows was a tool the model could decline to call and never did, so
+        density, title-register and apparatus checking were all inert in
+        practice.
+
+        A figure with nothing behind it is reported rather than removed. The
+        deck is the user's and the copy is theirs to keep; what they should
+        not have is a page asserting a measurement while the run has no record
+        of where it came from.
+        """
+        from app.grounding.check import ground
+
+        slides = self.working_state.accumulated_slides
+        if not slides:
+            return
+        evidence = self._evidence()
+        claims, gaps = ground(slides, evidence)
+        self.working_state.unsupported_figures = [g.describe() for g in gaps]
+        logger.info(
+            "deck_grounded",
+            spans=len(evidence.spans),
+            claims=len(claims),
+            unsupported=len(gaps),
+            examples=[g.describe() for g in gaps[:3]],
+        )
+
+    def _evidence(self):
+        """Every span this run has to support its claims with."""
+        from app.grounding.claim import Evidence
+
+        evidence = Evidence.from_research(run_context.get_research_findings())
+        for source in self.working_state.document_texts:
+            evidence = evidence + Evidence.from_document(
+                source.get("text") or "",
+                source_id=source.get("id") or "",
+                title=source.get("title") or "",
+            )
+        return evidence
+
     def _log_usage(self, session_id: uuid.UUID) -> None:
         """What this run spent, per model.
 
@@ -2179,6 +2260,7 @@ class AgentLoop:
         self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
     ) -> AsyncIterator[tuple[str, object]]:
         """Render the deck as it currently stands."""
+        self._ground_the_deck()
         structure = self.working_state.presentation_structure or {}
         tool_result = None
         async for kind, payload in self._call_tool(
@@ -2620,6 +2702,30 @@ class AgentLoop:
             "row for figures; a block for content with a shape), then "
             f"design_slide_content for slide_index={index}. This slide only."
             + self._structure_directive()
+            + self._arc_directive(index)
+        )
+
+    def _arc_directive(self, index: int) -> str:
+        """What the arc check found wrong with *this* page, if anything.
+
+        Named per page rather than reported as a grade, because a grade is not
+        something a model can act on - "your deck does not argue anything" has
+        no next move in it, and "slide 4 ends on a topic label where a
+        position belongs" has exactly one.
+        """
+        arc = self.working_state.arc or {}
+        mine = [b for b in arc.get("breaks") or []
+                if b.get("slideIndex") == index]
+        if not mine:
+            return ""
+        lines = "\n".join(
+            f"- {b.get('observed')}; expected {b.get('expected')}"
+            for b in mine
+        )
+        return (
+            "\nThe outline check flagged this page's headline:\n" + lines
+            + "\nWrite a headline that states what this page found, so a "
+              "reader who reads only the headlines has read the argument."
         )
 
     def _structure_directive(self) -> str:
@@ -3358,6 +3464,7 @@ class AgentLoop:
                         structure["deviations"] = deviations
                     self.working_state.presentation_structure = structure
                     self._resolve_pack(structure, context)
+                    self._read_the_arc(structure)
 
             if fn_name == "design_slide_content":
                 if tool_result.data and "slideIndex" in tool_result.data:
@@ -3447,6 +3554,18 @@ class AgentLoop:
             # Catalog embedded images extracted from the user's own
             # documents (PDF/DOCX) - see analyze_document. Reused,
             # never generated.
+            if fn_name == "analyze_document" and tool_result.data:
+                source_text = tool_result.data.get("sourceText") or ""
+                if source_text:
+                    # Kept so a figure can be traced to an offset inside the
+                    # document rather than merely to the file it came from.
+                    self.working_state.document_texts.append({
+                        "id": tool_result.data.get("document_path") or "",
+                        "title": os.path.basename(
+                            tool_result.data.get("document_path") or ""),
+                        "text": source_text,
+                    })
+
             if fn_name == "analyze_document" and tool_result.data and tool_result.data.get("images"):
                 image_catalog = context.setdefault("imageCatalog", [])
                 image_catalog.extend(tool_result.data["images"])
