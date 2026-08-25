@@ -58,7 +58,8 @@ from app.renderer.xml_utils import describe_picture
 # The five marks. Anything a slide can carry is one of these; there is no
 # sixth, which is why an open primitive layer is a bounded commitment rather
 # than an ever-growing vocabulary.
-PRIMITIVE_KINDS = frozenset({"text", "rect", "line", "ellipse", "image"})
+PRIMITIVE_KINDS = frozenset({"text", "rect", "line", "ellipse", "image",
+                             "path"})
 
 ALIGNMENTS = {
     "left": PP_ALIGN.LEFT,
@@ -213,6 +214,16 @@ class Primitive:
     # Native multi-column text (a:bodyPr/@numCol), which stays editable.
     columns: int = 1
     column_gap_pt: float = 0.0
+    # A freeform outline, as subpaths of points in fractions of this
+    # primitive's own box. Fractions rather than inches so a figure can be
+    # placed and scaled without re-flattening the curve it came from.
+    subpaths: tuple[tuple[tuple[float, float], ...], ...] = ()
+    closed: tuple[bool, ...] = ()
+    # What this mark actually sits on, when that is not the slide's own
+    # ground. The contrast guard reads it: a white label over a green node is
+    # readable, and flipping it to dark because the *slide* is white is how an
+    # imported diagram loses its knockout type.
+    ground: Optional[str] = None
     # Deck furniture rather than slide content: named with the chrome prefix
     # so every downstream measurement keeps ignoring it.
     chrome: bool = False
@@ -433,7 +444,7 @@ def _paint_text(slide, primitive: Primitive, context: PaintContext):
         preferred = run_spec.color or primitive.color or context.default_color
         try:
             run.font.color.rgb = _hex_to_rgbcolor(
-                colors.readable_on(context.ground, preferred)
+                colors.readable_on(primitive.ground or context.ground, preferred)
             )
         except ValueError:
             pass
@@ -641,8 +652,59 @@ def _paint_image(slide, primitive: Primitive, context: PaintContext):
     return picture
 
 
+def _paint_path(slide, primitive: Primitive, context: PaintContext):
+    """A freeform outline, as a real PowerPoint shape.
+
+    `build_freeform` takes line segments and nothing else, which is why the
+    curve was flattened upstream. What comes out is a shape a user can select,
+    recolour and reshape - not a picture of one, which is the whole point of
+    importing an SVG rather than rasterising it.
+
+    Each subpath becomes its own shape. PowerPoint's freeform builder has one
+    start point and no way to lift the pen, so a figure drawn as several
+    disjoint outlines cannot be one shape without joining strokes that the
+    original kept apart.
+    """
+    shapes = []
+    left, top = primitive.box.left, primitive.box.top
+    width, height = primitive.box.width, primitive.box.height
+    for index, points in enumerate(primitive.subpaths):
+        if len(points) < 2:
+            continue
+        closed = (primitive.closed[index]
+                  if index < len(primitive.closed) else False)
+
+        def at(point):
+            return (Inches(left + point[0] * width),
+                    Inches(top + point[1] * height))
+
+        first = at(points[0])
+        builder = slide.shapes.build_freeform(first[0], first[1])
+        builder.add_line_segments([at(p) for p in points[1:]], close=closed)
+        try:
+            shape = builder.convert_to_shape()
+        except Exception:
+            continue
+        _apply_fill(shape, primitive.fill if closed else None,
+                    primitive.fill_alpha)
+        if primitive.stroke:
+            try:
+                shape.line.color.rgb = _hex_to_rgbcolor(primitive.stroke)
+                shape.line.width = Pt(max(0.25, primitive.stroke_pt or 0.75))
+            except ValueError:
+                pass
+        else:
+            shape.line.fill.background()
+        _drop_theme_style(shape)
+        if primitive.alt_text:
+            describe_picture(shape, primitive.alt_text)
+        shapes.append(shape)
+    return shapes[0] if shapes else None
+
+
 _PAINTERS = {
     "text": _paint_text,
+    "path": _paint_path,
     "rect": _paint_rect,
     "ellipse": _paint_ellipse,
     "line": _paint_line,
