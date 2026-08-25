@@ -31,6 +31,7 @@ from app.renderer.regions import RegionTree
 from app.renderer.blocks import BLOCK_TYPES, BlockCompiler
 from app.renderer.chrome import ChromeSpec, compile_chrome
 from app.renderer import apparatus as apparatus_markers
+from app.renderer import emphasis
 from app.renderer.apparatus import (
     ApparatusTokens, SlideApparatus, compile_apparatus, content_ceiling,
 )
@@ -142,6 +143,12 @@ OBJECT_CONTENT_TYPES = frozenset({"image", "table", "chart", "metrics"})
 # composition put the title inside, and the band's bottom-anchoring rule does
 # not apply to it. The stock title band is 1.1in on a 7.5in canvas.
 TITLE_BAND_MAX_IN = 2.4
+
+
+# How far under a wrapped title the accent rule sits when it has to move. A
+# rule is a device for separating the title from the page, so it belongs close
+# to what it separates.
+RULE_CLEARANCE_IN = 0.12
 
 
 @dataclass
@@ -813,7 +820,9 @@ class PPTXRenderer:
         # knows about compositions is #126; until then a composed slide is
         # left to its own structure rather than having a bar drawn through it.
         if plan.accent_rule is not None and plan.regions is None:
-            self._add_accent_rule(slide, plan.accent_rule, plan.style.accent_color)
+            placed = self._rule_under_title(slide, plan)
+            if placed is not None:
+                self._add_accent_rule(slide, placed, plan.style.accent_color)
 
         # Chrome is declared by the design system rather than hardcoded here,
         # so a design direction can move it, drop it, or vary it by slide
@@ -897,6 +906,56 @@ class PPTXRenderer:
                     and rect.top <= y <= rect.top + rect.height):
                 found = region.ground
         return found
+
+    def _rule_under_title(self, slide, plan: "SlidePlan"):
+        """The accent rule, moved under the title that actually rendered.
+
+        The catalog puts it at a fixed height down the page, under where a
+        catalog layout *would* put a one-line title. A title that wraps to two
+        lines runs straight past it, and the rule is then drawn through
+        whatever is beneath - on one real deck, a line through the middle of
+        `$1,404 billion`.
+
+        Read off the rendered shapes rather than re-measured: this runs after
+        the content is on the slide, so what the title actually did is a fact
+        rather than an estimate.
+
+        Returns None when there is nowhere for the rule to go. Chrome that
+        cannot be placed is not drawn: a rule is a device for separating the
+        title from the page, and one struck through the page is worse than
+        none at all.
+        """
+        rule = plan.accent_rule
+        bottom = self._rendered_title_bottom(slide, plan)
+        if bottom is None or bottom <= rule.top:
+            return rule
+        moved = PositionConfig(left=rule.left, top=bottom + RULE_CLEARANCE_IN,
+                               width=rule.width, height=rule.height)
+        for region in plan.body_regions or ():
+            if moved.top + moved.height > region.top:
+                return None
+        if moved.top + moved.height > LayoutEngine.SLIDE_HEIGHT:
+            return None
+        return moved
+
+    @staticmethod
+    def _rendered_title_bottom(slide, plan: "SlidePlan"):
+        """Where the title actually ended, in inches, or None if it is absent."""
+        region = plan.title_region
+        if region is None:
+            return None
+        lowest = None
+        for shape in slide.shapes:
+            if shape.top is None or shape.height is None:
+                continue
+            top = emu_to_inches(shape.top)
+            # A shape that starts in the title's band is the title or part of
+            # it; anything starting below it is content.
+            if top < region.top - 0.05 or top > region.top + region.height:
+                continue
+            bottom = top + emu_to_inches(shape.height)
+            lowest = bottom if lowest is None else max(lowest, bottom)
+        return lowest
 
     @staticmethod
     def _add_accent_rule(slide, region: PositionConfig, color_hex: str) -> None:
@@ -1592,7 +1651,13 @@ class PPTXRenderer:
                 p.space_before = Pt(balance.paragraph_gap_pt)
 
             run = p.add_run()
-            run.text = apparatus_markers.strip_markers(run_data.get("text", ""))
+            # Markdown emphasis is resolved rather than rendered. A model
+            # asked for prose writes markdown sooner or later, and a real deck
+            # shipped `*Cars 2* leads in worldwide earnings` - asterisks and
+            # all - on a slide a customer opened.
+            written = emphasis.read(
+                apparatus_markers.strip_markers(run_data.get("text", "")))
+            run.text = written.text
 
             # A run may carry a URL (citation markers and the reference list -
             # see renderer/citations.py). Set before the colour below, because
@@ -1607,8 +1672,10 @@ class PPTXRenderer:
             )
             run.font.name = style.font_name
             run.font.size = font_size
-            run.font.bold = style.bold or run_data.get("bold", False)
-            run.font.italic = style.italic or run_data.get("italic", False)
+            run.font.bold = (style.bold or run_data.get("bold", False)
+                             or written.bold)
+            run.font.italic = (style.italic or run_data.get("italic", False)
+                               or written.italic)
             run.font.underline = style.underline or run_data.get("underline", False)
             self._apply_text_color(run, is_title)
             _clear_text_transform(run)
@@ -1625,6 +1692,11 @@ class PPTXRenderer:
                     marker.hyperlink.address = str(citation["link"])
                 marker.font.name = style.font_name
                 marker.font.size = font_size
+                # A reference marker is apparatus, not a link a reader clicks.
+                # Left to a renderer's own hyperlink styling it comes out blue
+                # and underlined, which on a dark ground is unreadable and
+                # reads as a broken link rather than as a footnote.
+                marker.font.underline = False
                 self._apply_text_color(marker, is_title)
                 _clear_text_transform(marker)
 
