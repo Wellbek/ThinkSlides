@@ -121,18 +121,21 @@ class TestTheChoiceIsMadeOnceAndKept:
         assert loop.working_state.pack_id is None
 
 
-class TestItIsOptInUntilThePacksAreGoodEnough:
-    """The wiring is complete and renders end to end. The packs are not yet
-    good enough to put in front of every user: they are traced from reference
-    PDFs and carry chart axis labels as content slots (#275). Defaulting this
-    on would trade one kind of bad page for another."""
+class TestItIsOnNowThatThePacksPassTheirGates:
+    """It was opt-in while the packs were not fit to put in front of a user:
+    they carried chart axis labels as content slots (#275), described pages
+    the renderer refuses to place (#276), and were traces of five specific
+    pages rather than recovered patterns (#268). All three pass now, asserted
+    against the shipped packs in test_pack_quality.py."""
 
-    def test_it_is_off_by_default(self):
+    def test_it_is_on_by_default(self):
         from app.config import Settings
 
-        assert Settings().design_language_enabled is False
+        assert Settings().design_language_enabled is True
 
-    def test_a_run_gets_no_pack_while_it_is_off(self, monkeypatch):
+    def test_it_can_still_be_turned_off(self, monkeypatch):
+        """A switch that cannot be thrown back is not a switch, and this one
+        is the difference between a composed deck and the legacy path."""
         from app.config import settings
 
         monkeypatch.setattr(settings, "design_language_enabled", False)

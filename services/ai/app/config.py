@@ -69,13 +69,15 @@ class Settings(BaseSettings):
     # ── Design language ─────────────────────────
     # Whether a run with no uploaded template composes its pages against a
     # design language pack instead of filling one of eight stock Office
-    # layouts. The path is complete and renders end to end; what is not yet
-    # good enough to put in front of every user is the *packs*, which are
-    # traced from reference PDFs and carry chart labels and page furniture as
-    # content slots (#275). Turning this on before that is fixed trades one
-    # kind of bad page for another, so it is opt-in until the pack gate
-    # passes.
-    design_language_enabled: bool = False
+    # layouts. It was opt-in while the packs were not yet fit to put in front
+    # of a user: they were traced from reference PDFs and carried chart axis
+    # labels and page numbers as content slots (#275), described pages the
+    # renderer refuses to place (#276), and were traces of five specific pages
+    # rather than recovered patterns (#268). All three now pass their own
+    # gates, asserted against the shipped packs in tests/test_pack_quality.py,
+    # so this is on. An uploaded template is unaffected either way - that run
+    # keeps the template-faithful path.
+    design_language_enabled: bool = True
 
     # `extra="ignore"` is load-bearing, not tidiness. `.env` at the repo root
     # is the single file the setup docs tell you to create, and it carries the
