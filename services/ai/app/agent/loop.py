@@ -15,6 +15,7 @@ from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession
 from app import ai_settings
 from app.agent import run_context
+from app.llm import usage
 from app.agent.event_types import ALL_EVENT_TYPES
 from app.agent.redact import redact_binary
 from app.agent.registry import get_registry, ToolResult
@@ -1056,6 +1057,7 @@ class AgentLoop:
         self.include_sources = include_sources
         self.search_config: ai_settings.SearchConfig | None = None
         self._search_token = None
+        self._usage_token = None
         self._provider_token = None
         self._vision_token = None
         self._citation_tokens: list = []
@@ -1139,6 +1141,10 @@ class AgentLoop:
         # reasoning - and require_chat_provider is what makes its absence an
         # error rather than a silent fallback.
         self._provider_token = run_context.set_chat_provider(self.llm)
+        # Start counting. Nothing counted tokens before, which made every
+        # question about what a run cost unanswerable and every claim about it
+        # a guess.
+        self._usage_token = usage.start()
 
         # The qualitative pass in validate_rendered_output looks at rendered
         # pages, and it was reaching for the process-wide, environment-built
@@ -1488,6 +1494,7 @@ class AgentLoop:
         try:
             async for event in self._run(session_id):
                 yield event
+            self._log_usage(session_id)
         except AINotConfiguredError as e:
             # A workspace with no model configured cannot generate anything.
             # Said once, plainly, with a code the interface can act on - rather
@@ -1503,6 +1510,9 @@ class AgentLoop:
                 "timestamp": _iso_now(),
             })
         finally:
+            if self._usage_token is not None:
+                usage.reset(self._usage_token)
+                self._usage_token = None
             if self._search_token is not None:
                 run_context.reset_search_config(self._search_token)
                 self._search_token = None
@@ -1767,6 +1777,25 @@ class AgentLoop:
         async for event in self._closing_message(context, chat_messages):
             yield event
     # ── The phases the loop drives itself ─────────────────────────────────
+
+    def _log_usage(self, session_id: uuid.UUID) -> None:
+        """What this run spent, per model.
+
+        Counted rather than priced. A token count is a fact the provider
+        returned; a price is a number that changes without warning and would
+        be stale in the repository within a month, so the cost of a run is a
+        multiplication anyone can do against whatever the current rates are.
+        """
+        spent = usage.current()
+        if spent is None or not spent.by_model:
+            return
+        logger.info(
+            "run_usage",
+            session_id=str(session_id),
+            calls=spent.calls,
+            total_tokens=spent.total_tokens,
+            models=spent.to_dict()["models"],
+        )
 
     def _resolve_pack(self, structure: dict, context: dict) -> None:
         """Put this run on a design language pack, when it should be on one.

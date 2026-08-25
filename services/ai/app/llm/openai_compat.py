@@ -53,6 +53,16 @@ _REJECTION_MARKERS = (
     "is not supported with this model",
     "are not supported for",
     "does not support",
+    # Anthropic and the Zhipu-compatible endpoints word the same complaint
+    # differently. Every provider a user can configure has to be able to say
+    # "not that parameter" in a way this recognises, or the adapter helps
+    # only the providers it was first written against.
+    "extra inputs are not permitted",
+    "unexpected keyword argument",
+    "invalid parameter",
+    "invalid_request_error",
+    "not allowed",
+    "is not permitted",
 )
 
 # Removing one of these leaves a request that cannot mean anything, so a
@@ -109,6 +119,17 @@ def rejected_parameter(exc: Exception, sent: dict[str, Any]) -> str | None:
     # suggested replacement, an enum value, a model id.
     for candidate in _QUOTED_NAME_RE.findall(text):
         if candidate in sent:
+            return candidate
+    # Not every provider quotes the name. Anthropic and the Zhipu-compatible
+    # endpoints often write it bare - "temperature is not allowed" - and a
+    # rejection nobody can attribute is a rejection nobody can act on. Only
+    # whole words, only parameters this request actually sent, and never one
+    # the request cannot mean anything without.
+    lowered = text.lower()
+    for candidate in sent:
+        if candidate in ESSENTIAL_PARAMS:
+            continue
+        if re.search(rf"\b{re.escape(candidate.lower())}\b", lowered):
             return candidate
     return None
 
