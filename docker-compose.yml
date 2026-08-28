@@ -3,6 +3,25 @@ version: "3.9"
 networks:
   thinkslides-network:
     driver: bridge
+    # Pinned, not left to Docker to choose.
+    #
+    # Left unpinned, Docker allocates from its default pool and moves on to
+    # the next free block each time a network is created. On a machine that
+    # already had two Compose stacks it walked past 172.17-172.19 and landed
+    # on 192.168.0.0/20 - which was the host's own home LAN. The bridge then
+    # claimed 192.168.0.1, the same address as the router, and every
+    # published port died the same way: docker-proxy accepted the connection,
+    # tried to reach a container at 192.168.0.2, and the reply came back down
+    # the wrong interface. `curl localhost:3000` completed its handshake and
+    # then reset, and so did every other service, whether or not anything
+    # about it had changed.
+    #
+    # 172.28 is inside RFC 1918's 172.16/12 block, which Docker's own default
+    # pool uses and home routers almost never do. Override it if it collides
+    # with something on your network - that is what the variable is for.
+    ipam:
+      config:
+        - subnet: ${DOCKER_SUBNET:-172.28.0.0/16}
 
 services:
   # ────────────────────────────────────────────
