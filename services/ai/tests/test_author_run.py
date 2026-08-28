@@ -1,0 +1,173 @@
+"""
+One run's design languages, authored and checked.
+
+The retry is the part worth pinning. A model told only "try again" tries the
+same thing again; told "every language uses six columns" it changes the
+measure - and the difference between those two prompts is the difference
+between three arrangements of one idea and three designs.
+"""
+import asyncio
+import json
+
+import pytest
+
+from app.design import author_run
+from app.design.schema import Canvas
+
+CANVAS = Canvas(w_in=13.333, h_in=7.5)
+
+LEDGER = {
+    "name": "Box office ledger", "rationale": "receipts read as a ledger",
+    "columns": 6, "bodyPt": 13, "ratios": {"display": 4.2, "headline": 2.8},
+    "displayFace": "Georgia", "bodyFace": "Arial", "accent": "#B3261E",
+    "pages": [{"name": "Receipts", "role": "content", "frequency": 0.6,
+               "slots": [{"kind": "heading", "span": 6, "required": True},
+                         {"kind": "statistic", "span": 6},
+                         {"kind": "prose", "span": 3}]}],
+}
+WIDE = {
+    "name": "Wide screen", "rationale": "a franchise shown", "columns": 12,
+    "bodyPt": 11, "ratios": {"headline": 1.7}, "displayFace": "Arial",
+    "bodyFace": "Arial", "accent": "#0B6E4F",
+    "pages": [{"name": "Spread", "role": "content", "frequency": 0.7,
+               "slots": [{"kind": "heading", "span": 12, "required": True},
+                         {"kind": "prose", "span": 4},
+                         {"kind": "prose", "span": 4}]}],
+}
+STUB = {
+    "name": "Ticket stub", "rationale": "a small dense stub", "columns": 4,
+    "bodyPt": 10, "ratios": {"headline": 2.0},
+    "displayFace": "Times New Roman", "bodyFace": "Verdana",
+    "accent": "#3B3B98", "density": "dense",
+    "pages": [{"name": "Stub", "role": "content", "frequency": 0.5,
+               "slots": [{"kind": "heading", "span": 4, "required": True},
+                         {"kind": "quote", "span": 4},
+                         {"kind": "prose", "span": 4}]}],
+}
+GOOD = {"languages": [LEDGER, WIDE, STUB]}
+SAME = {"languages": [dict(LEDGER, name=f"Twin {i}") for i in range(3)]}
+
+
+class _LLM:
+    """Answers with each payload in turn, then repeats the last."""
+
+    def __init__(self, *payloads):
+        self.payloads = list(payloads)
+        self.calls = 0
+        self.prompts: list[str] = []
+
+    async def chat(self, messages, tools=None):
+        self.calls += 1
+        self.prompts.append(messages[0]["content"])
+        payload = self.payloads[min(self.calls - 1, len(self.payloads) - 1)]
+        return {"message": {"content": json.dumps(payload)}}
+
+
+def _author(llm, brief="Cars movies finances"):
+    return asyncio.run(author_run.author(llm, brief, CANVAS))
+
+
+class TestAGoodSetIsTakenAsItStands:
+    def test_every_language_comes_back(self):
+        languages, why = _author(_LLM(GOOD))
+        assert [language.name for language in languages] == [
+            "Box office ledger", "Wide screen", "Ticket stub"]
+        assert why == ""
+
+    def test_it_asks_only_once(self):
+        llm = _LLM(GOOD)
+        _author(llm)
+        assert llm.calls == 1
+
+    def test_the_deck_reaches_the_prompt(self):
+        llm = _LLM(GOOD)
+        _author(llm, "Cars movies finances")
+        assert "Cars movies finances" in llm.prompts[0]
+
+
+class TestASamenessRetryCarriesTheReason:
+    def test_a_set_that_differs_only_in_hue_is_asked_again(self):
+        llm = _LLM(SAME, GOOD)
+        languages, why = _author(llm)
+        assert llm.calls == 2
+        assert [language.name for language in languages] == [
+            "Box office ledger", "Wide screen", "Ticket stub"]
+        assert why == ""
+
+    def test_the_second_ask_says_what_was_wrong(self):
+        """Told only "try again" a model tries the same thing again."""
+        llm = _LLM(SAME, GOOD)
+        _author(llm)
+        assert "was rejected" in llm.prompts[1]
+        assert "columns" in llm.prompts[1]
+
+    def test_a_set_that_never_improves_is_returned_anyway(self):
+        """A user offered three similar designs has still been offered a
+        choice; a user offered an error has not."""
+        llm = _LLM(SAME)
+        languages, why = _author(llm)
+        assert len(languages) == 3
+        assert why
+
+
+class TestNothingUnusableIsOffered:
+    def test_a_language_that_cannot_derive_is_dropped(self):
+        broken = {"languages": [LEDGER, {"name": "Empty", "pages": []}]}
+        languages, _ = _author(_LLM(broken))
+        assert [language.name for language in languages] == ["Box office ledger"]
+
+    def test_a_provider_failure_is_reported_not_raised(self):
+        class Boom:
+            async def chat(self, messages, tools=None):
+                raise RuntimeError("provider down")
+
+        languages, why = asyncio.run(
+            author_run.author(Boom(), "x", CANVAS))
+        assert languages == []
+        assert "could not be reached" in why
+
+    def test_nonsense_back_from_the_model_is_survivable(self):
+        class Junk:
+            async def chat(self, messages, tools=None):
+                return {"message": {"content": "not json at all"}}
+
+        languages, why = asyncio.run(author_run.author(Junk(), "x", CANVAS))
+        assert languages == []
+        assert why
+
+
+class TestWhatTheUserIsOffered:
+    def test_each_language_is_described_in_terms_a_user_can_act_on(self):
+        languages, _ = _author(_LLM(GOOD))
+        described = author_run.describe(languages)
+        assert [d["name"] for d in described] == [
+            "Box office ledger", "Wide screen", "Ticket stub"]
+        for entry in described:
+            assert entry["rationale"] and entry["summary"] and entry["pages"]
+
+    def test_the_summary_says_how_the_designs_differ(self):
+        languages, _ = _author(_LLM(GOOD))
+        summaries = [author_run.summary(language) for language in languages]
+        assert "6 columns" in summaries[0] and "12 columns" in summaries[1]
+        assert "loud" in summaries[0] and "quiet" in summaries[1]
+        assert "Georgia" in summaries[0]
+
+    def test_a_choice_resolves_back_to_its_language(self):
+        languages, _ = _author(_LLM(GOOD))
+        assert author_run.find(languages, "wide-screen").columns == 12
+        assert author_run.find(languages, "Ticket stub").columns == 4
+        assert author_run.find(languages, "nothing") is None
+
+    def test_each_becomes_a_pack_a_deck_could_be_composed_against(self):
+        languages, _ = _author(_LLM(GOOD))
+        packs = author_run.packs_for(languages, CANVAS)
+        assert len(packs) == 3
+        assert len({pack.grid.columns for pack in packs}) == 3
+        for pack in packs:
+            assert pack.archetypes and pack.type_roles
+
+    @pytest.mark.parametrize("index,expected", [(0, 6), (1, 12), (2, 4)])
+    def test_the_measure_survives_into_the_pack(self, index, expected):
+        languages, _ = _author(_LLM(GOOD))
+        packs = author_run.packs_for(languages, CANVAS)
+        assert packs[index].grid.columns == expected

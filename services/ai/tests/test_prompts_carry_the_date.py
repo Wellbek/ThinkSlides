@@ -42,6 +42,11 @@ _EXEMPT = {
     # date paragraph would only add tokens to a call made many times over an
     # iteration.
     "eval/visual_judge.py": "grades rendered pages, generates no content",
+    # It sends the prompt but does not write it: `design/authoring.py` builds
+    # it, and that module does state the date. Exempt because this check reads
+    # one file at a time and cannot see through the call, not because the
+    # prompt is dateless.
+    "design/author_run.py": "sends the prompt design/authoring.py builds",
 }
 
 

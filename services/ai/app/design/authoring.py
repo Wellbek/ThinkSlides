@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 from typing import Optional, Sequence
 
+from app.agent.tools._today import today_line
 from app.design.authored import DEFAULT_RATIOS, Language, PageKind, Slot
 from app.observability.logging import get_logger
 
@@ -73,6 +74,8 @@ def prompt(brief: str, answers: str = "", wanted: int = WANTED) -> str:
         }],
     }
     lines = [
+        today_line(),
+        "",
         f"Design {wanted} genuinely different design languages for this deck.",
         "",
         f"The deck: {brief.strip() or 'a business presentation'}",
