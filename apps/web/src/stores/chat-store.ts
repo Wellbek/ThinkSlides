@@ -6,6 +6,8 @@ import { AGENT_EVENT_TYPES } from '@thinkslides/schemas';
 import type {
   AgentEvent,
   AgentEventType,
+  CodeDeltaEvent,
+  CodeReadyEvent,
   DetailLevel,
   DoneEvent,
   EffortMode,
@@ -374,6 +376,93 @@ export const useChatStore = create<ChatState>((set, get) => ({
           endRetry();
         } catch (err) { console.error(err); }
       };
+      /**
+       * A chunk of a script, folded into the one entry that shows it.
+       *
+       * Not appended as its own event. The stream is persisted and replayed
+       * after a reload, so a run that wrote a 40-chunk script would replay
+       * as 40 rows - and, worse, a replay that overlapped what the browser
+       * already had would append the script to itself. So the chunks
+       * accumulate into a single `code_delta` entry per `stepId`, and a
+       * `seq` already folded in is dropped. That is what `seq` is for: it is
+       * the only thing that makes a delta idempotent, and this is the
+       * failure `validation_unresolved` is the cautionary tale for - an
+       * event whose handling nobody checked.
+       */
+      const onCodeDelta: SSEEventHandler = (e) => {
+        try {
+          const delta = JSON.parse(e.data) as CodeDeltaEvent;
+          set((state) => {
+            const activeMsg = findActiveAssistantMessage(state.activeMessages);
+            if (!activeMsg) return state;
+            const stream = activeMsg.agentEventStream || [];
+            const at = stream.findIndex(
+              (event): event is CodeDeltaEvent =>
+                event.type === "code_delta" && event.stepId === delta.stepId
+            );
+            if (at === -1) {
+              return {
+                activeMessages: state.activeMessages.map((msg) =>
+                  msg.id === activeMsg.id
+                    ? { ...msg, agentEventStream: [...stream, delta] }
+                    : msg
+                ),
+              };
+            }
+            const existing = stream[at] as CodeDeltaEvent;
+            if (delta.seq <= existing.seq) return state;
+            const merged: CodeDeltaEvent = {
+              ...existing,
+              seq: delta.seq,
+              text: existing.text + delta.text,
+              timestamp: delta.timestamp,
+            };
+            const next = [...stream];
+            next[at] = merged;
+            return {
+              activeMessages: state.activeMessages.map((msg) =>
+                msg.id === activeMsg.id
+                  ? { ...msg, agentEventStream: next }
+                  : msg
+              ),
+            };
+          });
+          endRetry();
+          set({ isGenerating: true });
+        } catch (err) { console.error(err); }
+      };
+      /**
+       * The script the model settled on.
+       *
+       * Terminal for a step and authoritative: it carries the whole source,
+       * so a subscriber that connected halfway through and one that saw
+       * every chunk end up showing exactly the same code. The accumulated
+       * deltas are replaced rather than added to, which is also what makes a
+       * dropped chunk invisible instead of a hole in the middle of a script.
+       */
+      const onCodeReady: SSEEventHandler = (e) => {
+        try {
+          const ready = JSON.parse(e.data) as CodeReadyEvent;
+          set((state) => {
+            const activeMsg = findActiveAssistantMessage(state.activeMessages);
+            if (!activeMsg) return state;
+            const stream = (activeMsg.agentEventStream || []).filter(
+              (event) =>
+                !(event.type === "code_delta" &&
+                  (event as CodeDeltaEvent).stepId === ready.stepId)
+            );
+            return {
+              activeMessages: state.activeMessages.map((msg) =>
+                msg.id === activeMsg.id
+                  ? { ...msg, agentEventStream: [...stream, ready] }
+                  : msg
+              ),
+            };
+          });
+          endRetry();
+          set({ isGenerating: true });
+        } catch (err) { console.error(err); }
+      };
       const onRateLimit: SSEEventHandler = (e) => {
         try {
           beginRetry(JSON.parse(e.data) as RateLimitEvent);
@@ -542,6 +631,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // thrown: the run carried on without it, and the user has to
         // be able to tell that from a deck that simply found nothing.
         connection_degraded: recordOnly,
+        // The agent writing a script, and the script it settled on. See
+        // onCodeDelta for why these are folded rather than appended.
+        code_delta: onCodeDelta,
+        code_ready: onCodeReady,
         timer_update: onTimerUpdate,
         session_title_updated: onSessionTitleUpdated,
         file_generated: onFileGenerated,

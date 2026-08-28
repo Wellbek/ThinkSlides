@@ -23,7 +23,14 @@ from app.design import run as design_run
 
 
 class _Loop:
-    """The three attributes `_resolve_pack` reads, and nothing else."""
+    """What `_resolve_pack` reads, and nothing else.
+
+    Every method it calls is bound explicitly rather than inherited, so
+    adding one to the real loop shows up here as a failure rather than as a
+    silently disabled feature: `_resolve_pack` catches everything and logs
+    `pack_selection_failed`, so a missing method would have turned the whole
+    design-language path off with a warning nobody was reading.
+    """
 
     def __init__(self):
         from app.agent.loop import AgentLoop, WorkingState
@@ -32,6 +39,7 @@ class _Loop:
         self._pack_token = None
         self._resolve_pack = AgentLoop._resolve_pack.__get__(self)
         self._install_pack = AgentLoop._install_pack.__get__(self)
+        self._authored_pack = AgentLoop._authored_pack.__get__(self)
 
 
 PLAN = {"totalSlides": 2, "slides": [

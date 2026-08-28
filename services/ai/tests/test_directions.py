@@ -370,16 +370,41 @@ class TestAnUploadedTemplate:
 # ──────────────────────────────────────────────────────────────────────
 
 class _StubLLM:
-    """A model that returns whatever set the test wants to see rejected."""
+    """A model that returns whatever set the test wants to see rejected.
+
+    The tool makes two *kinds* of call now - one for the enum directions and
+    one for the design languages the agent authors - so a raw count of
+    prompts stopped meaning "how many times was the set re-asked". The
+    payloads answer the direction calls; a language call gets an empty
+    object, which `authoring.read` treats as no languages and the tool then
+    falls back to the enum, which is exactly the path these tests are about.
+    """
 
     def __init__(self, *payloads):
         self.payloads = list(payloads)
         self.prompts: list[str] = []
 
+    @property
+    def direction_prompts(self) -> list[str]:
+        """Only the calls asking for directions - the ones being counted."""
+        return [p for p in self.prompts if not _is_language_prompt(p)]
+
     async def chat(self, messages, tools=None):
-        self.prompts.append(messages[0]["content"])
-        payload = self.payloads.pop(0) if self.payloads else self.payloads[-1]
+        prompt = messages[0]["content"]
+        self.prompts.append(prompt)
+        if _is_language_prompt(prompt):
+            return {"message": {"content": "{}"}}
+        payload = self.payloads.pop(0) if self.payloads else {}
         return {"message": {"content": json.dumps(payload)}}
+
+
+def _is_language_prompt(prompt: str) -> bool:
+    """Whether this call is asking the agent to design a language.
+
+    Matched on what the authoring prompt asks for rather than on call order,
+    so a change to when the tool authors does not silently make these tests
+    count the wrong calls."""
+    return '"languages"' in prompt or "design language" in prompt.lower()
 
 
 def _payload(*specs, **extra):
@@ -498,8 +523,8 @@ class TestProposingDirections:
 
         result = await tool.run(brief="a deck", session_id="s1")
 
-        assert len(llm.prompts) == 2
-        assert "rejected" in llm.prompts[1]
+        assert len(llm.direction_prompts) == 2
+        assert "rejected" in llm.direction_prompts[1]
         assert [d["id"] for d in result.data["directions"]] == \
             ["clean", "dark", "editorial"]
 
@@ -513,8 +538,8 @@ class TestProposingDirections:
 
         await tool.run(brief="a deck", session_id="s1")
 
-        assert len(llm.prompts) == 2
-        assert "the same slide" in llm.prompts[1]
+        assert len(llm.direction_prompts) == 2
+        assert "the same slide" in llm.direction_prompts[1]
 
     @pytest.mark.asyncio
     async def test_each_direction_previews_its_own_structure(
@@ -658,7 +683,7 @@ class TestProposingDirections:
 
         result = await tool.run(brief="a deck", session_id="s1")
 
-        assert len(llm.prompts) == 2
+        assert len(llm.direction_prompts) == 2
         assert result.success
 
     @pytest.mark.asyncio
@@ -673,8 +698,8 @@ class TestProposingDirections:
             session_id="s1",
         )
 
-        assert "#00704A" in llm.prompts[0]
-        assert "do not propose another hue" in llm.prompts[0]
+        assert "#00704A" in llm.direction_prompts[0]
+        assert "do not propose another hue" in llm.direction_prompts[0]
         for direction in result.data["directions"]:
             palette = {c["name"]: c["value"] for c in
                        direction["designSystem"]["palette"]["colors"]}
@@ -689,8 +714,8 @@ class TestProposingDirections:
         await tool.run(brief="a deck", answers="Audience: the board. Keep it short.",
                        session_id="s1")
 
-        assert "Audience: the board" in llm.prompts[0]
-        assert "settled" in llm.prompts[0]
+        assert "Audience: the board" in llm.direction_prompts[0]
+        assert "settled" in llm.direction_prompts[0]
 
     @pytest.mark.asyncio
     async def test_an_uploaded_template_is_direction_one(

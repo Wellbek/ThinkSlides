@@ -185,6 +185,63 @@ def _runs_text(block: dict) -> list[str]:
     return out
 
 
+# What each block builder calls its entries, and which of an entry's fields
+# carry copy. Written out rather than walked generically: a generic walk over
+# an arbitrary dict picks up ids, tones and icon names as though they were
+# prose, and a heading made of the word "benefit" is worse than none.
+BLOCK_TEXT_FIELDS = {
+    "accentCard": ("accentCards", ("heading", "body")),
+    "iconCard": ("iconCards", ("heading", "body")),
+    "rowBand": ("rowBands", ("label", "prose")),
+}
+
+# The two that nest their payload one level down rather than holding a list at
+# the top: `{"type": "banner", "banner": {"text": ...}}`.
+NESTED_BLOCK_TEXT = {
+    "banner": ("banner", "text"),
+}
+
+
+def _block_text(block: dict) -> list[str]:
+    """The copy inside a typed block payload, for a block with no `runs`."""
+    kind = str(block.get("type") or "")
+
+    nested = NESTED_BLOCK_TEXT.get(kind)
+    if nested:
+        holder, field = nested
+        text = str((block.get(holder) or {}).get(field) or "").strip()
+        return [text] if text else []
+
+    if kind == "imageCardRow":
+        cards = (block.get("imageCardRow") or {}).get("cards") or ()
+        return [line for card in cards if isinstance(card, dict)
+                for line in [" - ".join(
+                    part for part in (str(card.get("title") or "").strip(),
+                                      str(card.get("caption") or "").strip())
+                    if part)]
+                if line]
+
+    named = BLOCK_TEXT_FIELDS.get(kind)
+    if not named:
+        return []
+    key, fields = named
+    out: list[str] = []
+    for entry in block.get(key) or ():
+        if not isinstance(entry, dict):
+            continue
+        parts: list[str] = []
+        for field in fields:
+            value = entry.get(field)
+            if isinstance(value, (list, tuple)):
+                parts.extend(str(item).strip() for item in value
+                             if str(item or "").strip())
+            elif str(value or "").strip():
+                parts.append(str(value).strip())
+        if parts:
+            out.append(" - ".join(parts))
+    return out
+
+
 def _role_of(slide: dict, index: int, total: int) -> str:
     """What kind of page this is, from what the slide says about itself."""
     declared = str(slide.get("role") or "").strip()
@@ -242,7 +299,14 @@ def material_from(slide: dict, *, index: int = 0, total: int = 1) -> MaterialSha
             # An unknown block still carries copy worth keeping rather than
             # discarding: dropping it silently is the failure this whole
             # layer exists to end.
-            paragraphs.extend(_runs_text(block))
+            #
+            # `_runs_text` alone was not enough for that. The block builders
+            # write their copy into their own typed payload - `accentCards`,
+            # `rowBands`, `iconCards` - and none of them carries a `runs`
+            # key, so every one of them reached here and contributed nothing.
+            # A page built entirely of accent cards arrived at the selector as
+            # a page with a heading and no material.
+            paragraphs.extend(_runs_text(block) or _block_text(block))
 
     return shape_from(
         _role_of(slide, index, total),

@@ -93,13 +93,179 @@ def build_page(page_id: str, shape: MaterialShape, selection: Selection,
         archetype=archetype.id,
         role=shape.role,
         grid=archetype.grid,
-        frames=_fill(archetype.frames, contents, pack),
+        frames=_compact(_fill(archetype.frames, contents, pack),
+                        archetype.frames),
         provenance=Provenance(
             selected_by="fit",
             fit_cost=round(selection.cost, 4),
             considered=considered,
         ),
     )
+
+
+def _compact(frames: tuple[Frame, ...],
+             original: tuple[Frame, ...]) -> tuple[Frame, ...]:
+    """Close the gap a dropped frame leaves behind.
+
+    `_fill` drops a frame nothing was bound to, which is right - an empty
+    figure slot painted as a third of a page of white is worse than no figure
+    slot. What it did not do is move what was below it. So a content page
+    whose archetype has a figure slot, used for a page with no figure, came
+    out as a headline, a hole where the graph would have gone, and a
+    paragraph three quarters of the way down. Every page of a text-only deck
+    looked unfinished, and the reason was invisible: the page was laid out
+    exactly as its archetype says, and the archetype is not wrong.
+
+    Only pages that actually lost a frame are touched. A page that kept all
+    of them is composed exactly as the archetype states, which is what a
+    measured pack is for.
+
+    Frames are compacted by row rather than one at a time, so two frames side
+    by side stay side by side. The leftover at the bottom goes to the last
+    row, which is where a column of prose or a figure wants it.
+    """
+    # A *top-level* frame going missing is what leaves a hole in the stack.
+    # A child dropping out changes nothing about where its siblings sit -
+    # a child's place is relative to its parent - so compacting for one
+    # closed a gap that was never there and pushed two EY frames into each
+    # other. `_walk` descends, which is right for asking what was kept and
+    # wrong for asking whether the stack moved.
+    kept = {frame.id for frame in frames}
+    if all(frame.id in kept for frame in original):
+        return frames
+
+    # Only a clean vertical stack is compacted.
+    #
+    # The schema deliberately allows siblings to overlap at different `z` -
+    # type over a full-bleed image, a pull-quote across a panel edge - and a
+    # page built that way cannot be closed up by moving frames down a column,
+    # because "the row below" is not a thing it has. A first version tried
+    # anyway, grouped the overlapping frames into one row, and produced a
+    # document the renderer refused: "frames 'pullquote-0' and 'body-2'
+    # overlap by 25% at the same z".
+    #
+    # So the rule is: every frame either states a band or is structural
+    # (a ground or a scrim, which is a background and does not move), and no
+    # two bands overlap. That is exactly the shape an authored language
+    # derives - the case this exists for - and it leaves every measured pack
+    # composed as its own pages were.
+    placed = []
+    for frame in frames:
+        if frame.ground or frame.scrim:
+            continue
+        band = _band(frame)
+        if band is None:
+            return frames
+        placed.append(frame)
+    if len(placed) < 2:
+        return frames
+
+    ordered = sorted(placed, key=lambda f: _band(f)[0])
+    for upper, lower in zip(ordered, ordered[1:]):
+        if _band(lower)[0] < _band(upper)[1]:
+            return frames
+
+    # The archetype's own spacing, taken from the layout that still has every
+    # frame in it. Measuring between survivors instead would preserve the gap
+    # the *dropped* frame was sitting in, which is the hole this exists to
+    # close - and the first version of this did exactly that and moved
+    # nothing.
+    gap = _typical_gap([f for f in original if _band(f) is not None])
+
+    rows = _rows(ordered)
+    moved: dict[str, float] = {}
+    cursor = min(_band(f)[0] for f in rows[0])
+    for row in rows:
+        top = min(_band(f)[0] for f in row)
+        bottom = max(_band(f)[1] for f in row)
+        for frame in row:
+            moved[frame.id] = _band(frame)[0] - top + cursor
+        cursor += (bottom - top) + gap
+
+    # Whatever is left at the bottom goes to the last row's frames, which is
+    # the one a reader's eye ends on. The trailing gap added above is not
+    # part of the page, so it comes back here.
+    spare = 1.0 - (cursor - gap)
+    grown = {f.id for f in rows[-1]} if spare > 0 else set()
+
+    out = []
+    for frame in frames:
+        if frame.id not in moved:
+            out.append(frame)
+            continue
+        band = _band(frame)
+        height = band[1] - band[0] + (spare if frame.id in grown else 0.0)
+        out.append(frame.model_copy(update={
+            "place": frame.place.model_copy(update={
+                "y": round(moved[frame.id], 4), "h": round(height, 4),
+            }),
+        }))
+
+    # Checked rather than trusted. Everything above reasons about a stack,
+    # and the cost of being wrong is a document `render_doc` refuses outright
+    # - which is a failed run, not a slightly worse page. A compaction that
+    # did not come out as a clean stack is discarded and the page renders
+    # with its hole, which is ugly and correct.
+    compacted = [f for f in out if f.id in moved]
+    compacted.sort(key=lambda f: _band(f)[0])
+    for upper, lower in zip(compacted, compacted[1:]):
+        if _band(lower)[0] < _band(upper)[1] - 1e-6:
+            return frames
+    if compacted and _band(compacted[-1])[1] > 1.0 + 1e-6:
+        return frames
+    return tuple(out)
+
+
+def _typical_gap(original: list[Frame]) -> float:
+    """The space this archetype leaves between one row and the next.
+
+    The smallest of them rather than the mean: an archetype whose largest gap
+    is the one a figure sits under would carry that gap into every page, and
+    a page with no figure would be as short of material as before.
+    """
+    rows = _rows(sorted(original, key=lambda f: _band(f)[0]))
+    gaps = [
+        max(0.0, min(_band(f)[0] for f in rows[index + 1])
+            - max(_band(f)[1] for f in rows[index]))
+        for index in range(len(rows) - 1)
+    ]
+    return min(gaps) if gaps else 0.0
+
+
+def _band(frame: Frame) -> Optional[tuple[float, float]]:
+    """This frame's top and bottom, or None if it does not state them.
+
+    A frame on a row-based grid, or one bleeding off the page, is left where
+    it is: compacting something whose vertical extent is not a pair of
+    fractions would be guessing at it.
+    """
+    place = frame.place
+    y = getattr(place, "y", None)
+    h = getattr(place, "h", None)
+    if y is None or h is None or frame.bleed:
+        return None
+    return (float(y), float(y) + float(h))
+
+
+def _rows(placed: list[Frame]) -> list[list[Frame]]:
+    """Frames grouped into bands that overlap vertically.
+
+    Two frames side by side share a band and move together; a stack is one
+    frame per band. Written as a sweep rather than a pairwise check because
+    a row is transitive - three frames across a page overlap their
+    neighbours, not necessarily each other.
+    """
+    rows: list[list[Frame]] = []
+    edge = None
+    for frame in placed:
+        top, bottom = _band(frame)
+        if edge is None or top >= edge:
+            rows.append([frame])
+            edge = bottom
+        else:
+            rows[-1].append(frame)
+            edge = max(edge, bottom)
+    return rows
 
 
 def _walk(frames):

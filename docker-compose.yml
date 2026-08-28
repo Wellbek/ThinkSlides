@@ -136,6 +136,39 @@ services:
       # store credentials rather than persisting them unencrypted.
       - SETTINGS_ENCRYPTION_KEY=${SETTINGS_ENCRYPTION_KEY}
       - SETTINGS_ENCRYPTION_KEYS_RETIRED=${SETTINGS_ENCRYPTION_KEYS_RETIRED}
+      # Agent-written Python, off unless an operator turns it on. See
+      # app/config.py: the AST gate and the sandboxed process stand whatever
+      # this is set to, but the container hardening below is part of the
+      # deployment rather than of the service, and a default that assumed it
+      # would be deciding a security question on the operator's behalf.
+      - CODE_AMENDMENT_ENABLED=${CODE_AMENDMENT_ENABLED:-false}
+    # ── Containment ──────────────────────────────────────────────────────
+    # The third of the three layers `edit_deck_with_code` rests on. The
+    # first is the AST gate, which decides what a script may say; the second
+    # is the privilege-dropped process the runner starts. This is what makes
+    # both worth having: without it the service ran as root, unlimited, with
+    # every provider key in its environment and Postgres and Redis one
+    # connect() away.
+    #
+    # `no-new-privileges` stops a setuid binary regaining what the runner
+    # dropped. `cap_drop: ALL` leaves the process no capability to use if it
+    # somehow gets back to uid 0 - the service binds 8000, which needs none.
+    # `pids_limit` is the container-level answer to a fork bomb, behind the
+    # runner's own RLIMIT_NPROC. The memory limit bounds the whole container
+    # the way RLIMIT_AS bounds one script.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    mem_limit: ${AI_MEM_LIMIT:-4g}
+    # Note for an existing deployment: this service now runs as uid 10001
+    # rather than as root. A *fresh* named volume takes its ownership from
+    # the image, which the Dockerfile chowns, so a new stack is correct with
+    # no further action. Volumes created while the service ran as root are
+    # still root-owned and it will not be able to write to them - `make
+    # clean` (or a one-off `chown -R 10001:10001` inside each volume) is what
+    # moves an existing stack over.
     networks:
       - thinkslides-network
     depends_on:

@@ -23,6 +23,25 @@ COPY alembic.ini .
 
 RUN mkdir -p /app/uploads /app/templates /app/output /app/previews
 
+# The service does not run as root.
+#
+# It used to, and that was the assumption the sandbox could not be built on:
+# `edit_deck_with_code` runs agent-written Python in a child of this process,
+# and every containment the runner applies - dropped privileges, resource
+# limits, a scrubbed environment - is weaker when the process it starts from
+# is uid 0. The AST gate stands whatever the uid is; this is what makes the
+# layers underneath it worth having.
+#
+# Chromium is installed above as root because Playwright puts its browsers in
+# the invoking user's home, so the directory is moved somewhere the service
+# user can actually read.
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin thinkslides \
+    && mv /root/.cache/ms-playwright /opt/ms-playwright \
+    && chmod -R a+rX /opt/ms-playwright \
+    && chown -R thinkslides:thinkslides /app
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+USER thinkslides
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

@@ -754,8 +754,8 @@ def _exhibit_spread(per_slide: list[list[str]]) -> dict | None:
             "detail": (
                 f"Every one of this deck's {len(counts)} visual slides carries "
                 "exactly one exhibit. Some pages carry a finding that needs two "
-                "or three exhibits side by side, and compose_slide_regions "
-                "exists for those. Where the material genuinely supports one, "
+                "or three exhibits side by side, and this deck has none. Where "
+                "the material genuinely supports one, "
                 "one is right - this is worth a look, not an automatic change."
             ),
         }

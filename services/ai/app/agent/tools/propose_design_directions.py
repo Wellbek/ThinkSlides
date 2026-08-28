@@ -56,6 +56,11 @@ from app.renderer import specimen
 
 logger = get_logger(__name__)
 
+# The canvas every specimen and every deck is composed on: 16:9 at 13.333in.
+# Stated here because a language derives its geometry from a canvas and the
+# authoring happens before any deck exists to read one off.
+DEFAULT_CANVAS_IN = (13.333, 7.5)
+
 QUESTION = "Which design direction should the deck follow?"
 COLOUR_QUESTION = "And the colour?"
 # The answer that changes nothing - first in the list, because the previews
@@ -147,6 +152,23 @@ class ProposeDesignDirectionsTool:
             proposed, content, palettes, problems = await cls._author(
                 brief, answers, brand_hex, uploaded
             )
+
+            # The design the agent reasoned out for *this* deck, ahead of the
+            # enum. A direction on the enum is a pick from sixteen cells, so
+            # deck after deck could only look the same; a language is measure,
+            # ramp, colour roles and page vocabulary decided from the subject.
+            # It leads, and the enum stays behind it - a run that could not
+            # author three usable languages still gets three directions.
+            if uploaded is None:
+                languages, language_problems = await cls._author_languages(
+                    brief, answers, brand_hex)
+                if languages:
+                    taken = {d["id"] for d in languages}
+                    proposed = languages + [
+                        d for d in proposed if d.get("id") not in taken
+                    ]
+                elif language_problems:
+                    problems = list(problems) + [language_problems]
             wanted = (direction_model.DIRECTION_COUNT - 1) if uploaded \
                 else direction_model.DIRECTION_COUNT
             # Topped up, not replaced. A set used to be discarded whole when
@@ -236,6 +258,71 @@ class ProposeDesignDirectionsTool:
             logger.error("design_directions_failed", error=str(e))
             return ToolResult(success=False, error=str(e),
                               duration_ms=int((time.time() - start) * 1000))
+
+    @classmethod
+    async def _author_languages(
+        cls, brief: str, answers: str, brand_hex: str | None,
+    ) -> tuple[list[dict], str]:
+        """The design languages this deck is offered, as direction dicts.
+
+        The language itself rides along under ``language``, as the dict its
+        model dumps to. That is deliberately not a side channel: the chosen
+        direction is already persisted whole across the pause, so a language
+        carried inside it is persisted and resumed with no new machinery -
+        and a resume that lost the design would have to fall back to a pack
+        chosen off disk, which an authored language does not have.
+        """
+        from app.design import author_run
+        from app.design.authored import to_pack
+        from app.design.authored_system import readable, system_for
+        from app.design.schema import Canvas
+
+        try:
+            llm = require_chat_provider()
+        except Exception as exc:
+            return [], f"no model was available to design with ({exc})"
+
+        canvas = Canvas(w_in=DEFAULT_CANVAS_IN[0], h_in=DEFAULT_CANVAS_IN[1])
+        languages, why = await author_run.author(
+            llm, brief, canvas, answers=answers)
+        if not languages:
+            return [], why or "no design language could be authored"
+
+        out: list[dict] = []
+        for language, described in zip(languages,
+                                       author_run.describe(languages)):
+            # The floor before the preview, not after the choice: a language
+            # whose copy cannot be read on its own ground is not a language
+            # the user should be shown, and repairing it here means what they
+            # pick is what they saw.
+            language = readable(language)
+            system = system_for(language)
+            if brand_hex:
+                # A colour the user has already settled wins over the one the
+                # language proposed, exactly as it does for a direction spec.
+                # Applied to the language rather than to the system, so the
+                # pack composes in it too.
+                language = readable(language.model_copy(
+                    update={"accent": brand_hex}))
+                system = system_for(language)
+            try:
+                to_pack(language, canvas)
+            except Exception as exc:   # already gated in author_run
+                logger.warning("authored_language_dropped",
+                               name=language.name, error=str(exc))
+                continue
+            out.append({
+                **described,
+                "designSystem": system,
+                "language": language.model_dump(mode="json"),
+                "previewUrls": [],
+            })
+        if not out:
+            return [], "no authored language could be derived into a pack"
+        # `why` is carried even when the set is usable: a set of two where
+        # three were asked for has a reason, and a reason that is thrown away
+        # because something survived is a reason nobody ever reads.
+        return out, why
 
     @classmethod
     async def _author(

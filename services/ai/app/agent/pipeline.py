@@ -140,6 +140,29 @@ def _slides_outstanding(loop: "AgentLoop") -> list[int]:
     return []
 
 
+def _wants_code_amendment(loop: "AgentLoop") -> bool:
+    """Whether this run has a defect only a script could fix.
+
+    Deliberately narrow. `edit_deck_with_code` is the most powerful tool in
+    the set, and offering it wherever a slide could be improved would make it
+    the first thing reached for rather than the last: every other builder is
+    on-brand by construction and this one is not. So it is offered only after
+    validation has run, only when validation is *unhappy*, and only when the
+    run has a rendered deck to edit.
+    """
+    ws = loop.working_state
+    return bool(
+        loop.code_amendment_enabled
+        and ws.has_called_finalize
+        and ws.last_rendered_path
+        # Validation ran out of revision passes with something still wrong.
+        # A clean deck needs no script, and a deck still inside its revision
+        # budget should use the typed tools, which is what those passes are.
+        and ws.at_validation_cap
+        and not ws.validation_clean
+    )
+
+
 def _validation_settled(loop: "AgentLoop") -> bool:
     ws = loop.working_state
     return ws.validation_clean or ws.at_validation_cap
@@ -253,6 +276,23 @@ PIPELINE: tuple[Phase, ...] = (
         driver=LOOP_DRIVEN,
         done=_validation_settled,
         directive=lambda loop: "Check the rendered file with validate_rendered_output.",
+    ),
+    Phase(
+        name="amend",
+        label="validation",
+        driver=MODEL_DRIVEN,
+        tools=frozenset({"edit_deck_with_code"}),
+        # Only when validation has settled *and* left something the typed
+        # tools could not fix. A script is the last resort, not the first
+        # one, so this phase applies to almost no run - which is the point.
+        applies=_wants_code_amendment,
+        done=lambda loop: loop.working_state.code_amendment_done,
+        directive=lambda loop: (
+            "validate_rendered_output reported something the build_* tools "
+            "cannot fix. Write one short script with edit_deck_with_code to "
+            "correct it, or say the deck is done if a script would not help."
+        ),
+        max_turns=4,
     ),
 )
 

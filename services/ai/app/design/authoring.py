@@ -113,6 +113,10 @@ def prompt(brief: str, answers: str = "", wanted: int = WANTED) -> str:
         "of page it actually needs: if it argues from figures it wants a page "
         "built round a statistic row; if it compares, two prose columns side "
         "by side.",
+        "- At least one content page MUST carry a `figure` slot. A deck's "
+        "charts, tables and diagrams go there and nowhere else, so a "
+        "vocabulary without one cannot hold the deck's own evidence and is "
+        "rejected.",
         "- `frequency` is roughly what share of the deck each kind is, and "
         "they should sum to about 1.",
         "",

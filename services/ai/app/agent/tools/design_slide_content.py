@@ -96,9 +96,12 @@ class DesignSlideContentTool:
                     name="layout_info",
                     type="string",
                     description=(
-                        "JSON string of the selected layout with placeholder positions. "
-                        "Optional - the system supplies the layout you selected via "
-                        "select_layout for this slide_index automatically."
+                        "JSON string of the slide's layout with placeholder positions. "
+                        "Optional - the system supplies this slide_index's layout "
+                        "automatically, however the run decides layout. Named here "
+                        "without naming the tool that produces it, because a run on "
+                        "a design language composes its pages in code and never sees "
+                        "select_layout at all."
                     ),
                     required=False,
                 ),

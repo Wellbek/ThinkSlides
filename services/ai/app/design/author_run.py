@@ -63,6 +63,17 @@ async def author(llm, brief: str, canvas: Canvas, *, answers: str = "",
             best = usable
 
         problems = []
+        no_exhibit = [language.name for language in languages
+                      if language not in usable
+                      and not _carries_an_exhibit(language)]
+        if no_exhibit:
+            # Named specifically. "Try again" gets the same set back; "none
+            # of your content pages has a figure slot" gets a page for the
+            # deck's charts to go on.
+            problems.append(
+                f"{', '.join(no_exhibit)} declared no content page with a "
+                "figure slot, so the deck's charts and tables would have "
+                "nowhere to go")
         if not usable:
             problems.append("no language in that set could be used")
         elif len(usable) < wanted:
@@ -94,7 +105,29 @@ def _derives(language: Language, canvas: Canvas) -> bool:
         logger.info("authored_language_underivable",
                     name=language.name, error=str(exc))
         return False
-    return bool(pack.archetypes) and bool(pack.type_roles)
+    if not pack.archetypes or not pack.type_roles:
+        return False
+    if not _carries_an_exhibit(language):
+        # A deck argues from charts and tables, and they go in figure slots.
+        # A language with none composed its cover and its prose pages and
+        # then had nowhere to put the graph, so the run failed at the third
+        # page with "no archetype can carry a page of 103 characters" - which
+        # names the paragraph count and not the actual problem. Caught here,
+        # the model is told what is missing and writes a page for it.
+        logger.info("authored_language_has_no_exhibit_page",
+                    name=language.name)
+        return False
+    return True
+
+
+def _carries_an_exhibit(language: Language) -> bool:
+    """Whether any content page of this language can hold a chart."""
+    return any(
+        slot.kind == "figure"
+        for page in language.pages
+        if page.role in ("content", "exhibit")
+        for slot in page.slots
+    )
 
 
 def packs_for(languages: Sequence[Language], canvas: Canvas) -> list:

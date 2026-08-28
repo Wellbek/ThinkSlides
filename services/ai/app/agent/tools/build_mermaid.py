@@ -21,6 +21,7 @@ import time
 
 from app.agent.registry import ToolParameter, ToolRegistry, ToolResult
 from app.agent.tools._binding import bind as _bind
+from app.agent.tools._binding import region_param as _region_param
 from app.agent.tools._binding import slot_param as _slot_param
 from app.observability.logging import get_logger
 
@@ -72,13 +73,14 @@ class BuildMermaidTool:
                     name="caption", type="string", required=False,
                     description="One line saying what the graph shows.",
                 ),
+                _region_param(),
                 _slot_param("'states' or 'sequence'"),
             ],
         )
 
     @classmethod
     async def run(cls, slide_index: int, source: str, caption: str = "",
-                  slot: str = "") -> ToolResult:
+                  region_id: str = "", slot: str = "") -> ToolResult:
         start = time.time()
         from app.agent import run_context
         from app.renderer.svg import mermaid
@@ -108,12 +110,13 @@ class BuildMermaidTool:
                  "diagram": {"format": "svg", "svg": svg,
                              "source": source.strip(),
                              "caption": str(caption or "").strip()}}
-        _bind(block, slot)
         logger.info("mermaid_figure_built", slide_index=slide_index,
                     chars=len(svg))
         return ToolResult(
             success=True,
-            data={"slideIndex": slide_index, "blocks": [block],
+            # See draw_svg: "content" is the key the loop attaches from.
+            data={"slideIndex": slide_index,
+                  "content": _bind(block, region_id, slot),
                   "summary": f"A graph for slide {slide_index + 1}."},
             duration_ms=int((time.time() - start) * 1000),
         )

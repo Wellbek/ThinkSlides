@@ -5,8 +5,10 @@ import { useChatStore } from "@/stores/chat-store";
 import { QuestionCard } from "./QuestionCard";
 import { MarkdownText } from "./MarkdownText";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
-import { BookOpen, CheckCheck, ChevronDown, Download, ExternalLink, Globe, LayoutTemplate, LoaderCircle, Pencil } from "lucide-react";
+import { CodeBox } from "./CodeBox";
+import { BookOpen, CheckCheck, ChevronDown, Code2, Download, ExternalLink, Globe, LayoutTemplate, LoaderCircle, Pencil } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { CodeDeltaEvent, CodeReadyEvent } from "@thinkslides/schemas";
 import type { AgentEvent, SourceInfo } from "@thinkslides/schemas";
 
 // ──────────────────────────────────────────────
@@ -85,7 +87,7 @@ const PAUSING_TOOLS = new Set(["ask_user_question", "propose_design_directions"]
  *  because the tool is what the row itself is about. Anything unlisted falls
  *  back to the block's own group via `GROUP_TO_KIND`, so a tool added later
  *  gets a sensible glyph rather than none. */
-type WorkKind = "research" | "design" | "draft" | "check";
+type WorkKind = "research" | "design" | "draft" | "check" | "code";
 
 const TOOL_KIND: Record<string, WorkKind> = {
   analyze_document: "research",
@@ -115,6 +117,8 @@ const TOOL_KIND: Record<string, WorkKind> = {
   draw_primitives: "draft",
   generate_image: "draft",
 
+  edit_deck_with_code: "code",
+
   validate_slide_json: "check",
   validate_rendered_output: "check",
   finalize_and_render_pptx: "check",
@@ -135,11 +139,12 @@ const KIND_LABEL: Record<WorkKind, string> = {
   design: "Design",
   draft: "Drafting",
   check: "Validation",
+  code: "Code",
 };
 
 /** The order a stack is drawn in - pipeline order, so the glyphs read the
  *  way the work happened rather than the order the tools happened to fire. */
-const KIND_ORDER: WorkKind[] = ["research", "design", "draft", "check"];
+const KIND_ORDER: WorkKind[] = ["research", "design", "draft", "code", "check"];
 
 /** The two groups a validation-retry loop alternates between - see
  *  `currentBlock`'s reuse logic below. No other group pair loops this
@@ -246,6 +251,11 @@ function fmtDuration(ms?: number): string {
 interface SubStep {
   key: string;
   callId: string;
+  /** The script this step is running, when it is `edit_deck_with_code`.
+   *  Carried on the step rather than as a row of its own so the code box
+   *  sits with the call that ran it - the deltas and the finished source
+   *  share that call's id, which is what `stepId` is. */
+  code?: CodeDeltaEvent | CodeReadyEvent;
   toolName: string;
   args: Record<string, unknown>;
   result?: unknown;
@@ -464,6 +474,18 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
         };
         block.subSteps.push(sub);
         openSubSteps.set(ev.callId, sub);
+        break;
+      }
+      // The script, folded onto the step that runs it. The store has
+      // already merged the deltas into one entry per stepId and replaced
+      // them with `code_ready` when it arrived, so at most one of each
+      // reaches here per step and the last one wins - which is what makes a
+      // replayed stream show the final script rather than a doubled one.
+      case "code_delta":
+      case "code_ready": {
+        const sub = openSubSteps.get(ev.stepId)
+          ?? block.subSteps.find((s) => s.callId === ev.stepId);
+        if (sub) sub.code = ev;
         break;
       }
       case "tool_result": {
@@ -896,6 +918,7 @@ const KIND_ICON: Record<WorkKind, LucideIcon> = {
   design: LayoutTemplate,
   draft: Pencil,
   check: CheckCheck,
+  code: Code2,
 };
 
 /** What a completed phase shows instead of its rows: how much it did, and a
@@ -1310,6 +1333,11 @@ interface Row {
   args?: Record<string, unknown>;
   result?: unknown;
   sources?: SourceInfo[];
+  /** The script this row's step is running, when there is one. Shown under
+   *  the row rather than behind "Raw": a script is the thing the step *is*,
+   *  and hiding it would make the most consequential tool in the set the
+   *  only one whose work you have to click to see. */
+  code?: CodeDeltaEvent | CodeReadyEvent;
 }
 
 /** Whether a step passed, as opposed to merely having run.
@@ -1347,6 +1375,7 @@ function toRow(s: SubStep): Row {
     args: s.args,
     result: s.result,
     sources: s.sources,
+    code: s.code,
   };
 }
 
@@ -1456,6 +1485,7 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
       args: last.args,
       result: last.result,
       sources: sources.length ? sources : undefined,
+      code: findLastMatch(group, (step) => !!step.code)?.code,
     });
   }
   return rows;
@@ -1541,6 +1571,7 @@ function CheckRow({ row }: { row: Row }) {
           )}
         </div>
         {row.note && <div className="ws-check-note">{row.note}</div>}
+        {row.code && <CodeBox event={row.code} />}
       </div>
       {open && hasRaw && (
         <div className="ws-phase-check-raw-body">

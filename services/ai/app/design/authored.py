@@ -82,6 +82,13 @@ FRAME_FOR_SLOT: dict[str, str] = {
 
 ACCEPTS_FOR_SLOT: dict[str, tuple[str, ...]] = {
     "figure": ("figure", "chart", "table", "diagram", "metrics"),
+    # A stat row is where a row of figures goes - that is the whole reason a
+    # language declares one - so it takes figures and nothing else. It used to
+    # accept text, which meant a page with no metrics put a paragraph there
+    # and the paragraph was set at headline size, competing with the heading
+    # two inches above it. An empty stat row is a page that had no figures;
+    # a sentence in one is a page that looks broken.
+    "statistic": ("metrics",),
 }
 
 # How tall one slot is, as multiples of the lines its role sets. A heading is
@@ -94,6 +101,14 @@ LINES_FOR_SLOT: dict[str, int] = {
 
 # What a density does to how much copy a page carries.
 DENSITY_SCALE = {"airy": 0.7, "balanced": 1.0, "dense": 1.45}
+
+# What share of a slot's geometric capacity a page of this density actually
+# carries. A derived capacity is a ceiling - the characters that would fit if
+# the slot were set solid - and no designed page is set solid. Selecting
+# against the ceiling made every archetype look underfilled and picked the
+# meanest one available; selecting against the habit picks the one whose shape
+# the material suits.
+TYPICAL_FILL = {"airy": 0.45, "balanced": 0.62, "dense": 0.82}
 
 # The ramp, as multiples of the body size. Authored as ratios rather than
 # points because a ratio is the decision - a display three times the body is a
@@ -228,31 +243,36 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
             ground=ground, z=0, bleed=("top", "right", "bottom", "left"),
         ))
 
+    heights = _heights(kind, language, roles, box.height, scale, gap)
+
     for index, slot in enumerate(kind.slots):
         role_name = ROLE_FOR_SLOT[slot.kind]
         role = roles.get(role_name) or roles["body"]
         span = max(1, min(grid.columns, slot.span))
-        lines = LINES_FOR_SLOT[slot.kind]
-        if slot.kind == "figure":
-            height = 0.34
-        else:
-            wanted = max(1, round(lines * (scale if slot.kind == "prose" else 1.0)))
-            height = (wanted * role.line_height_pt / 72.0) / max(0.01, box.height)
+        height = heights[index]
         identifier = f"{kind.name}-{slot.name or slot.kind}-{index}"
         frames.append(Frame(
             id=identifier, role=FRAME_FOR_SLOT[slot.kind],
+            # The rung this slot is set in, stated on the frame rather than
+            # only used to size it. Left off, a statistic slot was measured
+            # as a headline and then *rendered* at body size, because the
+            # renderer reads the frame and the frame said nothing - so a
+            # language's stat row came out the same size as its prose.
             type_role=("display" if slot.kind == "heading"
-                       and kind.role in ("cover", "section") else None),
+                       and kind.role in ("cover", "section") else role_name),
             place=GridPlace(col=0, span=span, y=round(cursor, 4),
                             h=round(height, 4)),
             z=1,
         ))
+        capacity = _capacity(role, span, grid, canvas, height, box.height)
         slots.append(SlotSpec(
             frame_id=identifier,
             accepts=ACCEPTS_FOR_SLOT.get(slot.kind, ("text",)),
             required=slot.required,
             prominence=1.0 if slot.kind == "heading" else 0.5,
-            max_chars=_capacity(role, span, grid, canvas, height, box.height),
+            max_chars=capacity,
+            typical_chars=max(1, round(
+                capacity * TYPICAL_FILL[language.density])),
         ))
         cursor += height + gap
 
@@ -261,6 +281,79 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
         frequency=kind.frequency, frames=tuple(frames), slots=tuple(slots),
         note="authored for this deck, not measured from a publication",
     )
+
+
+# Slot kinds whose height is decided by the type they are set in. A headline
+# is two lines tall because that is what two lines of it measures; giving it
+# the room left over at the bottom of the page would set one line of it
+# floating in the middle of nowhere. Everything else flows.
+FIXED_HEIGHT_SLOTS = frozenset({
+    "heading", "standfirst", "statistic", "quote", "caption", "footnote",
+})
+
+
+def _heights(kind: PageKind, language: Language, roles: dict[str, TypeRole],
+             box_height: float, scale: float, gap: float) -> list[float]:
+    """Each slot's height as a fraction of the content box, filling the page.
+
+    The natural heights come from the type. They rarely add up to a page: a
+    heading, a stat row and a column of prose measure about a third of the
+    box, and the stack used to be laid from the top and simply stop - so
+    every page carried its material in the top third and two thirds of white
+    below it, whatever the language said its density was. That is not an airy
+    layout, it is an unfinished one.
+
+    So what is left over is given to the slots that can use it - prose and
+    figures, the two that flow - in proportion to what they already have. A
+    page with neither keeps its natural heights and its white space, which is
+    right: a section divider carrying one line is meant to be mostly empty.
+    """
+    natural: list[float] = []
+    for slot in kind.slots:
+        role = roles.get(ROLE_FOR_SLOT[slot.kind]) or roles["body"]
+        if slot.kind == "figure":
+            natural.append(0.34)
+            continue
+        lines = LINES_FOR_SLOT[slot.kind]
+        wanted = max(1, round(lines * (scale if slot.kind == "prose" else 1.0)))
+        natural.append((wanted * role.line_height_pt / 72.0)
+                       / max(0.01, box_height))
+
+    used = sum(natural) + gap * max(0, len(natural) - 1)
+    spare = 1.0 - used
+    flexible = [index for index, slot in enumerate(kind.slots)
+                if slot.kind not in FIXED_HEIGHT_SLOTS]
+    if abs(spare) < 1e-9 or not flexible:
+        return natural
+
+    share = sum(natural[index] for index in flexible)
+    if share <= 0:
+        return natural
+
+    if spare > 0:
+        for index in flexible:
+            natural[index] += spare * natural[index] / share
+        return natural
+
+    # Too tall, not too short. A language that declares a heading, a stat row,
+    # a column and a figure asks for more than a page: the stack was laid from
+    # the top regardless and the last slot ran off the bottom of the canvas,
+    # where nothing renders. The flexible slots give the room back first,
+    # since they are the ones that flow.
+    wanted = -spare
+    if wanted < share:
+        for index in flexible:
+            natural[index] -= wanted * natural[index] / share
+        return natural
+
+    # Even emptying the flexible slots is not enough, so everything shrinks
+    # together and the ramp is preserved as a ratio. A page cannot be taller
+    # than the page.
+    total = sum(natural)
+    room = max(0.0, 1.0 - gap * max(0, len(natural) - 1))
+    if total <= 0 or room <= 0:
+        return natural
+    return [height * room / total for height in natural]
 
 
 def _capacity(role: TypeRole, span: int, grid: GridSpec, canvas: Canvas,

@@ -586,6 +586,13 @@ class WorkingState:
         # gate requires this (or the retry cap), so a deck with a known
         # rendering defect can't be announced as finished.
         self.validation_clean: bool = False
+        # Whether the amend phase has had its turn. One pass, not a loop: a
+        # script that did not fix the deck is unlikely to be fixed by another
+        # script, and the run has to end.
+        self.code_amendment_done: bool = False
+        # The last script that failed, and why, so the next attempt renders as
+        # a diff against it rather than as a second wall of code.
+        self.last_code_attempt: dict | None = None
         # Issues reported by the most recent validation run, replayed to the
         # model when it tries to stop without fixing them.
         self.validation_issues: list[dict] = []
@@ -1432,6 +1439,7 @@ class AgentLoop:
             "validation_attempts": self.working_state.validation_attempts,
             "validation_failures": self.working_state.validation_failures,
             "validation_clean": self.working_state.validation_clean,
+            "code_amendment_done": self.working_state.code_amendment_done,
             "validation_issues": self.working_state.validation_issues,
             "slides_needing_revision": self.working_state.slides_needing_revision,
             "last_rendered_path": self.working_state.last_rendered_path,
@@ -1511,6 +1519,8 @@ class AgentLoop:
             self.working_state.validation_attempts = state_dict.get("validation_attempts", 0)
             self.working_state.validation_failures = state_dict.get("validation_failures", 0)
             self.working_state.validation_clean = state_dict.get("validation_clean", False)
+            self.working_state.code_amendment_done = state_dict.get(
+                "code_amendment_done", False)
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
             self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
@@ -2006,6 +2016,20 @@ class AgentLoop:
         try:
             from app.design import run as design_run
 
+            authored = self._authored_pack()
+            if authored is not None:
+                # The user chose a design, not a shape of deck. When the
+                # direction they picked carries a language, that language is
+                # the pack - deriving one from the plan instead would compose
+                # the deck in a design nobody was shown.
+                if (self.working_state.pack_id != authored.id
+                        or self._pack_token is None):
+                    self.working_state.pack_id = authored.id
+                    self._install_pack(authored, design_system)
+                    logger.info("authored_pack_installed", pack=authored.id,
+                                archetypes=len(authored.archetypes))
+                return
+
             if self.working_state.pack_id:
                 # A resumed run already chose; it just has to be reinstalled,
                 # because a ContextVar does not survive the process.
@@ -2025,6 +2049,101 @@ class AgentLoop:
         self._install_pack(pack, design_system)
         logger.info("pack_selected", pack=pack.id,
                     archetypes=len(pack.archetypes))
+
+    # How much of a script goes in one `code_delta`. Small enough that the box
+    # fills visibly, large enough that a 200-line script is not 200 events on
+    # a Redis channel the browser is also using for everything else.
+    CODE_CHUNK_CHARS = 240
+
+    def _code_events(self, fn_args: dict, call_id: str,
+                     phase: str, step: str | None):
+        """The script, as the events that draw it into the code box.
+
+        `code_delta` appends, `code_ready` is terminal and carries the whole
+        source. Both, rather than either alone: the orchestrator persists the
+        stream and replays it after a reload, so a subscriber that connected
+        halfway through has seen some deltas and not others, and only an
+        event carrying the finished source puts every one of them in the same
+        state. `seq` is what lets the store drop a delta it already has -
+        without it a replay would append the script to itself.
+
+        `previous` is the script this one replaces, when the model is fixing
+        a script that failed. The box renders the diff rather than a second
+        wall of code, which is the difference between seeing the fix and
+        reading the whole thing again.
+        """
+        source = str((fn_args or {}).get("code") or "")
+        if not source:
+            return
+
+        step_id = f"{call_id}"
+        for index in range(0, len(source), self.CODE_CHUNK_CHARS):
+            yield _event("code_delta", phase, {
+                "stepId": step_id,
+                "seq": index // self.CODE_CHUNK_CHARS,
+                "text": source[index:index + self.CODE_CHUNK_CHARS],
+                "timestamp": _iso_now(),
+            }, step=step)
+
+        previous = self.working_state.last_code_attempt
+        yield _event("code_ready", phase, {
+            "stepId": step_id,
+            "source": source,
+            # Outcome is settled by the tool result, which has not happened
+            # yet - so this says what is true now: it is about to run. The
+            # next attempt's `previous` and `reason` are what report how it
+            # went, which is where a reader needs them.
+            "outcome": "ran",
+            **({"previous": previous["source"],
+                "reason": previous["reason"]} if previous else {}),
+            "timestamp": _iso_now(),
+        }, step=step)
+
+    def _remember_code_attempt(self, fn_args: dict, tool_result) -> None:
+        """Keep a failed script so the next attempt can be shown as a diff.
+
+        Only a failure is kept. A script that ran is not something the next
+        one is fixing, and carrying it forward would make an unrelated later
+        edit render as a diff against it.
+        """
+        if tool_result.success:
+            self.working_state.last_code_attempt = None
+            return
+        data = tool_result.data or {}
+        self.working_state.last_code_attempt = {
+            "source": str(data.get("source") or (fn_args or {}).get("code") or ""),
+            "reason": str(data.get("reason") or tool_result.error or ""),
+        }
+
+    @property
+    def code_amendment_enabled(self) -> bool:
+        """Whether this run may have the agent write and run its own code."""
+        from app.config import settings
+
+        return bool(settings.code_amendment_enabled)
+
+    def _authored_pack(self):
+        """The pack of the design language the user chose, if they chose one.
+
+        Derived from the chosen direction rather than loaded by id, because
+        an authored language has no file on disk - it was invented for this
+        deck. `chosen_direction` is already persisted across the pause, so
+        the language rides through a resume with it and the pack is rebuilt
+        from the same dict either side.
+        """
+        payload = (self.working_state.chosen_direction or {}).get("language")
+        if not isinstance(payload, dict) or not payload:
+            return None
+        try:
+            from app.design.authored import Language, to_pack
+            from app.design.schema import Canvas
+            from app.design.vocabulary import ensure
+
+            return ensure(to_pack(Language(**payload),
+                                  Canvas(w_in=13.333, h_in=7.5)))
+        except Exception as exc:   # a pack must never fail a run
+            logger.warning("authored_pack_failed", error=str(exc))
+            return None
 
     def _install_pack(self, pack, design_system: dict | None) -> None:
         """Make the pack, wearing the user's chosen colours, visible to tools."""
@@ -2496,9 +2615,9 @@ class AgentLoop:
         # The phase's declared toolset, plus whatever this workspace's MCP
         # servers said they belong in. Added rather than merged into the phase
         # table because the second half is not known until the run starts.
-        offered = phase.tools | self.mcp_tools_by_phase.get(phase.name, frozenset())
-        if self.working_state.pack_id:
-            offered = offered - pipeline.TEMPLATE_GEOMETRY_TOOLS
+        offered = (phase.tools
+                   | self.mcp_tools_by_phase.get(phase.name, frozenset())
+                   ) - self._withheld_tools()
         schemas = [
             schema for schema in self.registry.get_function_schemas()
             if _schema_name(schema) in offered
@@ -2775,6 +2894,59 @@ class AgentLoop:
         """Whether intake judged this deck to stand on facts worth looking up."""
         return bool((self.working_state.brief or {}).get("needsResearch"))
 
+    def _attach_visual(self, fn_name: str, tool_result) -> None:
+        """Put a built block on the slide it names.
+
+        A method rather than an inline branch so a test can drive every
+        builder through the same code the run does. Both figure tools built
+        this session returned their block under "blocks" and were attached by
+        nothing: each reported success, the model moved on satisfied, and the
+        figure existed only in the tool's own return value. A test asserting
+        the tool's output cannot see that - only one that goes through here
+        can.
+        """
+        if fn_name not in BUILD_VISUAL_TOOLS and fn_name not in BLOCK_BUILDER_TOOLS \
+                and fn_name != "generate_image":
+            return
+        if not tool_result.data:
+            return
+        target = tool_result.data.get("slideIndex")
+        block = tool_result.data.get("content")
+        if target is None or not block:
+            return
+        slots = self.working_state.prepared_visuals.setdefault(target, [])
+        # One block per type, per region, *per slot*: rebuilding the stat
+        # callouts in the right rail must not discard the ones in the left,
+        # and a dashboard's bridge chart must not discard the mix chart
+        # beside it. Region alone was enough while a slide carried one chart;
+        # on a page with no region tree two charts both bind to the same
+        # nothing, and the second silently replaced the first - the tool
+        # reported success and the exhibit never reached the page.
+        key = slot_key(block)
+        slots[:] = [existing for existing in slots if slot_key(existing) != key]
+        slots.append(block)
+
+    def _withheld_tools(self) -> frozenset[str]:
+        """Tools this run has, and does not offer.
+
+        One predicate, read by the toolset *and* by every piece of prose that
+        names a tool. Keeping them apart is what broke every template-less
+        run: the geometry tools were withheld from the drafting phase, the
+        instruction telling the model to call them was not, and a model told
+        to call a tool it cannot see calls something else until its turns run
+        out. `_build_system_prompt` already states the principle for document
+        and image tools - "a tool list that names a tool the run has withheld
+        is the prompt and the loop disagreeing, which the model resolves by
+        trying it anyway" - and this makes it one rule instead of three.
+        """
+        if self.working_state.pack_id:
+            # On a design language the page is composed in code, after the
+            # material exists. There is no layout to select and no region to
+            # compose, so offering either would put two systems in charge of
+            # the same decision.
+            return pipeline.TEMPLATE_GEOMETRY_TOOLS
+        return frozenset()
+
     def slide_directive(self) -> str:
         """What to do with the one slide the drafting phase is currently on."""
         from app.agent.pipeline import _slides_outstanding
@@ -2798,11 +2970,21 @@ class AgentLoop:
                 + "\nShorten the copy, give an oversized visual a smaller region, or move "
                 "it onto its own slide, then call design_slide_content for this slide."
             )
+        # Named only when it is actually offered. This instruction reaches the
+        # model twice a turn - as the `## Next Step` block, and again as the
+        # nudge when a turn produced no tool call - so naming a withheld tool
+        # here does not merely mislead once, it re-issues the impossible
+        # instruction every time the model fails to follow it.
+        opening = (
+            ". Call select_layout for slide_index=" + f"{index}, then any"
+            if "select_layout" not in self._withheld_tools()
+            else ". Call any"
+        )
         return (
             f"Draft slide {index + 1} of {len(plan) or index + 1}"
             + (f': "{title}"' if title else "")
-            + ". Call select_layout for slide_index="
-            + f"{index}, then any build_* tool its point needs (a chart, table or metric "
+            + opening
+            + " build_* tool its point needs (a chart, table or metric "
             "row for figures; a block for content with a shape), then "
             f"design_slide_content for slide_index={index}. This slide only."
             + self._structure_directive()
@@ -3372,6 +3554,17 @@ class AgentLoop:
             } if is_revision else {}),
         }, step=step)
 
+        # The code the model wrote, into the box that shows it - before the
+        # sandbox runs it, so a reader watches the script appear rather than
+        # being handed a log entry after the fact.
+        #
+        # After the `tool_call` event, not before, because these carry the
+        # same id: the interface hangs the code box on that call's own step,
+        # and a code event arriving first would have nothing to hang on.
+        if fn_name == "edit_deck_with_code":
+            for event in self._code_events(fn_args, call_id, current_phase, step):
+                yield "event", event
+
         # Execute tool
         tool_start = time.time()
         tool_result = None
@@ -3469,6 +3662,11 @@ class AgentLoop:
         if fn_name == "finalize_and_render_pptx" and tool_result.success:
             self.working_state.has_called_finalize = True
             self.working_state.last_rendered_path = tool_result.data.get("filePath")
+            # Visible to the tools as well as to the loop, so a tool that
+            # edits the deck edits the same file the download and the vision
+            # check read rather than a copy of it.
+            self._rendered_path_token = run_context.set_rendered_path(
+                self.working_state.last_rendered_path)
             preview_urls = tool_result.data.get("previewUrls", [])
 
             # Preview page N is the Nth slide of the RENDERED deck, so
@@ -3705,27 +3903,16 @@ class AgentLoop:
 
             # Charts/tables/metric rows are attached to their slide
             # here rather than handed back for the model to re-state.
-            if (fn_name in BUILD_VISUAL_TOOLS
-                    or fn_name in BLOCK_BUILDER_TOOLS
-                    or fn_name == "generate_image") and tool_result.data:
-                target = tool_result.data.get("slideIndex")
-                block = tool_result.data.get("content")
-                if target is not None and block:
-                    slots = self.working_state.prepared_visuals.setdefault(target, [])
-                    # One block per type, per region, *per slot*: rebuilding
-                    # the stat callouts in the right rail must not discard the
-                    # ones in the left, and a dashboard's bridge chart must not
-                    # discard the mix chart beside it. Region alone was enough
-                    # while a slide carried one chart; on a page with no region
-                    # tree two charts both bind to the same nothing, and the
-                    # second silently replaced the first - the tool reported
-                    # success and the exhibit never reached the page.
-                    key = slot_key(block)
-                    slots[:] = [
-                        existing for existing in slots
-                        if slot_key(existing) != key
-                    ]
-                    slots.append(block)
+            self._attach_visual(fn_name, tool_result)
+
+            if fn_name == "edit_deck_with_code":
+                self._remember_code_attempt(fn_args, tool_result)
+                if tool_result.success:
+                    # One pass. A script that did not fix the deck is
+                    # unlikely to be fixed by another script, and the run has
+                    # to end - so a success closes the phase and a failure
+                    # spends one of its four turns.
+                    self.working_state.code_amendment_done = True
 
             # compose_slide_regions resolves geometry rather than content,
             # so it attaches to the slide's own regions list. Recomposing
@@ -4278,8 +4465,14 @@ class AgentLoop:
             "",
             "## Templates & Design System",
             "",
-            "- If the user uploaded a template, its design system is already in your context below - use it directly and do NOT call extract_template_design_system.",
-            "- If the user has NO template or asks for a 'default' template, call extract_template_design_system with NO template_path (or template_path='default'). It returns a built-in default design system. NEVER invent a filename like 'default_template.pptx' - it does not exist and will fail.",
+            # The loop loads the design system itself, in `_ensure_design_system`,
+            # and `extract_template_design_system` is in no phase's toolset - so
+            # this used to instruct the model to call a tool it has never been
+            # offered on any run. Same defect as the geometry tools, found by
+            # the same invariant.
+            "- The deck's design system is already in your context below, whether "
+            "it came from an uploaded template or from the built-in default. Use it "
+            "directly. You do not load it and there is no tool for you to call.",
             "- Do NOT ask the user to upload a template if they already said to use a default. Proceed with the built-in default.",
             "",
             "## Presentation Detail Level",
@@ -4384,7 +4577,6 @@ class AgentLoop:
         ] if self.image_connection is not None else []
         tool_lines = [
             *document_tools,
-            "extract_template_design_system — Parse a template's design system, or get the built-in default (omit template_path). Call it once; if a design system is already in your context below, it is already loaded",
             *research_tool,
             "propose_design_directions — Author three whole design systems for this deck and "
             "render them as specimen slides for the user to choose between (pauses the "
@@ -4411,6 +4603,35 @@ class AgentLoop:
             "finalize_and_render_pptx — Render the final PPTX file",
             "validate_rendered_output — Check the ACTUAL rendered output: overflow/overlap in the real geometry, plus placeholder copy, repeated points, bullets restating a chart, and package integrity (MUST be called after finalize_and_render_pptx, and is the true last step)",
         ]
+        # Same rule as document_tools and image_tools above, applied to the
+        # whole list rather than to the two entries that happened to need it.
+        # A line's first word is its tool name, so a withheld tool drops out
+        # wherever it is described without every describing site having to
+        # know the rule.
+        withheld = self._withheld_tools()
+        tool_lines = [
+            line for line in tool_lines
+            if line.split(" ", 1)[0] not in withheld
+        ]
+
+        # `compose_slide_regions` divides a page only when the run is choosing
+        # its own geometry. On a design language the archetype already says
+        # where the exhibits go, so the model is told the truth about that
+        # instead of being pointed at a tool it does not have.
+        composition_advice = (
+            "- A slide showing ONE thing needs no regions: build the exhibit and "
+            "let it take the page. A slide with two or more genuinely different "
+            "things to show, and no template composition that fits, is composed "
+            "first with compose_slide_regions and then each exhibit is built with "
+            "the region_id it belongs in. Give two exhibits of the same type "
+            "different slot names so both survive."
+            if "compose_slide_regions" not in withheld else
+            "- You do not place exhibits on this run. Build what the slide's "
+            "point needs and the design language puts it where its own page "
+            "vocabulary says it goes. A slide with two genuinely different "
+            "things to show gets both built; give two exhibits of the same "
+            "type different slot names so both survive."
+        )
         prompt_parts.extend([
             "## Building Visuals",
             "",
@@ -4422,12 +4643,7 @@ class AgentLoop:
             "dropped at render time.",
             "- Call build_chart/build_table/build_key_metrics with the slide_index "
             "BEFORE calling design_slide_content for that slide.",
-            "- A slide showing ONE thing needs no regions: build the exhibit and "
-            "let it take the page. A slide with two or more genuinely different "
-            "things to show, and no template composition that fits, is composed "
-            "first with compose_slide_regions and then each exhibit is built with "
-            "the region_id it belongs in. Give two exhibits of the same type "
-            "different slot names so both survive.",
+            composition_advice,
             "- Composing a page is not a reason to fill it. Four exhibits "
             "answering the same question read worse than one answering it once, "
             "and an exhibit built from figures the material does not have is the "

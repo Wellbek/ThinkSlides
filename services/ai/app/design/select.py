@@ -134,7 +134,13 @@ def _accepts(slot: SlotSpec, item: MaterialItem) -> bool:
         return "text" in slot.accepts
     if item.kind == "figure":
         return "figure" in slot.accepts
-    return bool(_EXHIBIT_KINDS & set(slot.accepts)) or "figure" in slot.accepts
+    # The exhibit's own kind, not merely "some exhibit". Any-of matching sent
+    # a chart into a stat row that named only `metrics`, because the row
+    # accepted one exhibit kind and that was taken as accepting all of them -
+    # so a graph landed in a slot two lines tall. A slot that says `figure`
+    # still takes any of them: that is the general-purpose exhibit slot, and
+    # every measured pack declares its figure slots that way.
+    return item.kind in slot.accepts or "figure" in slot.accepts
 
 
 def _slot_frame(archetype: PageArchetype, slot: SlotSpec):
@@ -340,6 +346,97 @@ def _suits(slot: SlotSpec, item: MaterialItem) -> bool:
     return True
 
 
+def _body_slots(slots: Sequence[SlotSpec], archetype: PageArchetype,
+                slot_order: dict) -> list[SlotSpec]:
+    """This archetype's slots a paragraph could actually sit in, in reading order.
+
+    A display-only frame - a headline, an eyebrow - is not one of them, even
+    though it accepts text: it exists for the one line that names the page.
+    """
+    usable = []
+    for slot in slots:
+        if slot.accepts and "text" not in slot.accepts:
+            continue
+        frame = _slot_frame(archetype, slot)
+        if frame is not None and frame.role in DISPLAY_ONLY_FRAME_ROLES:
+            continue
+        if frame is not None and frame.role in APPARATUS_FRAME_ROLES:
+            continue
+        usable.append(slot)
+    return sorted(usable, key=lambda s: slot_order.get(s.frame_id, 0.0))
+
+
+def _grouped(items: list[MaterialItem], slots: Sequence[SlotSpec],
+             archetype: PageArchetype, slot_order: dict) -> list[MaterialItem]:
+    """Paragraphs gathered into as many runs as this archetype has room for.
+
+    The assignment below is one item to one slot, which read as "a prose
+    column holds one paragraph". A prose column holds a column of prose - it
+    is what the word means, it is what `max_chars` measures, and `_fill`
+    already puts several items in one frame. Without this, an archetype with
+    two body slots could not carry a three-paragraph page at all: the third
+    paragraph went unplaced, `fit` refused the archetype, and the page was
+    split into two that were four-fifths empty. Every content page of a
+    three-point deck came out that way.
+
+    The groups are sized in proportion to what each slot holds, not evenly.
+    An even split put a hundred characters into a stat row that holds fifty
+    and fifty into a column that holds four hundred - which is a worse page
+    than the split it replaced. Order is preserved, so the page still reads
+    top to bottom in the order it was written.
+    """
+    body = [item for item in items
+            if item.kind == "text" and item.role_hint == "body"]
+    usable = _body_slots(slots, archetype, slot_order)
+    room = len(usable)
+    if room < 1 or len(body) <= room:
+        return items
+
+    # A slot that states no capacity is taken at the median of those that do,
+    # so it is neither starved nor handed the whole page.
+    stated = [float(s.max_chars) for s in usable if s.max_chars]
+    fallback = (sorted(stated)[len(stated) // 2] if stated else 1.0)
+    weights = [float(s.max_chars) if s.max_chars else fallback for s in usable]
+    weight_total = sum(weights) or float(room)
+
+    total = float(sum(item.chars for item in body) or len(body))
+    # Where each group ends, as a running character count.
+    bounds = []
+    running = 0.0
+    for weight in weights:
+        running += total * weight / weight_total
+        bounds.append(running)
+
+    groups: list[list[MaterialItem]] = [[] for _ in range(room)]
+    index = 0
+    carried = 0
+    for item in body:
+        while index < room - 1 and carried >= bounds[index]:
+            index += 1
+        groups[index].append(item)
+        carried += item.chars
+
+    merged: dict[str, MaterialItem] = {}
+    dropped: set[str] = set()
+    for group in groups:
+        if len(group) < 2:
+            continue
+        first = group[0]
+        merged[first.id] = MaterialItem(
+            id=first.id,
+            kind="text",
+            text="\n".join(item.text for item in group),
+            # The group is as important as its most important paragraph:
+            # averaging would let one aside dilute the point beside it.
+            importance=max(item.importance for item in group),
+            role_hint="body",
+        )
+        dropped.update(item.id for item in group[1:])
+
+    return [merged.get(item.id, item) for item in items
+            if item.id not in dropped]
+
+
 def fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
         previous_archetype: Optional[str] = None) -> Optional[Selection]:
     """Bind this material into this archetype, and say what it cost.
@@ -368,6 +465,7 @@ def fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
         return None
 
     slot_order = reading_order(archetype, pack, grid)
+    items = _grouped(items, slots, archetype, slot_order)
     # Only the body prose is sequenced. A heading, a quote or an exhibit is
     # placed by what it *is*, and ordering it against the paragraphs would
     # drag the heading toward the middle of the page.
@@ -470,7 +568,7 @@ def _density_deviation(shape: MaterialShape,
     six-hundred-word archetype being chosen for a hundred and fifty words.
     """
     expected = sum(
-        slot.max_chars or 0 for slot in archetype.slots
+        slot.expected_chars for slot in archetype.slots
         if "text" in (slot.accepts or ())
     )
     actual = shape.total_chars + len(shape.heading)

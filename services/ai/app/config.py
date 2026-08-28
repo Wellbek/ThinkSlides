@@ -79,6 +79,28 @@ class Settings(BaseSettings):
     # keeps the template-faithful path.
     design_language_enabled: bool = True
 
+    # Whether the agent may write and run its own Python to fix a deck the
+    # typed tools could not.
+    #
+    # Off by default, and deliberately. Three deterministic gates stand in
+    # front of it - an AST allowlist, a privilege-dropped process with no
+    # network, and a check on the file it hands back - but the container
+    # hardening those gates assume (a non-root user, dropped capabilities, a
+    # pids limit) is part of the deployment rather than of this service, and
+    # a flag that turns itself on before the deployment has caught up is a
+    # flag that decided a security question on an operator's behalf. Turn it
+    # on with `CODE_AMENDMENT_ENABLED=true` once the container is hardened.
+    #
+    # One thing worth knowing before you do. The runner asks for its own
+    # network namespace and reports whether it got one; inside a container
+    # with `cap_drop: ALL` it does not, because `unshare` needs CAP_SYS_ADMIN
+    # and granting that back would undo more than it bought. So in production
+    # what keeps a script off the network is the AST gate refusing to let it
+    # name `socket`, `urllib`, `http` or `requests` - the layer that is a
+    # proof rather than a containment - and every run records
+    # `network_namespace` so the difference is visible rather than assumed.
+    code_amendment_enabled: bool = False
+
     # `extra="ignore"` is load-bearing, not tidiness. `.env` at the repo root
     # is the single file the setup docs tell you to create, and it carries the
     # web and orchestrator settings too (PORT, AI_SERVICE_URL,

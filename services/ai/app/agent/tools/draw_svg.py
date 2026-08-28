@@ -30,6 +30,7 @@ import time
 
 from app.agent.registry import ToolParameter, ToolRegistry, ToolResult
 from app.agent.tools._binding import bind as _bind
+from app.agent.tools._binding import region_param as _region_param
 from app.agent.tools._binding import slot_param as _slot_param
 from app.observability.logging import get_logger
 
@@ -97,13 +98,14 @@ class DrawSvgTool:
                     name="caption", type="string", required=False,
                     description="One line saying what the figure shows.",
                 ),
+                _region_param(),
                 _slot_param("'schematic' or 'statemachine'"),
             ],
         )
 
     @classmethod
     async def run(cls, slide_index: int, svg: str, caption: str = "",
-                  slot: str = "") -> ToolResult:
+                  region_id: str = "", slot: str = "") -> ToolResult:
         start = time.time()
         source = str(svg or "").strip()
         if not source:
@@ -145,14 +147,18 @@ class DrawSvgTool:
             "diagram": {"format": "svg", "svg": source,
                         "caption": str(caption or "").strip()},
         }
-        _bind(block, slot)
         shapes = sum(1 for mark in marks if mark.kind == "path")
         labels = sum(1 for mark in marks if mark.kind == "text")
         logger.info("svg_figure_drawn", slide_index=slide_index,
                     shapes=shapes, labels=labels, chars=len(source))
         return ToolResult(
             success=True,
-            data={"slideIndex": slide_index, "blocks": [block],
+            # "content", singular, because that is the key the loop reads to
+            # attach a block to its slide. This returned "blocks" for its whole
+            # life: the tool reported success, the model moved on, and the
+            # figure reached no slide at all.
+            data={"slideIndex": slide_index,
+                  "content": _bind(block, region_id, slot),
                   "shapes": shapes, "labels": labels,
                   "summary": (f"A drawn figure for slide {slide_index + 1}: "
                               f"{shapes} shape(s), {labels} label(s).")},

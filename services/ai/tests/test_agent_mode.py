@@ -220,6 +220,109 @@ def test_every_described_tool_is_one_the_run_can_actually_call():
     assert set(described) <= registered, set(described) - registered
 
 
+def _described_tools(prompt: str) -> set[str]:
+    lines = prompt.splitlines()
+    start = lines.index("## Tools") + 2
+    described = set()
+    for line in lines[start:]:
+        if not line or not line[0].isdigit():
+            break
+        described.add(line.split(". ", 1)[1].split(" \u2014")[0].strip())
+    return described
+
+
+def _drafting_loop(pack_id: str | None) -> AgentLoop:
+    """A loop sitting on the step that writes a slide.
+
+    That is the step the withheld tools were withheld from, so it is the one
+    whose prompt has to agree with its toolset.
+    """
+    # Simple mode: deep would put the research phase in front of drafting, and
+    # the step this is about is the drafting one.
+    loop = _loop(MODE_SIMPLE)
+    loop._session_has_documents = True
+    loop.working_state.pack_id = pack_id
+    loop.working_state.brief = {"brief": "a deck", "slideCount": 1}
+    loop.working_state.presentation_structure = {
+        "totalSlides": 1, "slides": [{"title": "One"}]
+    }
+    return loop
+
+
+@pytest.mark.parametrize("pack_id", [None, "authored-abc"])
+def test_no_part_of_the_prompt_names_a_tool_the_run_withholds(pack_id):
+    """
+    The invariant the registry check was one level too high to see.
+
+    `select_layout` is registered on every run - it is withheld from the
+    *phase*, which is a layer the previous test does not reach. A run on a
+    design language composes its pages in code and is not offered the geometry
+    tools, and for a while the prompt went on naming them anyway: the tool
+    list, the `## Building Visuals` advice, and worst of all the `## Next
+    Step` directive, which is re-issued every turn the model fails to comply.
+    A model told each turn to call a tool it cannot see calls something else
+    until its turns run out, which is exactly what every template-less run
+    did.
+
+    So this checks the whole prompt, not just the numbered list - the
+    directive and the prose are where the damage actually was.
+    """
+    loop = _drafting_loop(pack_id)
+    prompt = loop._build_system_prompt({})
+
+    # The directive is the site that mattered most, so this fails loudly if the
+    # loop ever stops putting it in the prompt and the check goes vacuous.
+    assert "Draft slide 1" in prompt
+
+    withheld = loop._withheld_tools()
+    assert withheld == (frozenset() if pack_id is None else
+                        {"select_layout", "compose_slide_regions"})
+    for name in withheld:
+        assert name not in prompt, f"{name} is described but withheld"
+
+
+@pytest.mark.parametrize("pack_id", [None, "authored-abc"])
+def test_every_described_slide_tool_is_offered_while_drafting(pack_id):
+    """
+    Described \u2286 offered, one layer below described \u2286 registered.
+
+    Restricted to the tools the *model* chooses. Most of this pipeline is
+    loop-driven: the loop calls plan_presentation_structure and
+    finalize_and_render_pptx itself, and the tool list describes them so the
+    model understands the run it is inside rather than so it can call them.
+    The drafting set is different - those are offered, the model picks among
+    them, and a name in the prompt that is not in the offered set is a
+    instruction the model cannot carry out.
+    """
+    from app.agent import pipeline
+
+    loop = _drafting_loop(pack_id)
+    described = _described_tools(loop._build_system_prompt({}))
+    offered = pipeline.SLIDE_TOOLS - loop._withheld_tools()
+
+    assert described & pipeline.SLIDE_TOOLS
+    assert described & pipeline.SLIDE_TOOLS <= offered, (
+        (described & pipeline.SLIDE_TOOLS) - offered
+    )
+
+
+def test_the_pack_path_still_describes_the_tools_it_does_have():
+    """A filter that dropped everything would pass the two tests above."""
+    loop = _drafting_loop("authored-abc")
+    described = _described_tools(loop._build_system_prompt({}))
+
+    assert "design_slide_content" in described
+    assert "build_chart" in described
+    assert "select_layout" not in described
+
+
+def test_the_template_path_is_unchanged():
+    """The geometry tools are withheld from the design-language path only."""
+    described = _described_tools(_drafting_loop(None)._build_system_prompt({}))
+
+    assert {"select_layout", "compose_slide_regions"} <= described
+
+
 # ── Mode resolution and persistence ────────────────────────────────────
 
 

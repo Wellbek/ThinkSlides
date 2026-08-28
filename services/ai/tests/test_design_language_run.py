@@ -154,6 +154,36 @@ class TestMaterialIsReadFromWhatTheModelAlreadyProduces:
         ]}
         assert any(i.text == "Kept." for i in run.material_from(slide).items)
 
+    @pytest.mark.parametrize("block,expected", [
+        ({"type": "accentCard", "accentCards": [
+            {"heading": "Scale", "body": ["Volume carries the margin."],
+             "tone": "benefit"}]},
+         "Scale - Volume carries the margin."),
+        ({"type": "rowBand", "rowBands": [
+            {"label": "Mix", "prose": "Premium lines grew fastest."}]},
+         "Mix - Premium lines grew fastest."),
+        ({"type": "iconCard", "iconCards": [
+            {"icon": "star", "heading": "Margin", "body": ["Held at 14%."]}]},
+         "Margin - Held at 14%."),
+        ({"type": "banner", "banner": {"text": "One line that carries it."}},
+         "One line that carries it."),
+        ({"type": "imageCardRow", "imageCardRow": {"cards": [
+            {"title": "North", "caption": "Strongest region"}]}},
+         "North - Strongest region"),
+    ])
+    def test_a_typed_block_keeps_its_copy_without_a_runs_key(self, block, expected):
+        """
+        The block builders write copy into their own payload, not into `runs`.
+
+        Reading only `runs` meant every one of them arrived here empty: a page
+        built entirely of accent cards reached the selector as a heading with
+        no material, and was laid out as though the model had written nothing.
+        The block is not unknown - it has a type this codebase defines - so
+        "unknown blocks keep their copy" was never enough on its own.
+        """
+        slide = {"slideIndex": 1, "contents": [text("H"), block]}
+        assert any(i.text == expected for i in run.material_from(slide).items)
+
     def test_the_first_page_is_a_cover_and_the_last_a_closing(self):
         assert run.material_from(DECK[0], index=0, total=3).role == "cover"
         assert run.material_from(DECK[2], index=2, total=3).role == "closing"

@@ -64,6 +64,8 @@ export const AGENT_EVENT_TYPES = [
   "connection_degraded",
   "timer_update",
   "session_title_updated",
+  "code_delta",
+  "code_ready",
   "done",
 ] as const;
 
@@ -316,6 +318,48 @@ export interface DoneEvent {
   timestamp: string;
 }
 
+/**
+ * One chunk of a script, as the model writes it.
+ *
+ * The first streaming event in this system - everything else is one-shot -
+ * so `seq` is load-bearing rather than decorative. The orchestrator persists
+ * the stream and replays it after a reload; without a sequence number a
+ * replay would append the code to itself, and the store would show a script
+ * written twice. The store keys by `stepId` and ignores a `seq` it has.
+ */
+export interface CodeDeltaEvent {
+  type: "code_delta";
+  phase: AgentEventPhase;
+  stepId: string;
+  seq: number;
+  text: string;
+  timestamp: string;
+}
+
+/**
+ * The script the model settled on, and what it replaces.
+ *
+ * Terminal for a step, and it carries the whole source rather than relying on
+ * the deltas having arrived: a subscriber that connected halfway through, or
+ * a replay that dropped a chunk, still ends up with exactly the code that ran.
+ *
+ * `previous` is set when this attempt follows a failed one for the same step.
+ * The box renders a unified diff against it - removed lines red, added lines
+ * green - so what the user sees is the fix, not a second wall of code.
+ */
+export interface CodeReadyEvent {
+  type: "code_ready";
+  phase: AgentEventPhase;
+  stepId: string;
+  source: string;
+  previous?: string;
+  /** Why the previous attempt failed, when there was one. */
+  reason?: string;
+  /** Whether the code was refused, ran and failed, or ran. */
+  outcome: "refused" | "failed" | "ran";
+  timestamp: string;
+}
+
 export type AgentEvent =
   | ThoughtEvent
   | ToolCallEvent
@@ -327,6 +371,8 @@ export type AgentEvent =
   | QuestionEvent
   | ValidationUnresolvedEvent
   | ConnectionDegradedEvent
+  | CodeDeltaEvent
+  | CodeReadyEvent
   | DoneEvent;
 // TimerUpdateEvent, SessionTitleUpdatedEvent and RateLimitEvent are
 // deliberately absent: this union models what lands in a message's

@@ -16,6 +16,11 @@ from app.design.schema import Canvas
 
 CANVAS = Canvas(w_in=13.333, h_in=7.5)
 
+# Every one of these declares a content page with a `figure` slot, because a
+# language without one is refused: a deck argues from charts and tables, and a
+# vocabulary with nowhere to put them cannot hold the deck's own evidence.
+# They differ in measure and in page vocabulary, which is the floor
+# `differs_enough` states.
 LEDGER = {
     "name": "Box office ledger", "rationale": "receipts read as a ledger",
     "columns": 6, "bodyPt": 13, "ratios": {"display": 4.2, "headline": 2.8},
@@ -23,6 +28,7 @@ LEDGER = {
     "pages": [{"name": "Receipts", "role": "content", "frequency": 0.6,
                "slots": [{"kind": "heading", "span": 6, "required": True},
                          {"kind": "statistic", "span": 6},
+                         {"kind": "figure", "span": 3},
                          {"kind": "prose", "span": 3}]}],
 }
 WIDE = {
@@ -32,6 +38,7 @@ WIDE = {
     "pages": [{"name": "Spread", "role": "content", "frequency": 0.7,
                "slots": [{"kind": "heading", "span": 12, "required": True},
                          {"kind": "prose", "span": 4},
+                         {"kind": "figure", "span": 4},
                          {"kind": "prose", "span": 4}]}],
 }
 STUB = {
@@ -42,6 +49,7 @@ STUB = {
     "pages": [{"name": "Stub", "role": "content", "frequency": 0.5,
                "slots": [{"kind": "heading", "span": 4, "required": True},
                          {"kind": "quote", "span": 4},
+                         {"kind": "figure", "span": 4},
                          {"kind": "prose", "span": 4}]}],
 }
 GOOD = {"languages": [LEDGER, WIDE, STUB]}
@@ -83,6 +91,57 @@ class TestAGoodSetIsTakenAsItStands:
         llm = _LLM(GOOD)
         _author(llm, "Cars movies finances")
         assert "Cars movies finances" in llm.prompts[0]
+
+
+class TestALanguageMustBeAbleToHoldAChart:
+    """
+    A deck argues from charts and tables, and they go in figure slots.
+
+    A language without one composed its cover and its prose pages perfectly
+    well and then failed at the evidence page with "no archetype in pack
+    'marquee' can carry a page of 103 characters in 3 items" - a message
+    about paragraph counts, for a problem that had nothing to do with
+    paragraphs. Caught at authoring, the model is told what is missing.
+    """
+
+    @staticmethod
+    def _no_figure(language: dict) -> dict:
+        return {**language, "pages": [
+            {**page, "slots": [slot for slot in page["slots"]
+                               if slot["kind"] != "figure"]}
+            for page in language["pages"]
+        ]}
+
+    def test_one_with_nowhere_to_put_a_chart_is_dropped(self):
+        payload = {"languages": [self._no_figure(LEDGER)]}
+        languages, why = asyncio.run(
+            author_run.author(_LLM(payload), "a deck", CANVAS, wanted=1))
+
+        assert languages == []
+        assert "figure slot" in why
+
+    def test_the_retry_names_what_was_missing(self):
+        """"Try again" gets the same set back. "None of your content pages
+        has a figure slot" gets a page for the deck's charts to go on."""
+        llm = _LLM({"languages": [self._no_figure(LEDGER)]})
+        asyncio.run(author_run.author(llm, "a deck", CANVAS, wanted=1))
+
+        assert llm.calls == 2
+        assert "figure slot" in llm.prompts[-1]
+
+    def test_a_figure_slot_on_a_cover_does_not_count(self):
+        """A cover carrying a photograph is not a page a chart can go on."""
+        cover_only = {**LEDGER, "pages": [
+            {"name": "Cover", "role": "cover", "frequency": 1.0, "slots": [
+                {"kind": "heading", "span": 6, "required": True},
+                {"kind": "figure", "span": 6}]},
+        ]}
+        languages, why = asyncio.run(
+            author_run.author(_LLM({"languages": [cover_only]}), "a deck",
+                              CANVAS, wanted=1))
+
+        assert languages == []
+        assert "figure slot" in why
 
 
 class TestASamenessRetryCarriesTheReason:

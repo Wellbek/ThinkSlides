@@ -77,6 +77,13 @@ _slide_material: ContextVar[dict | None] = ContextVar(
 # copy back, and nothing about it is the model's to decide.
 _pack: ContextVar[object | None] = ContextVar("thinkslides_pack", default=None)
 
+# Where this run's rendered deck is on disk. A path rather than the bytes:
+# `finalize_and_render_pptx` writes a real file that the download, the vision
+# check and `edit_deck_with_code` all read, and a second copy in memory would
+# be a second source of truth for the same deck.
+_rendered_path: ContextVar[str | None] = ContextVar(
+    "thinkslides_rendered_path", default=None)
+
 
 def set_include_sources(enabled: bool) -> Token:
     """Install whether this run cites its sources in the document."""
@@ -132,6 +139,20 @@ def get_pack():
 
 def reset_pack(token: Token) -> None:
     _pack.reset(token)
+
+
+def set_rendered_path(path: str | None) -> Token:
+    """Record where the deck this run has rendered actually is."""
+    return _rendered_path.set(path)
+
+
+def get_rendered_path() -> str | None:
+    """The rendered deck's path, or None before anything has been rendered."""
+    return _rendered_path.get()
+
+
+def reset_rendered_path(token: Token) -> None:
+    _rendered_path.reset(token)
 
 
 def set_slide_material(material: dict | None) -> Token:

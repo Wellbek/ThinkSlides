@@ -149,6 +149,22 @@ class SlotSpec(_Model):
     prominence: float = Field(default=0.5, ge=0.0, le=1.0)
     min_chars: Optional[int] = Field(default=None, ge=0)
     max_chars: Optional[int] = Field(default=None, ge=0)
+    # What this slot typically *carries*, as against what it could hold.
+    #
+    # For a measured pack the two are the same thing: `max_chars` comes from
+    # the page the archetype was read off, so it is already an observation.
+    # For an authored one it is not - the capacity there is derived from the
+    # rectangle, so it says how much text would fit, which is a ceiling and
+    # not a habit. Selecting on the ceiling penalised every generous slot for
+    # being generous: an archetype with a full-width prose column scored far
+    # worse than a cramped one for the same material, because the roomy one
+    # looked more underfilled. Left unset it falls back to `max_chars`, which
+    # is what every measured pack wants.
+    typical_chars: Optional[int] = Field(default=None, ge=0)
+
+    @property
+    def expected_chars(self) -> int:
+        return int(self.typical_chars or self.max_chars or 0)
     max_lines: Optional[int] = Field(default=None, ge=1)
     aspect_min: Optional[float] = Field(default=None, gt=0)
     aspect_max: Optional[float] = Field(default=None, gt=0)

@@ -298,15 +298,23 @@ def _exhibit_primitives(exhibit: Exhibit, rect: PositionConfig, pack: Pack,
     same contract is a second thing to keep in step.
     """
     if exhibit.exhibit_kind == "chart":
+        # The block, unwrapped. Every other exhibit kind is handed the whole
+        # block and reaches inside it - `_compile_diagram` reads
+        # `item["diagram"]` - but the chart renderer wants the spec itself,
+        # and handing it the wrapper meant `chartType` came back None on
+        # every chart this path composed. `render_chart_to_png` returns None
+        # rather than raising for an unrecognised chart, so the graph simply
+        # was not on the page and nothing said so.
+        spec = exhibit.payload.get("chart") or exhibit.payload
         return [
             Primitive(
                 id=ident,
                 kind="image",
                 box=rect,
-                image={"chart": exhibit.payload},
+                image={"chart": spec},
                 fit="fill",
                 region_id=frame.id,
-                alt_text=str(exhibit.payload.get("title") or "chart"),
+                alt_text=str(spec.get("title") or "chart"),
             )
         ]
     if block_compiler is None:

@@ -229,6 +229,59 @@ def specimen_slides(structure: str = "list",
     ]
 
 
+def language_specimen_slides(
+    content: Optional[SpecimenContent] = None,
+) -> list[dict]:
+    """
+    The same three specimens, in the shape a design language reads.
+
+    ``specimen_slides`` writes for the template renderer: ``placeholderIdx``
+    to say where a block goes, and a typed block per shape because the
+    direction's ``structure`` chose that shape up front. Neither applies here.
+    A pack decides the shape itself, from the material, so what it needs is
+    the material - a role, a heading, and the copy - and saying where anything
+    goes would be the model emitting geometry, which is precisely what this
+    path exists to stop.
+
+    So each point becomes plain copy and the evidence page keeps its chart.
+    Which archetype carries them, and whether the points land as bands, cards
+    or a column of prose, is the pack's answer and differs between the three
+    the user is choosing from. That difference is the preview's whole content.
+    """
+    content = content or default_content()
+    points = [f"{point.label} - {point.figure} {point.prose}"
+              for point in content.points]
+    return [
+        {
+            "slideIndex": 0,
+            "role": "cover",
+            "heading": content.title,
+            "contents": [
+                {"type": "text", "runs": [{"text": content.subtitle}]},
+            ],
+        },
+        {
+            "slideIndex": 1,
+            "role": "content",
+            "heading": content.headline,
+            "section": SECTION_LABEL,
+            "contents": [
+                {"type": "text", "runs": [{"text": line} for line in points]},
+            ],
+        },
+        {
+            "slideIndex": 2,
+            "role": "content",
+            "heading": content.evidence_headline,
+            "section": SECTION_LABEL,
+            "contents": [
+                _chart(content),
+                {"type": "text", "runs": [{"text": content.takeaway}]},
+            ],
+        },
+    ]
+
+
 # ── The three slides ──────────────────────────────────────────────────
 
 def _cover(content: SpecimenContent) -> dict:
@@ -390,13 +443,7 @@ def render_specimens(
     """
     from app.renderer.pptx_renderer import PPTXRenderer
 
-    generator = PreviewGenerator(output_dir)
-    target = _direction_dir(generator.output_dir, session_id, direction_id)
-    os.makedirs(target, exist_ok=True)
-
-    work_dir = tempfile.mkdtemp(prefix=f"ts_specimen_{direction_id}_")
-    try:
-        pptx_path = os.path.join(work_dir, "specimen.pptx")
+    def write(pptx_path: str) -> None:
         PPTXRenderer(
             template_path=None,
             color_theme=str((design_system or {}).get("colorTheme") or "") or None,
@@ -409,6 +456,66 @@ def render_specimens(
                                    or "Design direction")},
             output_path=pptx_path,
         )
+
+    return _preview(write, session_id, direction_id, output_dir)
+
+
+def render_language_specimens(
+    pack,
+    session_id: str,
+    direction_id: str,
+    output_dir: Optional[str] = None,
+    content: Optional[SpecimenContent] = None,
+    design_system: Optional[dict] = None,
+) -> list[str]:
+    """
+    The same three specimens, composed against a design language pack.
+
+    The one swap point between the two paths. Everything around it - the temp
+    dir, the single LibreOffice conversion, the rasterising, the
+    ``/previews/{session}/direction/{id}/{n}.png`` URL contract - is shared
+    with ``render_specimens`` through ``_preview``, because a preview the user
+    compares has to arrive by the same route whichever way it was drawn.
+
+    What differs is who decides the page. ``render_specimens`` hands slide
+    JSON to the template renderer and the design system's ``structure`` picks
+    the shape; here the pack's own archetypes do, from the material, which is
+    the whole reason an authored language is worth previewing: three languages
+    put the same three points on the page three genuinely different ways
+    rather than in three palettes.
+    """
+    from app.design import run as design_run
+    from app.renderer.designdoc_renderer import render_doc
+
+    composed = design_run.overlay(pack, design_system) if design_system else pack
+
+    def write(pptx_path: str) -> None:
+        doc = design_run.compose(
+            language_specimen_slides(content), composed,
+            title=str(getattr(pack, "name", "") or "Design direction"),
+        )
+        render_doc(doc, composed, pptx_path, design_system=design_system)
+
+    return _preview(write, session_id, direction_id, output_dir)
+
+
+def _preview(write, session_id: str, direction_id: str,
+             output_dir: Optional[str]) -> list[str]:
+    """Write a specimen deck, convert it once, and rasterise the pages.
+
+    One LibreOffice conversion for the whole three-slide deck rather than one
+    per slide: conversion is the slow step by an order of magnitude, and the
+    difference between three conversions and nine decides whether this fits
+    inside a chat pause.
+    """
+    generator = PreviewGenerator(output_dir)
+    target = _direction_dir(generator.output_dir, session_id, direction_id)
+    os.makedirs(target, exist_ok=True)
+
+    work_dir = tempfile.mkdtemp(prefix=f"ts_specimen_{direction_id}_")
+    try:
+        pptx_path = os.path.join(work_dir, "specimen.pptx")
+        write(pptx_path)
         pdf_path = generator.convert_to_pdf(pptx_path, work_dir)
         if not pdf_path:
             logger.error("specimen_conversion_failed", direction_id=direction_id)
@@ -447,10 +554,22 @@ async def render_directions(
     """
     async def one(direction: dict) -> tuple[str, list[str]]:
         direction_id = str(direction.get("id") or "")
-        urls = await asyncio.to_thread(
-            render_specimens, direction.get("designSystem") or {},
-            session_id, direction_id, output_dir, content,
-        )
+        system = direction.get("designSystem") or {}
+        # A direction carrying a design language previews through its pack:
+        # the whole point of an authored language is that it decides the page
+        # itself, and rendering it through the template path would show the
+        # user a preview of the design it replaced.
+        pack = _pack_for(direction)
+        if pack is not None:
+            urls = await asyncio.to_thread(
+                render_language_specimens, pack, session_id, direction_id,
+                output_dir, content, system,
+            )
+        else:
+            urls = await asyncio.to_thread(
+                render_specimens, system,
+                session_id, direction_id, output_dir, content,
+            )
         return direction_id, urls
 
     results = await asyncio.gather(
@@ -465,6 +584,30 @@ async def render_directions(
         direction_id, urls = result
         rendered[direction_id] = urls
     return rendered
+
+
+def _pack_for(direction: dict):
+    """The pack a direction composes against, or None for a template one.
+
+    Derived here rather than carried, because a `Pack` is not JSON and the
+    direction crosses a chat pause. What is carried is the language, which
+    is - and deriving a pack from a language is deterministic, so the pack
+    the preview was drawn with is the pack the deck is built with.
+    """
+    payload = direction.get("language")
+    if not isinstance(payload, dict) or not payload:
+        return None
+    try:
+        from app.design.authored import Language, to_pack
+        from app.design.schema import Canvas
+        from app.design.vocabulary import ensure
+
+        return ensure(to_pack(Language(**payload),
+                              Canvas(w_in=13.333, h_in=7.5)))
+    except Exception as exc:
+        logger.warning("authored_pack_unavailable",
+                       direction_id=direction.get("id"), error=str(exc))
+        return None
 
 
 def cleanup_directions(session_id: str, output_dir: Optional[str] = None,

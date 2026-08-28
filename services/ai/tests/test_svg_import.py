@@ -225,7 +225,7 @@ class TestAModelCanDrawItsOwnFigure:
     def test_a_figure_becomes_a_diagram_block(self):
         result = self._run(slide_index=2, svg=self.FIGURE)
         assert result.success
-        block = result.data["blocks"][0]
+        block = result.data["content"]
         assert block["type"] == "diagram"
         assert block["diagram"]["format"] == "svg"
 
