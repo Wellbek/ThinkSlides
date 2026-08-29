@@ -318,6 +318,15 @@ class Frame(_Model):
     pad: Optional[int] = Field(default=None, ge=0)
     ground: Optional[str] = None
     scrim: Optional[Scrim] = None
+    # A ruled outline around the frame, in a colour role. The reference
+    # publications set their pull-out statements in exactly this - a box in
+    # the accent colour with nothing inside it but the sentence - and a frame
+    # could previously only be filled, never outlined, so the one shape that
+    # says "this is the point of the page" had to be faked as a filled panel
+    # or left out. `Primitive` has carried `stroke`/`stroke_pt` all along;
+    # this is what lets a design ask for one.
+    border: Optional[str] = None
+    border_pt: float = Field(default=1.0, ge=0.0, le=12.0)
     clip: bool = False
     children: tuple["Frame", ...] = ()
     content: tuple[ContentItem, ...] = ()

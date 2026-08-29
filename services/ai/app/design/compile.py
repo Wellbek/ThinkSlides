@@ -190,6 +190,21 @@ def _ground_primitives(frame: ResolvedFrame, pack: Pack) -> list[Primitive]:
                 region_id=frame.id,
             )
         )
+    # Drawn after the ground and the scrim so the rule sits on top of both,
+    # and with no fill of its own - an outlined box that also filled itself
+    # would hide whatever it was drawn over, which on a bleeding panel is
+    # the photograph.
+    if frame.frame.border:
+        out.append(
+            Primitive(
+                id=f"{frame.id}-border",
+                kind="rect",
+                box=frame.rect,
+                stroke=_color(frame.frame.border, pack),
+                stroke_pt=frame.frame.border_pt,
+                region_id=frame.id,
+            )
+        )
     return out
 
 

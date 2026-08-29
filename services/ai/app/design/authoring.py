@@ -78,6 +78,7 @@ def prompt(brief: str, answers: str = "", wanted: int = WANTED,
                 "role": "cover|section|content|exhibit|closing",
                 "frequency": 0.4,
                 "slots": [
+                    {"kind": "figure", "span": 6, "behind": True},
                     {"kind": "heading", "span": 6, "required": True},
                     {"kind": "prose", "span": 3, "name": "left"},
                 ],
@@ -140,6 +141,19 @@ def prompt(brief: str, answers: str = "", wanted: int = WANTED,
         "charts, tables and diagrams go there and nowhere else, so a "
         "vocabulary without one cannot hold the deck's own evidence and is "
         "rejected.",
+        "- A slot may also set `behind: true` or `bleed: true`, and this is "
+        "what separates a designed page from a form with boxes on it. "
+        "`behind` puts the slot UNDER everything else on the page, filling "
+        "it edge to edge - a photograph with the heading, a quote and a "
+        "statistic set over it, the way a report opens a section. `bleed` "
+        "runs a slot off whichever edges its row puts it against, so a "
+        "figure reaches the paper's edge instead of sitting in a polite "
+        "margin. Text over a behind slot is reversed out automatically; you "
+        "do not set its colour.",
+        "- Give at least one page kind a `behind` figure with real material "
+        "over it. A vocabulary in which nothing ever overlaps anything is a "
+        "vocabulary of rectangles in rows, and it will read as a template "
+        "whatever its type and colour are.",
         "- `frequency` is roughly what share of the deck each kind is, and "
         "they should sum to about 1.",
         "",
@@ -174,6 +188,17 @@ def _slot(raw) -> Optional[Slot]:
         span=min(48, span),
         required=bool(raw.get("required")),
         name=str(raw.get("name") or "").strip()[:24],
+        # `Slot` has carried these since the packing work, and `to_pack`
+        # already derives real geometry for both - a behind slot becomes the
+        # whole content box at z=0, a bleeding one runs off the edges its row
+        # puts it against. Nothing ever set them: this parser dropped the
+        # keys and the prompt never asked for them, so no authored language
+        # could produce a page with an image behind its text. That is the
+        # single most recognisable move in the reference publications (a
+        # full-bleed photograph with the headline, a numeral and a quote set
+        # over it), and it was unreachable by construction.
+        bleed=bool(raw.get("bleed")),
+        behind=bool(raw.get("behind")),
     )
 
 

@@ -47,7 +47,8 @@ from app.design.pack import (
     SpacingScale,
     TypeRole,
 )
-from app.design.schema import Canvas, FracPlace, Frame, GridPlace, GridSpec, Insets
+from app.design.schema import (Canvas, FracPlace, Frame, GridPlace, GridSpec,
+                               Insets, Scrim)
 
 # What a page can carry. Open in combination and count - a page may hold any
 # number of these in any order - and closed in kind, because a slot's kind is
@@ -371,6 +372,27 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
             # than an ambiguity the gate refuses.
             z=0 if cell.behind else 1,
             bleed=cell.bleed,
+            # A photograph with type over it needs two things the geometry
+            # alone does not give it: something to darken the image so the
+            # type is legible whatever the picture happens to be, and a
+            # ground dark enough that everything above it reverses out to
+            # white. Without the scrim this is white text hoping for a dark
+            # sky; without the ground, `designdoc_renderer._ground_under`
+            # finds no colour under the type, falls back to the page's own
+            # white, and paints dark ink onto the photograph.
+            **({"scrim": Scrim(color_role="ink", opacity=0.55),
+                "ground": "ink"}
+               if cell.behind and slot.kind == "figure" else {}),
+            # A quote that is not sitting over a picture is the page's
+            # pull-out statement, and the reference publications rule a box
+            # round it in the accent colour. Only when it stands on the
+            # page's own ground: outlining one laid over a photograph draws
+            # a rectangle round part of the image, which is a different and
+            # much worse thing.
+            **({"border": "accent", "border_pt": 1.5}
+               if slot.kind == "quote"
+               and not _over_panel(cell, kind, grid.columns)
+               else {}),
         ))
         capacity = _capacity(role, cell.span, grid, canvas, cell.h, box.height)
         slots.append(SlotSpec(
@@ -447,6 +469,50 @@ def _natural(kind: PageKind, roles: dict[str, TypeRole],
     return out
 
 
+def _over_panel(cell: "_Cell", kind: PageKind, columns: int) -> bool:
+    """Whether this cell is laid over a behind slot rather than beside it.
+
+    A full-page behind slot puts everything over it; a side panel puts over
+    it only what starts inside the panel's own columns.
+    """
+    panel = _panel_span(kind, columns)
+    if any(slot.behind for slot in kind.slots) and not panel:
+        return True
+    return bool(panel) and cell.col < panel
+
+
+def _panel_span(kind: PageKind, columns: int) -> int:
+    """How many columns a side panel reserves, or 0 when there is none.
+
+    A behind slot is one of two things, and its own declared width is what
+    says which. Naming a width narrower than the grid asks for a panel down
+    one side - the reference publications' section opener, a full-height
+    photograph beside the reading matter. Naming none (the default span of
+    1) or the whole grid asks for a wash under the entire page, with the
+    type laid over it.
+
+    Only the first is honoured. Two panels would be two sides of a page with
+    nothing left between them, and a page whose whole width is spoken for
+    has nowhere to put what it is about.
+    """
+    for slot in kind.slots:
+        if not slot.behind:
+            continue
+        span = int(slot.span)
+        if 1 < span < columns:
+            # Never so wide that the remaining columns cannot hold a
+            # sentence: a panel of eleven columns in twelve leaves a
+            # one-column measure, which sets two words to a line.
+            return min(span, max(1, columns - MIN_READING_COLUMNS))
+        return 0
+    return 0
+
+
+# The narrowest measure worth setting body copy in, in columns of the page's
+# own grid. Below this a "column" is a stack of hyphenated fragments.
+MIN_READING_COLUMNS = 3
+
+
 def _stack(kind: PageKind, language: Language, roles: dict[str, TypeRole],
            box_height: float, scale: float, gap: float,
            columns: int) -> list[_Cell]:
@@ -461,7 +527,15 @@ def _stack(kind: PageKind, language: Language, roles: dict[str, TypeRole],
     reached through the side door.
     """
     natural = _natural(kind, roles, box_height, scale)
-    rows = _rows(kind, columns)
+    # A behind slot that names its own width is a *panel* down one side of the
+    # page rather than a wash under the whole of it - the shape the reference
+    # publications open a section with: a full-height photograph holding the
+    # left half, the reading matter set in the columns beside it. Reserving
+    # its columns here is what keeps the two from being laid out on top of
+    # each other; a behind slot that names no width (span 1, or the whole
+    # grid) still becomes the full page, with the type over it.
+    panel = _panel_span(kind, columns)
+    rows = _rows(kind, columns - panel)
 
     # A row is as tall as the tallest thing in it, and can grow if anything
     # in it flows.
@@ -475,10 +549,10 @@ def _stack(kind: PageKind, language: Language, roles: dict[str, TypeRole],
     cells: list[Optional[_Cell]] = [None] * len(kind.slots)
     y = 0.0
     for position, (row, height) in enumerate(zip(rows, row_height)):
-        col = 0
+        col = panel
         for index in row:
             slot = kind.slots[index]
-            span = max(1, min(columns, slot.span))
+            span = max(1, min(columns - panel, slot.span))
             # A fixed-height slot keeps its own height and sits at the top of
             # its row. Stretching a heading to match the figure beside it sets
             # one line of display type floating in the middle of a tall box.
@@ -494,7 +568,19 @@ def _stack(kind: PageKind, language: Language, roles: dict[str, TypeRole],
         y += height + gap
 
     for index, slot in enumerate(kind.slots):
-        if slot.behind:
+        if not slot.behind:
+            continue
+        if panel:
+            # The panel: its own columns, the full height of the page, and
+            # bleeding off every edge it actually touches. Not the right
+            # edge - that is where the reading matter begins, and a
+            # photograph running under the text would put white type on
+            # whatever the picture happened to be there.
+            cells[index] = _Cell(
+                col=0, span=panel, y=0.0, h=1.0,
+                bleed=("top", "bottom", "left"), behind=True,
+            )
+        else:
             cells[index] = _Cell(
                 col=0, span=columns, y=0.0, h=1.0,
                 bleed=("top", "right", "bottom", "left"), behind=True,
