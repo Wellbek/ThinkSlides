@@ -3185,9 +3185,83 @@ class AgentLoop:
             + " build_* tool its point needs (a chart, table or metric "
             "row for figures; a block for content with a shape), then "
             f"design_slide_content for slide_index={index}. This slide only."
+            + self._content_type_directive(planned)
+            + self._format_directive()
             + self._structure_directive()
             + self._arc_directive(index)
         )
+
+    def _content_type_directive(self, planned: dict) -> str:
+        """What the plan already decided this slide needs, restated as an
+        instruction rather than left as a field the drafting turn never reads.
+
+        plan_presentation_structure reasons about whether a slide's key
+        points are chart or table material, or whether a page needs several
+        exhibits, and records the answer as `contentType`/`exhibitPlan` on
+        the plan. Until this, that reasoning went nowhere: the turn that
+        actually drafts the slide was never told what the plan had already
+        worked out, and had to notice the same thing again from a bare title
+        and key points with only a generic "a chart, table or metric row for
+        figures" aside - which a run stating "12.1 billion hours of Netflix
+        viewing" as a bullet, never as a chart, shows it does not reliably do.
+        """
+        content_type = str(planned.get("contentType") or "").strip().lower()
+        if content_type == "chart":
+            return (
+                "\nThe plan calls for this to be a chart slide - its key "
+                "points are numbers that tell a story a reader would rather "
+                "see than read. Call build_chart for this slide before "
+                "design_slide_content; do not write the figures as bullets "
+                "instead of building it."
+            )
+        if content_type == "table":
+            return (
+                "\nThe plan calls for this to be a table slide - its key "
+                "points are structured rows and columns. Call build_table "
+                "for this slide before design_slide_content."
+            )
+        if content_type == "dashboard":
+            questions = [
+                str(q).strip() for q in (planned.get("exhibitPlan") or [])
+                if str(q or "").strip()
+            ]
+            listed = (
+                "\n".join(f"  {i}. {q}" for i, q in enumerate(questions, start=1))
+                if questions else "  (no exhibit plan was recorded - use your "
+                "judgment on what 2-4 exhibits this page needs)"
+            )
+            return (
+                "\nThe plan calls for this to be a dashboard page carrying "
+                "several exhibits, one answering each of these questions:\n"
+                f"{listed}\nBuild one exhibit per question - build_chart, "
+                "build_table, build_key_metrics or build_stat_callouts, "
+                "whichever fits that question - before design_slide_content. "
+                "A dashboard page with only prose or only one exhibit has not "
+                "done what the plan asked."
+            )
+        if content_type == "image":
+            return (
+                "\nThe plan calls for this to be an image slide - call "
+                "select_source_image (or generate_image, if available) for "
+                "this slide before design_slide_content."
+            )
+        return ""
+
+    def _format_directive(self) -> str:
+        """A standing reminder of the deck's own register, restated on every
+        drafting turn rather than said once at planning and forgotten.
+
+        `deck_format`'s vocabulary is folded into the planning prompt, but
+        planning happens once and drafting happens once per slide, many
+        turns later - and a plain "content" slide (no chart, no table, no
+        exhibit plan attached to it) is exactly the case
+        `_content_type_directive` says nothing about, which is most of a
+        deck. Without this, a slide the plan did not single out for a
+        specific content type had nothing at draft time distinguishing a
+        boardroom page from an academic one.
+        """
+        fmt = deck_format.by_id(self.working_state.deck_format)
+        return f"\nThis deck's pages read as: {fmt.vocabulary}."
 
     def _arc_directive(self, index: int) -> str:
         """What the arc check found wrong with *this* page, if anything.
