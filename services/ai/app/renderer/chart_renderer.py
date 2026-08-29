@@ -2179,3 +2179,116 @@ def _draw_data_labels(
     else:
         bottom, top = ax.get_ylim()
         ax.set_ylim(bottom, top + (top - bottom) * 0.12)
+
+
+def render_table_to_png(
+    table_data: dict,
+    design_system: dict | None,
+    width_in: float,
+    height_in: float,
+    dpi: int = 200,
+) -> bytes | None:
+    """
+    Render a table block to a transparent-background PNG.
+
+    A table is drawn as an image for the same reason a chart is: the
+    primitive layer is a closed union of five kinds - text, rect, line,
+    ellipse, image - and "there is no sixth" is load-bearing (see
+    ``primitives.PRIMITIVE_KINDS``). A native PowerPoint table would be a
+    sixth, so this reuses the escape hatch that already exists rather than
+    widening the union.
+
+    Column widths, row heights, numeric alignment and type size come from
+    ``table_layout.plan_table`` - the same geometry the template-path
+    renderer's native table uses, so a table looks the same shape whichever
+    path drew it, and colours from ``table_style.resolve_table_style``, so an
+    authored language's own palette (``system_for`` already populates
+    ``dataViz``) reaches its tables the same way it reaches its charts.
+
+    Deliberately narrower than the native-table renderer it sits beside:
+    the hairline row-rule treatment and apparatus (footnote-marker)
+    superscripts inside cells are not ported. Neither exists elsewhere on
+    this rendering path yet either - no text primitive here resolves an
+    apparatus marker - so a table not having them is consistent with
+    everything around it rather than a gap unique to tables.
+    """
+    from app import colors as colors_module
+    from app.renderer import table_layout, table_style as table_style_module
+
+    if width_in <= 0 or height_in <= 0:
+        return None
+    raw_rows = table_data.get("rows") or []
+    if not raw_rows:
+        return None
+    rows = [[str(cell) for cell in row] for row in raw_rows]
+    n_cols = max((len(row) for row in rows), default=0)
+    if n_cols == 0:
+        return None
+    header_row = bool(table_data.get("headerRow"))
+
+    layout = table_layout.plan_table(rows, header_row, width_in, height_in)
+    if layout is None:
+        return None
+    style = table_style_module.resolve_table_style(design_system)
+
+    n_rows = len(rows)
+    fig_height = max(0.1, layout.height_in)
+    fig = plt.figure(figsize=(width_in, fig_height), dpi=dpi)
+    fig.patch.set_alpha(0.0)
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+
+    col_edges = [0.0]
+    for fraction in layout.col_fractions:
+        col_edges.append(col_edges[-1] + fraction)
+    row_h = 1.0 / n_rows
+    header_rgb = style.header_bg
+    header_fg = style.header_fg
+    band_rgb = style.band_bg
+    row_rgb = style.row_bg
+    body_fg = "#1A1A1A"
+    pad = 0.012
+
+    for r_idx, row in enumerate(rows):
+        is_header = header_row and r_idx == 0
+        is_total = r_idx == layout.total_row_index
+        top = 1.0 - r_idx * row_h
+        if is_header:
+            face = header_rgb
+        elif is_total:
+            face = colors_module.mix(band_rgb, header_rgb, 0.22)
+        elif r_idx % 2 == 1:
+            face = band_rgb
+        else:
+            face = row_rgb
+        ax.add_patch(plt.Rectangle(
+            (0.0, top - row_h), 1.0, row_h, transform=ax.transAxes,
+            facecolor=face, edgecolor="none", zorder=0,
+        ))
+        size_pt = layout.header_pt if is_header else layout.body_pt
+        fg = header_fg if is_header else body_fg
+        for c_idx in range(n_cols):
+            cell = row[c_idx] if c_idx < len(row) else ""
+            if not cell:
+                continue
+            right_align = c_idx in layout.numeric_columns
+            left, right = col_edges[c_idx], col_edges[c_idx + 1]
+            x = right - pad if right_align else left + pad
+            ax.text(
+                x, top - row_h / 2, cell, transform=ax.transAxes,
+                ha="right" if right_align else "left", va="center",
+                fontsize=size_pt, fontname=style.font_name, color=fg,
+                fontweight="bold" if (is_header or is_total) else "normal",
+                clip_on=True,
+            )
+
+    buffer = io.BytesIO()
+    try:
+        fig.savefig(buffer, format="png", transparent=True, dpi=dpi)
+    except Exception:  # pragma: no cover - a bad font falls back, never raises
+        plt.close(fig)
+        return None
+    plt.close(fig)
+    return buffer.getvalue()

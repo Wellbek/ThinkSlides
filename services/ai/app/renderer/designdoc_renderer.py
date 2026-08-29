@@ -50,29 +50,72 @@ def _type_scale(pack: Pack) -> TypeScale:
     )
 
 
+def _block_compiler(pack: Pack, design_system: dict, ground: str):
+    """A ``BlockCompiler`` for this page's ground.
+
+    Every exhibit kind that is not a chart or a table (a metrics row, a
+    diagram, a typed block) is drawn through the same ``BlockCompiler`` the
+    template-path renderer uses - but nothing on this path ever built one, so
+    ``compile_page``'s ``block_compiler`` parameter was always ``None`` and
+    ``_exhibit_primitives`` returned nothing for every one of them the moment
+    it saw that. See issue #286.
+
+    Built once per page rather than per mark: the block compiler's `fit`
+    already scales a whole block together, and the page's own ground -
+    exactly what ``_materialise_charts`` already uses for a chart's ground -
+    is the same simplification, not a new one.
+    """
+    from app import colors as colors_module
+    from app.renderer.blocks import BlockCompiler
+    from app.renderer.deck_theme import SlideStyle
+
+    on_dark = colors_module.is_dark(ground)
+    ink = pack.colors.ink_reversed if on_dark else pack.colors.ink
+    style = SlideStyle(
+        role="content",
+        background=ground,
+        title_color=ink,
+        body_color=ink,
+        bullet_color=pack.colors.accent,
+        accent_color=pack.colors.accent,
+        footer_color=pack.colors.ink_muted,
+    )
+    return BlockCompiler(style=style, type_scale=_type_scale(pack),
+                         design_system=design_system)
+
+
 def _materialise_charts(marks: list[Primitive], pack: Pack,
                         design_system: dict) -> list[Primitive]:
-    """Turn chart payloads into image bytes before anything tries to paint them.
+    """Turn chart and table payloads into image bytes before anything tries
+    to paint them.
 
-    Charts are rasterised because a chart is a drawing, not a text box, and
-    the existing renderer already produces publication-grade ones. Doing it
-    here rather than inside the painter keeps ``_resolve_image_bytes``
-    ignorant of charts, which is the only reason it stayed simple.
+    Rasterised because neither is a text box, and the existing renderer
+    already produces publication-grade output for both. Doing it here rather
+    than inside the painter keeps ``_resolve_image_bytes`` ignorant of either,
+    which is the only reason it stayed simple.
     """
     from dataclasses import replace
 
-    from app.renderer.chart_renderer import render_chart_to_png
+    from app.renderer.chart_renderer import render_chart_to_png, render_table_to_png
 
     out: list[Primitive] = []
     for mark in marks:
-        payload = (mark.image or {}).get("chart") if mark.kind == "image" else None
-        if not payload:
+        image = mark.image or {}
+        chart_payload = image.get("chart") if mark.kind == "image" else None
+        table_payload = image.get("table") if mark.kind == "image" else None
+        if chart_payload:
+            png = render_chart_to_png(
+                chart_payload, design_system, mark.box.width, mark.box.height,
+                dpi=200, ground=pack.colors.ground,
+            )
+        elif table_payload:
+            png = render_table_to_png(
+                table_payload, design_system, mark.box.width, mark.box.height,
+                dpi=200,
+            )
+        else:
             out.append(mark)
             continue
-        png = render_chart_to_png(
-            payload, design_system, mark.box.width, mark.box.height, dpi=200,
-            ground=pack.colors.ground,
-        )
         if not png:
             continue
         out.append(
@@ -128,7 +171,10 @@ def render_doc(doc: DesignDoc, pack: Pack, output_path: str, *,
         )
         _paint_page_ground(slide, doc, ground)
 
-        marks = compile_page(doc, page, pack, block_compiler=block_compiler)
+        marks = compile_page(
+            doc, page, pack,
+            block_compiler=block_compiler or _block_compiler(pack, system, ground),
+        )
         marks = _materialise_charts(marks, pack, system)
 
         context = PaintContext(

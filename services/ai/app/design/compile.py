@@ -317,11 +317,44 @@ def _exhibit_primitives(exhibit: Exhibit, rect: PositionConfig, pack: Pack,
                 alt_text=str(spec.get("title") or "chart"),
             )
         ]
+    if exhibit.exhibit_kind == "table":
+        # Drawn as an image for the same reason a chart is - see
+        # `chart_renderer.render_table_to_png`. A native PowerPoint table
+        # would be a sixth primitive kind, and the primitive layer's whole
+        # guarantee is that there is no sixth.
+        table = exhibit.payload.get("table") or exhibit.payload
+        return [
+            Primitive(
+                id=ident,
+                kind="image",
+                box=rect,
+                image={"table": table},
+                fit="fill",
+                region_id=frame.id,
+                alt_text="table",
+            )
+        ]
     if block_compiler is None:
         return []
     kind = (
         exhibit.payload.get("kind")
         if exhibit.exhibit_kind == "block" else exhibit.exhibit_kind
     )
-    compiled = block_compiler.fit(str(kind), exhibit.payload, rect, ident)
+    # A "metrics" exhibit and the compiler's own "statCallout" block are the
+    # same shape on the page - a row of headline figures - authored under two
+    # different names by two different callers (`build_key_metrics` writes
+    # "metrics"; a hand-built block writes "statCallout"). The compiler is
+    # registered under neither name as such - see `BlockCompiler._compile_stat_callout`
+    # - so this is the one place that reconciles them, rather than asking two
+    # callers to agree on a name neither owns.
+    kind = _EXHIBIT_TO_BLOCK_KIND.get(str(kind), str(kind))
+    compiled = block_compiler.fit(kind, exhibit.payload, rect, ident)
     return [replace(p, region_id=frame.id) for p in compiled]
+
+
+# Where an exhibit's own kind name and the block compiler's method name
+# genuinely differ. Anything not listed here is passed through unchanged -
+# "diagram" reaches `_compile_diagram` by already matching, and that is
+# coincidence worth keeping working rather than a rule to lean on for the
+# next kind that does not.
+_EXHIBIT_TO_BLOCK_KIND = {"metrics": "statCallout"}

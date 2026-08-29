@@ -231,7 +231,12 @@ class BlockCompiler:
 
     def _compile_stat_callout(self, item: dict, rect: PositionConfig,
                               prefix: str) -> list[Primitive]:
-        entries = _items(item, "statCallouts", "statCallout")
+        # "metrics" reaches here too - `compile._EXHIBIT_TO_BLOCK_KIND` sends
+        # it to this method, because a metrics exhibit and a stat callout
+        # are the same shape on the page. `build_key_metrics` writes its
+        # items under the "metrics" key with a "label" field rather than
+        # this block's own "statCallout"/"caption", so both are read.
+        entries = _items(item, "statCallouts", "statCallout", "metrics")
         entries = [e for e in entries if str(e.get("value", "")).strip()]
         if not entries:
             return []
@@ -254,7 +259,7 @@ class BlockCompiler:
                 value, value_pt, value_color, bold=True,
                 font=self.type_scale.title_font,
             ))
-            caption = str(entry.get("caption") or "").strip()
+            caption = str(entry.get("caption") or entry.get("label") or "").strip()
             if caption:
                 caption_height = self._measure(caption, caption_pt, column)
                 out.append(self._text(
