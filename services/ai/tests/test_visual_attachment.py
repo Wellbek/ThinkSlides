@@ -97,6 +97,13 @@ CALLS: dict[str, dict] = {
         "cards": [{"imageUrl": "https://example.invalid/a.png", "title": "North"},
                   {"imageUrl": "https://example.invalid/b.png", "title": "South"}],
     },
+    "compute_visual_with_code": {
+        "slide_index": 0,
+        "code": ("from PIL import Image\n"
+                 "Image.new('RGB', (10, 10), (200, 0, 0)).save('figure.png')\n"),
+        "intent": "a solid red square",
+        "inputs": "none",
+    },
     # The one exception, and it is a real one: primitives are marks rather
     # than a content block, and they attach to `prepared_primitives` through
     # their own branch. Listed here so the coverage check below still sees it.

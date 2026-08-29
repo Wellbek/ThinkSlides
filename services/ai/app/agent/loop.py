@@ -3063,13 +3063,20 @@ class AgentLoop:
         is the prompt and the loop disagreeing, which the model resolves by
         trying it anyway" - and this makes it one rule instead of three.
         """
+        withheld = set()
         if self.working_state.pack_id:
             # On a design language the page is composed in code, after the
             # material exists. There is no layout to select and no region to
             # compose, so offering either would put two systems in charge of
             # the same decision.
-            return pipeline.TEMPLATE_GEOMETRY_TOOLS
-        return frozenset()
+            withheld |= pipeline.TEMPLATE_GEOMETRY_TOOLS
+        if not self.code_amendment_enabled:
+            # The container hardening this depends on is an operator's
+            # decision, not a default - see edit_deck_with_code's own
+            # docstring. `compute_visual_with_code` is its draft-time half
+            # (#283) and sits behind the same flag.
+            withheld.add("compute_visual_with_code")
+        return frozenset(withheld)
 
     def slide_directive(self) -> str:
         """What to do with the one slide the drafting phase is currently on."""
@@ -4753,6 +4760,7 @@ class AgentLoop:
             "much, a diagram shows how it fits together",
             "build_table — Build a validated table for a slide from typed columns and rows",
             "build_key_metrics — Build a row of 2-4 headline figures for a slide",
+            "compute_visual_with_code — Write a short script to compute and draw one figure none of the build_* tools can express. Checked before it runs and before its output is attached; use a build_* tool instead whenever one has the shape",
             "design_slide_content — Generate a slide's title and copy (visuals come from the build_* tools)",
             "validate_slide_json — Validate slide JSON against the schema before rendering",
             "select_source_image — Reuse a confidently-matching image already extracted from the user's own source material (never generates new images)",

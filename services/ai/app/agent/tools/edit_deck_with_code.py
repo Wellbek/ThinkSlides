@@ -47,7 +47,7 @@ import time
 from typing import Optional
 
 from app.agent.registry import ToolParameter, ToolRegistry, ToolResult
-from app.agent.sandbox import adopt, gate, runner
+from app.agent.sandbox import adopt, gate, grounding, runner
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -157,13 +157,13 @@ class EditDeckWithCodeTool:
                 duration_ms=int((time.time() - start) * 1000),
             )
 
-        grounding = _grounding_problem(source, inputs)
-        if grounding:
+        ungrounded = grounding.problem(source, inputs)
+        if ungrounded:
             logger.info("sandbox_code_ungrounded")
             return ToolResult(
-                success=False, error=grounding,
+                success=False, error=ungrounded,
                 data={"outcome": "refused", "source": source,
-                      "reason": grounding},
+                      "reason": ungrounded},
                 duration_ms=int((time.time() - start) * 1000),
             )
 
@@ -235,43 +235,6 @@ class EditDeckWithCodeTool:
             },
             duration_ms=int((time.time() - start) * 1000),
         )
-
-
-# What a script has to have declared an input for. Deliberately the *marks a
-# number leaves*, not the word "chart": a script that writes text frames full
-# of percentages is asserting figures as much as one that calls add_chart.
-_FIGURE_MARKERS = (
-    "add_chart", "chart_data", "CategoryChartData", "XyChartData",
-    "add_table", "plot(", "bar(", "barh(", "pie(", "scatter(", "hist(",
-)
-
-
-def _grounding_problem(source: str, inputs: str) -> Optional[str]:
-    """Whether this script asserts figures with nothing behind them.
-
-    The mitigation for the risk this tool's docstring names. A vision model
-    grading a rendered page cannot tell a real figure from a plausible one,
-    so the check is at the boundary and it is mechanical: a script that draws
-    a figure declares where the numbers came from, or it does not run.
-
-    Deliberately not a judgement about whether the declaration is *true* -
-    nothing here can know that. It is the same rule `#267` already applies to
-    every other figure: an unsupported one is a reported gap rather than a
-    silent claim.
-    """
-    declared = str(inputs or "").strip()
-    if declared and declared.lower() not in ("none", "n/a", "-", "na"):
-        return None
-    if not any(marker in source for marker in _FIGURE_MARKERS):
-        return None
-    return (
-        "This script draws a figure and `inputs` does not say where its "
-        "numbers came from. A chart drawn by code tells the reader the "
-        "numbers were measured, not typed, and nothing downstream can tell "
-        "a real figure from a plausible one. Name the document, the search "
-        "result or the part of the conversation each number came from - or, "
-        "if you do not have them, do not draw the figure."
-    )
 
 
 def _deck_path() -> Optional[str]:

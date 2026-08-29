@@ -196,6 +196,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     from app.agent.tools.build_mermaid import BuildMermaidTool
     from app.agent.tools.draw_svg import DrawSvgTool
     from app.agent.tools.edit_deck_with_code import EditDeckWithCodeTool
+    from app.agent.tools.compute_visual_with_code import ComputeVisualWithCodeTool
     from app.agent.tools.compose_regions import ComposeSlideRegionsTool
     from app.agent.tools.select_source_image import SelectSourceImageTool
     from app.agent.tools.finalize_and_render_pptx import FinalizeAndRenderPptxTool
@@ -218,6 +219,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     BuildMermaidTool.register(registry)
     DrawSvgTool.register(registry)
     EditDeckWithCodeTool.register(registry)
+    ComputeVisualWithCodeTool.register(registry)
     BuildTableTool.register(registry)
     BuildKeyMetricsTool.register(registry)
     BuildStatCalloutsTool.register(registry)

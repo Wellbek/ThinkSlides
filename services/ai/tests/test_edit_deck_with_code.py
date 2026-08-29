@@ -203,7 +203,7 @@ class TestAFigureDeclaresWhereItsNumbersCameFrom:
         "chart_data", "add_chart", "add_table", "axes.bar(", "pyplot.pie(",
     ])
     def test_every_way_of_drawing_one_is_covered(self, marker):
-        from app.agent.tools.edit_deck_with_code import _grounding_problem
+        from app.agent.sandbox import grounding
 
-        assert _grounding_problem(f"x = 1\n{marker}\n", "") is not None
-        assert _grounding_problem(f"x = 1\n{marker}\n", "the 10-K") is None
+        assert grounding.problem(f"x = 1\n{marker}\n", "") is not None
+        assert grounding.problem(f"x = 1\n{marker}\n", "the 10-K") is None
