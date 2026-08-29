@@ -587,10 +587,18 @@ class WorkingState:
         # gate requires this (or the retry cap), so a deck with a known
         # rendering defect can't be announced as finished.
         self.validation_clean: bool = False
-        # Whether the amend phase has had its turn. One pass, not a loop: a
-        # script that did not fix the deck is unlikely to be fixed by another
-        # script, and the run has to end.
+        # Whether the amend phase specifically has had its turn. One pass,
+        # not a loop, for that phase alone: a script that did not fix the
+        # deck there is unlikely to be fixed by another script, and the run
+        # has to end. `edit_deck_with_code` calls made earlier, during
+        # drafting, do not set this - see `code_edits_applied` for those.
         self.code_amendment_done: bool = False
+        # How many times a script has been written and kept this run, in
+        # any phase. `code_amendment_done` only tracks the backstop phase, so
+        # a fix applied mid-draft needs its own counter - otherwise the stall
+        # detector in `_progress_marker` cannot tell a successful edit apart
+        # from a turn that changed nothing.
+        self.code_edits_applied: int = 0
         # The last script that failed, and why, so the next attempt renders as
         # a diff against it rather than as a second wall of code.
         self.last_code_attempt: dict | None = None
@@ -1499,6 +1507,7 @@ class AgentLoop:
             "validation_failures": self.working_state.validation_failures,
             "validation_clean": self.working_state.validation_clean,
             "code_amendment_done": self.working_state.code_amendment_done,
+            "code_edits_applied": self.working_state.code_edits_applied,
             "validation_issues": self.working_state.validation_issues,
             "slides_needing_revision": self.working_state.slides_needing_revision,
             # Without these a resumed run forgets what it has already tried
@@ -1590,6 +1599,8 @@ class AgentLoop:
             self.working_state.validation_clean = state_dict.get("validation_clean", False)
             self.working_state.code_amendment_done = state_dict.get(
                 "code_amendment_done", False)
+            self.working_state.code_edits_applied = state_dict.get(
+                "code_edits_applied", 0)
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
             self.working_state.layout_revisions = {
@@ -2949,6 +2960,7 @@ class AgentLoop:
             ws.rendered_serial,
             ws.validation_attempts,
             ws.validation_failures,
+            ws.code_edits_applied,
         )
 
     async def _run_phase(
@@ -3105,8 +3117,20 @@ class AgentLoop:
             # The container hardening this depends on is an operator's
             # decision, not a default - see edit_deck_with_code's own
             # docstring. `compute_visual_with_code` is its draft-time half
-            # (#283) and sits behind the same flag.
+            # (#283) and sits behind the same flag; `edit_deck_with_code`
+            # itself now rides in `SLIDE_TOOLS` too (issue #283 follow-up:
+            # "use it whenever it seems reasonable", not only as the
+            # `amend` phase's last resort), so it needs the same guard here
+            # that it always needed there.
             withheld.add("compute_visual_with_code")
+            withheld.add("edit_deck_with_code")
+        elif not self.working_state.has_called_finalize:
+            # It edits a rendered file. Offering it before one exists is
+            # offering a tool that can only ever answer "there is no deck
+            # yet" - which costs a turn for nothing and is exactly the kind
+            # of dead call `_withheld_tools` exists to prevent, the same
+            # reasoning `TEMPLATE_GEOMETRY_TOOLS` already gets above.
+            withheld.add("edit_deck_with_code")
         return frozenset(withheld)
 
     def slide_directive(self) -> str:
@@ -3123,6 +3147,17 @@ class AgentLoop:
         revising = index in self.working_state.slides_needing_revision
 
         if revising:
+            # Named only when it is actually offered - see the same rule
+            # below for select_layout. A positioning complaint (an overlap,
+            # something that needs to move rather than be reworded) is
+            # exactly what edit_deck_with_code exists for; naming it only
+            # when the tool is reachable keeps this instruction honest.
+            code_option = (
+                " If what is wrong is where something sits rather than what "
+                "it says, edit_deck_with_code can fix that directly on the "
+                "rendered slide instead of a full redraft."
+                if "edit_deck_with_code" not in self._withheld_tools() else ""
+            )
             return (
                 f"Revise slide {index + 1}"
                 + (f' ("{title}")' if title else "")
@@ -3131,6 +3166,7 @@ class AgentLoop:
                 + self._describe_validation_issues()
                 + "\nShorten the copy, give an oversized visual a smaller region, or move "
                 "it onto its own slide, then call design_slide_content for this slide."
+                + code_option
             )
         # Named only when it is actually offered. This instruction reaches the
         # model twice a turn - as the `## Next Step` block, and again as the
@@ -4104,11 +4140,61 @@ class AgentLoop:
             if fn_name == "edit_deck_with_code":
                 self._remember_code_attempt(fn_args, tool_result)
                 if tool_result.success:
-                    # One pass. A script that did not fix the deck is
-                    # unlikely to be fixed by another script, and the run has
-                    # to end - so a success closes the phase and a failure
-                    # spends one of its four turns.
-                    self.working_state.code_amendment_done = True
+                    # Counted in every phase, so a mid-draft fix registers as
+                    # progress even though it moves none of the other fields
+                    # `_progress_marker` watches.
+                    self.working_state.code_edits_applied += 1
+                    # `code_amendment_done` closes the `amend` phase
+                    # specifically - scoped to it, or a fix applied earlier
+                    # while drafting would mark that later, unrelated
+                    # backstop phase as already finished before it ever ran.
+                    # `step` carries the pipeline phase's own name ("draft",
+                    # "amend"); `current_phase` here is that phase's SSE
+                    # label ("content_generation", "validation"), which
+                    # `validate` and `amend` share - not unique enough to
+                    # tell them apart.
+                    if step == "amend":
+                        # One pass. A script that did not fix the deck is
+                        # unlikely to be fixed by another script, and the run
+                        # has to end - so a success closes the phase and a
+                        # failure spends one of its four turns.
+                        self.working_state.code_amendment_done = True
+                    elif step == "draft":
+                        # Editing the rendered file directly does not touch
+                        # `design_serial`, so unlike a redraft it cannot rely
+                        # on `render`/`validate` being walked back into to
+                        # confirm it. Nothing else will ever drop this slide
+                        # from `slides_needing_revision` - only a fresh
+                        # `validate_rendered_output` call recomputes that
+                        # list, and that call is only reachable once `draft`
+                        # reports itself done. So a fix aimed at the slide
+                        # actually flagged clears the flag itself, which lets
+                        # the walker move on to `validate` and check the
+                        # edited file for real; a script that missed and gets
+                        # flagged again there costs one revision pass, not an
+                        # unresolvable one.
+                        #
+                        # Both lists, not just the first: `_slides_outstanding`
+                        # reads an *empty* `slides_needing_revision` as "no
+                        # restriction - revise the whole deck" (the
+                        # FULL_REWRITE_ISSUE_RATIO case), which is exactly
+                        # backwards for "the one flagged slide is resolved".
+                        # `validation_issues` has to drop to empty alongside it
+                        # so that reading is never reached, and so
+                        # `_validation_settled` still calls the deck unsettled
+                        # - not clean - which is what sends the walker back
+                        # into `validate` to actually check the edited file
+                        # rather than taking the fix on faith.
+                        target = fn_args.get("slide_index")
+                        if target in self.working_state.slides_needing_revision:
+                            self.working_state.slides_needing_revision = [
+                                i for i in self.working_state.slides_needing_revision
+                                if i != target
+                            ]
+                            self.working_state.validation_issues = [
+                                issue for issue in self.working_state.validation_issues
+                                if issue.get("slideIndex") != target
+                            ]
 
             # compose_slide_regions resolves geometry rather than content,
             # so it attaches to the slide's own regions list. Recomposing
@@ -4799,6 +4885,7 @@ class AgentLoop:
             "suggested answers (pauses the workflow until they reply)",
             "finalize_and_render_pptx — Render the final PPTX file",
             "validate_rendered_output — Check the ACTUAL rendered output: overflow/overlap in the real geometry, plus placeholder copy, repeated points, bullets restating a chart, and package integrity (MUST be called after finalize_and_render_pptx, and is the true last step)",
+            "edit_deck_with_code — Write a short script that opens the already-rendered deck with python-pptx and fixes one precise thing (an overlap, a shape's position, a slide that needs moving) - only once finalize_and_render_pptx has produced a file to edit. Checked before it runs and before its edit is kept. Prefer design_slide_content for an ordinary content fix; reach for this when the fix is about WHERE something sits rather than what it says",
         ]
         # Same rule as document_tools and image_tools above, applied to the
         # whole list rather than to the two entries that happened to need it.

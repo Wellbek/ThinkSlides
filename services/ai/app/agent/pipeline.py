@@ -53,6 +53,14 @@ SLIDE_TOOLS = frozenset({
     "select_source_image",
     "design_slide_content",
     "validate_slide_json",
+    # Available whenever it seems reasonable, not only as the last-resort
+    # `amend` phase below - a script that opens the deck and fixes one
+    # precise thing (an overlap, a region that needs to move) can be a
+    # smaller, faster move than a full redraft of the slide's content, and
+    # the model is left to judge which one a given revision actually needs.
+    # `AgentLoop._withheld_tools` keeps this out of the offer until a deck
+    # exists to edit and the operator has turned the capability on.
+    "edit_deck_with_code",
     *BUILD_VISUAL_TOOLS,
     *BLOCK_BUILDER_TOOLS,
 })
@@ -141,14 +149,17 @@ def _slides_outstanding(loop: "AgentLoop") -> list[int]:
 
 
 def _wants_code_amendment(loop: "AgentLoop") -> bool:
-    """Whether this run has a defect only a script could fix.
+    """Whether this run has a defect only a script could fix, with no slide
+    left in `slides_needing_revision` for it to attach to.
 
-    Deliberately narrow. `edit_deck_with_code` is the most powerful tool in
-    the set, and offering it wherever a slide could be improved would make it
-    the first thing reached for rather than the last: every other builder is
-    on-brand by construction and this one is not. So it is offered only after
-    validation has run, only when validation is *unhappy*, and only when the
-    run has a rendered deck to edit.
+    `edit_deck_with_code` itself is offered throughout drafting once a deck
+    exists (see `SLIDE_TOOLS` and `AgentLoop._withheld_tools`) - it is
+    reachable whenever it seems reasonable, not held back for this phase
+    alone. What this phase catches is the case that leaves behind: a deck
+    validation still calls unhappy after its revision budget, with nothing
+    specific flagged for the draft phase to walk back to and offer the tool
+    on. Without this backstop that state has no phase that applies to it at
+    all, and the run would finish silently unclean.
     """
     ws = loop.working_state
     return bool(
@@ -282,9 +293,9 @@ PIPELINE: tuple[Phase, ...] = (
         label="validation",
         driver=MODEL_DRIVEN,
         tools=frozenset({"edit_deck_with_code"}),
-        # Only when validation has settled *and* left something the typed
-        # tools could not fix. A script is the last resort, not the first
-        # one, so this phase applies to almost no run - which is the point.
+        # The backstop, not the primary path - see `_wants_code_amendment`.
+        # `edit_deck_with_code` is offered throughout drafting already; this
+        # only fires for the state that leaves nothing else to apply to.
         applies=_wants_code_amendment,
         done=lambda loop: loop.working_state.code_amendment_done,
         directive=lambda loop: (

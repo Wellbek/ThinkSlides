@@ -66,11 +66,13 @@ WHEN_NOT_TO = (
     "is the answer to a quantity, build_diagram to a structure, build_table "
     "to a grid and draw_svg to a bespoke figure - all four are on-brand by "
     "construction, validated against the deck's own design, and none of them "
-    "can go wrong the way a script can. Reach for this only when the slide "
-    "needs something none of them can express: a computation over the "
-    "material, a layout no archetype has, a figure whose geometry follows "
-    "from the data. Writing a chart by hand here, when build_chart would "
-    "have drawn it, is strictly worse in every respect."
+    "can go wrong the way a script can. Reach for this only when the fix is "
+    "not a matter of what is on the page but where it sits: two shapes "
+    "overlap, a region needs to move, a slide validation flagged is easier "
+    "to repair in place than to redraft from scratch. None of the typed "
+    "builders can reposition something already on a slide - each of them "
+    "only adds. Writing a chart by hand here, when build_chart would have "
+    "drawn it, is strictly worse in every respect."
 )
 
 

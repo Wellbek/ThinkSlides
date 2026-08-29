@@ -275,9 +275,10 @@ def test_no_part_of_the_prompt_names_a_tool_the_run_withholds(pack_id):
     assert "Draft slide 1" in prompt
 
     withheld = loop._withheld_tools()
-    # compute_visual_with_code sits behind CODE_AMENDMENT_ENABLED regardless
-    # of pack_id - the same flag edit_deck_with_code already sits behind.
-    expected = {"compute_visual_with_code"}
+    # Both sit behind CODE_AMENDMENT_ENABLED, and a drafting loop with
+    # nothing rendered yet withholds edit_deck_with_code on that ground too
+    # - it edits a file that does not exist yet at this point in a run.
+    expected = {"compute_visual_with_code", "edit_deck_with_code"}
     if pack_id is not None:
         expected |= {"select_layout", "compose_slide_regions"}
     assert withheld == expected

@@ -227,10 +227,106 @@ class TestItIsRegisteredAndGatedTheSameWay:
         )
         assert "compute_visual_with_code" not in loop._withheld_tools()
 
-    def test_edit_deck_with_code_stays_the_last_resort_trigger(self):
-        """#283's decision widened when a script may run; it did not touch
-        when the finished-deck edit fires."""
+    def test_edit_deck_with_code_is_offered_throughout_drafting_now(self):
+        """The follow-up to #283: "they can use code whenever it seems
+        reasonable" - not only as the `amend` phase's last resort. It now
+        rides in `SLIDE_TOOLS` itself, gated the same way
+        `compute_visual_with_code` already was."""
+        from app.agent.pipeline import SLIDE_TOOLS
+
+        assert "edit_deck_with_code" in SLIDE_TOOLS
+
+    def test_it_is_withheld_before_any_deck_has_rendered(self, monkeypatch):
+        """It edits a rendered file - offering it before one exists would
+        offer a tool that can only ever say "there is no deck yet"."""
+        from app.agent.loop import AgentLoop
+        from tests.test_agent_loop_workflow import _loop
+
+        loop = _loop()
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled",
+            property(lambda self: True),
+        )
+        loop.working_state.has_called_finalize = False
+        assert "edit_deck_with_code" in loop._withheld_tools()
+
+    def test_it_is_offered_once_a_deck_has_rendered_and_the_flag_is_on(
+            self, monkeypatch):
+        from app.agent.loop import AgentLoop
+        from tests.test_agent_loop_workflow import _loop
+
+        loop = _loop()
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled",
+            property(lambda self: True),
+        )
+        loop.working_state.has_called_finalize = True
+        assert "edit_deck_with_code" not in loop._withheld_tools()
+
+    def test_it_is_withheld_regardless_of_render_state_when_disabled(self):
+        from tests.test_agent_loop_workflow import _loop
+
+        loop = _loop()
+        assert loop.code_amendment_enabled is False
+        loop.working_state.has_called_finalize = True
+        assert "edit_deck_with_code" in loop._withheld_tools()
+
+    def test_the_amend_phase_is_now_the_backstop_not_the_only_path(self):
+        """`_wants_code_amendment` used to be the sole gate on the tool ever
+        running at all. It is now specifically the fallback for a deck that
+        is still unclean with nothing left in `slides_needing_revision` to
+        offer the tool on - stated in its own docstring, not "last resort"
+        language that would contradict `SLIDE_TOOLS` carrying the tool
+        directly."""
         from app.agent import pipeline
 
         doc = pipeline._wants_code_amendment.__doc__ or ""
-        assert "rather than the last" in doc
+        assert "backstop" in doc
+        assert "offered throughout drafting" in doc
+        assert "whenever it seems reasonable" in doc
+
+
+class TestSlideDirectiveNamesTheOptionWhenItIsReachable:
+    """The instruction the model actually reads while revising a flagged
+    slide - see #288. Offering the tool is not the same as telling the model
+    it exists for this; `slide_directive` is where that has to be said."""
+
+    @staticmethod
+    def _mid_revision(monkeypatch, *, code_amendment_enabled: bool):
+        from app.agent.loop import AgentLoop
+        from tests.test_agent_loop_workflow import _loop
+
+        loop = _loop()
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled",
+            property(lambda self: code_amendment_enabled),
+        )
+        loop.working_state.has_called_finalize = code_amendment_enabled
+        loop.working_state.presentation_structure = {
+            "totalSlides": 2,
+            "slides": [{"title": "A"}, {"title": "B"}],
+        }
+        loop.working_state.accumulated_slides = [
+            {"slideIndex": 0}, {"slideIndex": 1},
+        ]
+        loop.working_state.slides_needing_revision = [1]
+        loop.working_state.validation_issues = [
+            {"slideIndex": 1, "type": "overflow", "detail": "runs off the slide"},
+        ]
+        loop.working_state.validated_serial = loop.working_state.design_serial
+        return loop
+
+    def test_it_is_named_when_the_tool_is_reachable(self, monkeypatch):
+        loop = self._mid_revision(monkeypatch, code_amendment_enabled=True)
+        assert "edit_deck_with_code" in loop.slide_directive()
+
+    def test_it_is_not_named_when_the_tool_is_withheld(self, monkeypatch):
+        loop = self._mid_revision(monkeypatch, code_amendment_enabled=False)
+        assert "edit_deck_with_code" not in loop.slide_directive()
+
+    def test_design_slide_content_is_still_named_either_way(self, monkeypatch):
+        """The code option is additional, not a replacement - an ordinary
+        content fix is still the default instruction."""
+        for enabled in (True, False):
+            loop = self._mid_revision(monkeypatch, code_amendment_enabled=enabled)
+            assert "design_slide_content" in loop.slide_directive()

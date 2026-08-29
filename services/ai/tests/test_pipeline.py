@@ -932,3 +932,182 @@ class TestAStalledRevisionHandsOverWhatItHas:
 
         errors = [e for e in events if e["type"] == "error"]
         assert errors and errors[0].get("code") == "phase_stalled"
+
+
+class TestEditDeckWithCodeDuringARevision:
+    """The follow-up to #283 ("they can use code whenever it seems
+    reasonable") only does something if a script's fix can actually resolve
+    a flagged slide - see #288. This drives a real revision pass, scripting
+    the model to reach for edit_deck_with_code instead of design_slide_content,
+    and checks the whole chain: the tool fires mid-draft, the flag it
+    resolves is cleared without a fresh render, the walker returns to
+    validate for a real check against the edited file, and the run finishes
+    clean rather than stalling or looping.
+    """
+
+    @staticmethod
+    def _flagged_slide_one(**overrides):
+        # `_stalled_after_one_render` does not set `offered_directions`, so
+        # without it the walker never reaches `draft` at all - it stalls
+        # back at `design` re-offering directions instead, which is a
+        # different phase entirely from the one this class is about. Nor
+        # does it satisfy `_research_is_thin`, which sits earlier still in
+        # the pipeline than `design` - a deck this far along (drafted,
+        # rendered, mid-revision) has obviously cleared research too.
+        overrides.setdefault("offered_directions", True)
+        overrides.setdefault("web_search_calls", 10)
+        overrides.setdefault(
+            "researched_urls",
+            [f"https://example.com/{i}" for i in range(6)],
+        )
+        # A redraft that falls out of the flagged-slide path re-renders, and
+        # finalize_and_render_pptx refuses without a look having been
+        # settled one of three ways - fine to have been decided any of
+        # those ways for what this class is testing.
+        overrides.setdefault("autonomy_confirmed", True)
+        return TestAStalledRevisionHandsOverWhatItHas._stalled_after_one_render(
+            **overrides
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_fix_clears_the_flag_and_the_deck_finishes_clean(
+            self, monkeypatch):
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 1,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the overflowing box up",
+            "inputs": "none",
+        }))]
+        loop, session_id, seen = _loop(
+            script, state=self._flagged_slide_one(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        assert "edit_deck_with_code" in seen, (
+            "the tool must actually be reachable and called mid-draft, not "
+            "just offered"
+        )
+        assert "finalize_and_render_pptx" not in seen, (
+            "a script edit does not bump design_serial, so render must be "
+            "skipped rather than overwriting the file the script just fixed"
+        )
+        assert "validate_rendered_output" in seen, (
+            "clearing the flag locally is not enough - the walker has to "
+            "come back through validate and check the edited file for real"
+        )
+        assert not [e for e in events if e["type"] == "error"]
+        finalized = [e for e in events if e["type"] == "deck_finalized"]
+        assert finalized and finalized[0]["validationClean"] is True
+
+    @pytest.mark.asyncio
+    async def test_it_does_not_close_the_unrelated_amend_phase(
+            self, monkeypatch):
+        """`code_amendment_done` gates a different phase entirely - a fix
+        applied while drafting must not mark that backstop as already spent
+        for a defect it never saw."""
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 1,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the overflowing box up",
+            "inputs": "none",
+        }))]
+        loop, session_id, _ = _loop(
+            script, state=self._flagged_slide_one(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        _ = [e async for e in loop.run(session_id)]
+
+        assert loop.working_state.code_amendment_done is False
+
+    @pytest.mark.asyncio
+    async def test_a_successful_edit_counts_as_progress(self, monkeypatch):
+        """The other half of #288: before this counter existed, a script fix
+        that changed nothing `_progress_marker` was watching looked
+        indistinguishable from a turn that did nothing at all."""
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 1,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the overflowing box up",
+            "inputs": "none",
+        }))]
+        loop, session_id, _ = _loop(
+            script, state=self._flagged_slide_one(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        _ = [e async for e in loop.run(session_id)]
+
+        assert loop.working_state.code_edits_applied == 1
+
+    @pytest.mark.asyncio
+    async def test_a_script_that_misses_gets_re_flagged_not_stuck(
+            self, monkeypatch):
+        """The edited file still fails validation - a real re-check, not a
+        rubber stamp, so the deck goes back through one more revision pass
+        rather than being declared clean on the strength of the script
+        alone."""
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 1,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the overflowing box up",
+            "inputs": "none",
+        }))] + [_calls(("select_layout", {"slide_index": 1}),
+                       ("design_slide_content", {"slide_index": 1}))
+                for _ in range(10)]
+        loop, session_id, seen = _loop(
+            script, state=self._flagged_slide_one(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        validate_calls = 0
+
+        async def _execute(name, args):
+            nonlocal validate_calls
+            seen.append(name)
+            if name == "validate_rendered_output":
+                validate_calls += 1
+                # Clean once the redraft has happened, still broken on the
+                # check the script's fix alone triggers - the fix genuinely
+                # did not work, so a redraft has to be what actually clears
+                # it.
+                issues = [] if validate_calls > 1 else [
+                    {"slideIndex": 1, "type": "overflow",
+                     "detail": "still runs off the slide"},
+                ]
+                return ToolResult(success=True, data={"issues": issues})
+            if name == "design_slide_content":
+                return ToolResult(success=True, data={
+                    "slideIndex": args.get("slide_index"), "title": "t",
+                    "contents": [],
+                })
+            return ToolResult(success=True, data=dict(TOOL_RESULTS.get(name) or {}))
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute)
+
+        events = [e async for e in loop.run(session_id)]
+
+        # It came back through validate a second time on the strength of the
+        # edit alone, found the same problem, and fell back to a redraft -
+        # not stuck re-running the same script forever.
+        assert seen.count("validate_rendered_output") >= 2
+        assert "design_slide_content" in seen
+        assert not [e for e in events if e["type"] == "error"]
