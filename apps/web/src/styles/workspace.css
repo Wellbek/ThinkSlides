@@ -1081,10 +1081,15 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
    that item, so consecutive segments always meet however tall the content
    turns out to be - no coordinate anywhere is guessed, and nothing has to
    track where a far-away element ended up as the feed streams and scrolls. */
-.ws-feed.has-loop { padding-left: 56px; }
+/* 64px, not 56px: the badge's own width (it reads "↻ ×N", not a single
+   digit) meant its rendered left edge landed about 15px inside the panel's
+   own border - close enough that the panel's rounded corner visibly ate
+   into it. This clears the corner with margin instead of nearly touching
+   it. */
+.ws-feed.has-loop { padding-left: 64px; }
 
 .ws-loop-rail {
-  position: absolute; left: -32px; top: 0; bottom: 0; width: 16px;
+  position: absolute; left: -28px; top: 0; bottom: 0; width: 16px;
   pointer-events: none; color: var(--ws-revisit-c, var(--ws-red-text));
 }
 .ws-loop-rail-line { position: absolute; left: 0; width: 0; border-left: 1.5px dashed currentColor; }
