@@ -53,7 +53,7 @@ def prompt(brief: str, answers: str = "", wanted: int = WANTED) -> str:
             "columns": 6,
             "marginRatio": 0.06,
             "gutterRatio": 0.02,
-            "bodyPt": 13.0,
+            "bodyPt": 20.0,
             "ratios": {"display": 4.2, "headline": 2.8, "standfirst": 1.4},
             "displayFace": "<a real typeface>",
             "bodyFace": "<a real typeface>",
@@ -99,6 +99,10 @@ def prompt(brief: str, answers: str = "", wanted: int = WANTED) -> str:
         "- `columns` is the measure. A wide measure with few columns reads as "
         "a report; many narrow columns read as a broadsheet or a dashboard. "
         "Choose from what this deck has to carry.",
+        "- You are designing a SLIDE, seen from across a room - not a page "
+        "held at arm's length. Body type is 18-24pt. A journal or a report "
+        "sets 10 or 11pt on A4 and is right to; the same number here is "
+        "unreadable, and every other rung shrinks with it.",
         "- `bodyPt` and `ratios` are the ramp. A ratio is a multiple of the "
         "body, so a display of 4.2 is four times the body copy - a loud deck. "
         "A ratio near 2 is a quiet one. Set the rungs you care about; the "
@@ -113,6 +117,10 @@ def prompt(brief: str, answers: str = "", wanted: int = WANTED) -> str:
         "of page it actually needs: if it argues from figures it wants a page "
         "built round a statistic row; if it compares, two prose columns side "
         "by side.",
+        "- `required` on a slot means the page is UNUSABLE without it, so use "
+        "it only for the heading. A cover also needs somewhere for its "
+        "subtitle to go - a `standfirst` or a `prose` slot - or it can carry "
+        "only a title and nothing else.",
         "- At least one content page MUST carry a `figure` slot. A deck's "
         "charts, tables and diagrams go there and nowhere else, so a "
         "vocabulary without one cannot hold the deck's own evidence and is "
@@ -193,7 +201,11 @@ def read(payload: dict) -> list[Language]:
                 columns=int(_clamp(raw.get("columns"), 6, 2, 16)),
                 margin_ratio=_clamp(raw.get("marginRatio"), 0.06, 0.01, 0.24),
                 gutter_ratio=_clamp(raw.get("gutterRatio"), 0.02, 0.005, 0.09),
-                body_pt=_clamp(raw.get("bodyPt"), 14.0, 5.0, 40.0),
+                # The low bound is a legibility floor of last resort, not a
+                # target: `to_pack` scales anything below the canvas-relative
+                # floor up. Left at 5.0 so a language is read as authored and
+                # the scaling happens in one place.
+                body_pt=_clamp(raw.get("bodyPt"), 18.0, 5.0, 40.0),
                 ratios={
                     str(k): float(v)
                     for k, v in (raw.get("ratios") or {}).items()

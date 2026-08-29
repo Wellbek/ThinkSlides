@@ -80,6 +80,24 @@ FRAME_FOR_SLOT: dict[str, str] = {
     "figure": "figure",
 }
 
+# Slot kinds that carry an exhibit rather than copy.
+#
+# A language may declare one `required`, and a model reasonably writes that:
+# it means "this page is about its chart". `SlotSpec.required` means something
+# else - "reject this archetype when the slot is empty" - and honouring the
+# second reading of the first sentence made an authored language unusable.
+#
+# The deck's cover carries a heading and a subtitle and no chart, so the only
+# content archetype was rejected, `_place` had nothing left to fall back to,
+# and `compose` raised `Unplaceable` on page one. Every text-only page failed
+# the same way. The direction then rendered no previews at all, and the user
+# chose a design by looking at three grey rectangles.
+#
+# So a required exhibit slot is honoured as prominence, not as a precondition.
+# An empty one costs nothing: `bind._compact` drops a frame nothing was bound
+# to and closes the gap above it.
+EXHIBIT_SLOTS = frozenset({"figure", "statistic"})
+
 ACCEPTS_FOR_SLOT: dict[str, tuple[str, ...]] = {
     "figure": ("figure", "chart", "table", "diagram", "metrics"),
     # A stat row is where a row of figures goes - that is the whole reason a
@@ -164,7 +182,9 @@ class Language(_Model):
     gutter_ratio: float = Field(default=0.02, gt=0.0, lt=0.1)
 
     # The ramp. Body in points, everything else as a multiple of it.
-    body_pt: float = Field(default=14.0, gt=4.0, lt=48.0)
+    # The default is a slide's body size, not a document's: 14.0 sat below
+    # every canvas-relative floor, so the default itself needed scaling.
+    body_pt: float = Field(default=18.0, gt=4.0, lt=48.0)
     ratios: dict[str, float] = Field(default_factory=dict)
     display_face: str = "Arial"
     body_face: str = "Arial"
@@ -268,7 +288,7 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
         slots.append(SlotSpec(
             frame_id=identifier,
             accepts=ACCEPTS_FOR_SLOT.get(slot.kind, ("text",)),
-            required=slot.required,
+            required=slot.required and slot.kind not in EXHIBIT_SLOTS,
             prominence=1.0 if slot.kind == "heading" else 0.5,
             max_chars=capacity,
             typical_chars=max(1, round(
@@ -373,6 +393,87 @@ def _capacity(role: TypeRole, span: int, grid: GridSpec, canvas: Canvas,
     return max(1, int(width_in * 72.0 / per_char) * lines)
 
 
+# Where an opener's subtitle goes, when the language did not say.
+#
+# A cover carrying a headline and nothing else is a page kind a model
+# plausibly authors, and it is not wrong - it is incomplete. The deck's own
+# cover material is a heading *and* a standfirst, so such an archetype can
+# never carry it: `fit` leaves the subtitle unplaced, and an archetype that
+# cannot hold all of the material is not an option.
+#
+# Composing the missing slot rather than refusing the page is the same
+# judgement `vocabulary.py` already makes for a pack whose sampled pages never
+# showed an opener. Without it the cover still composes - as *content*, on a
+# content archetype - so the deck loses its cover silently, which is worse
+# than the crash it replaces because nothing reports it.
+OPENER_ROLES = frozenset({"cover", "section"})
+
+# The slot kinds that can carry an opener's standfirst if one is present.
+_STANDFIRST_KINDS = frozenset({"standfirst", "prose", "quote"})
+
+
+def _with_opener_standfirst(language: Language) -> Language:
+    """Every opener has somewhere for its subtitle to go."""
+    pages = []
+    changed = False
+    for kind in language.pages:
+        if (kind.role in OPENER_ROLES
+                and not any(s.kind in _STANDFIRST_KINDS for s in kind.slots)):
+            span = kind.slots[0].span if kind.slots else language.columns
+            kind = kind.model_copy(update={
+                "slots": kind.slots + (Slot(kind="standfirst", span=span,
+                                            name="composed"),),
+            })
+            changed = True
+        pages.append(kind)
+    return language.model_copy(update={"pages": tuple(pages)}) \
+        if changed else language
+
+
+# The smallest body type an authored language may set, as a share of canvas
+# height.
+#
+# Nothing used to relate `body_pt` to the canvas at all. A model asked for a
+# "scientific journal" or a "traditional academic" design answers with the
+# document sizes those references actually use - 10pt, 11pt - because that is
+# what they are set in on A4. On a slide read across a room it is unreadable,
+# and because every other rung is a ratio of the body, the whole page shrinks
+# with it.
+#
+# PowerPoint's own default body is 18pt on a 7.5in canvas, which is 3.33%, and
+# the conventional band for projected type is 18-24pt, or 3.3-4.4%. 3.0% is
+# the floor rather than the target.
+#
+# This is a floor on *invention*, not on measurement. `typeset.policy` records
+# why a global 3.0% is wrong for the packs recovered from real publications -
+# they set body at 1.3% to 2.6% and are correct to - but those are documents
+# with a real page behind them. A number a model produced for a slide has no
+# such evidence, and 11pt on a 13.33in canvas is not a register, it is a
+# category error.
+CANVAS_BODY_FLOOR_RATIO = 0.030
+
+# How far below the derived body the typesetter may still shrink before it has
+# to say the composition is at fault rather than the type. Kept as the same
+# three-quarters the first version used, but taken from the canvas instead of
+# from `language.body_pt` - which made the policy a tautology, since a language
+# setting 10pt body declared its own floor to be 7.5pt and passed.
+POLICY_FLOOR_SHARE = 0.75
+
+
+def _above_the_floor(language: Language, canvas: Canvas) -> Language:
+    """The language with its ramp scaled up to the canvas, if it sits below it.
+
+    Scaling rather than clamping: every rung is a ratio of the body, so
+    raising the body raises the whole ramp and leaves the proportions the
+    language was designed around exactly as authored. Clamping the body alone
+    would flatten the ramp, and the ramp is the design.
+    """
+    floor = CANVAS_BODY_FLOOR_RATIO * canvas.h_in * 72.0
+    if language.body_pt >= floor:
+        return language
+    return language.model_copy(update={"body_pt": round(floor, 1)})
+
+
 def to_pack(language: Language, canvas: Canvas, *,
             pack_id: Optional[str] = None) -> Pack:
     """The language, derived into the representation everything else reads.
@@ -382,6 +483,7 @@ def to_pack(language: Language, canvas: Canvas, *,
     they are set in, because all of that was computed here rather than
     asserted by a model.
     """
+    language = _with_opener_standfirst(_above_the_floor(language, canvas))
     roles = _type_roles(language)
     baseline_in = roles["body"].line_height_pt / 72.0
     grid = _grid(language, canvas, baseline_in)
@@ -408,7 +510,7 @@ def to_pack(language: Language, canvas: Canvas, *,
         body_face=language.body_face,
         display_face=language.display_face,
         policy=LegibilityPolicy(
-            body_min_ratio=(language.body_pt * 0.75) / (canvas.h_in * 72.0),
+            body_min_ratio=CANVAS_BODY_FLOOR_RATIO * POLICY_FLOOR_SHARE,
         ),
     )
     archetypes = tuple(_archetype(kind, language, canvas, pack.grid, roles)

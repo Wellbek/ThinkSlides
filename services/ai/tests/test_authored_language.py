@@ -65,8 +65,10 @@ class TestTheAgentDecidesTheDesign:
     def test_the_ramp_is_built_from_ratios_not_points(self):
         """A ratio is the decision - a display three times the body is a loud
         deck at any canvas size, and 42pt is only loud on some."""
-        small = to_pack(_language(body_pt=10.0), CANVAS)
-        large = to_pack(_language(body_pt=20.0), CANVAS)
+        # Both above the canvas-relative floor, so neither is scaled on the
+        # way past and what is being compared is the ratio arithmetic.
+        small = to_pack(_language(body_pt=18.0), CANVAS)
+        large = to_pack(_language(body_pt=36.0), CANVAS)
         assert (large.role("headline").size_pt
                 == pytest.approx(2 * small.role("headline").size_pt, rel=0.01))
 
@@ -189,13 +191,23 @@ class TestAnAuthoredLanguagePassesEveryGate:
         import os
         assert os.path.getsize(out) > 0
 
-    def test_the_legibility_floor_follows_the_authored_body(self):
-        """A language that sets 9pt body is held to 9pt, not to a constant
-        that would forbid the register it chose."""
-        from app.renderer.typeset.policy import check
+    def test_the_legibility_floor_comes_from_the_canvas(self):
+        """The floor used to be computed from `language.body_pt` itself, which
+        made it a tautology: a language setting 10pt declared its own floor to
+        be 7.5pt and passed, so no authored value could ever fail it."""
+        from app.design.authored import (
+            CANVAS_BODY_FLOOR_RATIO, POLICY_FLOOR_SHARE,
+        )
+        from app.renderer.typeset.policy import check, floor_for
 
-        pack = to_pack(_language(body_pt=9.0), CANVAS)
-        assert check(pack, "body", pack.role("body").size_pt) is None
+        tiny = to_pack(_language(body_pt=9.0), CANVAS)
+        loud = to_pack(_language(body_pt=30.0), CANVAS)
+        assert floor_for(tiny, "body") == pytest.approx(floor_for(loud, "body"))
+        assert floor_for(tiny, "body") == pytest.approx(
+            CANVAS_BODY_FLOOR_RATIO * POLICY_FLOOR_SHARE * CANVAS.h_in * 72.0)
+        # And what it derives is still legible by that floor, because the ramp
+        # was scaled up rather than left where it was authored.
+        assert check(tiny, "body", tiny.role("body").size_pt) is None
 
 
 class TestItIsNotACatalogue:
@@ -208,3 +220,191 @@ class TestItIsNotACatalogue:
 
     def test_the_id_comes_from_the_name_the_agent_chose(self):
         assert to_pack(_language(name="Wide Screen!"), CANVAS).id == "wide-screen"
+
+
+class TestALanguageThatCannotDrawItselfIsNotOffered:
+    """Issue #280.
+
+    Every direction card rendered "No preview". The design pause worked - three
+    languages were authored, named and described - and all three specimen decks
+    failed to compose, so the user chose a design by looking at three grey
+    rectangles.
+
+    The language below is the shape a model plausibly authors and is the exact
+    reproduction: a cover carrying only a headline, and a content page whose
+    figure slot is `required`.
+    """
+
+    @staticmethod
+    def _brittle() -> Language:
+        return Language(
+            name="Scientific journal",
+            rationale="a paper read as a paper",
+            columns=6, body_pt=10.0,
+            pages=(
+                PageKind(name="cover", role="cover", frequency=0.1, slots=(
+                    Slot(kind="heading", span=6, required=True),)),
+                PageKind(name="figure-page", role="content", frequency=0.9,
+                         slots=(
+                             Slot(kind="heading", span=6, required=True),
+                             Slot(kind="figure", span=3, required=True),
+                             Slot(kind="prose", span=3))),
+            ),
+        )
+
+    @staticmethod
+    def _compose(language: Language, **kwargs):
+        from app.design import run as design_run
+        from app.renderer.specimen import language_specimen_slides
+
+        pack = ensure(to_pack(language, CANVAS))
+        return pack, design_run.compose(
+            language_specimen_slides(), pack, title="specimen", **kwargs)
+
+    def test_the_specimen_deck_composes_at_all(self):
+        _, doc = self._compose(self._brittle())
+        assert len(doc.pages) == 3
+
+    def test_the_cover_is_still_a_cover(self):
+        """The half-fix passes without this.
+
+        Making the figure slot optional is enough to compose - and it composed
+        all three pages onto the *content* archetype, so the deck silently lost
+        its cover. A test asserting only "it composed" is green on the wrong
+        outcome.
+        """
+        pack, doc = self._compose(self._brittle())
+        roles = {a.id: a.role for a in pack.archetypes}
+        assert roles[doc.pages[0].archetype] == "cover"
+
+    @staticmethod
+    def _slot_for(archetype, frame_role: str):
+        """The slot whose frame carries this role.
+
+        By frame rather than by frame id: the reproduction's page kind is
+        *named* "figure-page", so matching "figure" against the id picks its
+        heading and the test passes on the wrong slot.
+        """
+        ids = {f.id for f in archetype.frames if f.role == frame_role}
+        return next(s for s in archetype.slots if s.frame_id in ids)
+
+    def test_an_exhibit_slot_is_never_a_precondition(self):
+        """A model writing `required` on a figure means "this page is about its
+        chart". `SlotSpec.required` means "reject this archetype when the slot
+        is empty", and a page with no chart is most of a deck."""
+        pack = to_pack(self._brittle(), CANVAS)
+        page = next(a for a in pack.archetypes if a.id == "figure-page")
+        assert self._slot_for(page, "figure").required is False
+
+    def test_a_heading_may_still_be_required(self):
+        pack = to_pack(self._brittle(), CANVAS)
+        page = next(a for a in pack.archetypes if a.id == "figure-page")
+        assert self._slot_for(page, "headline").required is True
+
+    def test_an_opener_gets_somewhere_to_put_its_subtitle(self):
+        pack = to_pack(self._brittle(), CANVAS)
+        cover = next(a for a in pack.archetypes if a.id == "cover")
+        assert any(f.role == "standfirst" for f in cover.frames)
+
+    def test_an_opener_that_said_where_is_left_alone(self):
+        """Composing the missing slot is a floor, not a preference. A language
+        that already declared one keeps exactly what it authored."""
+        pack = to_pack(_language(), CANVAS)
+        cover = next(a for a in pack.archetypes if a.id == "cover")
+        assert len([f for f in cover.frames if f.role == "standfirst"]) == 1
+
+
+class TestAPreviewShowsWhatItCan:
+    """Issue #280, third part: one unplaceable page lost all three previews."""
+
+    @staticmethod
+    def _one_page_pack():
+        """A pack whose only content archetype cannot hold a chart."""
+        language = Language(
+            name="Text only", rationale="no exhibits anywhere",
+            columns=6, body_pt=18.0,
+            pages=(PageKind(name="page", role="content", frequency=1.0, slots=(
+                Slot(kind="heading", span=6, required=True),
+                Slot(kind="prose", span=6))),),
+        )
+        return ensure(to_pack(language, CANVAS))
+
+    def test_a_real_deck_still_fails_loudly(self):
+        """The default stays strict. A deck that silently loses a slide is
+        worse than one that fails: the user gets a file, ships it, and finds
+        out in the room."""
+        from app.design import run as design_run
+
+        chart = {"type": "chart", "chartType": "bar",
+                 "series": [{"name": "a", "values": [1, 2]}],
+                 "categories": ["x", "y"]}
+        slides = [{"slideIndex": 0, "role": "content", "heading": "H",
+                   "contents": [chart]}]
+        with pytest.raises(design_run.Unplaceable):
+            design_run.compose(slides, self._one_page_pack())
+
+    def test_a_specimen_drops_the_page_and_keeps_the_rest(self):
+        from app.design import run as design_run
+        from app.renderer.specimen import language_specimen_slides
+
+        doc = design_run.compose(
+            language_specimen_slides(), self._one_page_pack(),
+            skip_unplaceable=True)
+        assert 0 < len(doc.pages) < 3
+
+
+class TestTypeIsSizedForASlideNotAPage:
+    """Issue #282.
+
+    A model asked for a "scientific journal" design answers with the sizes that
+    reference actually uses - 10pt, 11pt - because that is what it is set in on
+    A4. On a slide read across a room it is unreadable, and every other rung is
+    a ratio of the body, so the whole page shrinks with it.
+    """
+
+    @staticmethod
+    def _floor_pt(canvas: Canvas = CANVAS) -> float:
+        from app.design.authored import CANVAS_BODY_FLOOR_RATIO
+
+        return CANVAS_BODY_FLOOR_RATIO * canvas.h_in * 72.0
+
+    def test_a_document_sized_ramp_is_raised_to_the_canvas(self):
+        pack = to_pack(_language(body_pt=10.0), CANVAS)
+        assert pack.role("body").size_pt >= self._floor_pt()
+
+    def test_the_ratios_the_language_chose_survive_the_scaling(self):
+        """Clamping the body alone would flatten the ramp, and the ramp is the
+        design."""
+        authored = _language(body_pt=10.0)
+        pack = to_pack(authored, CANVAS)
+        assert (pack.role("headline").size_pt / pack.role("body").size_pt
+                == pytest.approx(authored.ratio("headline"), rel=0.02))
+        assert (pack.role("display").size_pt / pack.role("body").size_pt
+                == pytest.approx(authored.ratio("display"), rel=0.02))
+
+    def test_a_language_already_above_the_floor_is_untouched(self):
+        pack = to_pack(_language(body_pt=22.0), CANVAS)
+        assert pack.role("body").size_pt == pytest.approx(22.0)
+
+    def test_the_default_body_size_is_a_slide_size(self):
+        """The schema default was 14.0, which is below every canvas-relative
+        floor - so the default itself was being scaled on every run."""
+        from app.design.authored import Language as L
+
+        assert L.model_fields["body_pt"].default >= self._floor_pt()
+
+    def test_the_floor_follows_the_canvas_rather_than_a_constant(self):
+        """A poster is read at a metre and a slide is projected, so the floor
+        is a share of the canvas rather than a number of points."""
+        tall = Canvas(w_in=26.666, h_in=15.0)
+        wide = to_pack(_language(body_pt=8.0), CANVAS)
+        big = to_pack(_language(body_pt=8.0), tall)
+        assert big.role("body").size_pt > wide.role("body").size_pt
+
+    def test_a_scaled_language_still_composes(self):
+        from app.design import run as design_run
+        from app.renderer.specimen import language_specimen_slides
+
+        pack = ensure(to_pack(_language(body_pt=9.0), CANVAS))
+        doc = design_run.compose(language_specimen_slides(), pack, title="x")
+        assert len(doc.pages) >= 3

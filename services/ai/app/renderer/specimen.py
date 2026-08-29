@@ -490,9 +490,13 @@ def render_language_specimens(
     composed = design_run.overlay(pack, design_system) if design_system else pack
 
     def write(pptx_path: str) -> None:
+        # Partial rather than nothing. One page no archetype can carry used to
+        # lose all three previews for that direction, so the user chose a
+        # design from three grey rectangles reading "No preview".
         doc = design_run.compose(
             language_specimen_slides(content), composed,
             title=str(getattr(pack, "name", "") or "Design direction"),
+            skip_unplaceable=True,
         )
         render_doc(doc, composed, pptx_path, design_system=design_system)
 

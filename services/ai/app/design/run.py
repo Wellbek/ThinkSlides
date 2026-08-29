@@ -42,6 +42,9 @@ from app.design.repair import repair
 from app.design.schema import DesignDoc, Page, PackRef
 from app.design.select import choose
 from app.design.vocabulary import ensure
+from app.observability.logging import get_logger
+
+logger = get_logger(__name__)
 
 PACK_DIR = os.path.join(os.path.dirname(__file__), "packs")
 
@@ -381,12 +384,20 @@ def _place(shape: MaterialShape, pack: Pack,
     return placed
 
 
-def compose(slides: Sequence[dict], pack: Pack, *, title: str = "") -> DesignDoc:
+def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
+            skip_unplaceable: bool = False) -> DesignDoc:
     """Every designed slide, laid out in this pack and repaired.
 
     Repair runs here rather than being offered as a tool. The validator this
     replaces was a tool the model could decline to call, and it was invoked
     zero times across every observed run.
+
+    ``skip_unplaceable`` drops a page that no archetype can carry instead of
+    raising, and exists for **previews only**. A real deck that silently loses
+    a slide is worse than one that fails loudly - the user gets a file, ships
+    it, and finds out in the room - so the default stays strict. A specimen
+    deck is the opposite case: three cards showing two pages each is a
+    comparison the user can still make, and three showing nothing is not.
     """
     ordered = sorted(
         [s for s in slides if isinstance(s, dict)],
@@ -396,7 +407,19 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "") -> DesignDoc
     previous: Optional[str] = None
     for index, slide in enumerate(ordered):
         shape = material_from(slide, index=index, total=len(ordered))
-        for part, selection in _place(shape, pack, previous):
+        try:
+            placed = _place(shape, pack, previous)
+        except Unplaceable:
+            if not skip_unplaceable:
+                raise
+            # Logged rather than swallowed: a preview that quietly shows two
+            # pages instead of three has still found a defect in the pack, and
+            # nobody looking at the card can tell.
+            logger.info("specimen_page_skipped", pack=pack.id,
+                        slide_index=index, chars=shape.total_chars,
+                        items=len(shape.items))
+            continue
+        for part, selection in placed:
             page = build_page(f"p{len(pages) + 1}", part, selection, pack,
                               considered=tuple(a.id for a in pack.archetypes))
             previous = selection.archetype.id
