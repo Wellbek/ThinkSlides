@@ -133,6 +133,28 @@ MAX_BLOCKS = 18
 # purpose. The reference's own dashboard pages reach the mid twenties.
 MAX_BLOCKS_BY_ARCHETYPE: dict[str, int] = {DASHBOARD: 26}
 
+# How a deck's *format* - not a slide's archetype - moves the budget. Most
+# formats carry as much as today's default and are left at 1.0: the format
+# already earns its keep through the page vocabulary it asks
+# `plan_presentation_structure` for, and scaling the per-slide numbers on top
+# of that would double-count it.
+#
+# The two that get a real number both break that default in a way nothing
+# else already captures. A pitch slide is read across a room in the seconds
+# it is on screen - "one claim a page" means the ordinary target is still too
+# much, not merely differently shaped. A poster page is not a slide at all:
+# it is the whole deck's material on one sheet, and MAX_BLOCKS was
+# calibrated against the reference's densest single *slide*, reaching 17 -
+# a poster page routinely carries several times that.
+FORMAT_BUDGET_SCALE: dict[str, float] = {
+    "pitch": 0.55,
+    "poster": 3.2,
+}
+
+
+def _format_scale(format_id: str) -> float:
+    return FORMAT_BUDGET_SCALE.get(str(format_id or "").strip().lower(), 1.0)
+
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'%$.,-]*")
 
 
@@ -323,6 +345,7 @@ def budget_for(
     design_system: Optional[dict],
     archetype: str = CONTENT,
     material: float = 1.0,
+    format_id: str = "",
 ) -> SlideBudget:
     """
     The budget for one slide of one kind, given what it has to work with.
@@ -331,17 +354,26 @@ def budget_for(
     pages carry. It is the whole guard against this becoming a filler quota:
     the deck is asked to be as dense as its template *where the material goes
     that far*, and no denser.
+
+    ``format_id`` scales the result again, afterward, for the two formats
+    whose numbers genuinely differ from a boardroom deck's rather than only
+    their page vocabulary - see ``FORMAT_BUDGET_SCALE``.
     """
     profile = DensityProfile.from_dict((design_system or {}).get("density"))
     kind = archetype if archetype in ARCHETYPES else CONTENT
     block_share, word_share = ARCHETYPE_SHARE[kind]
-    ceiling = MAX_BLOCKS_BY_ARCHETYPE.get(kind, MAX_BLOCKS)
+    scale = _format_scale(format_id)
+    ceiling = max(2, round(MAX_BLOCKS_BY_ARCHETYPE.get(kind, MAX_BLOCKS) * scale))
 
     material = max(0.0, min(1.0, float(material)))
     reach = THIN_FLOOR + (1.0 - THIN_FLOOR) * material
 
-    blocks = min(ceiling, max(1.0, profile.blocks_median * block_share * reach))
-    words = max(6.0, profile.words_median * word_share * reach)
+    # The floor constants scale too, not only the measured target: a design
+    # system with no density profile of its own (material_score's median
+    # comes back zero) must not fall through the scale entirely and leave a
+    # poster with the same six-word minimum a boardroom slide has.
+    blocks = min(ceiling, max(1.0 * scale, profile.blocks_median * block_share * reach * scale))
+    words = max(6.0 * scale, profile.words_median * word_share * reach * scale)
     per_block = profile.words_per_block_median or (words / blocks if blocks else 0.0)
 
     return SlideBudget(

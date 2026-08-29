@@ -231,6 +231,7 @@ def specimen_slides(structure: str = "list",
 
 def language_specimen_slides(
     content: Optional[SpecimenContent] = None,
+    format_id: str = "",
 ) -> list[dict]:
     """
     The same three specimens, in the shape a design language reads.
@@ -247,11 +248,27 @@ def language_specimen_slides(
     Which archetype carries them, and whether the points land as bands, cards
     or a column of prose, is the pack's answer and differs between the three
     the user is choosing from. That difference is the preview's whole content.
+
+    ``format_id`` shifts *how much* material each page carries, for the two
+    formats where showing the boardroom amount would be dishonest: a
+    dashboard's second page is a real dashboard's page, several exhibits
+    rather than one, or a language authoring nothing but a single-figure
+    slot would preview as if it had passed a test it never faced; a pitch's
+    pages carry a fraction of the copy, because previewing a full paragraph
+    on a "one claim a page" language shows a page it will never actually be
+    asked to set. Boardroom, academic and poster are unchanged - poster's own
+    difference (one page, not three) is issue #285's, not this one's.
     """
     content = content or default_content()
     points = [f"{point.label} - {point.figure} {point.prose}"
               for point in content.points]
-    return [
+
+    if format_id == "pitch":
+        # One claim, not three - a pitch page's own habit, previewed
+        # honestly rather than padded to the boardroom's amount.
+        points = points[:1]
+
+    slides = [
         {
             "slideIndex": 0,
             "role": "cover",
@@ -274,12 +291,27 @@ def language_specimen_slides(
             "role": "content",
             "heading": content.evidence_headline,
             "section": SECTION_LABEL,
-            "contents": [
-                _chart(content),
-                {"type": "text", "runs": [{"text": content.takeaway}]},
-            ],
+            "contents": (
+                [_chart(content), _metrics(content)]
+                if format_id == "dashboard"
+                # A dashboard page is several exhibits, not one chart framed
+                # by a paragraph - so the paragraph a boardroom page would
+                # carry is dropped rather than kept beside exhibits it was
+                # never meant to share a page with.
+                else [_chart(content),
+                      {"type": "text", "runs": [{"text": content.takeaway}]}]
+            ),
         },
     ]
+    return slides
+
+
+def _metrics(content: SpecimenContent) -> dict:
+    """A small stat-row exhibit, built from the same points every specimen
+    already carries - a dashboard page's second exhibit, beside its chart."""
+    items = [{"value": point.figure, "label": point.label}
+             for point in content.points]
+    return {"type": "metrics", "metrics": {"items": items}}
 
 
 # ── The three slides ──────────────────────────────────────────────────
@@ -467,6 +499,7 @@ def render_language_specimens(
     output_dir: Optional[str] = None,
     content: Optional[SpecimenContent] = None,
     design_system: Optional[dict] = None,
+    format_id: str = "",
 ) -> list[str]:
     """
     The same three specimens, composed against a design language pack.
@@ -494,7 +527,7 @@ def render_language_specimens(
         # lose all three previews for that direction, so the user chose a
         # design from three grey rectangles reading "No preview".
         doc = design_run.compose(
-            language_specimen_slides(content), composed,
+            language_specimen_slides(content, format_id), composed,
             title=str(getattr(pack, "name", "") or "Design direction"),
             skip_unplaceable=True,
         )
@@ -567,7 +600,7 @@ async def render_directions(
         if pack is not None:
             urls = await asyncio.to_thread(
                 render_language_specimens, pack, session_id, direction_id,
-                output_dir, content, system,
+                output_dir, content, system, direction.get("format") or "",
             )
         else:
             urls = await asyncio.to_thread(
@@ -602,12 +635,13 @@ def _pack_for(direction: dict):
     if not isinstance(payload, dict) or not payload:
         return None
     try:
+        from app.design import deck_format
         from app.design.authored import Language, to_pack
-        from app.design.schema import Canvas
         from app.design.vocabulary import ensure
 
-        return ensure(to_pack(Language(**payload),
-                              Canvas(w_in=13.333, h_in=7.5)))
+        fmt = deck_format.by_id(direction.get("format"))
+        return ensure(to_pack(Language(**payload), fmt.canvas,
+                              floor_pt=fmt.floor_pt(fmt.canvas)))
     except Exception as exc:
         logger.warning("authored_pack_unavailable",
                        direction_id=direction.get("id"), error=str(exc))

@@ -15,8 +15,9 @@ from __future__ import annotations
 from typing import Optional, Sequence
 
 from app.agent.tools._json_extract import extract_json_object
-from app.design import authoring
+from app.design import authoring, deck_format as deck_format_module
 from app.design.authored import Language, to_pack
+from app.design.deck_format import DeckFormat
 from app.design.schema import Canvas
 from app.design.vocabulary import ensure
 from app.observability.logging import get_logger
@@ -27,7 +28,9 @@ MAX_ATTEMPTS = 2
 
 
 async def author(llm, brief: str, canvas: Canvas, *, answers: str = "",
-                 wanted: int = authoring.WANTED) -> tuple[list[Language], str]:
+                 wanted: int = authoring.WANTED,
+                 fmt: Optional[DeckFormat] = None,
+                 ) -> tuple[list[Language], str]:
     """The languages this deck should be offered, and why if there are none.
 
     A language that will not derive into a usable pack is dropped here rather
@@ -35,12 +38,19 @@ async def author(llm, brief: str, canvas: Canvas, *, answers: str = "",
     language are the same ones that reject a badly invented one, and running
     them now is what keeps "the agent designs it" from meaning "the agent gets
     to skip the checks".
+
+    ``fmt`` is what kind of presentation this is - a pitch, a poster, a
+    dashboard. It shapes the prompt (what the deck is designing for) and the
+    derivation floor (``fmt.floor_pt``), so a language rejected here is
+    rejected against the same standard the deck will actually be held to.
     """
+    fmt = fmt or deck_format_module.by_id(None)
     problems: list[str] = []
     best: list[Language] = []
+    floor_pt = fmt.floor_pt(canvas)
 
     for attempt in range(MAX_ATTEMPTS):
-        text = authoring.prompt(brief, answers, wanted)
+        text = authoring.prompt(brief, answers, wanted, fmt=fmt)
         if problems:
             text += ("\n\nThe last set was rejected:\n"
                      + "\n".join(f"- {p}" for p in problems)
@@ -58,7 +68,7 @@ async def author(llm, brief: str, canvas: Canvas, *, answers: str = "",
             (response.get("message") or {}).get("content", "{}")) or {}
         languages = authoring.read(payload)
         usable = [language for language in languages
-                  if _derives(language, canvas)]
+                  if _derives(language, canvas, floor_pt)]
         if len(usable) > len(best):
             best = usable
 
@@ -92,7 +102,7 @@ async def author(llm, brief: str, canvas: Canvas, *, answers: str = "",
     return best[:wanted], "; ".join(problems)
 
 
-def _derives(language: Language, canvas: Canvas) -> bool:
+def _derives(language: Language, canvas: Canvas, floor_pt: float) -> bool:
     """Whether this language becomes a pack that would actually render.
 
     The check is the derivation itself: a language whose ramp or measure
@@ -100,7 +110,7 @@ def _derives(language: Language, canvas: Canvas) -> bool:
     than at render, where it costs the deck.
     """
     try:
-        pack = ensure(to_pack(language, canvas))
+        pack = ensure(to_pack(language, canvas, floor_pt=floor_pt))
     except Exception as exc:
         logger.info("authored_language_underivable",
                     name=language.name, error=str(exc))
@@ -130,12 +140,14 @@ def _carries_an_exhibit(language: Language) -> bool:
     )
 
 
-def packs_for(languages: Sequence[Language], canvas: Canvas) -> list:
+def packs_for(languages: Sequence[Language], canvas: Canvas,
+             fmt: Optional[DeckFormat] = None) -> list:
     """Each language as the pack a deck would actually be composed against."""
+    floor_pt = (fmt or deck_format_module.by_id(None)).floor_pt(canvas)
     out = []
     for language in languages:
         try:
-            out.append(ensure(to_pack(language, canvas)))
+            out.append(ensure(to_pack(language, canvas, floor_pt=floor_pt)))
         except Exception as exc:   # already filtered, but never fail a run
             logger.warning("authored_pack_failed", name=language.name,
                            error=str(exc))

@@ -10,6 +10,7 @@ from app.agent.run_context import require_chat_provider
 from app.agent.tools._today import today_line
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app import budget as budget_model
+from app.design import deck_format as deck_format_module
 from app.measure import archetypes as archetype_model
 from app.observability.logging import get_logger
 import json
@@ -54,6 +55,29 @@ _DETAIL_GUIDANCE = {
 # the size a quarter-page leaves it.
 MIN_EXHIBIT_QUESTIONS = 2
 MAX_EXHIBIT_QUESTIONS = 4
+
+
+def _format_guidance(fmt) -> str:
+    """What this format expects of the plan, folded in beside the detail
+    guidance and the density guidance it already reads alongside."""
+    if fmt.single_page:
+        # A poster is not a deck: everything the material has goes on the one
+        # page a poster is, so the plan's job changes from pacing several
+        # slides to sectioning one.
+        return (
+            f"\n\nFormat: {fmt.label}. This is a SINGLE PAGE, not a deck - "
+            f"totalSlides MUST be 1. Plan its material as sections on that "
+            f"one page rather than as separate slides: {fmt.vocabulary}. Use "
+            "\"section\" on each slide's single entry only if you genuinely "
+            "need more than one contentType block; otherwise fold every "
+            "section into the one slide's keyPoints and notes."
+        )
+    return (
+        f"\n\nFormat: {fmt.label} - {fmt.description}. Plan roughly "
+        f"{fmt.pages_min}-{fmt.pages_max} slides unless the material clearly "
+        f"calls for fewer or more, and favour this page vocabulary: "
+        f"{fmt.vocabulary}."
+    )
 
 
 def demote_unearned_dashboards(slides: list) -> list[str]:
@@ -278,6 +302,16 @@ class PlanPresentationStructureTool:
                     description="Content depth: concise, detailed, or comprehensive",
                     required=False,
                 ),
+                ToolParameter(
+                    name="deck_format",
+                    type="string",
+                    required=False,
+                    description=(
+                        "What kind of presentation this is (boardroom, pitch, "
+                        "academic, dashboard, poster). Supplied automatically; "
+                        "you do not need to pass this."
+                    ),
+                ),
             ],
         )
 
@@ -290,9 +324,11 @@ class PlanPresentationStructureTool:
         audience: str = "general",
         design_system_summary: str = "{}",
         detail_level: str = "detailed",
+        deck_format: str = "",
     ) -> ToolResult:
         start = time.time()
         try:
+            fmt = deck_format_module.by_id(deck_format)
             # The workspace's configured model. There is no environment
             # fallback: a run reaches a tool only after the loop resolved
             # Settings into a provider, and its absence is an error, not a
@@ -319,6 +355,7 @@ class PlanPresentationStructureTool:
                 parsed_ds, _deck_material(content_summary, parsed_data)
             )
             chapter_info = _chapter_guidance(parsed_ds)
+            format_info = _format_guidance(fmt)
 
             prompt = f"""{today_line()}
 
@@ -331,7 +368,7 @@ Key Data: {json.dumps(parsed_data, indent=2)[:2000]}
 
 Target Audience: {audience}
 Target Slide Count: {target_slide_count if target_slide_count > 0 else 'auto-determine'}
-{layout_info}{density_info}{chapter_info}
+{layout_info}{density_info}{chapter_info}{format_info}
 
 Return a JSON object with this structure:
 {{
@@ -397,6 +434,20 @@ Rules:
                 )
 
             duration_ms = int((time.time() - start) * 1000)
+            if fmt.single_page and int(structure.get("totalSlides") or 0) != 1:
+                # A single-page format that came back as a multi-slide plan
+                # is the model treating it as a deck anyway. Named rather
+                # than silently corrected: merging the extra slides' material
+                # down to one page is exactly the work issue #285 tracks -
+                # doing it here, invisibly, would hide a gap that is not
+                # actually closed yet.
+                structure.setdefault("deviations", []).append(
+                    f"{fmt.label} is a single page, but the plan carries "
+                    f"{structure.get('totalSlides')} slides."
+                )
+                logger.warning("single_page_format_multi_slide_plan",
+                               format_id=fmt.id,
+                               total_slides=structure.get("totalSlides"))
             demotions = demote_unearned_dashboards(structure.get("slides") or [])
             if demotions:
                 structure["dashboardWarnings"] = demotions

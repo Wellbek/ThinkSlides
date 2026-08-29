@@ -27,6 +27,8 @@ from typing import Optional, Sequence
 
 from app.agent.tools._today import today_line
 from app.design.authored import DEFAULT_RATIOS, Language, PageKind, Slot
+from app.design.deck_format import DeckFormat
+from app.design import deck_format as deck_format_module
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -44,8 +46,17 @@ SLOT_KINDS: tuple[str, ...] = (
 PAGE_ROLES = ("cover", "section", "content", "exhibit", "closing")
 
 
-def prompt(brief: str, answers: str = "", wanted: int = WANTED) -> str:
-    """What to ask for. The decisions, never the geometry."""
+def prompt(brief: str, answers: str = "", wanted: int = WANTED,
+          *, fmt: "DeckFormat | None" = None) -> str:
+    """What to ask for. The decisions, never the geometry.
+
+    ``fmt`` says what kind of presentation this is, and it changes more of
+    the prompt than any other single thing does - a "scientific journal"
+    language authored for a pitch and one authored for an academic seminar
+    should not come back the same, and until #284 nothing told the model
+    which one it was designing.
+    """
+    fmt = fmt or deck_format_module.by_id(None)
     example = {
         "languages": [{
             "name": "<two or three words a non-designer would recognise>",
@@ -79,6 +90,9 @@ def prompt(brief: str, answers: str = "", wanted: int = WANTED) -> str:
         f"Design {wanted} genuinely different design languages for this deck.",
         "",
         f"The deck: {brief.strip() or 'a business presentation'}",
+        "",
+        f"Format: {fmt.label} - {fmt.description}. This deck wants "
+        f"{fmt.vocabulary}.",
     ]
     if str(answers or "").strip():
         lines += ["", "Settled with the user already - every language must "
@@ -99,10 +113,11 @@ def prompt(brief: str, answers: str = "", wanted: int = WANTED) -> str:
         "- `columns` is the measure. A wide measure with few columns reads as "
         "a report; many narrow columns read as a broadsheet or a dashboard. "
         "Choose from what this deck has to carry.",
-        "- You are designing a SLIDE, seen from across a room - not a page "
-        "held at arm's length. Body type is 18-24pt. A journal or a report "
-        "sets 10 or 11pt on A4 and is right to; the same number here is "
-        "unreadable, and every other rung shrinks with it.",
+        f"- You are designing for {fmt.description}. Body type below "
+        f"{fmt.floor_pt():.0f}pt on this canvas will be scaled up regardless "
+        "of what you set, so choose a number you actually mean: a journal or "
+        "a report sets 10 or 11pt on A4 and is right to, but that number "
+        "describes a page held at arm's length, not this format.",
         "- `bodyPt` and `ratios` are the ramp. A ratio is a multiple of the "
         "body, so a display of 4.2 is four times the body copy - a loud deck. "
         "A ratio near 2 is a quiet one. Set the rungs you care about; the "

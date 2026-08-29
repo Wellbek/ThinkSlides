@@ -20,6 +20,7 @@ from app.agent.event_types import ALL_EVENT_TYPES
 from app.agent.redact import redact_binary
 from app.agent.registry import get_registry, ToolResult
 from app.agent import pipeline
+from app.design import deck_format
 from app.agent.summaries import summarize_tool_result
 from app.agent.tools._binding import slot_key
 from app.agent.tools._json_extract import extract_json_object
@@ -662,6 +663,13 @@ class WorkingState:
         # a second pause that has not happened yet.
         self.offered_directions: bool = False
         self.chosen_direction: dict | None = None
+        # What kind of presentation this is - a pitch, a boardroom deck, a
+        # poster. Resolved once from the user's own words (see
+        # deck_format.resolve, called near user_confirmed_autonomy below) and
+        # read by code from here on: the authoring prompt, the canvas, the
+        # type floor, the plan's page-count band and the per-slide budget all
+        # read this rather than re-parsing free text each time they need it.
+        self.deck_format: str = deck_format.DEFAULT_FORMAT
         # True when the direction was picked on the user's behalf because
         # they answered the question without naming one. Drives the wording of
         # the announcement, so the choice is visible rather than silent.
@@ -1097,6 +1105,7 @@ class WorkingState:
         self.reviewed_outline_with_user = False
         self.offered_deep_research = False
         self.offered_directions = False
+        self.deck_format = deck_format.DEFAULT_FORMAT
         self.chosen_direction = None
         self.direction_deferred = False
         self.proposed_directions = []
@@ -1514,6 +1523,7 @@ class AgentLoop:
             # question would find the checkpoint unmet and ask all over again.
             "consulted_before_planning": self.working_state.consulted_before_planning,
             "offered_directions": self.working_state.offered_directions,
+            "deck_format": self.working_state.deck_format,
             "chosen_direction": self.working_state.chosen_direction,
             "direction_deferred": self.working_state.direction_deferred,
             "proposed_directions": self.working_state.proposed_directions,
@@ -1602,6 +1612,9 @@ class AgentLoop:
             )
             self.working_state.offered_directions = state_dict.get(
                 "offered_directions", False
+            )
+            self.working_state.deck_format = state_dict.get(
+                "deck_format", deck_format.DEFAULT_FORMAT
             )
             self.working_state.chosen_direction = state_dict.get("chosen_direction")
             self.working_state.direction_deferred = state_dict.get(
@@ -1848,6 +1861,15 @@ class AgentLoop:
         # because it decides whether the design pause happens at all.
         if user_confirmed_autonomy(chat_messages):
             self.working_state.autonomy_confirmed = True
+
+        # What kind of presentation this is, resolved the same way: scanned
+        # from the user's own words rather than trusted to survive as a line
+        # of prose. Only overwritten when a message actually names one, so a
+        # later, unrelated reply cannot silently reset an earlier answer with
+        # the default.
+        matched_format = deck_format.resolve_from_chat(chat_messages)
+        if matched_format:
+            self.working_state.deck_format = matched_format
 
         research_answer = user_answered_deep_research(chat_messages)
         if research_answer is not None:
@@ -2196,16 +2218,17 @@ class AgentLoop:
         the language rides through a resume with it and the pack is rebuilt
         from the same dict either side.
         """
-        payload = (self.working_state.chosen_direction or {}).get("language")
+        direction = self.working_state.chosen_direction or {}
+        payload = direction.get("language")
         if not isinstance(payload, dict) or not payload:
             return None
         try:
             from app.design.authored import Language, to_pack
-            from app.design.schema import Canvas
             from app.design.vocabulary import ensure
 
-            return ensure(to_pack(Language(**payload),
-                                  Canvas(w_in=13.333, h_in=7.5)))
+            fmt = deck_format.by_id(direction.get("format"))
+            return ensure(to_pack(Language(**payload), fmt.canvas,
+                                  floor_pt=fmt.floor_pt(fmt.canvas)))
         except Exception as exc:   # a pack must never fail a run
             logger.warning("authored_pack_failed", error=str(exc))
             return None
@@ -2287,6 +2310,18 @@ class AgentLoop:
         brief.setdefault("needsResearch", False)
         self.working_state.brief = brief
 
+        # A run that skips the consultation entirely (full autonomy) never
+        # reaches the format question, and the boardroom default would then
+        # be silent guesswork rather than a read of what was actually asked
+        # for. If the brief itself names a format - "a pitch deck for
+        # investors", "make me a poster" - that is worth acting on even
+        # though nobody was asked. Only applied while nothing more specific
+        # has been resolved yet, so a later, explicit answer always wins.
+        if self.working_state.deck_format == deck_format.DEFAULT_FORMAT:
+            inferred = deck_format.resolve_from_text(str(brief.get("brief") or ""))
+            if inferred:
+                self.working_state.deck_format = inferred
+
         summary = str(brief.get("brief") or "").strip()
         if summary:
             yield "event", _event("thought", "content_analysis", {
@@ -2357,7 +2392,14 @@ class AgentLoop:
                 yield item
             return
 
-        questions: list[dict] = []
+        # What kind of presentation this is - reserved ahead of the
+        # ambiguity truncation below, because it decides the design pause
+        # that follows: an authoring prompt, a canvas and a type floor all
+        # read `working_state.deck_format`, and an ambiguity crowding this
+        # question out would leave every run defaulting to a boardroom deck
+        # by starvation rather than by choice. Asked once, like every other
+        # question here - this phase does not run again once answered.
+        questions: list[dict] = [dict(deck_format.QUESTION)]
 
         if self._can_offer_research():
             figures = [
@@ -2375,11 +2417,13 @@ class AgentLoop:
             if len(questions) >= MAX_CONSULT_QUESTIONS:
                 break
 
-        if not questions:
-            # Intake found nothing to ask, and the run is still going to ask:
-            # the consultation is not skipped because a model could not think
-            # of a question, only because the user said to skip it. This is
-            # the floor, not the expected case.
+        if len(questions) == 1:
+            # The format question always fires, so "no questions" no longer
+            # happens - but a pause carrying only it wastes the round trip an
+            # intake with nothing to ask used to spend on this instead:
+            # intake found nothing to ask, and the run is still going to ask,
+            # because the consultation is not skipped for want of a question,
+            # only because the user said to skip it.
             questions.append(dict(FALLBACK_QUESTION))
 
         async for item in self._ask_and_pause(
@@ -2438,6 +2482,16 @@ class AgentLoop:
         An uploaded template is left exactly as it is: the user already chose a
         design by attaching one, and replacing it would be the run overruling
         the clearest instruction it has.
+
+        Picks from the enum's built-in directions rather than authoring a
+        language - the same fallback this took before formats existed. That
+        means `working_state.deck_format` (inferred from the brief, or
+        default) shapes the plan and the per-slide budget for a run built
+        this way, but not the canvas or the ramp: the enum path composes on
+        the fixed 16:9 canvas regardless of format, so a fully autonomous
+        "make me a poster" run gets a boardroom-shaped deck about a poster's
+        subject rather than an actual poster. Extending the enum path to
+        other canvases is out of scope here - see issue #285.
         """
         from app import directions as direction_model
 
@@ -3504,6 +3558,12 @@ class AgentLoop:
             # knows, and the second of which is the first direction.
             fn_args["session_id"] = str(session_id)
             fn_args["design_system"] = design_system
+            # What kind of presentation this is - resolved once, from the
+            # user's own words, at the hub near user_confirmed_autonomy. The
+            # tool falls back to re-reading `answers` itself when this is not
+            # supplied (a test, an offline harness), but the loop is the
+            # authoritative source whenever it can be.
+            fn_args["deck_format"] = self.working_state.deck_format
             # Everything the user has already told us, so all three
             # directions respect it. Passed rather than trusted to the
             # model's own summary: the answers are on the working
@@ -3524,11 +3584,13 @@ class AgentLoop:
                 _project_design_system(fn_name, design_system)
             )
             fn_args["detail_level"] = self.detail_level
+            fn_args["deck_format"] = self.working_state.deck_format
         elif fn_name == "design_slide_content":
             fn_args["design_system_context"] = json.dumps(
                 _project_design_system(fn_name, design_system)
             )
             fn_args["detail_level"] = self.detail_level
+            fn_args["deck_format"] = self.working_state.deck_format
             slide_index = fn_args.get("slide_index")
             if slide_index in self.working_state.selected_layouts:
                 fn_args["layout_info"] = json.dumps(

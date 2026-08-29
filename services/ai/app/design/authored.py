@@ -713,30 +713,43 @@ CANVAS_BODY_FLOOR_RATIO = 0.030
 POLICY_FLOOR_SHARE = 0.75
 
 
-def _above_the_floor(language: Language, canvas: Canvas) -> Language:
-    """The language with its ramp scaled up to the canvas, if it sits below it.
+def _above_the_floor(language: Language, floor_pt: float) -> Language:
+    """The language with its ramp scaled up to the floor, if it sits below it.
 
     Scaling rather than clamping: every rung is a ratio of the body, so
     raising the body raises the whole ramp and leaves the proportions the
     language was designed around exactly as authored. Clamping the body alone
     would flatten the ramp, and the ramp is the design.
+
+    ``floor_pt`` is a point size rather than a canvas ratio, because the
+    caller may be printed rather than projected - a poster's floor is fixed
+    at physical size regardless of how large the sheet is (see
+    ``app.design.deck_format``), and resolving that distinction is not this
+    function's job.
     """
-    floor = CANVAS_BODY_FLOOR_RATIO * canvas.h_in * 72.0
-    if language.body_pt >= floor:
+    if language.body_pt >= floor_pt:
         return language
-    return language.model_copy(update={"body_pt": round(floor, 1)})
+    return language.model_copy(update={"body_pt": round(floor_pt, 1)})
 
 
 def to_pack(language: Language, canvas: Canvas, *,
-            pack_id: Optional[str] = None) -> Pack:
+            pack_id: Optional[str] = None,
+            floor_pt: Optional[float] = None) -> Pack:
     """The language, derived into the representation everything else reads.
 
     Deriving rather than accepting is the whole point: what comes back has a
     measured grid, a real ramp and archetypes whose slots can hold the type
     they are set in, because all of that was computed here rather than
     asserted by a model.
+
+    ``floor_pt`` defaults to the ordinary projected-slide floor
+    (``CANVAS_BODY_FLOOR_RATIO`` of this canvas) when the caller does not
+    know better. A caller building against a specific deck format passes its
+    own floor - see ``app.design.deck_format.DeckFormat.floor_pt``.
     """
-    language = _with_opener_standfirst(_above_the_floor(language, canvas))
+    floor = (floor_pt if floor_pt is not None
+             else CANVAS_BODY_FLOOR_RATIO * canvas.h_in * 72.0)
+    language = _with_opener_standfirst(_above_the_floor(language, floor))
     roles = _type_roles(language)
     baseline_in = roles["body"].line_height_pt / 72.0
     grid = _grid(language, canvas, baseline_in)
@@ -763,7 +776,7 @@ def to_pack(language: Language, canvas: Canvas, *,
         body_face=language.body_face,
         display_face=language.display_face,
         policy=LegibilityPolicy(
-            body_min_ratio=CANVAS_BODY_FLOOR_RATIO * POLICY_FLOOR_SHARE,
+            body_min_ratio=(floor * POLICY_FLOOR_SHARE) / (canvas.h_in * 72.0),
         ),
     )
     archetypes: list[PageArchetype] = []

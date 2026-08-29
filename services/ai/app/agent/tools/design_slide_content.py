@@ -160,6 +160,16 @@ class DesignSlideContentTool:
                     ),
                     required=False,
                 ),
+                ToolParameter(
+                    name="deck_format",
+                    type="string",
+                    required=False,
+                    description=(
+                        "What kind of presentation this is (boardroom, pitch, "
+                        "academic, dashboard, poster). Supplied automatically; "
+                        "you do not need to pass this."
+                    ),
+                ),
             ],
         )
 
@@ -173,6 +183,7 @@ class DesignSlideContentTool:
         detail_level: str = "detailed",
         selected_image_context: str = "{}",
         prepared_visuals: str = "[]",
+        deck_format: str = "",
     ) -> ToolResult:
         start = time.time()
         try:
@@ -261,7 +272,7 @@ Design System Context:
             # the written slide against the same budget and must not be the
             # one deciding how thin the material was.
             density_info = _density_guidance(ds, outline, key_points, attached,
-                                             slide_index)
+                                             slide_index, deck_format)
             # The compositions this template actually uses, read off its own
             # pages. Offered as region trees the slide can adopt wholesale,
             # because a rail described in prose is a rail the model has to
@@ -678,7 +689,8 @@ def _resolve_title_register(outline: dict, attached: list[dict],
 
 
 def _density_guidance(design_system: dict, outline: dict, key_points: list,
-                      attached: list, slide_index: int) -> str:
+                      attached: list, slide_index: int,
+                      format_id: str = "") -> str:
     """
     How much this slide should carry, and why that number and not another.
 
@@ -708,7 +720,8 @@ def _density_guidance(design_system: dict, outline: dict, key_points: list,
     archetype = budget_model.resolve_archetype(
         outline, material, len(attached or [])
     )
-    budget = budget_model.budget_for(design_system, archetype, material)
+    budget = budget_model.budget_for(design_system, archetype, material,
+                                     format_id=format_id)
     if not budget_model.density_brief_available(design_system):
         return ""
 

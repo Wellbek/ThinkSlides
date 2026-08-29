@@ -207,10 +207,14 @@ class TestTheOfferRidesInTheConsultation:
         events = [e async for e in loop.run(session_id)]
 
         question = next(e for e in events if e["type"] == "question")
-        # Only the research offer: this user implied nothing about handing over
-        # and left nothing ambiguous, so nothing else is worth a round trip.
-        assert len(question["questions"]) == 1
-        assert question["questions"][0]["options"] == [DEEP_RESEARCH_YES, DEEP_RESEARCH_NO]
+        # The reserved format question, then the research offer: this user
+        # implied nothing about handing over and left nothing ambiguous, so
+        # nothing else is worth a round trip.
+        asked = [q["question"] for q in question["questions"]]
+        assert asked[0] == "What kind of presentation is this?"
+        assert len(asked) == 2
+        assert "Research them on the web" in asked[1]
+        assert question["questions"][1]["options"] == [DEEP_RESEARCH_YES, DEEP_RESEARCH_NO]
         assert events[-1]["paused"] is True
 
 

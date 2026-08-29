@@ -195,7 +195,16 @@ class TestTheOrderIsFixed:
 
         assert "ask_user_question" in seen
         question = next(e for e in events if e["type"] == "question")
-        assert question["question"] == "How should I pitch this?"
+        # The format question is reserved ahead of everything else and always
+        # fires first. With nothing else to ask, the pitch-depth fallback
+        # rides along as the second question rather than being dropped -
+        # consultation is not skipped for want of a question, only because
+        # the user said to skip it.
+        assert question["question"] == "What kind of presentation is this?"
+        asked = [q["question"] for q in question["questions"]]
+        assert asked == [
+            "What kind of presentation is this?", "How should I pitch this?",
+        ]
         assert loop.working_state.consulted_before_planning is True
 
     @pytest.mark.asyncio
@@ -212,9 +221,12 @@ class TestTheOrderIsFixed:
 
         question = next(e for e in events if e["type"] == "question")
         asked = [q["question"] for q in question["questions"]]
-        # The clarifying question, and not the handover one the user never
-        # implied.
-        assert asked == ["Which breeds should it cover?"]
+        # The format question first, then the clarifying question - and not
+        # the handover one the user never implied, nor the pitch-depth
+        # fallback, which only fires when nothing else was asked.
+        assert asked == [
+            "What kind of presentation is this?", "Which breeds should it cover?",
+        ]
 
 
 class TestTheRunResumesWhereItStopped:
