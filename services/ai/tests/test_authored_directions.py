@@ -251,6 +251,90 @@ class TestTheChosenLanguageSurvivesTheChatPause:
 
         assert loop._authored_pack() is None
 
+    @pytest.mark.asyncio
+    async def test_a_resumed_run_has_the_pack_live_when_it_renders(
+            self, monkeypatch):
+        """The gap the three tests above could not see (#290).
+
+        `_authored_pack` worked, the language round-tripped, the pack
+        derived - and none of it reached a rendered deck, because
+        `_resolve_pack` was reachable only from the
+        `plan_presentation_structure` branch of `_dispatch_tool`. Planning
+        happens once; every consulted run then pauses for outline review
+        immediately after it, and the resumed run that actually drafts and
+        renders never called it again. The pack lives in a ContextVar, which
+        does not survive the process, so `run_context.get_pack()` was None at
+        render and finalize_and_render_pptx silently took its
+        stock-placeholder branch.
+
+        So this asserts the thing that actually matters and was never
+        checked: at the moment the render tool runs, on a run that resumed
+        after the pause, is the chosen language's pack live?
+        """
+        from app.agent import run_context
+        from app.agent.registry import ToolResult
+        from tests.test_pipeline import INTAKE, _loop
+
+        state = {
+            "brief": json.loads(INTAKE),
+            "scouted": True,
+            "consulted_before_planning": True,
+            "offered_directions": True,
+            "reviewed_outline_with_user": True,
+            "autonomy_confirmed": True,
+            "mode": "deep",
+            "detail_level": "detailed",
+            # Research already satisfied, or the walker stops there first.
+            "web_search_calls": 10,
+            "researched_urls": [f"https://example.com/{i}" for i in range(6)],
+            "presentation_structure": {
+                "totalSlides": 1, "slides": [{"slideIndex": 0}],
+            },
+            "accumulated_slides": [{"slideIndex": 0}],
+            "design_serial": 1,
+            "rendered_serial": 0,
+            # The pause this run resumed from is the outline review, so the
+            # direction the user picked is already settled and persisted.
+            "chosen_direction": {
+                "id": "box-office-ledger",
+                "name": "Box office ledger",
+                "language": _language().model_dump(mode="json"),
+            },
+        }
+
+        loop, session_id, _ = _loop(
+            [], state=state,
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+
+        seen_pack: dict = {}
+
+        async def _execute(name, args):
+            if name == "finalize_and_render_pptx":
+                # Read in the same context the real tool reads it in.
+                seen_pack["at_render"] = run_context.get_pack()
+                return ToolResult(success=True, data={
+                    "filePath": "/tmp/deck.pptx", "previewUrls": [],
+                })
+            if name == "validate_rendered_output":
+                return ToolResult(success=True, data={"issues": []})
+            return ToolResult(success=True, data={})
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute)
+
+        _ = [event async for event in loop.run(session_id)]
+
+        assert "at_render" in seen_pack, (
+            "the run never reached finalize_and_render_pptx, so this test "
+            "proves nothing - fix the fixture, not the assertion")
+        pack = seen_pack["at_render"]
+        assert pack is not None, (
+            "the deck rendered with no pack: the design language the user "
+            "chose was dropped and this deck is stock Office placeholders")
+        assert {a.id for a in pack.archetypes} >= {"cover", "receipts"}, (
+            "a pack was installed, but not the one the user chose")
+
 
 # ── The tool ───────────────────────────────────────────────────────────
 

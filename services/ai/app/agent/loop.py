@@ -1930,6 +1930,28 @@ class AgentLoop:
         if self._material_token is None:
             self._material_token = run_context.set_slide_material({})
 
+        # The design language the user chose, reinstalled for THIS run.
+        #
+        # `_resolve_pack` used to be reachable from exactly one place - the
+        # `plan_presentation_structure` branch of `_dispatch_tool` - so the
+        # pack was installed only on the run that did the planning. Every
+        # consulted run then pauses for the outline review immediately
+        # afterwards (observed: 31ms later), and the resumed run that
+        # actually drafts and renders never called it again. The pack lives
+        # in a ContextVar, which does not survive the process, so
+        # `run_context.get_pack()` was None at render and
+        # finalize_and_render_pptx quietly took its stock-placeholder
+        # branch. The user picked a design language, watched three previews
+        # of it, and got a deck of Office bullets - see issue #290.
+        #
+        # Idempotent by construction: `_resolve_pack` reinstalls only when
+        # `_pack_token` is None or the chosen pack changed, returns early
+        # for an uploaded template, and no-ops on a fresh run with no plan
+        # and no chosen direction (`for_plan({})` finds no slides).
+        self._resolve_pack(
+            self.working_state.presentation_structure or {}, context
+        )
+
         # ── The run walks its pipeline ────────────────────────────────────
         #
         # Each pass takes the first phase that applies and is not finished, and

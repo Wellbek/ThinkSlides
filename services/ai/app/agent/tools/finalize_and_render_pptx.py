@@ -153,6 +153,27 @@ class FinalizeAndRenderPptxTool:
             # keeps the XML-clone path that makes it faithful.
             pack = run_context.get_pack()
 
+            # A run with no template and no pack is about to render stock
+            # Office placeholders, which is never what anyone asked for -
+            # it is what a template-less run looked like before design
+            # languages existed. This was silent for the whole life of
+            # issue #290: the pack was being dropped at the outline-review
+            # pause and every consulted run rendered plain bullets, with
+            # nothing in the logs saying so because the same branch is a
+            # legitimate path for an uploaded template. Said out loud now,
+            # so the next time it happens it is visible on the first run
+            # rather than after a user compares their deck to a preview.
+            if pack is None and not (
+                template_path and os.path.exists(template_path)
+            ):
+                logger.warning(
+                    "rendering_without_a_design_language",
+                    session_id=session_id,
+                    slides=len(slides),
+                    detail=("no pack and no uploaded template - this deck "
+                            "will render on stock Office placeholders"),
+                )
+
             for attempt in range(1, max_retries + 1):
                 try:
                     if pack is not None:
