@@ -767,3 +767,168 @@ class TestTheOutlineReviewAnswerIsActedOn:
         assert events == []
         assert ws.presentation_structure is not None
         assert ws.accumulated_slides
+
+
+class TestAStalledRevisionHandsOverWhatItHas:
+    """
+    A stall after a deck has already rendered once is not the same failure
+    as one before anything has. This used to treat them identically -
+    "nothing was generated" after every slide was drafted and the deck had
+    already rendered, because the redraft loop trying to fix the last few
+    flagged slides never converged. Twelve slides of real work is not
+    nothing, and the file the first render produced still opens.
+
+    Reproduces the reported shape exactly: draft finishes, render and
+    validate find real problems, and every attempt to fix them keeps
+    failing - `design_slide_content`/`validate_slide_json` returning
+    `success: False` turn after turn, which is what a genuine content or
+    schema problem looks like, not a mocked no-op.
+    """
+
+    @staticmethod
+    def _stalled_after_one_render(**overrides):
+        state = {
+            "brief": json.loads(INTAKE),
+            "scouted": True,
+            "consulted_before_planning": True,
+            "reviewed_outline_with_user": True,
+            "design_system": {"palette": {}, "layouts": []},
+            "mode": "deep",
+            "detail_level": "detailed",
+            "presentation_structure": {
+                "totalSlides": 3,
+                "slides": [{"slideIndex": i} for i in range(3)],
+            },
+            "accumulated_slides": [{"slideIndex": i} for i in range(3)],
+            "design_serial": 3,
+            "rendered_serial": 3,
+            "validated_serial": 3,
+            "has_called_finalize": True,
+            "last_rendered_path": "/tmp/deck.pptx",
+            "pending_render_result": {"filePath": "/tmp/deck.pptx",
+                                      "previewUrls": []},
+            "pending_slide_previews": [
+                {"slideIndex": i, "previewUrl": f"/p/{i}.png"} for i in range(3)
+            ],
+            "previews_published": False,
+            "validation_clean": False,
+            "validation_issues": [
+                {"slideIndex": 1, "type": "overflow",
+                 "detail": "text runs off the slide"},
+            ],
+            "slides_needing_revision": [1],
+        }
+        state.update(overrides)
+        return state
+
+    @pytest.mark.asyncio
+    async def test_it_hands_over_the_deck_instead_of_a_bare_error(
+            self, monkeypatch):
+        # Every attempt to fix slide 1 fails outright - a real content or
+        # schema problem, not a no-op - so nothing about working state can
+        # change no matter how many turns are spent on it.
+        script = [_calls(("design_slide_content", {"slide_index": 1}))
+                 for _ in range(20)]
+        loop, session_id, seen = _loop(
+            script, state=self._stalled_after_one_render(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+
+        async def _failing_execute(name, args):
+            seen.append(name)
+            return ToolResult(success=False, error="that slide will not validate")
+
+        monkeypatch.setattr(loop, "_execute_tool", _failing_execute)
+
+        events = [e async for e in loop.run(session_id)]
+
+        assert not [e for e in events if e["type"] == "error"], (
+            "a stall with a render to fall back on must not end on a bare "
+            "error - the whole point is that it hands the deck over instead")
+
+        finalized = [e for e in events if e["type"] == "deck_finalized"]
+        assert finalized, "the deck from the first render must still be handed over"
+        assert finalized[0]["validationClean"] is False
+
+        unresolved = [e for e in events if e["type"] == "validation_unresolved"]
+        assert unresolved, "the residual issue must still be stated, not hidden"
+
+    @pytest.mark.asyncio
+    async def test_the_thought_names_what_happened(self, monkeypatch):
+        script = [_calls(("design_slide_content", {"slide_index": 1}))
+                 for _ in range(20)]
+        loop, session_id, _ = _loop(
+            script, state=self._stalled_after_one_render(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            loop, "_execute_tool",
+            lambda name, args: _async(
+                ToolResult(success=False, error="will not validate")),
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        thoughts = " ".join(
+            e.get("content", "") for e in events if e["type"] == "thought")
+        assert "handing over the deck" in thoughts
+
+    @pytest.mark.asyncio
+    async def test_working_state_is_cleared_so_a_resume_starts_clean(
+            self, monkeypatch):
+        script = [_calls(("design_slide_content", {"slide_index": 1}))
+                 for _ in range(20)]
+        loop, session_id, _ = _loop(
+            script, state=self._stalled_after_one_render(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            loop, "_execute_tool",
+            lambda name, args: _async(
+                ToolResult(success=False, error="will not validate")),
+        )
+
+        _ = [e async for e in loop.run(session_id)]
+
+        assert f"working_state:{session_id}" not in loop.redis_client.store
+
+    @pytest.mark.asyncio
+    async def test_a_stall_before_any_render_still_gets_the_bare_error(
+            self, monkeypatch):
+        """The fallback is specifically for a stall with something to hand
+        over. One before the first render ever succeeds still has nothing,
+        and the honest answer is still the plain error."""
+        script = [_calls(("design_slide_content", {"slide_index": 0}))
+                 for _ in range(20)]
+        loop, session_id, _ = _loop(
+            script,
+            state=self._stalled_after_one_render(
+                has_called_finalize=False,
+                last_rendered_path=None,
+                pending_render_result=None,
+                pending_slide_previews=[],
+                validation_clean=False,
+                validation_issues=[],
+                slides_needing_revision=[],
+                design_serial=0,
+                accumulated_slides=[],
+                presentation_structure={
+                    "totalSlides": 1, "slides": [{"slideIndex": 0}],
+                },
+            ),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            loop, "_execute_tool",
+            lambda name, args: _async(
+                ToolResult(success=False, error="will not draft")),
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        errors = [e for e in events if e["type"] == "error"]
+        assert errors and errors[0].get("code") == "phase_stalled"

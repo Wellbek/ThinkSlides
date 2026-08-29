@@ -1971,6 +1971,37 @@ class AgentLoop:
                     session_id=str(session_id),
                 )
                 if stalls >= 2:
+                    # A stall after a deck has already rendered once is not
+                    # the same failure as one before anything has: the first
+                    # has something to hand over and the second does not.
+                    # This used to treat them identically - "nothing was
+                    # generated" after twelve slides and a successful render,
+                    # because the redraft loop trying to fix the last three
+                    # never converged. Twelve slides of real work is not
+                    # nothing, and the file the first render produced still
+                    # opens.
+                    if self.working_state.pending_render_result:
+                        logger.warning(
+                            "phase_stalled_with_render_to_fall_back_on",
+                            phase=phase.name, session_id=str(session_id),
+                        )
+                        yield _event("thought", phase.label, {
+                            "content": (
+                                "The revision after validation is not "
+                                "converging, so I'm stopping here and handing "
+                                "over the deck as it last rendered rather "
+                                "than losing the work."
+                            ),
+                            "timestamp": _iso_now(),
+                        }, step=phase.name)
+                        # The normal end of a run clears this from inside the
+                        # validate handler, the moment validation settles.
+                        # This run never gets there - it is leaving mid
+                        # redraft - so nothing else will clear it, and a
+                        # resume would otherwise pick the stalled state back
+                        # up and try the same unconverging fix again.
+                        await self._clear_working_state(session_id)
+                        break
                     yield _event("error", phase.label, {
                         "message": (
                             f"The run could not get past the {phase.name} step. "
