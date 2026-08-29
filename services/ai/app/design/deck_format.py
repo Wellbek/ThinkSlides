@@ -74,9 +74,12 @@ BOARDROOM = DeckFormat(
     canvas=_SLIDE_CANVAS, pages_min=10, pages_max=18,
     body_floor_ratio=0.030, body_floor_pt=None, density="balanced",
     vocabulary=("mixed content and exhibit pages, section dividers, a "
-                "closing recap - the shape a board pack or a client report "
-                "already has"),
-    description="read on a screen, presented and left behind as a document",
+                "closing recap - text, charts and images sharing a page, "
+                "shapes overlapping panels, the way a strategy consultancy "
+                "hands a client a report"),
+    description=("dense with text and evidence, built to be read on the "
+                 "page as much as presented out loud - the register of a "
+                 "consulting deck or a board pack"),
     budget_scale=1.0,
 )
 
@@ -97,8 +100,9 @@ ACADEMIC = DeckFormat(
     body_floor_ratio=0.033, body_floor_pt=None, density="balanced",
     vocabulary=("prose-forward pages, a figure with its own caption, and a "
                 "real footnote slot for citations"),
-    description="a seminar or a lecture, closest to how a deck is built by "
-                "default today",
+    description=("one idea developed in prose each page, with sources cited "
+                 "- the register of a research seminar or a graduate "
+                 "reading group"),
     budget_scale=1.0,
 )
 
@@ -107,9 +111,11 @@ DASHBOARD = DeckFormat(
     canvas=_SLIDE_CANVAS, pages_min=3, pages_max=8,
     body_floor_ratio=0.026, body_floor_pt=None, density="dense",
     vocabulary=("statistic rows and figure grids almost exclusively - "
-                "prose limited to captions and a short interpretation"),
-    description="almost entirely charts, tables and numbers, read at a "
-                "glance rather than followed as an argument",
+                "maps, headline-number tiles, charts of several kinds "
+                "sharing one page - prose limited to captions"),
+    description=("several charts, maps and headline numbers sharing one "
+                 "page like an analytics dashboard - scanned for a reading, "
+                 "not followed as an argument"),
     budget_scale=1.0,
 )
 
