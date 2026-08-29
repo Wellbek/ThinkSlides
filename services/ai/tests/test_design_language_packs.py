@@ -162,3 +162,64 @@ class TestIngestionRefusesRatherThanInvents:
             # across 3.9% - a coin-flip that the wider sample calls the other
             # way, and neither reading is wrong.
             assert _load(pack_id).role("body").size_pt == pytest.approx(size, abs=1.2)
+
+
+class TestTheAspectWeightDoesNotDisturbTheMeasuredPacks:
+    """`select.W_ASPECT` was raised from 1.0 to 6.0 so that an exhibit's shape
+    decides between the arrangements an authored language offers.
+
+    That weight is shared with the packs recovered from real publications, and
+    those choose their pages for reasons the aspect of one slot should not be
+    able to overrule. This is the guard on that: what a measured pack picks
+    must not depend on the weight.
+    """
+
+    ASPECTS = (0.6, 1.0, 1.5, 2.4, 4.0)
+
+    @staticmethod
+    def _material(aspect: float):
+        from app.design.material import shape_from
+
+        return shape_from(
+            "content", "A measured heading",
+            ["One sentence of body copy that runs a reasonable length."] * 3,
+            exhibits=[{"type": "chart", "chartType": "bar", "aspect": aspect,
+                       "series": [{"name": "a", "values": [1, 2, 3]}],
+                       "categories": ["x", "y", "z"]}])
+
+    @staticmethod
+    def _choices(weight: float) -> dict:
+        from app.design import run as design_run
+        from app.design import select
+
+        before = select.W_ASPECT
+        select.W_ASPECT = weight
+        try:
+            out = {}
+            for pack_id in design_run.available():
+                pack = design_run.load(pack_id)
+                for aspect in (
+                        TestTheAspectWeightDoesNotDisturbTheMeasuredPacks
+                        .ASPECTS):
+                    selection = select.choose(
+                        TestTheAspectWeightDoesNotDisturbTheMeasuredPacks
+                        ._material(aspect), pack)
+                    out[(pack_id, aspect)] = (
+                        selection.archetype.id if selection else None)
+            return out
+        finally:
+            select.W_ASPECT = before
+
+    def test_the_shipped_packs_choose_the_same_pages_at_any_weight(self):
+        from app.design import select
+
+        assert self._choices(1.0) == self._choices(select.W_ASPECT)
+
+    def test_the_saturation_window_is_wider_than_the_page_offers(self):
+        """A half-width slot beside a column measures about 1.4 and a
+        full-width band about 6.3, which are more than two apart - so at the
+        old window every portrait exhibit saturated against both and the term
+        could not say which was closer."""
+        from app.design.select import ASPECT_SATURATION
+
+        assert ASPECT_SATURATION >= 4.0

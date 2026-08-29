@@ -17,6 +17,7 @@ from app.design.schema import (
     Exhibit,
     Figure,
     Frame,
+    GridPlace,
     Page,
     Paragraph,
     Provenance,
@@ -81,7 +82,8 @@ def _fill(frames: tuple[Frame, ...], contents: dict[str, list],
 
 
 def build_page(page_id: str, shape: MaterialShape, selection: Selection,
-               pack: Pack, *, considered: tuple[str, ...] = ()) -> Page:
+               pack: Pack, *, considered: tuple[str, ...] = (),
+               source_slide: Optional[int] = None) -> Page:
     """The page this selection describes, with its material in place."""
     archetype: PageArchetype = selection.archetype
     contents: dict[str, list] = {}
@@ -99,6 +101,7 @@ def build_page(page_id: str, shape: MaterialShape, selection: Selection,
             selected_by="fit",
             fit_cost=round(selection.cost, 4),
             considered=considered,
+            source_slide=source_slide,
         ),
     )
 
@@ -188,6 +191,8 @@ def _compact(frames: tuple[Frame, ...],
     spare = 1.0 - (cursor - gap)
     grown = {f.id for f in rows[-1]} if spare > 0 else set()
 
+    columns = _closed_up(rows, original)
+
     out = []
     for frame in frames:
         if frame.id not in moved:
@@ -195,10 +200,10 @@ def _compact(frames: tuple[Frame, ...],
             continue
         band = _band(frame)
         height = band[1] - band[0] + (spare if frame.id in grown else 0.0)
+        update = {"y": round(moved[frame.id], 4), "h": round(height, 4)}
+        update.update(columns.get(frame.id, {}))
         out.append(frame.model_copy(update={
-            "place": frame.place.model_copy(update={
-                "y": round(moved[frame.id], 4), "h": round(height, 4),
-            }),
+            "place": frame.place.model_copy(update=update),
         }))
 
     # Checked rather than trusted. Everything above reasons about a stack,
@@ -214,6 +219,59 @@ def _compact(frames: tuple[Frame, ...],
     if compacted and _band(compacted[-1])[1] > 1.0 + 1e-6:
         return frames
     return tuple(out)
+
+
+def _closed_up(rows: list[list[Frame]],
+               original: tuple[Frame, ...]) -> dict[str, dict]:
+    """Where each survivor sits across its row, once the row has lost members.
+
+    The horizontal half of the same problem. `_compact` closed the gap a
+    dropped frame left *above* the frames below it, and once slots could share
+    a row a frame could also lose the thing beside it - so an archetype of
+    `heading 6 / figure 4 / prose 2`, used for a page with no chart, put its
+    only paragraph in a two-column strip at the right-hand edge with four
+    empty columns to its left. The stack was clean and the page was broken.
+
+    A survivor moves left to where the row now starts. A survivor left *alone*
+    takes the width the row occupied, because a lone narrow column on a wide
+    page is the same unfinished look this exists to prevent.
+    """
+    spans: dict[str, tuple[int, int]] = {}
+    for frame in original:
+        if isinstance(frame.place, GridPlace):
+            spans[frame.id] = (frame.place.col, frame.place.span)
+
+    out: dict[str, dict] = {}
+    for row in rows:
+        placed = [f for f in row if f.id in spans]
+        if not placed:
+            continue
+        before = [spans[f.id] for f in original
+                  if f.id in spans and _same_band(f, row)]
+        if len(before) <= len(placed):
+            continue
+        left = min(col for col, _ in before)
+        width = max(col + span for col, span in before) - left
+        placed.sort(key=lambda f: spans[f.id][0])
+        if len(placed) == 1:
+            out[placed[0].id] = {"col": left, "span": max(1, width)}
+            continue
+        cursor = left
+        for frame in placed:
+            out[frame.id] = {"col": cursor}
+            cursor += spans[frame.id][1]
+    return out
+
+
+def _same_band(frame: Frame, row: list[Frame]) -> bool:
+    """Whether this frame sat in the band this row occupies."""
+    band = _band(frame)
+    if band is None:
+        return False
+    top = min(_band(f)[0] for f in row)
+    bottom = max(_band(f)[1] for f in row)
+    middle = (band[0] + band[1]) / 2.0
+    return top - 1e-6 <= middle <= bottom + 1e-6
 
 
 def _typical_gap(original: list[Frame]) -> float:

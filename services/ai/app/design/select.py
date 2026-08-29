@@ -34,7 +34,21 @@ from app.design.schema import FracPlace, GridPlace, GridSpec
 # the function so the trade-off is arguable in one place.
 W_SLOT = 3.0
 W_CAPACITY = 2.0
-W_ASPECT = 1.0
+# An exhibit set in the wrong shape is not a small fault, and this was the
+# cheapest thing on the board to get wrong. Two reasons compounded. It is a
+# *pair* cost, averaged over every placement, so on a three-item page an
+# aspect penalty of 1.0 reached the total as 0.33 - against `W_DENSITY` and
+# `W_SLOT`, which are page-level and undiluted. And once an authored language
+# offers several arrangements of one page kind, the exhibit's shape is exactly
+# the thing that should decide between them: at 1.0 the arrangement did not
+# respond to the chart at all, and a portrait chart and a letterbox one got
+# the same page.
+#
+# Measured against the shipped packs at 1, 2, 4, 6, 8 and 12: their choices do
+# not change at any of them, because their archetypes differ in far more than
+# the shape of one slot. 6.0 is the smallest weight at which the arrangement
+# tracks the exhibit.
+W_ASPECT = 6.0
 W_DENSITY = 2.5
 W_RHYTHM = 0.8
 # Material has an order, and the assignment did not know it. Minimising each
@@ -277,6 +291,20 @@ def capacity_strain(item: MaterialItem, slot: SlotSpec, pack: Pack,
     return 0.0
 
 
+# The mismatch at which one shape is simply the wrong shape, past which
+# nothing is gained by measuring further.
+#
+# It was two, and a factor of two is a smaller difference than the page
+# offers: a half-width slot beside a column measures about 1.4, a full-width
+# band under a heading about 6.3, and those are four and a half apart. So
+# every portrait chart saturated against both and the term could not say which
+# was closer - it reported "maximally wrong" for the slot that fitted and for
+# the slot that did not. Widening it to four leaves the shipped packs choosing
+# exactly the pages they chose before, and lets a tall exhibit find the tall
+# slot.
+ASPECT_SATURATION = 4.0
+
+
 def aspect_penalty(item: MaterialItem,
                    size: Optional[tuple[float, float]]) -> float:
     """How far this slot's shape is from the shape the item wants."""
@@ -288,7 +316,8 @@ def aspect_penalty(item: MaterialItem,
     slot_aspect = width_in / height_in
     if slot_aspect <= 0:
         return 1.0
-    return min(1.0, abs(math.log(item.aspect / slot_aspect)) / math.log(2.0))
+    return min(1.0, abs(math.log(item.aspect / slot_aspect))
+               / math.log(ASPECT_SATURATION))
 
 
 def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,

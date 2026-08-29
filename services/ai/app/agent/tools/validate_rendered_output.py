@@ -54,6 +54,63 @@ MAX_VISION_REVIEW_SLIDES = 12
 # not a layout defect. Anything beyond this is genuinely off the slide.
 IMAGE_OVERFLOW_TOLERANCE_PT = 4.0
 
+# The rungs of the revision ladder, smallest first. A page is revised at most
+# twice, so which rung is asked for is the difference between fixing a page
+# and rebuilding it.
+FIX_NUDGE = "nudge"
+FIX_REPLACE = "replace"
+FIX_REDRAFT = "redraft"
+FIX_TIERS = (FIX_NUDGE, FIX_REPLACE, FIX_REDRAFT)
+
+
+def _fix_tier(raw) -> str:
+    """The rung this verdict asks for, defaulting to the cheapest.
+
+    Defaulting down rather than up on purpose: an unparseable verdict should
+    cost a nudge that the ratchet will discard if it does not help, not a
+    redraft that throws away copy nobody complained about.
+    """
+    value = str(raw or "").strip().lower()
+    return value if value in FIX_TIERS else FIX_NUDGE
+
+
+# The aesthetic pass judges *arrangement* as well as damage.
+#
+# It used to say "not subjective style preferences", which was the right
+# instinct and too broad a cut: it ruled out the whole class of defect an
+# authored design language actually produces. A page with its material in the
+# top third and two thirds of white below it is not a matter of taste, and
+# neither is a chart squeezed into a shape that fights it. Both are visible in
+# a screenshot and answerable without an opinion about the deck.
+#
+# What stays out is everything a reasonable designer could disagree about:
+# the palette, the typeface, the wording, whether the page is interesting.
+def _aesthetic_prompt() -> str:
+    """Built per call so the date is this run's, not the import's."""
+    return f"{today_line()}\n\n" + (
+    "Look at this presentation slide screenshot and judge it as a page.\n\n"
+    "Reply with ONLY a JSON object:\n"
+    '{"hasIssue": true|false, "issue": "one short sentence, or empty string", '
+    '"fix": "nudge|replace|redraft"}\n\n'
+    "Flag a defect in either of these two classes, and nothing else.\n"
+    "1. DAMAGE: text overlapping other text, anything spilling off the slide, "
+    "type too small to read, illegibly low contrast.\n"
+    "2. ARRANGEMENT: a large area of the page empty while another is crowded; "
+    "an exhibit squeezed into a shape that fights it (a wide chart in a narrow "
+    "box, a tall one stretched flat); something sitting oddly high or low with "
+    "a conspicuous gap beside or beneath it.\n\n"
+    "Do NOT flag the colours, the typeface, the wording, or whether the page "
+    "is interesting. Those are choices, not defects.\n\n"
+    '"fix" is the SMALLEST change that would fix it:\n'
+    '- "nudge": the page is right, one thing is in the wrong place or the '
+    "wrong size.\n"
+    '- "replace": the page needs a different arrangement of the same '
+    "material.\n"
+    '- "redraft": the copy itself is the problem - too much of it, too little, '
+    "or the wrong thing.\n"
+    "Prefer the smallest that would work."
+    )
+
 
 class ValidateRenderedOutputTool:
     """Validate the actually-rendered PPTX output (LibreOffice geometry - ground truth)."""
@@ -356,17 +413,10 @@ class ValidateRenderedOutputTool:
                     img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
 
                     response = await vision_provider.chat_with_images(
-                        prompt=(
-                            f"{today_line()}\n\n"
-                            "Look at this presentation slide screenshot. Reply with ONLY a JSON "
-                            'object: {"hasIssue": true|false, "issue": "one short sentence, or '
-                            'empty string"}. Only flag a genuine visual defect - overlapping '
-                            "text, text spilling off the slide, illegibly low contrast - not "
-                            "subjective style preferences."
-                        ),
+                        prompt=_aesthetic_prompt(),
                         images=[f"data:image/png;base64,{img_b64}"],
                         temperature=0.2,
-                        max_tokens=200,
+                        max_tokens=250,
                     )
                     parsed = extract_json_object(response)
                     if parsed and parsed.get("hasIssue") and parsed.get("issue"):
@@ -374,6 +424,12 @@ class ValidateRenderedOutputTool:
                             "slideIndex": page_index,
                             "type": "aesthetic",
                             "detail": str(parsed["issue"])[:200],
+                            # Which rung of the revision ladder this asks for.
+                            # A verdict that only says "wrong" leaves redraft
+                            # as the single remedy, and redrafting a slide
+                            # whose copy was fine to move a frame down is the
+                            # most expensive way to fix the smallest problem.
+                            "fix": _fix_tier(parsed.get("fix")),
                         })
             finally:
                 doc.close()

@@ -342,8 +342,22 @@ def _split(shape: MaterialShape) -> tuple[MaterialShape, MaterialShape]:
 
 
 def _place(shape: MaterialShape, pack: Pack,
-           previous: Optional[str]) -> list[tuple[MaterialShape, object]]:
-    """This material, bound to archetypes, split as many times as it takes."""
+           previous: Optional[str],
+           avoid: frozenset[str] = frozenset(),
+           ) -> list[tuple[MaterialShape, object]]:
+    """This material, bound to archetypes, split as many times as it takes.
+
+    ``avoid`` names archetypes this page has already been through. It is how a
+    page is *placed again* rather than redrafted: the arrangement that came
+    out wrong is taken off the menu and the next-best one is chosen from the
+    same material. `choose` has always accepted a candidate list; nothing here
+    passed it one.
+
+    An avoid set that would leave nothing to choose from is ignored rather
+    than obeyed. Refusing to place a page at all is a worse outcome than
+    placing it the way we already did.
+    """
+    candidates = [a for a in pack.archetypes if a.id not in avoid] or None
     pending = [shape]
     placed: list[tuple[MaterialShape, object]] = []
     splits = 0
@@ -352,7 +366,8 @@ def _place(shape: MaterialShape, pack: Pack,
     last = previous
     while pending:
         current = pending.pop(0)
-        selection = choose(current, pack, previous_archetype=last)
+        selection = choose(current, pack, previous_archetype=last,
+                           candidates=candidates)
         if selection is None and current.role != "content":
             # An opener carrying a page of copy is a content page in
             # practice, and a pack whose real cover is a full-bleed
@@ -360,7 +375,8 @@ def _place(shape: MaterialShape, pack: Pack,
             # back is better than refusing: the page still gets composed, in
             # the archetype that can actually hold it.
             current = dataclasses.replace(current, role="content")
-            selection = choose(current, pack, previous_archetype=last)
+            selection = choose(current, pack, previous_archetype=last,
+                               candidates=candidates)
         if selection is not None:
             placed.append((current, selection))
             last = selection.archetype.id
@@ -385,12 +401,18 @@ def _place(shape: MaterialShape, pack: Pack,
 
 
 def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
-            skip_unplaceable: bool = False) -> DesignDoc:
+            skip_unplaceable: bool = False,
+            avoid: Optional[dict[int, frozenset[str]]] = None) -> DesignDoc:
     """Every designed slide, laid out in this pack and repaired.
 
     Repair runs here rather than being offered as a tool. The validator this
     replaces was a tool the model could decline to call, and it was invoked
     zero times across every observed run.
+
+    ``avoid`` names, per slide index, the archetypes that slide has already
+    been composed on and should not be given again. That is the second rung of
+    the revision ladder: a page whose arrangement came out wrong is placed
+    again from the same material rather than redrafted from scratch.
 
     ``skip_unplaceable`` drops a page that no archetype can carry instead of
     raising, and exists for **previews only**. A real deck that silently loses
@@ -408,7 +430,8 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
     for index, slide in enumerate(ordered):
         shape = material_from(slide, index=index, total=len(ordered))
         try:
-            placed = _place(shape, pack, previous)
+            placed = _place(shape, pack, previous,
+                            (avoid or {}).get(index, frozenset()))
         except Unplaceable:
             if not skip_unplaceable:
                 raise
@@ -421,7 +444,8 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
             continue
         for part, selection in placed:
             page = build_page(f"p{len(pages) + 1}", part, selection, pack,
-                              considered=tuple(a.id for a in pack.archetypes))
+                              considered=tuple(a.id for a in pack.archetypes),
+                              source_slide=index)
             previous = selection.archetype.id
             pages.append(page)
 

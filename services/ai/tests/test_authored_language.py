@@ -14,6 +14,8 @@ design, code derives the geometry.** The model never emits coordinates - that
 is what removed the whole class of guessed-rectangle failures - so what comes
 back has to pass every gate a measured language passes.
 """
+import math
+
 import pytest
 
 from app.design.authored import Language, PageKind, Slot, to_pack
@@ -115,8 +117,18 @@ class TestTheAgentNeverDecidesGeometry:
             assert forbidden not in fields
 
     def test_a_slot_declares_a_span_not_a_rectangle(self):
+        """`bleed` and `behind` are declarations, not coordinates.
+
+        A language says that a figure bleeds; *which* edges it runs off is
+        derived from the row it lands in and the columns it takes. Saying
+        where would be emitting geometry again, one flag at a time.
+        """
         fields = set(Slot.model_fields)
-        assert fields == {"kind", "span", "required", "name"}
+        assert fields == {"kind", "span", "required", "name",
+                          "bleed", "behind"}
+        for forbidden in ("x", "y", "col", "row", "left", "top",
+                          "width", "height", "edges", "z"):
+            assert forbidden not in fields
 
     def test_an_impossible_span_is_clamped_rather_than_obeyed(self):
         """An agent asking for eight columns of six gets six."""
@@ -408,3 +420,243 @@ class TestTypeIsSizedForASlideNotAPage:
         pack = ensure(to_pack(_language(body_pt=9.0), CANVAS))
         doc = design_run.compose(language_specimen_slides(), pack, title="x")
         assert len(doc.pages) >= 3
+
+
+class TestAPageMayPutThingsBesideEachOther:
+    """Issue #281.
+
+    Every page an authored language composed was a single column down the left
+    of the slide. `_archetype` emitted `col=0` for every slot and only ever
+    advanced downward, so `span` narrowed a frame without moving anything up
+    beside it: a half-width figure left the right half of the page empty, and
+    a deck of them read as plain and unfinished.
+
+    The whole rule is that consecutive slots whose spans fit the grid share a
+    row. It adds no authoring vocabulary - `Slot.span` already said how wide a
+    thing was, and `PageKind.slots` already had an order.
+    """
+
+    @staticmethod
+    def _pack(**page):
+        base = dict(name="page", role="content", frequency=1.0)
+        base.update(page)
+        return to_pack(_language(body_pt=18.0, pages=(PageKind(**base),)),
+                       CANVAS)
+
+    @staticmethod
+    def _grid(archetype) -> dict:
+        return {f.id: f.place for f in archetype.frames
+                if f.place.kind == "grid"}
+
+    def test_slots_whose_spans_fit_share_a_row(self):
+        pack = self._pack(slots=(
+            Slot(kind="heading", span=6, required=True),
+            Slot(kind="figure", span=3),
+            Slot(kind="prose", span=3)))
+        places = self._grid(pack.archetype("page"))
+        figure = next(p for k, p in places.items() if "figure" in k)
+        prose = next(p for k, p in places.items() if "prose" in k)
+        assert figure.y == pytest.approx(prose.y)
+        assert figure.col == 0
+        assert prose.col == figure.span
+
+    def test_spans_that_overflow_the_grid_wrap_to_a_new_row(self):
+        pack = self._pack(slots=(
+            Slot(kind="prose", span=4, name="a"),
+            Slot(kind="prose", span=4, name="b")))
+        places = self._grid(pack.archetype("page"))
+        first = places["page-a-0"]
+        second = places["page-b-1"]
+        assert second.col == 0
+        assert second.y > first.y
+
+    def test_the_bands_still_fill_the_page(self):
+        """`_fill` distributes the page's spare height per *band*. Doing it
+        per slot over-counts a row carrying two things: a figure and its
+        commentary side by side measured as two stacked bands, so the stack
+        came to about half the box and the rest was white."""
+        pack = self._pack(slots=(
+            Slot(kind="heading", span=6, required=True),
+            Slot(kind="figure", span=3),
+            Slot(kind="prose", span=3)))
+        places = self._grid(pack.archetype("page"))
+        assert max(p.y + p.h for p in places.values()) == pytest.approx(
+            1.0, abs=0.02)
+
+    def test_a_heading_is_not_stretched_to_the_figure_beside_it(self):
+        """Stretching a fixed-height slot to match its row sets one line of
+        display type floating in the middle of a tall box."""
+        pack = self._pack(slots=(
+            Slot(kind="heading", span=3, required=True),
+            Slot(kind="figure", span=3)))
+        places = self._grid(pack.archetype("page"))
+        heading = next(p for k, p in places.items() if "heading" in k)
+        figure = next(p for k, p in places.items() if "figure" in k)
+        assert heading.y == pytest.approx(figure.y)
+        assert heading.h < figure.h
+
+    def test_a_composed_page_is_still_geometrically_sound(self):
+        from app.design import run as design_run
+        from app.design.geometry import check_doc
+        from app.renderer.specimen import language_specimen_slides
+
+        pack = ensure(to_pack(_language(body_pt=18.0), CANVAS))
+        doc = design_run.compose(language_specimen_slides(), pack, title="x")
+        assert check_doc(doc) == []
+
+
+class TestATypeOverImageOpenerIsAuthorable:
+    """The shape the schema could already express that no language could ask
+    for: a full-page figure with the title laid over it, which is how the
+    reference decks open."""
+
+    @staticmethod
+    def _cover():
+        return ensure(to_pack(_language(body_pt=18.0, pages=(
+            PageKind(name="opener", role="cover", frequency=1.0, slots=(
+                Slot(kind="figure", span=6, behind=True, name="hero"),
+                Slot(kind="heading", span=6, required=True),
+                Slot(kind="standfirst", span=4))),
+            PageKind(name="page", role="content", frequency=1.0, slots=(
+                Slot(kind="heading", span=6, required=True),
+                Slot(kind="figure", span=6))),
+        )), CANVAS)).archetype("opener")
+
+    def test_a_behind_slot_is_the_whole_page_underneath(self):
+        hero = next(f for f in self._cover().frames if "hero" in f.id)
+        assert hero.z == 0
+        assert hero.place.col == 0 and hero.place.h == pytest.approx(1.0)
+
+    def test_the_type_sits_over_it(self):
+        cover = self._cover()
+        hero = next(f for f in cover.frames if "hero" in f.id)
+        typed = [f for f in cover.frames
+                 if f.role in ("headline", "standfirst")]
+        assert typed and all(f.z > hero.z for f in typed)
+
+    def test_a_bleeding_slot_names_the_edges_it_runs_off(self):
+        """Derived, not authored. A language says a figure bleeds; where it
+        bleeds follows from the row it lands in and the columns it takes."""
+        pack = to_pack(_language(body_pt=18.0, pages=(
+            PageKind(name="p", role="content", frequency=1.0, slots=(
+                Slot(kind="heading", span=6, required=True),
+                Slot(kind="figure", span=3, bleed=True),
+                Slot(kind="prose", span=3))),)), CANVAS)
+        figure = next(f for f in pack.archetype("p").frames
+                      if f.role == "figure")
+        assert set(figure.bleed) == {"bottom", "left"}
+
+    def test_a_slot_that_does_not_bleed_declares_no_edges(self):
+        pack = to_pack(_language(body_pt=18.0), CANVAS)
+        assert all(f.bleed == () for f in pack.archetype("receipts").frames)
+
+
+class TestAnOpenerSitsLowOnThePage:
+    def test_authored_and_composed_openers_agree(self):
+        """`vocabulary.py` builds a composed cover with its type low - it is
+        what BXSL does. An authored cover stacked from the top, so a language
+        that declared its own cover got a worse one than a language that
+        forgot to."""
+        from app.design.vocabulary import COVER_BASELINE
+
+        pack = to_pack(_language(body_pt=18.0), CANVAS)
+        bands = [f.place for f in pack.archetype("cover").frames
+                 if f.place.kind == "grid"]
+        assert max(p.y + p.h for p in bands) == pytest.approx(
+            COVER_BASELINE, abs=0.02)
+
+    def test_an_opener_with_room_already_used_is_left_alone(self):
+        """A cover carrying a column of prose has already filled the page, and
+        pushing it down would run it off the bottom."""
+        pack = to_pack(_language(body_pt=18.0, pages=(
+            PageKind(name="full", role="cover", frequency=1.0, slots=(
+                Slot(kind="heading", span=6, required=True),
+                Slot(kind="prose", span=6))),)), CANVAS)
+        bands = [f.place for f in pack.archetype("full").frames
+                 if f.place.kind == "grid"]
+        assert max(p.y + p.h for p in bands) <= 1.001
+
+
+class TestTheArrangementIsChosenFromTheMaterial:
+    """Your note on #281: pick the layout from what the page actually carries.
+
+    Half of that already worked - `select.choose` scores every archetype
+    against the real material. What did not is that an authored page kind
+    derived to exactly one geometry, so the selector was choosing from a set
+    of size one and a page of prose and a page carrying a wide chart got the
+    same shape.
+    """
+
+    @staticmethod
+    def _pack():
+        return ensure(to_pack(_language(body_pt=18.0, pages=(
+            PageKind(name="page", role="content", frequency=1.0, slots=(
+                Slot(kind="heading", span=6, required=True),
+                Slot(kind="figure", span=3),
+                Slot(kind="prose", span=3))),)), CANVAS))
+
+    @staticmethod
+    def _with_chart(aspect: float):
+        from app.design.material import shape_from
+
+        return shape_from("content", "Heading", ["one two three four."] * 3,
+                          exhibits=[{"type": "chart", "chartType": "bar",
+                                     "aspect": aspect,
+                                     "series": [{"name": "a",
+                                                 "values": [1, 2]}],
+                                     "categories": ["x", "y"]}])
+
+    def test_one_page_kind_offers_more_than_one_arrangement(self):
+        ids = {a.id for a in self._pack().archetypes}
+        assert {"page", "page-stacked"} <= ids
+
+    def test_identical_arrangements_are_not_offered_twice(self):
+        """A language whose slots are already full width *is* the stack."""
+        pack = to_pack(_language(body_pt=18.0, pages=(
+            PageKind(name="wide", role="content", frequency=1.0, slots=(
+                Slot(kind="heading", span=6, required=True),
+                Slot(kind="prose", span=6))),)), CANVAS)
+        assert [a.id for a in pack.archetypes] == ["wide"]
+
+    def test_the_arrangement_the_language_wrote_wins_a_tie(self):
+        pack = self._pack()
+        authored = pack.archetype("page")
+        variant = pack.archetype("page-stacked")
+        assert authored.frequency > variant.frequency
+
+    def test_a_wide_exhibit_and_a_tall_one_land_differently(self):
+        """The point of the whole thing. At the old `W_ASPECT` these were the
+        same page, because the exhibit's shape reached the total divided by
+        the number of placements and never decided anything."""
+        from app.design.select import choose
+
+        pack = self._pack()
+        tall = choose(self._with_chart(0.7), pack)
+        wide = choose(self._with_chart(6.0), pack)
+        assert tall is not None and wide is not None
+        assert tall.archetype.id != wide.archetype.id
+
+    def test_an_exhibit_goes_where_its_shape_fits(self):
+        from app.design.select import _slot_rect, choose
+
+        pack = self._pack()
+        for aspect in (0.7, 6.0):
+            selection = choose(self._with_chart(aspect), pack)
+            archetype = selection.archetype
+            slot = next(s for s in archetype.slots if "figure" in s.frame_id)
+            rect = _slot_rect(archetype, slot, pack,
+                              archetype.grid or pack.grid)
+            chosen = rect[0] / rect[1]
+            others = []
+            for other in pack.archetypes:
+                if other.id == archetype.id or other.role != archetype.role:
+                    continue
+                spec = next((s for s in other.slots
+                             if "figure" in s.frame_id), None)
+                if spec is None:
+                    continue
+                box = _slot_rect(other, spec, pack, other.grid or pack.grid)
+                if box and box[1]:
+                    others.append(box[0] / box[1])
+            assert all(abs(math.log(aspect / chosen))
+                       <= abs(math.log(aspect / o)) + 1e-9 for o in others)

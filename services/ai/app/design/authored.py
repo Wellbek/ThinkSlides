@@ -31,7 +31,7 @@ recovered one is.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal, NamedTuple, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -152,11 +152,33 @@ class Slot(_Model):
     kind: SlotKind
     # How many columns of the grid it spans. Clamped to the grid on
     # derivation, so an agent asking for eight of six gets six.
+    #
+    # Consecutive slots whose spans fit the grid share a row - that is the
+    # whole of the horizontal vocabulary, and it needs nothing new to author.
+    # Before rows existed a span narrowed a frame without moving anything up
+    # beside it, so `figure span 3` was a half-width box with dead space to
+    # its right and the next slot went underneath it. Every page an authored
+    # language produced was one column down the left of the slide.
     span: int = Field(default=1, ge=1, le=48)
     # Whether the page is unusable without it.
     required: bool = False
     # A short id, so two prose columns on one page are distinguishable.
     name: str = ""
+    # Whether this runs to the edge of the page rather than stopping at the
+    # margin. Which edges is derived from where the slot lands - a frame in
+    # the first row bleeds off the top, one at column zero off the left - so
+    # a language says that a figure bleeds and never says where.
+    bleed: bool = False
+    # Whether this sits *behind* the rest of the page: the full content box at
+    # z=0, with the type laid over it. This is how the reference decks open -
+    # a full-page photograph carrying the title - and it was the one shape the
+    # schema could already express that no authored language could ask for.
+    #
+    # A page built this way is not compacted when a frame drops out.
+    # `bind._compact` refuses to close gaps on a page whose frames overlap,
+    # deliberately: "the row below" is not a thing such a page has. So a
+    # behind slot must be authored complete rather than relying on that pass.
+    behind: bool = False
 
 
 class PageKind(_Model):
@@ -237,14 +259,72 @@ def _grid(language: Language, canvas: Canvas, baseline_in: float) -> GridSpec:
     )
 
 
+# The slot kinds that flow, and so can be set beside one another. A heading
+# spans its page by nature; a figure and the prose reading it are the pair a
+# designed page actually puts side by side.
+FLOWING_SLOTS = frozenset({"figure", "prose"})
+
+
+def _arrangements(kind: PageKind, columns: int) -> list[tuple[str, PageKind]]:
+    """The same page kind, arranged every way its own slots allow.
+
+    An authored page kind used to derive to exactly one geometry, which meant
+    a content-driven selector was choosing from a set of size one: a page of
+    three paragraphs and a page carrying a wide chart got the same shape,
+    because the shape was decided before either was looked at.
+
+    `select.choose` already scores every archetype against the real material -
+    how many items, how many characters, an exhibit's natural aspect, how far
+    the page sits from the archetype's density habit. So what was missing was
+    never a decision procedure. It was something to decide between.
+
+    These are the language's own slots at the two ends of the one axis that is
+    genuinely free, with the arrangement it authored kept as its preference.
+    Nothing here invents a page kind the language did not ask for.
+    """
+    flowing = [index for index, slot in enumerate(kind.slots)
+               if slot.kind in FLOWING_SLOTS and not slot.behind]
+
+    def respan(spans: dict[int, int]) -> PageKind:
+        return kind.model_copy(update={"slots": tuple(
+            slot.model_copy(update={"span": spans.get(index, slot.span)})
+            for index, slot in enumerate(kind.slots))})
+
+    every = max(1, columns)
+    candidates = [
+        ("", kind),
+        ("stacked", respan({i: every for i in range(len(kind.slots))})),
+    ]
+    if len(flowing) >= 2:
+        half = max(1, columns // 2)
+        spans = {i: every for i in range(len(kind.slots))}
+        spans.update({i: half for i in flowing})
+        candidates.append(("paired", respan(spans)))
+
+    # Two arrangements that come out the same shape are one archetype. A
+    # language whose slots are already full width *is* the stack, and offering
+    # the selector two identical options only costs it time.
+    seen: set[tuple] = set()
+    unique: list[tuple[str, PageKind]] = []
+    for suffix, variant in candidates:
+        key = tuple((slot.span, slot.behind) for slot in variant.slots)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((suffix, variant))
+    return unique
+
+
 def _archetype(kind: PageKind, language: Language, canvas: Canvas,
-               grid: GridSpec, roles: dict[str, TypeRole]) -> PageArchetype:
+               grid: GridSpec, roles: dict[str, TypeRole], *,
+               suffix: str = "",
+               frequency: Optional[float] = None) -> PageArchetype:
     """One authored page kind, laid out.
 
     This is where a decision becomes a rectangle, and the agent is not in the
-    room for it. Slots are stacked down the content box in the order they were
-    declared, each as tall as the type it is set in needs, and a slot that
-    spans fewer columns than the grid sits at the left edge of its own run.
+    room for it. `_stack` decides where every slot sits - which row it shares,
+    which columns it takes, how tall its band is - and this turns those
+    fractions into frames and the slot specs that bind material to them.
     """
     from app.design.geometry import content_box
 
@@ -252,7 +332,6 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
     scale = DENSITY_SCALE[language.density]
     frames: list[Frame] = []
     slots: list[SlotSpec] = []
-    cursor = 0.0
     gap = (grid.baseline_in or canvas.h_in * 0.012) / max(0.01, box.height)
 
     ground = "accent" if kind.role in ("cover", "section") else None
@@ -263,14 +342,18 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
             ground=ground, z=0, bleed=("top", "right", "bottom", "left"),
         ))
 
-    heights = _heights(kind, language, roles, box.height, scale, gap)
+    stack = _stack(kind, language, roles, box.height, scale, gap, grid.columns)
+
+    archetype_id = f"{kind.name}-{suffix}" if suffix else kind.name
 
     for index, slot in enumerate(kind.slots):
         role_name = ROLE_FOR_SLOT[slot.kind]
         role = roles.get(role_name) or roles["body"]
-        span = max(1, min(grid.columns, slot.span))
-        height = heights[index]
-        identifier = f"{kind.name}-{slot.name or slot.kind}-{index}"
+        # Prefixed with the arrangement, not just the page kind: two
+        # arrangements of one kind are two archetypes, and a frame id repeated
+        # across them makes a composed page ambiguous about where it came from.
+        identifier = f"{archetype_id}-{slot.name or slot.kind}-{index}"
+        cell = stack[index]
         frames.append(Frame(
             id=identifier, role=FRAME_FOR_SLOT[slot.kind],
             # The rung this slot is set in, stated on the frame rather than
@@ -280,11 +363,16 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
             # language's stat row came out the same size as its prose.
             type_role=("display" if slot.kind == "heading"
                        and kind.role in ("cover", "section") else role_name),
-            place=GridPlace(col=0, span=span, y=round(cursor, 4),
-                            h=round(height, 4)),
-            z=1,
+            place=GridPlace(col=cell.col, span=cell.span,
+                            y=round(cell.y, 4), h=round(cell.h, 4)),
+            # A slot that sits behind goes under everything else. Overlap is
+            # an error only between siblings at equal z, so this is the one
+            # declaration that makes type-over-image legal geometry rather
+            # than an ambiguity the gate refuses.
+            z=0 if cell.behind else 1,
+            bleed=cell.bleed,
         ))
-        capacity = _capacity(role, span, grid, canvas, height, box.height)
+        capacity = _capacity(role, cell.span, grid, canvas, cell.h, box.height)
         slots.append(SlotSpec(
             frame_id=identifier,
             accepts=ACCEPTS_FOR_SLOT.get(slot.kind, ("text",)),
@@ -294,13 +382,179 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
             typical_chars=max(1, round(
                 capacity * TYPICAL_FILL[language.density])),
         ))
-        cursor += height + gap
 
     return PageArchetype(
-        id=kind.name, label=kind.name.replace("-", " "), role=kind.role,
-        frequency=kind.frequency, frames=tuple(frames), slots=tuple(slots),
+        id=archetype_id, label=archetype_id.replace("-", " "), role=kind.role,
+        frequency=kind.frequency if frequency is None else frequency,
+        frames=tuple(frames), slots=tuple(slots),
         note="authored for this deck, not measured from a publication",
     )
+
+
+class _Cell(NamedTuple):
+    """Where one slot ends up, in fractions of the content box."""
+
+    col: int
+    span: int
+    y: float
+    h: float
+    bleed: tuple[str, ...]
+    behind: bool
+
+
+def _rows(kind: PageKind, columns: int) -> list[list[int]]:
+    """Slot indices grouped into the rows they share.
+
+    Consecutive slots whose spans sum to the grid width belong beside each
+    other, and the next row starts when the sum would overflow. That single
+    rule turns `heading 6 / figure 3 / prose 3` from three stacked boxes into
+    a headline over a figure and its commentary side by side, and it adds no
+    authoring vocabulary at all: `Slot.span` already says how wide a thing is
+    and `PageKind.slots` already has an order.
+
+    A slot that sits behind is not in any row. It is the whole page.
+    """
+    rows: list[list[int]] = []
+    current: list[int] = []
+    used = 0
+    for index, slot in enumerate(kind.slots):
+        if slot.behind:
+            continue
+        span = max(1, min(columns, slot.span))
+        if current and used + span > columns:
+            rows.append(current)
+            current, used = [], 0
+        current.append(index)
+        used += span
+    if current:
+        rows.append(current)
+    return rows
+
+
+def _natural(kind: PageKind, roles: dict[str, TypeRole],
+             box_height: float, scale: float) -> list[float]:
+    """How tall each slot wants to be, from the type it is set in."""
+    out: list[float] = []
+    for slot in kind.slots:
+        role = roles.get(ROLE_FOR_SLOT[slot.kind]) or roles["body"]
+        if slot.kind == "figure":
+            out.append(0.34)
+            continue
+        lines = LINES_FOR_SLOT[slot.kind]
+        wanted = max(1, round(lines * (scale if slot.kind == "prose" else 1.0)))
+        out.append((wanted * role.line_height_pt / 72.0)
+                   / max(0.01, box_height))
+    return out
+
+
+def _stack(kind: PageKind, language: Language, roles: dict[str, TypeRole],
+           box_height: float, scale: float, gap: float,
+           columns: int) -> list[_Cell]:
+    """Where every slot sits, row by row.
+
+    Rows are the unit of vertical rhythm once rows exist. Distributing the
+    page's spare height per *slot* - which is what this did when every slot
+    was its own band - over-counts a row carrying two things and leaves the
+    page short: a figure and its commentary side by side measured as two
+    stacked bands, so the stack came to about half the box and the rest was
+    white. That is the same unfinished page `_fill` was written to prevent,
+    reached through the side door.
+    """
+    natural = _natural(kind, roles, box_height, scale)
+    rows = _rows(kind, columns)
+
+    # A row is as tall as the tallest thing in it, and can grow if anything
+    # in it flows.
+    row_natural = [max(natural[i] for i in row) for row in rows]
+    row_flexible = [
+        any(kind.slots[i].kind not in FIXED_HEIGHT_SLOTS for i in row)
+        for row in rows
+    ]
+    row_height = _fill(row_natural, row_flexible, gap)
+
+    cells: list[Optional[_Cell]] = [None] * len(kind.slots)
+    y = 0.0
+    for position, (row, height) in enumerate(zip(rows, row_height)):
+        col = 0
+        for index in row:
+            slot = kind.slots[index]
+            span = max(1, min(columns, slot.span))
+            # A fixed-height slot keeps its own height and sits at the top of
+            # its row. Stretching a heading to match the figure beside it sets
+            # one line of display type floating in the middle of a tall box.
+            own = (height if slot.kind not in FIXED_HEIGHT_SLOTS
+                   else min(natural[index], height))
+            cells[index] = _Cell(
+                col=col, span=span, y=y, h=max(MIN_SLOT_HEIGHT, own),
+                bleed=_bleed_edges(slot, col, span, columns,
+                                   position, len(rows)),
+                behind=False,
+            )
+            col += span
+        y += height + gap
+
+    for index, slot in enumerate(kind.slots):
+        if slot.behind:
+            cells[index] = _Cell(
+                col=0, span=columns, y=0.0, h=1.0,
+                bleed=("top", "right", "bottom", "left"), behind=True,
+            )
+
+    settled = [cell for cell in cells if cell is not None]
+    return _seated(settled, kind.role)
+
+
+def _seated(cells: list[_Cell], role: str) -> list[_Cell]:
+    """An opener's type sits low on the page rather than at the top of it.
+
+    `vocabulary.py` already builds a composed cover this way - it is what BXSL
+    does, and it leaves the upper two thirds for the ground to carry - but an
+    authored opener stacked from the top like any other page. So a language's
+    own cover was a title and a standfirst in the top quarter with a flat
+    field of accent under them, while the cover composed *for* a language that
+    forgot to declare one was set properly. Two covers, two rules, and the
+    authored one looked unfinished.
+
+    Only a stack with room to move is moved. A cover carrying a column of
+    prose has already filled the page, and pushing it down would run it off
+    the bottom.
+    """
+    from app.design.vocabulary import COVER_BASELINE, SECTION_BASELINE
+
+    baseline = {"cover": COVER_BASELINE, "section": SECTION_BASELINE}.get(role)
+    if baseline is None:
+        return cells
+    movable = [cell for cell in cells if not cell.behind]
+    if not movable:
+        return cells
+    bottom = max(cell.y + cell.h for cell in movable)
+    shift = baseline - bottom
+    if shift <= 0:
+        return cells
+    return [cell if cell.behind else cell._replace(y=cell.y + shift)
+            for cell in cells]
+
+
+def _bleed_edges(slot: Slot, col: int, span: int, columns: int,
+                 row: int, rows: int) -> tuple[str, ...]:
+    """Which edges a bleeding slot runs off, from where it landed.
+
+    Derived rather than authored. A language says that a figure bleeds; where
+    it bleeds is a consequence of the row it is in and the columns it takes,
+    and asking a model for it would be asking for geometry again.
+    """
+    if not slot.bleed:
+        return ()
+    edges = []
+    if row == 0:
+        edges.append("top")
+    if row == rows - 1:
+        edges.append("bottom")
+    if col == 0:
+        edges.append("left")
+    if col + span >= columns:
+        edges.append("right")
+    return tuple(edges)
 
 
 # Slot kinds whose height is decided by the type they are set in. A headline
@@ -311,10 +565,16 @@ FIXED_HEIGHT_SLOTS = frozenset({
     "heading", "standfirst", "statistic", "quote", "caption", "footnote",
 })
 
+# The smallest a slot may be squeezed to and still be a rectangle. `GridPlace`
+# refuses a height of zero, and a page whose bands have all been shrunk to
+# nothing is a page that should have been split rather than one that should
+# fail to construct.
+MIN_SLOT_HEIGHT = 0.01
 
-def _heights(kind: PageKind, language: Language, roles: dict[str, TypeRole],
-             box_height: float, scale: float, gap: float) -> list[float]:
-    """Each slot's height as a fraction of the content box, filling the page.
+
+def _fill(natural: list[float], flexible: list[bool],
+          gap: float) -> list[float]:
+    """Bands sized to fill the page, given what each one naturally wants.
 
     The natural heights come from the type. They rarely add up to a page: a
     heading, a stat row and a column of prose measure about a third of the
@@ -323,57 +583,50 @@ def _heights(kind: PageKind, language: Language, roles: dict[str, TypeRole],
     below it, whatever the language said its density was. That is not an airy
     layout, it is an unfinished one.
 
-    So what is left over is given to the slots that can use it - prose and
-    figures, the two that flow - in proportion to what they already have. A
-    page with neither keeps its natural heights and its white space, which is
-    right: a section divider carrying one line is meant to be mostly empty.
+    So what is left over is given to the bands that can use it - the ones
+    carrying something that flows, prose and figures - in proportion to what
+    they already have. A page with neither keeps its natural heights and its
+    white space, which is right: a section divider carrying one line is meant
+    to be mostly empty.
+
+    A band is a row, not a slot, so two things side by side are measured once
+    rather than twice.
     """
-    natural: list[float] = []
-    for slot in kind.slots:
-        role = roles.get(ROLE_FOR_SLOT[slot.kind]) or roles["body"]
-        if slot.kind == "figure":
-            natural.append(0.34)
-            continue
-        lines = LINES_FOR_SLOT[slot.kind]
-        wanted = max(1, round(lines * (scale if slot.kind == "prose" else 1.0)))
-        natural.append((wanted * role.line_height_pt / 72.0)
-                       / max(0.01, box_height))
-
-    used = sum(natural) + gap * max(0, len(natural) - 1)
+    heights = list(natural)
+    used = sum(heights) + gap * max(0, len(heights) - 1)
     spare = 1.0 - used
-    flexible = [index for index, slot in enumerate(kind.slots)
-                if slot.kind not in FIXED_HEIGHT_SLOTS]
-    if abs(spare) < 1e-9 or not flexible:
-        return natural
+    growable = [index for index, can in enumerate(flexible) if can]
+    if abs(spare) < 1e-9 or not growable:
+        return heights
 
-    share = sum(natural[index] for index in flexible)
+    share = sum(heights[index] for index in growable)
     if share <= 0:
-        return natural
+        return heights
 
     if spare > 0:
-        for index in flexible:
-            natural[index] += spare * natural[index] / share
-        return natural
+        for index in growable:
+            heights[index] += spare * heights[index] / share
+        return heights
 
     # Too tall, not too short. A language that declares a heading, a stat row,
     # a column and a figure asks for more than a page: the stack was laid from
     # the top regardless and the last slot ran off the bottom of the canvas,
-    # where nothing renders. The flexible slots give the room back first,
+    # where nothing renders. The flexible bands give the room back first,
     # since they are the ones that flow.
     wanted = -spare
     if wanted < share:
-        for index in flexible:
-            natural[index] -= wanted * natural[index] / share
-        return natural
+        for index in growable:
+            heights[index] -= wanted * heights[index] / share
+        return heights
 
-    # Even emptying the flexible slots is not enough, so everything shrinks
+    # Even emptying the flexible bands is not enough, so everything shrinks
     # together and the ramp is preserved as a ratio. A page cannot be taller
     # than the page.
-    total = sum(natural)
-    room = max(0.0, 1.0 - gap * max(0, len(natural) - 1))
+    total = sum(heights)
+    room = max(0.0, 1.0 - gap * max(0, len(heights) - 1))
     if total <= 0 or room <= 0:
-        return natural
-    return [height * room / total for height in natural]
+        return heights
+    return [height * room / total for height in heights]
 
 
 def _capacity(role: TypeRole, span: int, grid: GridSpec, canvas: Canvas,
@@ -513,9 +766,19 @@ def to_pack(language: Language, canvas: Canvas, *,
             body_min_ratio=CANVAS_BODY_FLOOR_RATIO * POLICY_FLOOR_SHARE,
         ),
     )
-    archetypes = tuple(_archetype(kind, language, canvas, pack.grid, roles)
-                       for kind in language.pages)
-    return pack.model_copy(update={"archetypes": archetypes})
+    archetypes: list[PageArchetype] = []
+    for kind in language.pages:
+        for suffix, variant in _arrangements(kind, pack.grid.columns):
+            archetypes.append(_archetype(
+                variant, language, canvas, pack.grid, roles, suffix=suffix,
+                # Frequency only ever breaks a tie (`select.choose`), so
+                # halving it for the arrangements the language did not write
+                # says exactly one thing: when two arrangements cost the same,
+                # the one it actually authored wins.
+                frequency=(kind.frequency if not suffix
+                           else kind.frequency * 0.5),
+            ))
+    return pack.model_copy(update={"archetypes": tuple(archetypes)})
 
 
 def _slug(name: str) -> str:

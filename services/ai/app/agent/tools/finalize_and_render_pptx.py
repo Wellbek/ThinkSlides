@@ -400,17 +400,32 @@ class FinalizeAndRenderPptxTool:
         validator this replaces was a tool the model could decline to call,
         and it was called zero times across every observed run.
         """
+        from app.agent import run_context
         from app.design.run import compose
         from app.renderer.designdoc_renderer import render_doc
 
-        doc = compose(slides, pack, title=str(metadata.get("title") or ""))
+        # What the previous pass already tried and validation disliked. Empty
+        # on a first render, which is every render until a layout verdict
+        # comes back.
+        avoid = run_context.get_arrangements_to_avoid()
+        doc = compose(slides, pack, title=str(metadata.get("title") or ""),
+                      avoid=avoid or None)
         logger.info(
             "designdoc_composed",
             pack=pack.id,
             slides=len(slides),
             pages=len(doc.pages),
             archetypes=sorted({page.archetype for page in doc.pages}),
+            avoided={str(k): sorted(v) for k, v in (avoid or {}).items()},
         )
+        # What each slide actually landed on, so a layout verdict can say
+        # "not that one again" without the loop having to re-derive it.
+        placed: dict[int, list[str]] = {}
+        for page in doc.pages:
+            source = page.provenance.source_slide
+            if source is not None:
+                placed.setdefault(source, []).append(page.archetype)
+        run_context.set_placed_arrangements(placed)
         return render_doc(doc, pack, output_path, design_system=design_system)
 
     @classmethod

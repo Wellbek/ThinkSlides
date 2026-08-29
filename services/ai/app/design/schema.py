@@ -375,6 +375,11 @@ class Provenance(_Model):
     fit_cost: Optional[float] = None
     considered: tuple[str, ...] = ()
     patched_by: tuple[PatchOp, ...] = ()
+    # Which designed slide this page came from. One slide can become several
+    # pages when its material has to be split, so this is not the page's own
+    # position - it is what the page is attributable *to*, which is what a
+    # caller needs to say "place that slide again, differently".
+    source_slide: Optional[int] = None
 
 
 class Page(_Model):

@@ -601,6 +601,16 @@ class WorkingState:
         # need its other slides rewritten, and regenerating them costs an LLM
         # call each and risks changing copy the user was happy with.
         self.slides_needing_revision: list[int] = []
+        # How many times each slide has been revised for its *layout*, and
+        # which arrangements it has already been placed on.
+        #
+        # Per slide rather than per run: a run-level cap lets one stubborn page
+        # spend the whole budget and leaves every other flagged page unfixed.
+        # And a page that has been placed twice has nothing left to learn from
+        # a third arrangement - `LAYOUT_REVISION_CAP` is two because the ladder
+        # has three rungs and the first two are the cheap ones.
+        self.layout_revisions: dict[int, int] = {}
+        self.arrangements_tried: dict[int, set[str]] = {}
         self.validation_attempts: int = 0
         self.MAX_VALIDATION_ATTEMPTS = 3
         # Checks that could not run at all (LibreOffice conversion error, a
@@ -705,6 +715,44 @@ class WorkingState:
     # Above this share of the deck being flagged, redesigning everything is
     # simpler (and no more expensive) than steering slide-by-slide edits.
     FULL_REWRITE_ISSUE_RATIO = 0.6
+
+    # How many times one page may be revised for its layout before the run
+    # stops trying. Two, because the ladder's first two rungs - nudge a frame,
+    # place the page again - are the cheap ones, and a page that both have
+    # failed on has a copy problem rather than a layout one.
+    LAYOUT_REVISION_CAP = 2
+
+    def layout_revision_for(self, issues: list[dict]) -> dict[int, str]:
+        """Which slides to revise for their layout, and on which rung.
+
+        A slide at its cap is left alone rather than escalated: the point of
+        the cap is that the run stops, and quietly promoting it to a redraft
+        is the run not stopping.
+        """
+        wanted: dict[int, str] = {}
+        for issue in issues:
+            index = issue.get("slideIndex")
+            fix = str(issue.get("fix") or "").strip().lower()
+            if not isinstance(index, int) or fix not in ("nudge", "replace"):
+                continue
+            if self.layout_revisions.get(index, 0) >= self.LAYOUT_REVISION_CAP:
+                continue
+            # The larger rung wins when one page draws both verdicts: placing
+            # it again subsumes moving a frame within the page it replaces.
+            if wanted.get(index) != "replace":
+                wanted[index] = fix
+        return wanted
+
+    def record_layout_revision(self, index: int, archetype: str = "") -> None:
+        """Count one revision of this page, and remember what it was placed on."""
+        self.layout_revisions[index] = self.layout_revisions.get(index, 0) + 1
+        if archetype:
+            self.arrangements_tried.setdefault(index, set()).add(archetype)
+
+    def arrangements_to_avoid(self) -> dict[int, frozenset[str]]:
+        """What `compose` should not offer each slide again."""
+        return {index: frozenset(seen)
+                for index, seen in self.arrangements_tried.items() if seen}
 
     def compute_slides_needing_revision(self, issues: list[dict]) -> list[int]:
         """
@@ -1032,6 +1080,8 @@ class WorkingState:
         self.validation_clean = False
         self.validation_issues = []
         self.slides_needing_revision = []
+        self.layout_revisions = {}
+        self.arrangements_tried = {}
         self.validation_attempts = 0
         self.validation_failures = 0
         self.last_rendered_path = None
@@ -1442,6 +1492,15 @@ class AgentLoop:
             "code_amendment_done": self.working_state.code_amendment_done,
             "validation_issues": self.working_state.validation_issues,
             "slides_needing_revision": self.working_state.slides_needing_revision,
+            # Without these a resumed run forgets what it has already tried
+            # and starts the ladder again from the bottom - which is not a cap
+            # of two, it is a cap of two per reload.
+            "layout_revisions": {
+                str(k): v for k, v in
+                self.working_state.layout_revisions.items()},
+            "arrangements_tried": {
+                str(k): sorted(v) for k, v in
+                self.working_state.arrangements_tried.items()},
             "last_rendered_path": self.working_state.last_rendered_path,
             "pending_slide_previews": self.working_state.pending_slide_previews,
             "previews_published": self.working_state.previews_published,
@@ -1523,6 +1582,12 @@ class AgentLoop:
                 "code_amendment_done", False)
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
+            self.working_state.layout_revisions = {
+                int(k): int(v) for k, v in
+                (state_dict.get("layout_revisions") or {}).items()}
+            self.working_state.arrangements_tried = {
+                int(k): set(v) for k, v in
+                (state_dict.get("arrangements_tried") or {}).items()}
             self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
             self.working_state.pending_slide_previews = state_dict.get("pending_slide_previews", [])
             self.working_state.previews_published = state_dict.get("previews_published", False)
@@ -2484,6 +2549,11 @@ class AgentLoop:
     ) -> AsyncIterator[tuple[str, object]]:
         """Render the deck as it currently stands."""
         self._ground_the_deck()
+        # What a previous pass placed and validation disliked. Empty on a
+        # first render, which is every render until a layout verdict comes
+        # back - so this costs an ordinary run nothing.
+        run_context.set_arrangements_to_avoid(
+            self.working_state.arrangements_to_avoid())
         structure = self.working_state.presentation_structure or {}
         tool_result = None
         async for kind, payload in self._call_tool(
@@ -3729,8 +3799,34 @@ class AgentLoop:
                 issues = (tool_result.data or {}).get("issues", [])
                 self.working_state.validation_issues = issues
                 self.working_state.validation_clean = not issues
+                # A layout verdict is answered by placing the page again, not
+                # by rewriting it. Redrafting a slide to move a frame down
+                # throws away copy nobody complained about and brings back
+                # different copy, which is how a page that had one thing wrong
+                # comes back with three.
+                relayout = self.working_state.layout_revision_for(issues)
+                placed = run_context.get_placed_arrangements()
+                for index, rung in relayout.items():
+                    # Only a "replace" rules an arrangement out. A nudge keeps
+                    # the page it has and moves something within it, so
+                    # forbidding that arrangement would answer a verdict
+                    # nobody gave.
+                    used = placed.get(index) or [] if rung == "replace" else []
+                    self.working_state.record_layout_revision(
+                        index, used[0] if used else "")
+                if relayout:
+                    # The deck has to be laid out and rendered again, and
+                    # `render_is_current` reads the design serial - so bumping
+                    # it is what walks the run back to `render` without
+                    # touching a single slide's words.
+                    self.working_state.design_serial += 1
+                    logger.info("layout_revision_requested",
+                                slides=sorted(relayout),
+                                rungs=sorted(set(relayout.values())))
                 self.working_state.slides_needing_revision = (
-                    self.working_state.compute_slides_needing_revision(issues)
+                    self.working_state.compute_slides_needing_revision(
+                        [i for i in issues
+                         if i.get("slideIndex") not in relayout])
                 )
                 self.working_state.validated_serial = self.working_state.design_serial
                 at_cap = (

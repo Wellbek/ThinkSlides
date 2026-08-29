@@ -77,6 +77,18 @@ _slide_material: ContextVar[dict | None] = ContextVar(
 # copy back, and nothing about it is the model's to decide.
 _pack: ContextVar[object | None] = ContextVar("thinkslides_pack", default=None)
 
+# Per slide index, the archetypes it has already been composed on. The second
+# rung of the revision ladder: a page whose arrangement came out wrong is
+# placed again from the same material rather than redrafted from scratch.
+_avoid_arrangements: ContextVar[dict | None] = ContextVar(
+    "thinkslides_avoid_arrangements", default=None)
+
+# The other direction: what the last render actually chose, per slide index.
+# Read by the loop when a layout verdict says to place a page again, so it can
+# name the arrangement to rule out instead of re-deriving it.
+_placed_arrangements: ContextVar[dict | None] = ContextVar(
+    "thinkslides_placed_arrangements", default=None)
+
 # Where this run's rendered deck is on disk. A path rather than the bytes:
 # `finalize_and_render_pptx` writes a real file that the download, the vision
 # check and `edit_deck_with_code` all read, and a second copy in memory would
@@ -139,6 +151,33 @@ def get_pack():
 
 def reset_pack(token: Token) -> None:
     _pack.reset(token)
+
+
+def set_arrangements_to_avoid(avoid: dict | None) -> Token:
+    """Which arrangements each slide has already been placed on and failed.
+
+    Carried here rather than as a tool parameter for the same reason the pack
+    is: it is the *loop's* bookkeeping, and a model that could set it could
+    talk the deck out of an arrangement nobody complained about.
+    """
+    return _avoid_arrangements.set(avoid or {})
+
+
+def get_arrangements_to_avoid() -> dict:
+    return _avoid_arrangements.get() or {}
+
+
+def reset_arrangements_to_avoid(token: Token) -> None:
+    _avoid_arrangements.reset(token)
+
+
+def set_placed_arrangements(placed: dict | None) -> Token:
+    """What each slide was actually composed on, recorded by the renderer."""
+    return _placed_arrangements.set(placed or {})
+
+
+def get_placed_arrangements() -> dict:
+    return _placed_arrangements.get() or {}
 
 
 def set_rendered_path(path: str | None) -> Token:

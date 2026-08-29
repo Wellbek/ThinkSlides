@@ -21,7 +21,7 @@ producing a page nobody can account for.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Literal, Optional
+from typing import Callable, Literal, Optional, Sequence
 
 from app.design.geometry import check_page, resolve_page
 from app.design.pack import Pack
@@ -35,6 +35,9 @@ Severity = Literal[1, 2, 3, 4, 5]
 # is inside the headroom the fitter already reserves.
 OVERFLOW_TOLERANCE = 0.02
 MAX_ROUNDS = 3
+# The smallest a band may be nudged down to. `GridPlace` refuses zero, and a
+# frame shrunk to nothing is a frame that should have been dropped.
+MIN_BAND_HEIGHT = 0.01
 # A round has to earn its place: a repair that improves the page by less
 # than this is noise, and applying it costs a render for nothing.
 MIN_IMPROVEMENT = 0.01
@@ -401,6 +404,40 @@ def _set_ground(page: Page, args: dict) -> Page:
     return page.model_copy(update={"frames": _map_frames(page.frames, apply)})
 
 
+def _move_band(page: Page, args: dict) -> Page:
+    """Shift a frame's band, and optionally resize it.
+
+    The one thing the vocabulary could not say. Every other operation changes
+    what a frame *contains* or how it is *set* - its columns, its type role,
+    its fit, its ground, its depth - and none of them can move it, so the
+    smallest real fix a page ever needs ("this sits too high, drop it") had no
+    expression and the only remedy was to redraft the whole slide.
+
+    Deltas rather than coordinates, so a caller says "down a little" rather
+    than naming a position it would have to derive. Clamped to the schema's
+    own bounds, because a patch that cannot be constructed is a patch that
+    silently does nothing.
+    """
+    target = args.get("frame_id")
+    dy = float(args.get("dy") or 0.0)
+    dh = float(args.get("dh") or 0.0)
+
+    def apply(frame: Frame) -> Frame:
+        # Only a band moves. A ground or a full-bleed panel is placed by
+        # fraction of its parent and is not part of the stack.
+        if frame.id != target or frame.place.kind != "grid":
+            return frame
+        place = frame.place
+        if place.y is None or place.h is None:
+            return frame
+        return frame.model_copy(update={"place": place.model_copy(update={
+            "y": round(max(-1.0, min(2.0, place.y + dy)), 4),
+            "h": round(max(MIN_BAND_HEIGHT, min(2.0, place.h + dh)), 4),
+        })})
+
+    return page.model_copy(update={"frames": _map_frames(page.frames, apply)})
+
+
 def _set_z(page: Page, args: dict) -> Page:
     target, z = args.get("frame_id"), int(args.get("z", 0))
 
@@ -411,6 +448,7 @@ def _set_z(page: Page, args: dict) -> Page:
 
 
 PATCHES: dict[str, PatchFn] = {
+    "move_band": _move_band,
     "set_columns": _set_columns,
     "set_type_role": _set_type_role,
     "set_fit": _set_fit,
@@ -504,6 +542,47 @@ def repair(doc: DesignDoc, page: Page, pack: Pack, *,
         after=best_score,
         rounds=rounds,
         findings=tuple(diagnose(doc, best, pack)),
+    )
+
+
+def apply_if_better(doc: DesignDoc, page: Page, pack: Pack,
+                    patches: Sequence[PatchOp]) -> RepairResult:
+    """Apply patches this page did not diagnose for itself, and keep the
+    result only if it measurably improved.
+
+    `repair` finds its own work. This exists for the work found *elsewhere* -
+    by looking at the rendered page - so a verdict from outside the design
+    layer lands under the same guarantee as one from inside it: the page gets
+    better or it does not change. Without this a bounded revision loop can
+    still end on its worst attempt, which is the failure a cap does not
+    prevent.
+    """
+    before = score(doc, page, pack)
+    candidate = page
+    used: list[PatchOp] = []
+    for patch in patches:
+        try:
+            candidate = apply_patch(candidate, patch)
+            used.append(patch)
+        except ValueError:
+            continue
+    if not used:
+        return RepairResult(page=page, before=before, after=before)
+
+    candidate_doc = doc.model_copy(update={
+        "pages": tuple(candidate if p.id == page.id else p for p in doc.pages)
+    })
+    after = score(candidate_doc, candidate, pack)
+    if after > before:
+        return RepairResult(page=page, before=before, after=before)
+    return RepairResult(
+        page=candidate.model_copy(update={
+            "provenance": candidate.provenance.model_copy(update={
+                "patched_by": tuple(candidate.provenance.patched_by) + tuple(used)
+            })
+        }),
+        applied=tuple(used), before=before, after=after, rounds=1,
+        findings=tuple(diagnose(candidate_doc, candidate, pack)),
     )
 
 
