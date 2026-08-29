@@ -288,3 +288,79 @@ class TestTheDispatchMapIsMinimal:
         from app.design.compile import _EXHIBIT_TO_BLOCK_KIND
 
         assert _EXHIBIT_TO_BLOCK_KIND == {"metrics": "statCallout"}
+
+
+class TestAFigureImageActuallyDraws:
+    """Issue #287, found while building #283's block-returning tool.
+
+    Every real producer of an image block - `generate_image`,
+    `select_source_image`, and every test fixture - nests the source under
+    "image": `{"type": "image", "image": {"source": ..., "data": ...}}`.
+    `bind._content_for` looked for a top-level "source" key that no real
+    producer ever wrote, fell through to the whole raw block, and handed
+    that to the renderer as the image's own source - which resolves nothing.
+    """
+
+    @staticmethod
+    def _pack():
+        return _pack("figure")
+
+    @staticmethod
+    def _png_b64() -> str:
+        import base64
+
+        return base64.b64encode(bytes.fromhex(
+            "89504e470d0a1a0a0000000d4948445200000001000000010"
+            "8060000001f15c4890000000a49444154789c6360000002000"
+            "1e221bc330000000049454e44ae426082")).decode("ascii")
+
+    def test_the_figure_binds_with_the_real_source_not_the_whole_block(self):
+        pack = self._pack()
+        slide = {"slideIndex": 0, "role": "content", "heading": "A figure",
+                "contents": [{"type": "image",
+                             "image": {"source": "base64",
+                                      "data": self._png_b64()},
+                             "altText": "a test figure"}]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        figure = next(f for f in doc.pages[0].frames if f.role == "figure")
+        source = figure.content[0].source
+        assert source == {"source": "base64", "data": self._png_b64()}
+        assert figure.content[0].alt_text == "a test figure"
+
+    def test_the_figure_draws_a_real_picture(self, tmp_path):
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+        from app.renderer.designdoc_renderer import render_doc
+
+        pack = self._pack()
+        slide = {"slideIndex": 0, "role": "content", "heading": "A figure",
+                "contents": [{"type": "image",
+                             "image": {"source": "base64",
+                                      "data": self._png_b64()}}]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        out = str(tmp_path / "figure.pptx")
+        render_doc(doc, pack, out)
+        kinds = _shape_kinds(out)
+        assert MSO_SHAPE_TYPE.PICTURE in kinds
+
+    def test_alt_text_nested_in_the_image_dict_is_read(self):
+        pack = self._pack()
+        slide = {"slideIndex": 0, "role": "content", "heading": "A figure",
+                "contents": [{"type": "image",
+                             "image": {"source": "base64",
+                                      "data": self._png_b64(),
+                                      "altText": "nested"}}]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        figure = next(f for f in doc.pages[0].frames if f.role == "figure")
+        assert figure.content[0].alt_text == "nested"
+
+    def test_a_block_with_no_usable_source_resolves_to_an_empty_dict(self):
+        """Never a crash - `_resolve_image_bytes({})` already returns None
+        gracefully, treated as "skip this image", the same as any other
+        malformed figure."""
+        pack = self._pack()
+        slide = {"slideIndex": 0, "role": "content", "heading": "Bad",
+                "contents": [{"type": "image", "notImage": "nonsense"}]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        figure = next(f for f in doc.pages[0].frames if f.role == "figure")
+        assert figure.content[0].source == {}

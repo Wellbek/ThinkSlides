@@ -46,8 +46,20 @@ def _content_for(frame: Frame, pack: Pack, item: MaterialItem):
         return _text_block(frame, pack, item)
     if item.kind == "figure":
         payload = dict(item.payload or {})
-        return Figure(source=payload.get("source", payload), fit="cover",
-                      alt_text=str(payload.get("altText", "")))
+        # Every real producer - generate_image, select_source_image,
+        # compute_visual_with_code - nests the actual source under "image",
+        # the same convention build_chart nests a chart spec under "chart".
+        # A bare top-level "source" was never real: no producer, and no test
+        # fixture, ever wrote one, so looking for it first meant this always
+        # fell through to the whole raw block instead - `{"type": "image",
+        # "image": {...}}` handed to the renderer as its own image source,
+        # which resolves nothing and draws nothing. See issue #287.
+        source = payload.get("image")
+        if not isinstance(source, dict):
+            source = payload.get("source") if isinstance(
+                payload.get("source"), dict) else {}
+        alt = (source.get("altText") if isinstance(source, dict) else None)             or payload.get("altText") or ""
+        return Figure(source=source, fit="cover", alt_text=str(alt))
     payload = dict(item.payload or {})
     # The shape the exhibit declared travels with it, so the repair loop can
     # see that a wide graph landed in a tall slot.
