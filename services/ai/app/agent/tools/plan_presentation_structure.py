@@ -80,6 +80,51 @@ def _format_guidance(fmt) -> str:
     )
 
 
+def _merged_into_one_page(structure: dict) -> dict:
+    """Every planned slide, folded into the single page a poster is.
+
+    Section by section rather than run together as one undifferentiated
+    list: a poster's abstract, method and results are still distinct
+    sections on the one sheet, and the section headings are what a reader
+    orients by. Nothing is dropped - the verification issue #285 states
+    plainly, "every section of the material appears on it".
+    """
+    slides = [s for s in (structure.get("slides") or []) if isinstance(s, dict)]
+    if not slides:
+        return structure
+
+    ordered = sorted(slides, key=lambda s: int(s.get("slideIndex") or 0))
+    key_points: list[str] = []
+    notes: list[str] = []
+    for slide in ordered:
+        heading = str(slide.get("title") or slide.get("section") or "").strip()
+        if heading:
+            key_points.append(f"{heading}:")
+        key_points.extend(
+            str(point) for point in (slide.get("keyPoints") or [])
+            if str(point).strip()
+        )
+        note = str(slide.get("notes") or "").strip()
+        if note:
+            notes.append(f"{heading}: {note}" if heading else note)
+
+    first = ordered[0]
+    merged = {
+        "slideIndex": 0,
+        "title": structure.get("title") or first.get("title") or "",
+        "section": "",
+        "titleRegister": "label",
+        "keyPoints": key_points,
+        "suggestedLayout": first.get("suggestedLayout") or "Content",
+        "contentType": "content",
+        "notes": "\n".join(notes),
+    }
+    structure = dict(structure)
+    structure["slides"] = [merged]
+    structure["totalSlides"] = 1
+    return structure
+
+
 def demote_unearned_dashboards(slides: list) -> list[str]:
     """
     Turn a dashboard with no real exhibit plan back into a chart slide.
@@ -435,19 +480,23 @@ Rules:
 
             duration_ms = int((time.time() - start) * 1000)
             if fmt.single_page and int(structure.get("totalSlides") or 0) != 1:
-                # A single-page format that came back as a multi-slide plan
-                # is the model treating it as a deck anyway. Named rather
-                # than silently corrected: merging the extra slides' material
-                # down to one page is exactly the work issue #285 tracks -
-                # doing it here, invisibly, would hide a gap that is not
-                # actually closed yet.
+                # A single-page format that came back as a multi-slide plan is
+                # the model treating it as a deck anyway - the instruction
+                # said "totalSlides MUST be 1" and it wrote a plan for six.
+                # Merged rather than truncated: `_slides_outstanding` walks
+                # `range(totalSlides)`, so leaving five extra slides in the
+                # structure would draft five pages nothing downstream expects
+                # a poster to have, and truncating them would silently drop
+                # whatever those slides argued. Every section's material
+                # survives, folded into the one slide a poster actually is.
+                before = int(structure.get("totalSlides") or 0)
+                structure = _merged_into_one_page(structure)
                 structure.setdefault("deviations", []).append(
-                    f"{fmt.label} is a single page, but the plan carries "
-                    f"{structure.get('totalSlides')} slides."
+                    f"{fmt.label} is a single page: the plan's {before} "
+                    "slides were merged into one, section by section."
                 )
-                logger.warning("single_page_format_multi_slide_plan",
-                               format_id=fmt.id,
-                               total_slides=structure.get("totalSlides"))
+                logger.info("single_page_format_plan_merged",
+                           format_id=fmt.id, slides_before=before)
             demotions = demote_unearned_dashboards(structure.get("slides") or [])
             if demotions:
                 structure["dashboardWarnings"] = demotions

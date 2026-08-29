@@ -310,20 +310,28 @@ class TestThePlanReadsTheFormat:
         assert "totalSlides MUST be 1" in captured["prompt"]
 
     @pytest.mark.asyncio
-    async def test_a_poster_plan_that_ignores_the_constraint_is_flagged(
+    async def test_a_poster_plan_that_ignores_the_constraint_is_merged(
             self, monkeypatch):
-        """Named rather than silently corrected - merging extra slides into
-        one page is issue #285's work, not this one's."""
+        """The model was told totalSlides MUST be 1 and wrote three anyway.
+        Merged rather than truncated: every section's material survives,
+        folded into the one page a poster actually is."""
         from app.agent.tools import plan_presentation_structure as plan_tool
 
         class _LLM:
             async def chat(self, messages, tools=None):
                 return {"message": {"content": json.dumps({
-                    "title": "T", "totalSlides": 3,
+                    "title": "A Poster", "totalSlides": 3,
                     "slides": [
-                        {"slideIndex": i, "title": "T",
-                         "contentType": "title", "keyPoints": []}
-                        for i in range(3)
+                        {"slideIndex": 0, "title": "Abstract",
+                         "contentType": "title",
+                         "keyPoints": ["The headline finding"]},
+                        {"slideIndex": 1, "title": "Method",
+                         "contentType": "content",
+                         "keyPoints": ["How it was measured"]},
+                        {"slideIndex": 2, "title": "Results",
+                         "contentType": "chart",
+                         "keyPoints": ["What changed"],
+                         "notes": "See the attached figures"},
                     ],
                 })}}
 
@@ -331,8 +339,41 @@ class TestThePlanReadsTheFormat:
         result = await plan_tool.PlanPresentationStructureTool.run(
             content_summary="growth", deck_format="poster")
         assert result.success
-        assert any("single page" in d.lower() or "3 slides" in d
-                  for d in result.data.get("deviations", []))
+        structure = result.data
+        assert structure["totalSlides"] == 1
+        assert len(structure["slides"]) == 1
+        page = structure["slides"][0]
+        assert page["slideIndex"] == 0
+        # Every section's own material survives - nothing dropped for want
+        # of room, which is issue #285's own verification criterion.
+        joined = " ".join(page["keyPoints"])
+        assert "The headline finding" in joined
+        assert "How it was measured" in joined
+        assert "What changed" in joined
+        assert "See the attached figures" in page["notes"]
+        assert any("merged" in d.lower()
+                  for d in structure.get("deviations", []))
+
+    @pytest.mark.asyncio
+    async def test_a_poster_plan_that_already_has_one_slide_is_untouched(
+            self, monkeypatch):
+        from app.agent.tools import plan_presentation_structure as plan_tool
+
+        class _LLM:
+            async def chat(self, messages, tools=None):
+                return {"message": {"content": json.dumps({
+                    "title": "A Poster", "totalSlides": 1,
+                    "slides": [{"slideIndex": 0, "title": "A Poster",
+                               "contentType": "content",
+                               "keyPoints": ["one", "two"]}],
+                })}}
+
+        monkeypatch.setattr(plan_tool, "require_chat_provider", lambda: _LLM())
+        result = await plan_tool.PlanPresentationStructureTool.run(
+            content_summary="growth", deck_format="poster")
+        structure = result.data
+        assert structure["totalSlides"] == 1
+        assert structure.get("deviations", []) == []
 
     @pytest.mark.asyncio
     async def test_an_unspecified_format_behaves_as_boardroom(self, monkeypatch):
@@ -500,3 +541,102 @@ class TestWorkingStateCarriesTheFormat:
         if matched:
             loop.working_state.deck_format = matched
         assert loop.working_state.deck_format == "poster"
+
+
+class TestThePosterSpecimenIsOnePage:
+    """A poster is one sheet, not a deck (#285). Every section other formats
+    spread across three slides goes on the one page a poster actually is."""
+
+    def test_a_poster_specimen_is_a_single_slide(self):
+        from app.renderer.specimen import language_specimen_slides
+
+        slides = language_specimen_slides(format_id="poster")
+        assert len(slides) == 1
+        assert slides[0]["slideIndex"] == 0
+
+    def test_every_section_survives_on_the_one_slide(self):
+        from app.renderer.specimen import default_content, language_specimen_slides
+
+        content = default_content()
+        slides = language_specimen_slides(content, "poster")
+        page = slides[0]
+        blocks = page["contents"]
+        kinds = [b["type"] for b in blocks]
+        assert "chart" in kinds
+        text_blocks = [b for b in blocks if b["type"] == "text"]
+        joined = " ".join(
+            run["text"] for block in text_blocks for run in block["runs"])
+        assert content.subtitle in joined
+        assert any(point.label in joined for point in content.points)
+        assert content.takeaway in joined
+
+    def test_a_poster_specimen_composes_against_a_poster_language(self):
+        from app.design import deck_format, run as design_run
+        from app.design.authored import Language, PageKind, Slot, to_pack
+        from app.design.vocabulary import ensure
+        from app.renderer.specimen import language_specimen_slides
+
+        fmt = deck_format.FORMATS["poster"]
+        language = Language(
+            name="Poster", rationale="x", columns=4, body_pt=24.0,
+            pages=(PageKind(name="page", role="content", frequency=1.0,
+                            slots=(Slot(kind="heading", span=4, required=True),
+                                   Slot(kind="prose", span=2, name="a"),
+                                   Slot(kind="prose", span=2, name="b"),
+                                   Slot(kind="figure", span=4))),),
+        )
+        pack = ensure(to_pack(language, fmt.canvas,
+                              floor_pt=fmt.floor_pt(fmt.canvas)))
+        doc = design_run.compose(
+            language_specimen_slides(format_id="poster"), pack,
+            skip_unplaceable=True)
+        assert len(doc.pages) >= 1
+        assert doc.canvas.w_in == fmt.canvas.w_in
+
+
+class TestPlanMergingForSinglePageFormats:
+    """`_merged_into_one_page` - the deterministic half of #285's fix. Given
+    a plan that ignored "totalSlides MUST be 1", nothing is dropped and
+    nothing downstream needs to know a merge happened."""
+
+    def test_a_slide_with_no_material_merges_to_nothing_odd(self):
+        from app.agent.tools.plan_presentation_structure import (
+            _merged_into_one_page,
+        )
+
+        merged = _merged_into_one_page({
+            "title": "T", "totalSlides": 0, "slides": [],
+        })
+        assert merged["slides"] == [] or merged.get("totalSlides") == 0
+
+    def test_section_headings_are_kept_as_orientation(self):
+        from app.agent.tools.plan_presentation_structure import (
+            _merged_into_one_page,
+        )
+
+        merged = _merged_into_one_page({
+            "title": "T", "totalSlides": 2,
+            "slides": [
+                {"slideIndex": 0, "title": "Abstract", "keyPoints": ["a"]},
+                {"slideIndex": 1, "title": "Method", "keyPoints": ["b"]},
+            ],
+        })
+        page = merged["slides"][0]
+        assert "Abstract:" in page["keyPoints"]
+        assert "Method:" in page["keyPoints"]
+        assert merged["totalSlides"] == 1
+
+    def test_slides_out_of_order_are_merged_in_slide_index_order(self):
+        from app.agent.tools.plan_presentation_structure import (
+            _merged_into_one_page,
+        )
+
+        merged = _merged_into_one_page({
+            "title": "T", "totalSlides": 2,
+            "slides": [
+                {"slideIndex": 1, "title": "Second", "keyPoints": ["b"]},
+                {"slideIndex": 0, "title": "First", "keyPoints": ["a"]},
+            ],
+        })
+        points = merged["slides"][0]["keyPoints"]
+        assert points.index("First:") < points.index("Second:")

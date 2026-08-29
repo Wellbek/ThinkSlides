@@ -268,6 +268,27 @@ def language_specimen_slides(
         # honestly rather than padded to the boardroom's amount.
         points = points[:1]
 
+    if format_id == "poster":
+        # A poster is one sheet, not a deck - #285. Every section the other
+        # formats spread across three slides goes on the one page a poster
+        # actually is, so the preview shows what the direction genuinely
+        # produces rather than three slides nobody will ever see side by
+        # side. `compose` still splits it further if the language's own
+        # content archetype cannot hold all of it, which is the same
+        # safety net a real poster's merged plan relies on.
+        return [{
+            "slideIndex": 0,
+            "role": "content",
+            "heading": content.title,
+            "contents": [
+                {"type": "text", "runs": [{"text": content.subtitle}]},
+                {"type": "text",
+                 "runs": [{"text": line} for line in points]},
+                _chart(content),
+                {"type": "text", "runs": [{"text": content.takeaway}]},
+            ],
+        }]
+
     slides = [
         {
             "slideIndex": 0,
