@@ -21,14 +21,24 @@ import json
 import os
 import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.research.budget import (
+    Ledger,
+    MeteredProvider,
+    MeteredVisionProvider,
+    Meter,
+    load_prices,
+)
 from app.research.exchange import (
     Cassette,
     ClaudeCodeExchange,
     ClaudeCodeProvider,
     ClaudeCodeVisionProvider,
+    RecordingProvider,
+    RecordingVisionProvider,
     ReplayProvider,
     ReplayVisionProvider,
     recorded_search,
@@ -37,7 +47,18 @@ from app.research.task import Task
 
 CLAUDE_CODE = "claude-code"
 REPLAY = "replay"
-MODES = (CLAUDE_CODE, REPLAY)
+LIVE = "live"
+MODES = (CLAUDE_CODE, REPLAY, LIVE)
+
+
+@dataclass
+class Live:
+    """What a paid run needs: whose credentials, which model, and its cap."""
+
+    org_id: uuid.UUID
+    model: str
+    max_cost: float
+    benchmark_dir: Path
 
 
 @dataclass
@@ -159,8 +180,26 @@ async def _record_answer(session_id, question_event: dict, reply: str) -> None:
         await client.aclose()
 
 
+async def _live_providers(db, live: Live):
+    """A workspace's saved provider, on the model the run asked for."""
+    import dataclasses
+
+    from app import ai_settings
+    from app.llm.provider import build_chat_provider, build_vision_provider
+
+    credentials = ai_settings.resolve_chat_credentials(await ai_settings.load_row(db, live.org_id))
+    if credentials is None:
+        raise SystemExit(f"organisation {live.org_id} has no chat model configured")
+    credentials = dataclasses.replace(credentials, model=live.model)
+    try:
+        vision = build_vision_provider(credentials)
+    except ValueError:
+        vision = None
+    return build_chat_provider(credentials), vision, credentials.provider
+
+
 async def run_task(task: Task, *, mode: str, out_root: Path,
-                   cassette_from: Path | None = None) -> Outcome:
+                   cassette_from: Path | None = None, live: Live | None = None) -> Outcome:
     from app.agent.loop import AgentLoop
     from app.agent.tools import web_search
     from app.db.models import ChatMessage
@@ -171,6 +210,16 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
         raise ValueError(f"mode must be one of {', '.join(MODES)}")
     if mode == REPLAY and cassette_from is None:
         raise ValueError("replay needs the cassette of a previous run")
+    meter = ledger = None
+    if mode == LIVE:
+        if live is None:
+            raise ValueError("a live run needs an organisation, a model and --max-cost")
+        prices = load_prices(live.benchmark_dir / "prices.json")
+        if live.model not in prices:
+            raise ValueError(f"{live.model} is not in prices.json; an unpriced run is unbounded")
+        ledger = Ledger(live.benchmark_dir / "ledger.jsonl", live.benchmark_dir / "budget.json")
+        ledger.authorise(live.max_cost)
+        meter = Meter(prices[live.model], live.max_cost)
 
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = out_root / task.id / f"{stamp}-{mode}"
@@ -184,6 +233,10 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
         shutil.copy(cassette_from, run_dir / "cassette.jsonl")
         chat, vision = ReplayProvider(source), ReplayVisionProvider(source)
         search = recorded_search(web_search.run_search, source, replay=True)
+    elif mode == LIVE:
+        cassette = Cassette(run_dir / "cassette.jsonl")
+        chat = vision = None  # built once there is a database session
+        search = recorded_search(web_search.run_search, cassette, replay=False)
     else:
         cassette = Cassette(run_dir / "cassette.jsonl")
         exchange = ClaudeCodeExchange(run_dir / "llm", cassette)
@@ -197,6 +250,8 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
         "taskFile": str(task.source) if task.source else None,
         "commit": _git_commit(), "startedAt": datetime.datetime.now().isoformat(),
         "replayOf": str(cassette_from) if cassette_from else None,
+        "model": live.model if live else None,
+        "maxCostUsd": live.max_cost if live else None,
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
@@ -204,6 +259,12 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
     web_search.run_search = search
     try:
         async with async_session() as db:
+            if mode == LIVE:
+                real_chat, real_vision, provider_name = await _live_providers(db, live)
+                manifest["provider"] = provider_name
+                chat = RecordingProvider(MeteredProvider(real_chat, meter), cassette)
+                vision = (RecordingVisionProvider(MeteredVisionProvider(real_vision, meter), cassette)
+                          if real_vision else None)
             session_id = await _seed(db, task.prompt)
             manifest["sessionId"] = str(session_id)
             with open(run_dir / "events.log", "w") as log:
@@ -251,6 +312,11 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
                 outcome.pages = len(pages)
     finally:
         web_search.run_search = original_search
+        if meter is not None:
+            spend = meter.summary()
+            manifest["spend"] = spend
+            ledger.record(task=task.id, run=run_dir.name, model=live.model,
+                          provider=manifest.get("provider"), **spend)
         manifest.update({
             "finishedAt": datetime.datetime.now().isoformat(),
             "parts": outcome.parts,
