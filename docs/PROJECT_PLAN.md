@@ -41,6 +41,45 @@ Appendices: A. Iteration review; B. Version control plan; C. Engineering style r
 
 ---
 
+## Status and priorities
+
+Living section, updated whenever the order of work changes.
+Last updated: 2026-09-24, end of the first implementation session.
+Every open item is a GitHub issue labelled `roadmap` and its area; nothing planned lives only in this document.
+
+### Where the project stands
+
+The mission is a demonstrated quality/cost frontier: cheap models with strong orchestration matching frontier workflows on a benchmark.
+Measured against that, the project is about **15% done**.
+Shares are of the total remaining effort as estimated now; they will move as work reveals its size.
+
+| Area | Share of total | Done within it | Contribution | What is done | What is not |
+| --- | --- | --- | --- | --- | --- |
+| Research and planning | 5% | 90% | 4.5% | audit, source registry, Claude workflow study, plan, decisions D-1 to D-14 | reference pages of the Slides type, chart fidelity, benchmark licences |
+| Measurement and evaluation | 15% | 45% | 6.8% | run traces, headless runner with claude-code / replay / live, spend ledger, 10 tasks, first baseline | automated checks (#314), checklist grading (#315), results store and graphs (#316), category references and judges (#331), OTel (#317) |
+| Bugs in the existing pipeline | 10% | 20% | 2.0% | #306, #307 fixed; nine defects found and explained by runs | #299, #300, #301, #302, #312, and the older open bug backlog |
+| Defect prevention (iteration 2) | 12% | 0% | 0% | - | #318 to #322 |
+| New architecture (iterations 3-4) | 33% | 3% | 1.0% | provider injection, the runner's seams | #323 to #328 |
+| Visual quality and categories (iteration 5) | 12% | 0% | 0% | - | #303, #329 to #331 |
+| Frontier comparison and routing (iteration 6) | 5% | 0% | 0% | - | #332, #333 |
+| UX and cleanup | 5% | 15% | 0.8% | minimal versions of the dead controls | #334 to #337 |
+| Production hardening | 3% | 0% | 0% | - | #338 |
+| **Total** | **100%** | | **about 15%** | | |
+
+### Priority order, and why
+
+1. **#314 automated checks, then #315 checklist grading.**
+   Every later change has to be shown to help, and today a run is judged by reading its pages.
+   Checks are cheap, need no new dependency, and turn the ten tasks into a baseline that can be rerun after every fix.
+2. **#299 and #301**, the blind revision loop and the refused visuals.
+   They corrupt the quality signal of every run and cost about a third of runtime; measuring more tasks before fixing them re-measures the same failures.
+3. **#300, #302, #312, #322**, the remaining run-found defects and the language gate.
+4. **The ten-task baseline** in claude-code mode and on gpt-5.6-luna, scored by #314 and #315.
+5. **#323 storyline plus parallel compile, with #325 prompt shrinking**: the largest runtime and cost lever, and the core bet of the plan.
+6. Iteration 2 prevention (#318 to #321), then evidence (#327, #328), then visual quality, then the frontier report.
+
+---
+
 ## 1. Project mission
 
 Use relatively cheap models, combined with strong orchestration, retrieval, tools, reusable skills, structured generation, visual evaluation and iterative refinement, to produce consistently high-quality presentations across many presentation types, at materially lower cost and ideally lower runtime than frontier-model workflows.
