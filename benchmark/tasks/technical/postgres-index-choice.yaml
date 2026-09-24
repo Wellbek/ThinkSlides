@@ -4,6 +4,7 @@ prompt: |
   Four slides for application developers on choosing a Postgres index:
   B-tree, GIN, BRIN and partial indexes - what each is for, and a way to
   decide between them for a given query.
+slides: 4
 mode: simple
 detail: concise
 answers:

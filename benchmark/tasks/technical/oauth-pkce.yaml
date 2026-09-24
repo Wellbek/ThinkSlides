@@ -5,6 +5,7 @@ prompt: |
   OAuth 2.0 authorization code flow with PKCE: why the implicit flow was
   retired, the steps of the flow, and what the code verifier protects
   against.
+slides: 3
 mode: simple
 detail: concise
 answers:

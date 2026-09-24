@@ -5,6 +5,7 @@ prompt: |
   blue-green and canary releases on Kubernetes. Cover how each works,
   what it costs in spare capacity, how rollback works, and when to pick
   which. Research current Argo Rollouts and Flagger support.
+slides: 6
 mode: deep
 detail: detailed
 answers:

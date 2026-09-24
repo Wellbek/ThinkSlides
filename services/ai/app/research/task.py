@@ -7,6 +7,7 @@ Tasks live as YAML under ``benchmark/tasks/<category>/<id>.yaml``:
     category: technical-architecture
     prompt: |
       Three slides explaining ...
+    slides: 3               # the exact count the brief asks for, when it asks for one
     mode: simple            # simple | deep
     detail: concise         # concise | detailed | comprehensive
     answers:                # replies to the run's pauses, in order
@@ -31,6 +32,7 @@ class Task:
     id: str
     category: str
     prompt: str
+    slides: int | None = None
     mode: str = "simple"
     detail: str = "detailed"
     answers: list[str] = field(default_factory=list)

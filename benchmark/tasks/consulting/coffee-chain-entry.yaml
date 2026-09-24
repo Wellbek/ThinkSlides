@@ -4,6 +4,7 @@ prompt: |
   Five slides for the board of a European coffee chain on entering the
   South Korean market: market attractiveness, competition, entry options
   (own stores, franchise, joint venture), and a recommendation.
+slides: 5
 mode: deep
 detail: concise
 answers:
