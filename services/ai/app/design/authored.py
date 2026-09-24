@@ -170,8 +170,8 @@ class Slot(_Model):
     # the first row bleeds off the top, one at column zero off the left - so
     # a language says that a figure bleeds and never says where.
     bleed: bool = False
-    # Whether this sits *behind* the rest of the page: the full content box at
-    # z=0, with the type laid over it. This is how the reference decks open -
+    # Whether this sits *behind* the rest of the page: the full content box,
+    # below everything but the page's own ground, with the type laid over it. This is how the reference decks open -
     # a full-page photograph carrying the title - and it was the one shape the
     # schema could already express that no authored language could ask for.
     #

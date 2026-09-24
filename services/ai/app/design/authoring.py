@@ -190,7 +190,7 @@ def _slot(raw) -> Optional[Slot]:
         name=str(raw.get("name") or "").strip()[:24],
         # `Slot` has carried these since the packing work, and `to_pack`
         # already derives real geometry for both - a behind slot becomes the
-        # whole content box at z=0, a bleeding one runs off the edges its row
+        # whole content box under the page's material, a bleeding one runs off the edges its row
         # puts it against. Nothing ever set them: this parser dropped the
         # keys and the prompt never asked for them, so no authored language
         # could produce a page with an image behind its text. That is the
