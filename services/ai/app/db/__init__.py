@@ -22,6 +22,7 @@ from app.db.models import (
     Organisation,
     OrganisationAISettings,
     OrganisationConnection,
+    RunSpan,
     Template,
     User,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "Organisation",
     "OrganisationAISettings",
     "OrganisationConnection",
+    "RunSpan",
     "Template",
     "User",
     "get_db",

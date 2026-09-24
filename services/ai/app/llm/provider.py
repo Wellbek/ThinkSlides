@@ -876,6 +876,7 @@ class ZhipuVisionProvider(VisionLLMProvider):
             raise
 
         duration_ms = int((time.time() - start_time) * 1000)
+        usage.record("zhipu", self.model, response)
         choice = response.choices[0] if response.choices else None
         text = choice.message.content if choice and choice.message else ""
 
@@ -949,6 +950,7 @@ class OpenAIVisionProvider(VisionLLMProvider):
             logger.error("openai_vision_api_error", error=str(e), model=self.model)
             raise
 
+        usage.record("openai", self.model, response)
         choice = response.choices[0] if response.choices else None
         text = (choice.message.content if choice and choice.message else "") or ""
         logger.info(
@@ -1019,6 +1021,7 @@ class AzureOpenAIVisionProvider(VisionLLMProvider):
             raise
 
         duration_ms = int((time.time() - start_time) * 1000)
+        usage.record("azure_openai", self.deployment, response)
         choice = response.choices[0] if response.choices else None
         text = choice.message.content if choice and choice.message else ""
 

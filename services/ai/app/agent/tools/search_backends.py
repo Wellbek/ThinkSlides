@@ -33,6 +33,8 @@ import jwt
 from app.ai_settings import SearchConfig
 from app.config import settings
 from app.agent.tools._today import today_line
+from app.llm import usage
+from app.observability import trace
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -462,10 +464,13 @@ async def _anthropic_search(config: SearchConfig, query: str, count: int) -> lis
 
     for tool_type in (ANTHROPIC_SEARCH_TOOL, ANTHROPIC_SEARCH_TOOL_FALLBACK):
         try:
-            response = await client.messages.create(
-                **request,
-                tools=[{"type": tool_type, "name": "web_search", "max_uses": max(1, count // 4)}],
-            )
+            with trace.span("llm", "native_search", provider="anthropic",
+                            model=credentials.model):
+                response = await client.messages.create(
+                    **request,
+                    tools=[{"type": tool_type, "name": "web_search", "max_uses": max(1, count // 4)}],
+                )
+                usage.record("anthropic", credentials.model, response)
             return parse_anthropic_citations(response)
         except Exception as exc:  # noqa: BLE001 - retry only the model-gating case
             if tool_type is ANTHROPIC_SEARCH_TOOL and "web_search" in str(exc):
@@ -617,27 +622,31 @@ async def _openai_responses_search(
     know raises TypeError before any request leaves the process, while
     extra_body is forwarded verbatim on every SDK version.
     """
-    response = await client.responses.create(
-        model=model,
-        input=_search_prompt(query),
-        extra_body={
-            "tools": [{"type": "web_search"}],
-            "max_tool_calls": max(1, count // 4),
-        },
-    )
+    with trace.span("llm", "native_search", provider="openai", model=model):
+        response = await client.responses.create(
+            model=model,
+            input=_search_prompt(query),
+            extra_body={
+                "tools": [{"type": "web_search"}],
+                "max_tool_calls": max(1, count // 4),
+            },
+        )
+        usage.record("openai", model, response)
     return parse_openai_response_annotations(response)
 
 
 async def _openai_chat_completions_search(client, model: str, query: str) -> list[dict]:
     """Search with ``web_search_options``, the route the retired models used."""
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[{
-            "role": "user",
-            "content": _search_prompt(query),
-        }],
-        extra_body={"web_search_options": {}},
-    )
+    with trace.span("llm", "native_search", provider="openai", model=model):
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{
+                "role": "user",
+                "content": _search_prompt(query),
+            }],
+            extra_body={"web_search_options": {}},
+        )
+        usage.record("openai", model, response)
     return parse_openai_annotations(response)
 
 

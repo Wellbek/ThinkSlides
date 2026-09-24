@@ -284,6 +284,34 @@ class AgentEvent(Base):
     session = relationship("ChatSession", back_populates="events")
 
 
+class RunSpan(Base):
+    """One span of an agent run's trace (app/observability/trace.py).
+
+    Deliberately no foreign key to chat_sessions: a trace is written once, at
+    the end of the run, and must not be lost because the row it describes was
+    deleted meanwhile or never existed (a headless research run).
+    """
+
+    __tablename__ = "run_spans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True)
+    run_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    session_id = Column(UUID(as_uuid=True), index=True)
+    parent_id = Column(UUID(as_uuid=True))
+    kind = Column(String(20), nullable=False)
+    name = Column(String(100), nullable=False)
+    reason = Column(Text)
+    status = Column(String(20), nullable=False)
+    error = Column(Text)
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    ended_at = Column(DateTime(timezone=True))
+    duration_ms = Column(Integer)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    cached_input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    attrs = Column(JSONB, nullable=False, default=dict)
+
+
 class GeneratedFile(Base):
     __tablename__ = "generated_files"
 

@@ -151,7 +151,7 @@ class TestItSurvivesWhatARealRunProduces:
 
         from app.agent.loop import AgentLoop
 
-        assert "_read_the_arc" in inspect.getsource(AgentLoop._dispatch_tool)
+        assert "_read_the_arc" in inspect.getsource(AgentLoop._dispatch_tool_body)
 
     def test_a_flagged_page_is_told_what_to_fix(self):
         """A grade has no next move in it; "slide 4 ends on a topic label
