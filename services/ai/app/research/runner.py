@@ -248,7 +248,7 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
     manifest = {
         "search": search_config.backend if search_config else None,
         "task": task.id, "category": task.category, "mode": mode,
-        "taskFile": str(task.source) if task.source else None,
+        "taskFile": str(task.source.resolve()) if task.source else None,
         "commit": _git_commit(), "startedAt": datetime.datetime.now().isoformat(),
         "replayOf": str(cassette_from) if cassette_from else None,
         "model": live.model if live else None,
@@ -327,7 +327,21 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
             "errors": outcome.errors,
         })
         (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        _check(run_dir, task)
     return outcome
+
+
+def _check(run_dir: Path, task: Task) -> None:
+    """Check the run however it ended - the runs that fail hardest most need it -
+    and never let a check that cannot read what the run left undo the run."""
+    import logging
+
+    from app.research.checks import check_run
+
+    try:
+        check_run(run_dir, task)
+    except Exception as e:  # noqa: BLE001 - the run's own outcome stands either way
+        logging.getLogger(__name__).warning("run checks failed for %s: %s", run_dir, e)
 
 
 def summarise(run_dir: Path) -> str:
@@ -339,6 +353,10 @@ def summarise(run_dir: Path) -> str:
         f"{manifest.get('pages')} page(s)",
     ]
     lines += [f"error: {e}" for e in manifest.get("errors") or []]
+    if (run_dir / "checks.json").exists():
+        from app.research.checks import render
+
+        lines += ["", render(json.loads((run_dir / "checks.json").read_text()))]
     for part in sorted(run_dir.glob("trace-*.md")):
         lines += ["", part.read_text()]
     return "\n".join(lines)

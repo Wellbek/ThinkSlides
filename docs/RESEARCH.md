@@ -92,7 +92,7 @@ These are not external sources, but they carry the most weight in the diagnosis 
   - The revision loop redrafted only slide 1, three times, without the findings, re-rendered identical pages, and drafted again after the validation cap without validating (#299).
   - The planner prompt pairs the stated count with the format's own slide range (#300).
   - Without research, `build_table` and `build_mermaid` are refused whatever they contain (#301).
-  - Content headlines are set at the display size, 57.6 pt (#302).
+  - The drafting prompt reports the title size as 57.6 pt; the rendered PDF measures 39.6 pt, so the prompt is wrong and the rendering is not (#302, corrected by the run checks).
   - There is no technical format, and no planned `diagram` content type (#303).
 - **Confidence**: High for the mechanisms (code paths confirmed); the answers were a frontier model's, so model-quality conclusions are out of scope.
 - **Adoption**: reference.

@@ -4,6 +4,7 @@ Command line for headless runs.
     python -m app.research run <task.yaml> [--mode claude-code|replay|live] [--cassette PATH]
                                [--org UUID --model ID --max-cost USD]
     python -m app.research show <run-dir>
+    python -m app.research check <run-dir> [--task <task.yaml>]
 
 Runs against the dev Postgres and Redis on localhost (``make infra``). Search
 goes through Tavily when TAVILY_API_KEY is set, read from the environment or
@@ -68,6 +69,9 @@ def main() -> int:
     run.add_argument("--out", type=Path, default=DEFAULT_OUT)
     show = commands.add_parser("show", help="summarise a finished run")
     show.add_argument("run_dir", type=Path)
+    check = commands.add_parser("check", help="re-run the deterministic checks on a finished run")
+    check.add_argument("run_dir", type=Path)
+    check.add_argument("--task", type=Path, help="task file, when the manifest's path no longer resolves")
     args = parser.parse_args()
 
     _environment()
@@ -77,6 +81,12 @@ def main() -> int:
     if args.command == "show":
         print(runner.summarise(args.run_dir))
         return 0
+    if args.command == "check":
+        from app.research.checks import check_run, render
+
+        result = check_run(args.run_dir, Task.load(args.task) if args.task else None)
+        print(render(result))
+        return 1 if result["blockingFailures"] else 0
 
     live = None
     if args.mode == runner.LIVE:

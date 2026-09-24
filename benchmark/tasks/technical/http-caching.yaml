@@ -4,6 +4,7 @@ prompt: |
   Three slides for a team of backend engineers on how HTTP caching works:
   what Cache-Control directives do, how revalidation with ETags works, and
   when a CDN serves stale content. Exactly 3 slides.
+slides: 3
 mode: simple
 detail: concise
 answers:

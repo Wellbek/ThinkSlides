@@ -4,6 +4,7 @@ prompt: |
   Five slides for engineers who operate etcd on how Raft keeps a cluster
   consistent: leader election, log replication, what happens during a
   network partition, and why a cluster needs an odd number of members.
+slides: 5
 mode: simple
 detail: detailed
 answers:

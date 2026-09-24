@@ -4,6 +4,7 @@ prompt: |
   Six slides for the executive team of a mid-sized retail bank on why
   customers under 35 are moving their current accounts to digital banks,
   and three moves the bank could make in the next year.
+slides: 6
 mode: deep
 detail: detailed
 answers:

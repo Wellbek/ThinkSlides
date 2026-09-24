@@ -4,6 +4,7 @@ prompt: |
   Five slides for a CFO on where a SaaS company's cloud bill typically
   goes and the levers that reduce it: commitment discounts, rightsizing,
   storage tiering and architectural changes. Make it decision-oriented.
+slides: 5
 mode: simple
 detail: concise
 answers:

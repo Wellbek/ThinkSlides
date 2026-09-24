@@ -311,7 +311,7 @@ Problems are ordered by expected impact on the mission.
 - **Evidence required**: measure how often pre-render fit estimates agree with LibreOffice geometry on the regression decks (`tools/measure_typesetting.py` exists for this); verify fonts are metric-compatible in the renderer container (R-101 safe-font finding).
 - **Update (R-005)**: the first headless run found a larger cause than capacity: the revision loop never asks for the fixes (#299).
   With most of the deck flagged, the redraft prompt carries none of the findings, only the first slide is redrafted, the `replace` rung re-renders an identical page, and the walker keeps drafting after the cap.
-  Separately, content headlines are set at the language's display size (57.6 pt for an 18 pt body), which alone wraps every sentence-length title (#302).
+  Separately, the drafting prompt reports the display size (57.6 pt) as the title size; the rendered titles measure 39.6 pt, so this misleads the copy rather than causing the clipping (#302, corrected by measurement).
 
 ### P-3 Drafting is sequential and conversational
 
