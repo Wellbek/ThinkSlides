@@ -7,6 +7,7 @@ import { buildDownloadUrl, formatFileSize } from "@/lib/download";
 import { apiUpload } from "@/lib/api";
 import { AssetReplaceDialog, type ReplaceScope } from "./AssetReplaceDialog";
 import { FileSpreadsheet, Presentation, Globe, Plus, Monitor, Download, ExternalLink, ChevronDown, Image as ImageIcon } from "lucide-react";
+import { UserAvatar } from "./UserAvatar";
 
 export function DetailsPanel() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -101,7 +102,7 @@ export function DetailsPanel() {
         <div className="ws-meta-label">Slides</div>
         <div className="ws-meta-value">{slides.length}{session?.slide_count ? ` / ${session.slide_count}` : ""}</div>
         <div className="ws-meta-label">Owner</div>
-        <div className="ws-meta-value"><span className="ws-av indigo">WK</span> You</div>
+        <div className="ws-meta-value"><UserAvatar /> You</div>
         <div className="ws-meta-label">Created</div>
         <div className="ws-meta-value">{created}</div>
       </div>

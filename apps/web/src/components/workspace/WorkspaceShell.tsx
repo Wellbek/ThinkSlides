@@ -10,6 +10,7 @@ import { ChatFlow } from "./ChatFlow";
 import { SetupBanner } from "./SetupBanner";
 import { SettingsModal } from "@/components/layout/SettingsModal";
 import { Share2, Eye } from "lucide-react";
+import { UserAvatar } from "./UserAvatar";
 
 type View = "home" | "workspace";
 
@@ -208,7 +209,7 @@ export function WorkspaceShell() {
                   </button>
                 )}
                 <button className="ws-tb-btn"><Share2 size={13} /> Share</button>
-                <span className="ws-av indigo" title="You">WK</span>
+                <UserAvatar />
               </header>
 
               <div className="ws-body">

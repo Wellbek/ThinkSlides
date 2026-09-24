@@ -10,6 +10,7 @@ import { BookOpen, CheckCheck, ChevronDown, Code2, Download, ExternalLink, Globe
 import type { LucideIcon } from "lucide-react";
 import type { CodeDeltaEvent, CodeReadyEvent } from "@thinkslides/schemas";
 import type { AgentEvent, SourceInfo } from "@thinkslides/schemas";
+import { UserAvatar } from "./UserAvatar";
 
 // ──────────────────────────────────────────────
 // The phase timeline groups the flat event stream into the five things a
@@ -667,7 +668,7 @@ export function ActivityFeed() {
 
           if (m.role === "user") {
             return (
-              <FeedItem key={m.id} dot={<span className="ws-av indigo">WK</span>} dotClass="ws-dot-user">
+              <FeedItem key={m.id} dot={<UserAvatar />} dotClass="ws-dot-user">
                 <div className="ws-feed-header"><span className="lbl">You</span><span className="ts">{fmtTime(m.created_at)}</span></div>
                 <div className="ws-feed-text">{m.content}</div>
               </FeedItem>
