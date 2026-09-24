@@ -81,6 +81,23 @@ These are not external sources, but they carry the most weight in the diagnosis 
 
 ---
 
+### R-005 First headless run of the pipeline
+
+- **Source**: `benchmark/tasks/technical/http-caching.yaml` run with `python -m app.research run` in `claude-code` mode on 2026-09-24 (commit `0a3e8f7` plus the runner), every request and answer kept under `benchmark/runs/` (not committed); its replay rebuilt pixel-identical pages.
+- **Category**: observed system behaviour.
+- **Key facts**:
+  - 26 model calls over 4 parts (intake, two design calls, plan, three drafting turns and three copy calls per round, three vision calls per validation, closing); about 146k estimated input tokens in the drafting part alone, none cached.
+  - Each drafting request was about 50 KB, most of it the design system repeated; the draft phase is one conversation across all slides, so context grows with deck length.
+  - `propose_design_directions` makes two model calls; its specimen always demands three figures and a chart.
+  - The revision loop redrafted only slide 1, three times, without the findings, re-rendered identical pages, and drafted again after the validation cap without validating (#299).
+  - The planner prompt pairs the stated count with the format's own slide range (#300).
+  - Without research, `build_table` and `build_mermaid` are refused whatever they contain (#301).
+  - Content headlines are set at the display size, 57.6 pt (#302).
+  - There is no technical format, and no planned `diagram` content type (#303).
+- **Confidence**: High for the mechanisms (code paths confirmed); the answers were a frontier model's, so model-quality conclusions are out of scope.
+- **Adoption**: reference.
+- **Affects**: sections 5, 20.
+
 ## 2. Official documentation
 
 ### R-101 Anthropic public PPTX skill
