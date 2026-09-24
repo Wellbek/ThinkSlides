@@ -1,0 +1,4 @@
+{
+  "limitUsd": 3.0,
+  "note": "Total that live research runs may spend, across every run in ledger.jsonl. Live runs only validate what already passed in claude-code mode."
+}
