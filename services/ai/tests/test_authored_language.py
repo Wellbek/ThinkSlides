@@ -523,9 +523,49 @@ class TestATypeOverImageOpenerIsAuthorable:
         )), CANVAS)).archetype("opener")
 
     def test_a_behind_slot_is_the_whole_page_underneath(self):
-        hero = next(f for f in self._cover().frames if "hero" in f.id)
-        assert hero.z == 0
+        cover = self._cover()
+        hero = next(f for f in cover.frames if "hero" in f.id)
+        ground = next(f for f in cover.frames if f.id.endswith("-ground"))
+        assert ground.z < hero.z
         assert hero.place.col == 0 and hero.place.h == pytest.approx(1.0)
+
+    def test_a_cover_with_a_figure_behind_its_type_compiles(self):
+        """The cover's own ground and the behind figure shared z=0 and
+        overlapped completely, so check_doc refused the page and every render
+        of a deck on the language failed. The language is the one gpt-5.6-luna
+        authored on the live run that lost three drafted slides to it (#306)."""
+        from app.design import deck_format
+        from app.design import run as design_run
+        from app.design.authoring import read
+        from app.design.geometry import check_doc
+
+        (language,) = read({"languages": [{
+            "name": "Legal Brief", "rationale": "Clauses beside their exceptions.",
+            "columns": 4, "marginRatio": 0.075, "gutterRatio": 0.025, "bodyPt": 19.0,
+            "ratios": {"display": 3.2, "headline": 2.2, "standfirst": 1.35},
+            "displayFace": "Times New Roman", "bodyFace": "Arial",
+            "ground": "#FBFAF7", "ink": "#252525", "accent": "#1F4E79",
+            "accentAlt": "#9B6B30", "density": "dense",
+            "pages": [
+                {"name": "briefing-question", "role": "cover", "frequency": 0.34, "slots": [
+                    {"kind": "figure", "span": 4, "behind": True},
+                    {"kind": "heading", "span": 3, "required": True},
+                    {"kind": "standfirst", "span": 2},
+                    {"kind": "caption", "span": 2},
+                    {"kind": "footnote", "span": 4}]},
+                {"name": "analysis", "role": "content", "frequency": 0.66, "slots": [
+                    {"kind": "heading", "span": 4, "required": True},
+                    {"kind": "prose", "span": 2, "name": "left"},
+                    {"kind": "figure", "span": 2}]},
+            ],
+        }]})
+        fmt = deck_format.by_id("boardroom")
+        pack = ensure(to_pack(language, fmt.canvas, floor_pt=fmt.floor_pt(fmt.canvas)))
+        cover = [{"slideIndex": 0, "role": "cover", "contents": [
+            {"type": "text", "runs": [{"text": "How HTTP caching decides"}]},
+            {"type": "text", "runs": [{"text": "Freshness, revalidation and stale content"}]}]}]
+
+        assert check_doc(design_run.compose(cover, pack, title="x")) == []
 
     def test_the_type_sits_over_it(self):
         cover = self._cover()

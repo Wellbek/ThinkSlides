@@ -170,8 +170,8 @@ class Slot(_Model):
     # the first row bleeds off the top, one at column zero off the left - so
     # a language says that a figure bleeds and never says where.
     bleed: bool = False
-    # Whether this sits *behind* the rest of the page: the full content box at
-    # z=0, with the type laid over it. This is how the reference decks open -
+    # Whether this sits *behind* the rest of the page: the full content box,
+    # below everything but the page's own ground, with the type laid over it. This is how the reference decks open -
     # a full-page photograph carrying the title - and it was the one shape the
     # schema could already express that no authored language could ask for.
     #
@@ -336,6 +336,12 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
     gap = (grid.baseline_in or canvas.h_in * 0.012) / max(0.01, box.height)
 
     ground = "accent" if kind.role in ("cover", "section") else None
+    # Paint order, stated rather than tied: the page's ground, then a figure
+    # that sits behind, then everything laid over it. A cover carries a
+    # full-page ground, so a behind figure at the ground's own z overlapped
+    # it completely and check_doc refused the page - and with it every render
+    # of any deck on that language.
+    behind_z = 1 if ground else 0
     if ground:
         frames.append(Frame(
             id=f"{kind.name}-ground", role="panel",
@@ -370,7 +376,7 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
             # an error only between siblings at equal z, so this is the one
             # declaration that makes type-over-image legal geometry rather
             # than an ambiguity the gate refuses.
-            z=0 if cell.behind else 1,
+            z=behind_z if cell.behind else behind_z + 1,
             bleed=cell.bleed,
             # A photograph with type over it needs two things the geometry
             # alone does not give it: something to darken the image so the
