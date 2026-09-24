@@ -139,3 +139,47 @@ class TestDegenerateInput:
 
         assert len(plan.col_fractions) == 3
         assert len(plan.row_heights_in) == 3
+
+
+# Six columns in a half-width slot, from the Kubernetes run (#351). One-word
+# labels sit beside sentences, so proportional widths squeezed the label
+# columns below their own words and "Strategy" was set as "Stra / tegy".
+MATRIX = [
+    ["Strategy", "Spare capacity", "Rollback pattern", "Operational burden",
+     "Ingress fit", "Recommended use"],
+    ["Rolling", "Low", "Prior revision; reverse partial exposure", "Low",
+     "Native Service", "Routine releases; strong health checks"],
+    ["Blue-green", "High", "Switch routing back to prior version", "Medium",
+     "Service / ingress cutover", "Clean boundary; rapid reversal"],
+    ["Argo Rollouts", "Depends on strategy",
+     "Analysis, pauses, promotion and rollback controls", "Medium-high",
+     "Ingress integrations supported", "Kubernetes-native progressive delivery"],
+]
+
+
+class TestNoWordIsBrokenAcrossLines:
+    def test_every_column_is_at_least_as_wide_as_its_longest_word(self):
+        width_in = 5.73
+        layout = plan_table(MATRIX, True, width_in, 4.0)
+        for col, fraction in enumerate(layout.col_fractions):
+            for index, row in enumerate(MATRIX):
+                size = layout.header_pt if index == 0 else layout.body_pt
+                for word in row[col].split():
+                    need = (table_layout._word_width_pt(word, size, index == 0)
+                            + table_layout.CELL_PAD_H_PT)
+                    assert fraction * width_in * 72.0 >= need - 0.5, (col, word)
+
+
+class TestTheHeightATableNeeds:
+    def test_wrapping_cells_make_a_table_taller_than_its_row_count(self):
+        """A floor from the row count alone let a table whose cells wrap onto
+        three lines be set in a band a third of its height."""
+        wide = table_layout.needed_height_in(MATRIX, True, 11.7)
+        narrow = table_layout.needed_height_in(MATRIX, True, 5.7)
+        assert narrow > wide * 1.3
+
+    def test_it_is_measured_at_a_legible_size_and_never_compressed(self):
+        layout = plan_table(MATRIX, True, 5.7, float("inf"),
+                            sizes=(table_layout.LEGIBLE_CELL_PT,))
+        assert layout.body_pt == table_layout.LEGIBLE_CELL_PT
+        assert table_layout.needed_height_in(MATRIX, True, 5.7) == layout.height_in
