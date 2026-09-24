@@ -4028,7 +4028,8 @@ class AgentLoop:
                 if kind == "result" and tool_span is not None:
                     tool_span.set(success=bool(payload.success))
                     if not payload.success:
-                        tool_span.status = "failed"
+                        tool_span.status = (
+                            "rejected" if payload.rejected else "failed")
                         tool_span.error = str(payload.error or "")[:2000]
                 yield kind, payload
 
