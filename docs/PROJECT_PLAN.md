@@ -950,7 +950,7 @@ Local runs feed model requests directly to a Claude Code session, so they are pa
 API budget: $3 available now, up to $20 if topped up.
 Credits are spent only on real validations of something that has already passed in `claude-code` mode.
 
-- **Ledger**: the runner keeps a cumulative spend ledger (`benchmark/ledger.jsonl`, tokens times a dated price table) and refuses to start a `live` run whose projected cost would exceed the remaining budget.
+- **Ledger**: the runner keeps one cumulative spend ledger per machine (`~/.local/share/thinkslides/ledger.jsonl`, outside any checkout so branches cannot each see the whole budget; tokens times the dated price table in `benchmark/prices.json`) and refuses to start a `live` run whose projected cost would exceed the remaining budget.
 - **Projection first**: a step's cost is projected from its `claude-code` token counts before any live call.
 - **Order of spend**: the smallest task that validates the change (one 3- to 6-slide deck, Simple mode), on the cheapest model that is supposed to serve that step, one run at a time.
 - **Rough scale (unverified prices, to be checked before spending)**: token counts from R-003 suggest one current-architecture 12-slide run is on the order of 0.5M input tokens, which at a gpt-4o-class price is roughly one to two dollars.
