@@ -567,6 +567,11 @@ class WorkingState:
         # numbers through a second LLM response is how a chart ends up
         # disagreeing with the bullets beside it.
         self.prepared_visuals: dict[int, list[dict]] = {}
+        # slide_index -> slot_key -> the validation round each prepared block
+        # was built in. Kept beside the blocks rather than inside them, so a
+        # bookkeeping field never reaches the renderer or a prompt. See
+        # prepare_visual for what it decides.
+        self.prepared_rounds: dict[int, dict[tuple, int]] = {}
         # Marks a slide placed itself through draw_primitives. Kept apart from
         # prepared_visuals because they are not content blocks - they attach to
         # the slide's ``primitives`` list, not to its ``contents``.
@@ -905,7 +910,49 @@ class WorkingState:
         self.selected_images = shifted(self.selected_images)
         self.prepared_regions = shifted(self.prepared_regions)
         self.prepared_visuals = shifted(self.prepared_visuals)
+        self.prepared_rounds = shifted(self.prepared_rounds)
         self.prepared_primitives = shifted(self.prepared_primitives)
+
+    def prepare_visual(self, index: int, block: dict) -> None:
+        """Hold a built block for the slide it names, replacing what it rebuilds.
+
+        One block per type, per region, *per slot*: rebuilding the stat
+        callouts in the right rail must not discard the ones in the left, and
+        a dashboard's bridge chart must not discard the mix chart beside it.
+        Region alone was enough while a slide carried one chart; on a page
+        with no region tree two charts both bind to the same nothing, and the
+        second silently replaced the first - the tool reported success and
+        the exhibit never reached the page.
+
+        A revision round is the exception. A model redrafting a flagged page
+        rebuilds its exhibits, and it names the slot afresh each time rather
+        than repeating the first draft's: a Kubernetes deck's comparison table
+        was built as "strategy-comparison", rebuilt with no slot, then rebuilt
+        as "strategy_comparison", and the page shipped all three stacked
+        until the text ran off it. So a block built after a validation round
+        replaces the blocks of its type and region built before that round,
+        unless its slot names one of them - a targeted fix to one exhibit on
+        a dashboard keeps the others.
+        """
+        key = slot_key(block)
+        current = self.validation_attempts
+        slots = self.prepared_visuals.setdefault(index, [])
+        rounds = self.prepared_rounds.setdefault(index, {})
+
+        if any(slot_key(existing) == key for existing in slots):
+            superseded = {key}
+        else:
+            superseded = {
+                slot_key(existing) for existing in slots
+                if slot_key(existing)[:2] == key[:2]
+                and rounds.get(slot_key(existing), current) < current
+            }
+        slots[:] = [existing for existing in slots
+                    if slot_key(existing) not in superseded]
+        for gone in superseded:
+            rounds.pop(gone, None)
+        slots.append(block)
+        rounds[key] = current
 
     def resolve_and_add_slide(self, slide_data: dict, *, insert: bool = False) -> None:
         """
@@ -3327,17 +3374,7 @@ class AgentLoop:
         block = tool_result.data.get("content")
         if target is None or not block:
             return
-        slots = self.working_state.prepared_visuals.setdefault(target, [])
-        # One block per type, per region, *per slot*: rebuilding the stat
-        # callouts in the right rail must not discard the ones in the left,
-        # and a dashboard's bridge chart must not discard the mix chart
-        # beside it. Region alone was enough while a slide carried one chart;
-        # on a page with no region tree two charts both bind to the same
-        # nothing, and the second silently replaced the first - the tool
-        # reported success and the exhibit never reached the page.
-        key = slot_key(block)
-        slots[:] = [existing for existing in slots if slot_key(existing) != key]
-        slots.append(block)
+        self.working_state.prepare_visual(target, block)
 
     def _withheld_tools(self) -> frozenset[str]:
         """Tools this run has, and does not offer.
@@ -3426,6 +3463,7 @@ class AgentLoop:
                 + self._describe_validation_issues(slide_index=index)
                 + "\nShorten the copy, give an oversized visual a smaller region, or move "
                 "it onto its own slide, then call design_slide_content for this slide."
+                + self._attached_exhibits_directive(index)
                 + code_option
             )
         # Named only when it is actually offered. This instruction reaches the
@@ -3449,6 +3487,29 @@ class AgentLoop:
             + self._format_directive()
             + self._structure_directive()
             + self._arc_directive(index)
+        )
+
+    def _attached_exhibits_directive(self, index: int) -> str:
+        """The exhibits a slide being revised already carries, by slot.
+
+        A revising model that cannot see what the page holds rebuilds its
+        table under a new name, and the page gains a second table instead of
+        a better one. `prepare_visual` makes that rebuild a replacement; this
+        tells the model so, and gives it the names to keep another exhibit on
+        a page that carries several.
+        """
+        attached = self.working_state.prepared_visuals.get(index) or []
+        if not attached:
+            return ""
+        lines = "\n".join(
+            f"- {block.get('type')}"
+            + (f' (slot "{block["slot"]}")' if block.get("slot") else "")
+            for block in attached
+        )
+        return (
+            "\nThis slide already carries:\n" + lines
+            + "\nRebuilding one of these replaces it rather than adding "
+            "another; to fix one of several of a kind, pass its slot."
         )
 
     def _content_type_directive(self, planned: dict) -> str:
