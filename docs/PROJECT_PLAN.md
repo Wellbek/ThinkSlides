@@ -270,6 +270,9 @@ Problems are ordered by expected impact on the mission.
 - **Impact**: High on quality (visible defects) and runtime (about 30% of machine time).
 - **Possible solutions**: fit-before-render using font metrics (the Slides type does this with arithmetic: R-102); on a fit failure, re-bind to a roomier archetype or split the slide deterministically, and only then ask a model to shorten a specific field with a character budget; validate and re-render only changed slides; stop when a round does not reduce blocking defects.
 - **Evidence required**: measure how often pre-render fit estimates agree with LibreOffice geometry on the regression decks (`tools/measure_typesetting.py` exists for this); verify fonts are metric-compatible in the renderer container (R-101 safe-font finding).
+- **Update (R-005)**: the first headless run found a larger cause than capacity: the revision loop never asks for the fixes (#299).
+  With most of the deck flagged, the redraft prompt carries none of the findings, only the first slide is redrafted, the `replace` rung re-renders an identical page, and the walker keeps drafting after the cap.
+  Separately, content headlines are set at the language's display size (57.6 pt for an 18 pt body), which alone wraps every sentence-length title (#302).
 
 ### P-3 Drafting is sequential and conversational
 
@@ -308,6 +311,7 @@ Problems are ordered by expected impact on the mission.
 - **Impact**: Medium-High: users notice immediately.
 - **Possible solutions**: the plan-validate-execute pattern (R-103): the brief's explicit constraints become typed fields; a validator compares plan to brief and either re-plans with the specific violation or records a deviation itself.
 - **Evidence required**: none beyond a regression test from the observed case.
+- **Update (R-005)**: the planner prompt itself contradicts the count: `Target Slide Count: 3` beside the boardroom format's "Plan roughly 10-18 slides", plus unconditional title and conclusion slides (#300).
 
 ### P-7 Weak narrative and topic titles
 
@@ -366,11 +370,10 @@ Problems are ordered by expected impact on the mission.
 ### P-13 Work continues after the deck is declared final
 
 - **Evidence**: R-001: in session `597fd8e0`, `deck_finalized` and `file_generated` fire at 11:38:23, then a `validate_slide_json`, `build_diagram`, `design_slide_content` and a fourth render follow, with no validation, before the closing message.
-- **Likely cause**: not established; possibly the draft phase re-entering after validation settled with a slide still in `slides_needing_revision`, or the stall fallback path.
-- **Confidence**: Low (cause); High (observation).
-- **Impact**: Medium: the delivered file may differ from the validated one.
-- **Possible solutions**: to be decided after reproduction.
-- **Evidence required**: reproduce on current `main` with the research runner.
+- **Cause (reproduced, R-005)**: `_slides_outstanding` ignores the validation cap and `draft` precedes `validate` in `PIPELINE`, so once validation is settled at its cap the walker redrafts the flagged slide again, re-renders, and skips validation as settled (#299).
+- **Confidence**: High.
+- **Impact**: Medium: the delivered file differs from the validated one.
+- **Possible solutions**: treat the cap as ending revision; make the render after a cap-settled validation impossible without a validation.
 
 ### P-14 Run durability and admission control
 
@@ -1189,6 +1192,8 @@ Slide-scoped editing, project-level sources, run durability and admission contro
 | Big-bang rewrite of `loop.py` | Risky; refactor along seams as each iteration touches them |
 
 ## 25. Completed research (this iteration)
+
+- First headless run in `claude-code` mode (R-005), with its replay reproducing identical pages; five defects filed (#299 to #303).
 
 - Repository audit of all three services, the generation path, the design engine, the renderer, the evaluation harness and the frontend (R-003).
 - Historical run telemetry and rendered-output inspection from the local volumes (R-001, R-002).
