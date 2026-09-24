@@ -37,6 +37,11 @@ class ToolResult(BaseModel):
     success: bool
     data: Any = None
     error: Optional[str] = None
+    # A failure that is the tool doing its job: it ran to the end and turned
+    # its input down, as a validator does a draft. Traced as "rejected" rather
+    # than "failed", so a run's checks do not read a verdict as a tool that
+    # broke (#345). Only meaningful when success is False.
+    rejected: bool = False
     duration_ms: int = 0
     token_count: Optional[int] = None
 

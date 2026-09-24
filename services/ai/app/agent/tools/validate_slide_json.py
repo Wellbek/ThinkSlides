@@ -109,6 +109,7 @@ class ValidateSlideJsonTool:
         if errors:
             return ToolResult(
                 success=False,
+                rejected=True,
                 error="; ".join(errors),
                 data={"errors": errors, "warnings": warnings},
                 duration_ms=int((time.time() - start) * 1000),
@@ -273,6 +274,7 @@ class ValidateSlideJsonTool:
 
         return ToolResult(
             success=is_valid,
+            rejected=not is_valid,
             data={
                 "valid": is_valid,
                 "errors": errors,

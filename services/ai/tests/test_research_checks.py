@@ -116,6 +116,16 @@ class TestReviewedGaps:
         check = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["no_failed_tool_calls"]
         assert check["passed"] is False and "build_table x1" in check["detail"]
 
+    def test_a_rejected_draft_is_a_verdict_not_a_failure(self, tmp_path):
+        """A validator turning a draft down is the tool doing its job (#345)."""
+        spans = [_span("tool", "validate_slide_json", status="rejected")] * 3 + [
+            _span("tool", "validate_slide_json")]
+        result = check_run(_run(tmp_path, spans=spans), TASK)
+        check = _by_name(result)["no_failed_tool_calls"]
+        assert check["passed"] is True and check["detail"] == "none failed"
+        assert result["metrics"]["draftsRejected"] == 3
+        assert "3 draft(s) rejected by validation" in render(result)
+
     def test_a_script_edit_after_validation_is_an_unvalidated_deck(self, tmp_path):
         spans = [
             _span("phase", "validate", started="2026-09-24T10:00:02", attrs={"clean": False}),

@@ -279,3 +279,41 @@ class TestTracingNeverHurtsTheRun:
         assert loop._design_system_token is None
         assert run_context.get_design_system() is None
         assert trace.current_trace() is None
+
+
+class TestAVerdictIsNotABreakage:
+    """A validator turning a draft down ran to the end and did its job. The
+    trace said "failed" for it, the same word as a tool that broke, and every
+    run's checks read seven rejected drafts as seven broken calls (#345)."""
+
+    @staticmethod
+    async def _traced(name, args):
+        from app.agent.loop import AgentLoop
+        from tests.test_agent_loop_workflow import _dispatch
+
+        t = trace.begin("run")
+        _, result = await _dispatch(AgentLoop(db=None), name, args)
+        await trace.finish(t, [], termination=trace.COMPLETE)
+        return result, next(s for s in t.spans if s.kind == "tool")
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_draft_is_traced_as_rejected(self):
+        result, span = await self._traced(
+            "validate_slide_json", {"slide_json": json.dumps({"slideIndex": 0})})
+        assert result.success is False and result.rejected is True
+        assert span.status == "rejected"
+
+    @pytest.mark.asyncio
+    async def test_a_tool_that_returned_an_error_is_still_failed(self):
+        result, span = await self._traced("build_table", {"slide_index": 0})
+        assert result.success is False and result.rejected is False
+        assert span.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_a_call_the_validator_could_not_read_is_failed(self):
+        """An array or unparseable JSON is the model misusing the tool: there
+        was no draft to turn down."""
+        result, span = await self._traced(
+            "validate_slide_json", {"slide_json": json.dumps([{"slideIndex": 0}])})
+        assert result.success is False and result.rejected is False
+        assert span.status == "failed"
