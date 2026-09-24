@@ -1131,6 +1131,21 @@ class WorkingState:
         self.phase_turns = {}
 
 
+# Arguments a tool's schema offers the model that the loop acts on itself and
+# the tool never sees. `placement` decides whether a designed slide is
+# inserted or replaces one (see _dispatch_tool_body); passing it through made
+# every call that set it fail on an unexpected keyword.
+_LOOP_ARGUMENTS = {"design_slide_content": frozenset({"placement"})}
+
+
+def _tool_arguments(fn_name: str, fn_args: dict) -> dict:
+    """The arguments the tool itself takes, without the ones the loop consumes."""
+    consumed = _LOOP_ARGUMENTS.get(fn_name)
+    if not consumed:
+        return fn_args
+    return {k: v for k, v in fn_args.items() if k not in consumed}
+
+
 def _visual_asserts_figures(fn_name: str, fn_args: dict) -> bool:
     """Whether this visual would present a number as measured.
 
@@ -4071,7 +4086,8 @@ class AgentLoop:
             # Tools make their own LLM calls, so a rate limit can strike
             # inside one - narrate those waits the same way.
             async for kind, payload in self._with_retry_notices(
-                self._execute_tool(fn_name, fn_args), current_phase
+                self._execute_tool(fn_name, _tool_arguments(fn_name, fn_args)),
+                current_phase,
             ):
                 if kind == "event":
                     yield "event", payload
