@@ -84,9 +84,20 @@ def _git_commit() -> str:
         return ""
 
 
-def _tavily_config():
+def _search_config(mode: str, cassette_from: Path | None):
+    """Tavily when a key is set; on replay, whatever the recorded run had.
+
+    A replay never searches - its results come from the cassette - but
+    whether a search backend exists decides which path the run takes (Deep
+    is downgraded without one, the research question is offered with one),
+    so it has to match the recording, not this machine's environment.
+    """
     from app.ai_settings import SearchConfig
 
+    if mode == REPLAY:
+        manifest = cassette_from.parent / "manifest.json"
+        had_search = manifest.exists() and json.loads(manifest.read_text()).get("search")
+        return SearchConfig(backend="tavily", api_key="replayed") if had_search else None
     key = os.environ.get("TAVILY_API_KEY", "")
     return SearchConfig(backend="tavily", api_key=key) if key else None
 
@@ -168,7 +179,9 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
 
     if mode == REPLAY:
         source = Cassette(cassette_from)
-        cassette = Cassette(run_dir / "cassette.jsonl")
+        # A replay answered exactly what was recorded, so its cassette is the
+        # same one - kept, so a replay can itself be replayed.
+        shutil.copy(cassette_from, run_dir / "cassette.jsonl")
         chat, vision = ReplayProvider(source), ReplayVisionProvider(source)
         search = recorded_search(web_search.run_search, source, replay=True)
     else:
@@ -177,7 +190,9 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
         chat, vision = ClaudeCodeProvider(exchange), ClaudeCodeVisionProvider(exchange)
         search = recorded_search(web_search.run_search, cassette, replay=False)
 
+    search_config = _search_config(mode, cassette_from)
     manifest = {
+        "search": search_config.backend if search_config else None,
         "task": task.id, "category": task.category, "mode": mode,
         "taskFile": str(task.source) if task.source else None,
         "commit": _git_commit(), "startedAt": datetime.datetime.now().isoformat(),
@@ -199,7 +214,7 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
                         detail_level=task.detail if part == 0 else None,
                         chat_provider=chat,
                         vision_provider=vision,
-                        search_config=_tavily_config(),
+                        search_config=search_config,
                         trace_sinks=[DatabaseSink(), JsonlSink(run_dir, name=f"trace-{part}")],
                     )
                     question, paused = None, False

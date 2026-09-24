@@ -161,3 +161,57 @@ class TestInjectedProviders:
             assert get_search_config() is search
         finally:
             loop._reset_run_context()
+
+
+class TestReplayFollowsTheRecording:
+    @pytest.mark.asyncio
+    async def test_a_failed_search_is_kept_so_later_searches_stay_in_step(self, tmp_path):
+        from app.research.exchange import RecordedSearchError
+
+        cassette = Cassette(tmp_path / "cassette.jsonl")
+
+        async def flaky(config, query, **kwargs):
+            if query == "down":
+                raise TimeoutError("tavily timed out")
+            return [{"url": f"https://example.com/{query}"}]
+
+        recording = recorded_search(flaky, cassette, replay=False)
+        with pytest.raises(TimeoutError):
+            await recording(None, "down")
+        await recording(None, "etag")
+
+        replaying = recorded_search(flaky, Cassette(tmp_path / "cassette.jsonl"), replay=True)
+        with pytest.raises(RecordedSearchError, match="timed out"):
+            await replaying(None, "down")
+        assert await replaying(None, "etag") == [{"url": "https://example.com/etag"}]
+
+    def test_replay_takes_its_search_backend_from_the_recording_not_the_environment(
+        self, tmp_path, monkeypatch,
+    ):
+        from app.research.runner import REPLAY, _search_config
+
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+        (tmp_path / "manifest.json").write_text(json.dumps({"search": "tavily"}))
+        (tmp_path / "cassette.jsonl").write_text("")
+        assert _search_config(REPLAY, tmp_path / "cassette.jsonl").backend == "tavily"
+
+        (tmp_path / "manifest.json").write_text(json.dumps({"search": None}))
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-live")
+        assert _search_config(REPLAY, tmp_path / "cassette.jsonl") is None
+
+    @pytest.mark.asyncio
+    async def test_agreeing_to_research_mid_run_uses_the_injected_backend(self):
+        """Settings have no search backend on a headless run; the injected one
+        has to be the one a mid-run "yes, research it" switches to."""
+        from app.agent.loop import AgentLoop
+        from app.agent.run_context import get_search_config
+        from app.ai_settings import SearchConfig
+
+        search = SearchConfig(backend="tavily", api_key="tvly-test")
+        loop = AgentLoop(db=None, mode="simple", search_config=search)
+        try:
+            assert await loop._enable_deep_research() is True
+            assert loop.mode == "deep"
+            assert get_search_config() is search
+        finally:
+            loop._reset_run_context()

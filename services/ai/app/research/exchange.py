@@ -301,15 +301,31 @@ class ReplayVisionProvider(VisionLLMProvider):
         return self.tape.next(request_sha(prompt)).get("content") or ""
 
 
+class RecordedSearchError(RuntimeError):
+    """A search that failed when it was recorded, failing again on replay."""
+
+
 def recorded_search(search, cassette: Cassette, *, replay: bool):
-    """Wrap ``run_search`` so its results are kept, or served back on replay."""
+    """Wrap ``run_search`` so its results are kept, or served back on replay.
+
+    A failed search is kept too, as its error. Leaving it out would hand the
+    next recorded result to this call on replay, and every search after it
+    would answer the question before.
+    """
     tape = _Tape(cassette, "search") if replay else None
 
     async def run_search(config, query, **kwargs):
         sha = request_sha({"query": query, **kwargs})
         if tape is not None:
-            return tape.next(sha)
-        results = await search(config, query, **kwargs)
+            kept = tape.next(sha)
+            if isinstance(kept, dict) and "error" in kept:
+                raise RecordedSearchError(kept["error"])
+            return kept
+        try:
+            results = await search(config, query, **kwargs)
+        except Exception as e:
+            cassette.append("search", sha, {"error": f"{type(e).__name__}: {e}"})
+            raise
         cassette.append("search", sha, results)
         return results
 
