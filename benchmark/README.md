@@ -7,7 +7,7 @@ The design is in `docs/PROJECT_PLAN.md` sections 12 and 17; the runner is `servi
   The category is the directory name, and every deck is compared only against its own category.
 - `prices.json` - dated, sourced per-model prices; a model not listed cannot run live.
 - `budget.json` - the total all live runs may spend.
-- `ledger.jsonl` - one line per live run: calls, tokens, cost. Appended by the runner, never edited by hand.
+- The spend ledger is not here: it lives outside any checkout, at `~/.local/share/thinkslides/ledger.jsonl` (or `$THINKSLIDES_LEDGER`), so every branch and worktree sees the same remaining budget.
 - `runs/` - run output, not committed.
 
 Live runs validate what already passed in `claude-code` mode; they do not replace it.
