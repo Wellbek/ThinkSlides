@@ -1,0 +1,20 @@
+id: consulting-waiting-lists
+category: consulting
+prompt: |
+  A seven-slide briefing for a hospital trust board on reducing elective
+  waiting lists: the current national position in England, the main
+  bottlenecks, what high-performing trusts do differently, and a
+  prioritised plan.
+mode: deep
+detail: detailed
+answers:
+  - first
+  - first
+  - Go ahead as planned
+checklist:
+  - The deck has exactly 7 slides
+  - National waiting list figures carry NHS England as the source and a date
+  - Bottlenecks are evidenced, not asserted
+  - Practices of high-performing trusts are specific and attributed
+  - The plan is prioritised with owners or timeframes
+  - Every chart has units and a single measure per axis
