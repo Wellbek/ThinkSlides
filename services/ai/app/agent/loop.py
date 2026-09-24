@@ -3534,7 +3534,10 @@ class AgentLoop:
         is told to say on the slide that the figures are unverified rather than
         chart them as though they were not.
         """
-        config, reason = ai_settings.resolve_search_config(self._settings_row)
+        if self._search_override is not None:
+            config, reason = self._search_override, ""
+        else:
+            config, reason = ai_settings.resolve_search_config(self._settings_row)
         if config is None:
             logger.info("deep_research_unavailable", reason=reason)
             return False
