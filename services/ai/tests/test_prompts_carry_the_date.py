@@ -34,6 +34,9 @@ _EXEMPT = {
     # Wraps a provider to time and trace each call; forwards the messages it
     # was handed untouched.
     "llm/traced.py": "tracing wrapper, builds no prompt",
+    # Hands the loop's own requests to a Claude Code session, or records and
+    # replays a real provider's answers; composes no prompt of its own.
+    "research/exchange.py": "forwards and records prompts others built",
     # "Reply with exactly: OK" - a connectivity probe whose entire point is a
     # fixed, minimal answer. A date paragraph would both cost tokens on every
     # click of "Test model" and give the model something else to reply with.

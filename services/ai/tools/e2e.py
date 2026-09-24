@@ -70,8 +70,8 @@ async def _seed(db, prompt: str, org_id: uuid.UUID | None = None):
         user = User(
             organisation_id=org.id,
             email=f"bench-{uuid.uuid4().hex[:8]}@example.com",
-            hashed_password="x",
-            full_name="Bench",
+            password_hash="!",
+            display_name="Bench",
         )
         db.add(user)
         await db.flush()

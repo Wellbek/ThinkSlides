@@ -1,0 +1,19 @@
+id: technical-http-caching
+category: technical
+prompt: |
+  Three slides for a team of backend engineers on how HTTP caching works:
+  what Cache-Control directives do, how revalidation with ETags works, and
+  when a CDN serves stale content. Exactly 3 slides.
+mode: simple
+detail: concise
+answers:
+  - first
+  - first
+  - Go ahead as planned
+checklist:
+  - The deck has exactly 3 slides
+  - One slide explains max-age, no-cache and no-store and how they differ
+  - One slide shows the ETag / If-None-Match / 304 exchange as a sequence
+  - One slide covers stale-while-revalidate or stale-if-error at a CDN
+  - No slide states a figure without a source
+  - Titles state what the slide shows rather than naming a topic
