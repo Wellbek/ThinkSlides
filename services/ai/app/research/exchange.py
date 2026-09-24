@@ -104,8 +104,12 @@ class ClaudeCodeExchange:
         self.directory = directory
         self.cassette = cassette
         self.timeout_s = timeout_s
-        self.seq = 0
         directory.mkdir(parents=True, exist_ok=True)
+        # Numbered after anything already here. A folder can be reused - a
+        # deck graded twice - and a request numbered from 1 again would find
+        # the old answer waiting and take it without anyone being asked.
+        self.seq = max((int(p.name[:4]) for p in directory.glob("[0-9][0-9][0-9][0-9].request.json")),
+                       default=0)
 
     async def ask(self, kind: str, request: dict, readable: str) -> dict:
         self.seq += 1

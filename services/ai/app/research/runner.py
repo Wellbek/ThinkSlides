@@ -44,6 +44,7 @@ from app.research.exchange import (
     ReplayVisionProvider,
     recorded_search,
 )
+from app.llm import usage
 from app.research.task import Task
 
 CLAUDE_CODE = "claude-code"
@@ -344,6 +345,38 @@ def _check(run_dir: Path, task: Task) -> None:
         logging.getLogger(__name__).warning("run checks failed for %s: %s", run_dir, e)
 
 
+async def grade(run_dir: Path, task: Task, *, mode: str, live: Live | None = None) -> dict:
+    """Grade a finished run's deck against its checklist, through a Claude Code
+    session or a metered live model, and record a live judge's spend."""
+    from app.research.grade import grade_run
+
+    if mode == CLAUDE_CODE:
+        exchange = ClaudeCodeExchange(run_dir / "grade-llm", Cassette(run_dir / "grade-cassette.jsonl"))
+        return await grade_run(run_dir, task, ClaudeCodeVisionProvider(exchange), "claude-code")
+    if mode != LIVE or live is None:
+        raise ValueError("grade with claude-code, or live with an organisation, a model and a cap")
+
+    from app.db.session import async_session
+
+    prices = load_prices(live.benchmark_dir / "prices.json")
+    if live.model not in prices:
+        raise ValueError(f"{live.model} is not in prices.json; an unpriced run is unbounded")
+    ledger = Ledger(LEDGER_PATH, live.benchmark_dir / "budget.json")
+    ledger.authorise(live.max_cost)
+    meter = Meter(prices[live.model], live.max_cost)
+    async with async_session() as db:
+        _, vision, provider = await _live_providers(db, live)
+    if vision is None:
+        raise ValueError(f"{live.model} has no vision support to grade with")
+    token = usage.start()
+    try:
+        return await grade_run(run_dir, task, MeteredVisionProvider(vision, meter), live.model)
+    finally:
+        usage.reset(token)
+        ledger.record(task=task.id, run=run_dir.name, purpose="grade", model=live.model,
+                      provider=provider, **meter.summary())
+
+
 def summarise(run_dir: Path) -> str:
     """A run directory as a short report: outcome, then each part's timeline."""
     manifest = json.loads((run_dir / "manifest.json").read_text())
@@ -357,6 +390,10 @@ def summarise(run_dir: Path) -> str:
         from app.research.checks import render
 
         lines += ["", render(json.loads((run_dir / "checks.json").read_text()))]
+    for verdict in sorted(run_dir.glob("grade-*.json")):
+        from app.research.grade import render as render_grade
+
+        lines += ["", render_grade(json.loads(verdict.read_text()))]
     for part in sorted(run_dir.glob("trace-*.md")):
         lines += ["", part.read_text()]
     return "\n".join(lines)
