@@ -155,3 +155,92 @@ def test_rebuilding_the_same_slot_replaces_rather_than_duplicates(name):
     loop._attach_visual(name, result)
 
     assert len(loop.working_state.prepared_visuals.get(0) or []) == 1
+
+
+# ── Revision rounds ─────────────────────────────────────────────────────────
+#
+# A revising model rebuilds a flagged page's exhibits and names their slots
+# afresh. The Kubernetes run (`20260924-203834-live`) built slide 2's table
+# three times - "strategy-comparison" on the first draft, no slot after the
+# first validation, "strategy_comparison" after the second - and shipped all
+# three stacked, with the text run off the page.
+
+
+def _table(slot: str | None = None, title: str = "") -> dict:
+    block = {"type": "table", "table": {"title": title}}
+    if slot:
+        block["slot"] = slot
+    return block
+
+
+def _after_validation(loop: AgentLoop, rounds: int = 1) -> None:
+    loop.working_state.validation_attempts += rounds
+
+
+def test_the_kubernetes_run_ships_one_table_not_three():
+    loop = AgentLoop(db=None)
+    ws = loop.working_state
+    ws.prepare_visual(1, _table("strategy-comparison", "first draft"))
+    _after_validation(loop)
+    ws.prepare_visual(1, _table(None, "first revision"))
+    _after_validation(loop)
+    ws.prepare_visual(1, _table("strategy_comparison", "second revision"))
+
+    assert [b["table"]["title"] for b in ws.prepared_visuals[1]] == ["second revision"]
+
+
+def test_a_slot_restated_with_other_separators_is_the_same_slot():
+    loop = AgentLoop(db=None)
+    ws = loop.working_state
+    ws.prepare_visual(5, _table("decision-matrix", "old"))
+    ws.prepare_visual(5, _table("decision_matrix", "new"))
+
+    assert [b["table"]["title"] for b in ws.prepared_visuals[5]] == ["new"]
+
+
+def test_a_first_draft_keeps_two_exhibits_of_one_type():
+    loop = AgentLoop(db=None)
+    ws = loop.working_state
+    ws.prepare_visual(0, _table("costs"))
+    ws.prepare_visual(0, _table("risks"))
+
+    assert len(ws.prepared_visuals[0]) == 2
+
+
+def test_a_revision_keeps_both_exhibits_it_rebuilds():
+    loop = AgentLoop(db=None)
+    ws = loop.working_state
+    ws.prepare_visual(0, _table("costs", "old"))
+    ws.prepare_visual(0, _table("risks", "old"))
+    _after_validation(loop)
+    ws.prepare_visual(0, _table("cost_table", "new"))
+    ws.prepare_visual(0, _table("risk_table", "new"))
+
+    assert [b["table"]["title"] for b in ws.prepared_visuals[0]] == ["new", "new"]
+
+
+def test_a_named_fix_to_one_exhibit_keeps_the_other():
+    loop = AgentLoop(db=None)
+    ws = loop.working_state
+    ws.prepare_visual(0, _table("costs", "old costs"))
+    ws.prepare_visual(0, _table("risks", "old risks"))
+    _after_validation(loop)
+    ws.prepare_visual(0, _table("costs", "new costs"))
+
+    assert sorted(b["table"]["title"] for b in ws.prepared_visuals[0]) == [
+        "new costs", "old risks"]
+
+
+def test_a_revision_leaves_other_types_and_regions_alone():
+    loop = AgentLoop(db=None)
+    ws = loop.working_state
+    ws.prepare_visual(0, {"type": "diagram", "slot": "flow"})
+    ws.prepare_visual(0, {**_table("left"), "regionId": "left"})
+    ws.prepare_visual(0, {**_table("right"), "regionId": "right"})
+    _after_validation(loop)
+    ws.prepare_visual(0, {**_table("left-rebuilt"), "regionId": "left"})
+
+    kept = [(b["type"], b.get("regionId"), b.get("slot")) for b in ws.prepared_visuals[0]]
+    assert kept == [("diagram", None, "flow"), ("table", "right", "right"),
+                    ("table", "left", "left-rebuilt")]
+
