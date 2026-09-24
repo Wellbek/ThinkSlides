@@ -9,9 +9,13 @@ termination on the root.
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from app.llm import usage
+from app.llm.provider import LLMProvider
+from app.llm.traced import TracedChatProvider, prompt_sha
 from app.observability import trace
 from app.observability.trace_store import JsonlSink, render_timeline
 
@@ -81,6 +85,59 @@ class TestSpans:
         with trace.span("tool", "x") as s:
             trace.record_usage(input_tokens=5)
         assert s is None
+
+
+class TestTokenCounts:
+    def test_openai_chat_reports_cached_as_part_of_the_prompt(self):
+        response = SimpleNamespace(usage=SimpleNamespace(
+            prompt_tokens=1000, completion_tokens=50,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=768)))
+        assert usage.counts(response) == (1000, 768, 50)
+
+    def test_the_responses_api_nests_it_one_level_differently(self):
+        response = SimpleNamespace(usage=SimpleNamespace(
+            input_tokens=400, output_tokens=20,
+            input_tokens_details=SimpleNamespace(cached_tokens=0)))
+        assert usage.counts(response) == (400, 0, 20)
+
+    def test_anthropic_input_excludes_the_cache_so_it_is_added_back(self):
+        response = SimpleNamespace(usage=SimpleNamespace(
+            input_tokens=100, output_tokens=30,
+            cache_read_input_tokens=5000, cache_creation_input_tokens=200))
+        assert usage.counts(response) == (5300, 5000, 30)
+
+    def test_a_response_without_usage_counts_as_nothing(self):
+        assert usage.counts(SimpleNamespace()) == (0, 0, 0)
+
+
+class _ScriptedProvider(LLMProvider):
+    model = "cheap-1"
+
+    async def chat(self, messages, tools=None, temperature=0.7, max_tokens=4096):
+        usage.record("scripted", self.model, SimpleNamespace(usage=SimpleNamespace(
+            prompt_tokens=120, completion_tokens=8)))
+        return {"message": {"content": ""},
+                "tool_calls": [{"function": {"name": "build_chart"}}]}
+
+
+class TestTracedProvider:
+    @pytest.mark.asyncio
+    async def test_every_call_is_a_span_with_what_was_asked_and_spent(self):
+        t = trace.begin("run")
+        provider = TracedChatProvider(_ScriptedProvider())
+        messages = [{"role": "user", "content": "hi"}]
+        await provider.chat(messages, tools=[{"type": "function"}])
+        await trace.finish(t, [], termination=trace.COMPLETE)
+
+        call = next(s for s in t.spans if s.kind == "llm")
+        assert call.attrs["model"] == "cheap-1"
+        assert call.attrs["tools"] == 1
+        assert call.attrs["toolCalls"] == ["build_chart"]
+        assert call.attrs["promptSha"] == prompt_sha(messages)
+        assert (call.input_tokens, call.output_tokens) == (120, 8)
+
+    def test_it_still_looks_like_the_provider_it_wraps(self):
+        assert TracedChatProvider(_ScriptedProvider()).model == "cheap-1"
 
 
 class TestSinks:

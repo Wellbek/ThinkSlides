@@ -17,6 +17,8 @@ from __future__ import annotations
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 
+from app.observability import trace
+
 
 @dataclass
 class ModelUsage:
@@ -26,6 +28,7 @@ class ModelUsage:
     model: str
     calls: int = 0
     input_tokens: int = 0
+    cached_input_tokens: int = 0
     output_tokens: int = 0
 
     @property
@@ -40,7 +43,7 @@ class RunUsage:
     by_model: dict[tuple[str, str], ModelUsage] = field(default_factory=dict)
 
     def record(self, provider: str, model: str, *, input_tokens: int = 0,
-               output_tokens: int = 0) -> None:
+               cached_input_tokens: int = 0, output_tokens: int = 0) -> None:
         key = (provider, model)
         entry = self.by_model.get(key)
         if entry is None:
@@ -48,6 +51,7 @@ class RunUsage:
             self.by_model[key] = entry
         entry.calls += 1
         entry.input_tokens += max(0, int(input_tokens or 0))
+        entry.cached_input_tokens += max(0, int(cached_input_tokens or 0))
         entry.output_tokens += max(0, int(output_tokens or 0))
 
     @property
@@ -68,6 +72,7 @@ class RunUsage:
                     "model": entry.model,
                     "calls": entry.calls,
                     "inputTokens": entry.input_tokens,
+                    "cachedInputTokens": entry.cached_input_tokens,
                     "outputTokens": entry.output_tokens,
                 }
                 for entry in sorted(
@@ -98,25 +103,51 @@ def reset(token: Token) -> None:
     _usage.reset(token)
 
 
+def _number(value) -> int:
+    return int(value) if isinstance(value, (int, float)) else 0
+
+
+def counts(response: object) -> tuple[int, int, int]:
+    """(input, cached input, output) tokens from a provider response.
+
+    Input includes the cached part, so cached is always a share of input.
+    OpenAI reports it that way already, under prompt_tokens (chat) or
+    input_tokens (Responses) with the cached share in *_details. Anthropic
+    reports input_tokens *excluding* cache reads and writes, so those are
+    added back.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return 0, 0, 0
+    cache_read = _number(getattr(usage, "cache_read_input_tokens", None))
+    cache_write = _number(getattr(usage, "cache_creation_input_tokens", None))
+    if cache_read or cache_write:
+        input_tokens = _number(getattr(usage, "input_tokens", None)) + cache_read + cache_write
+        cached = cache_read
+    else:
+        input_tokens = (_number(getattr(usage, "prompt_tokens", None))
+                        or _number(getattr(usage, "input_tokens", None)))
+        details = (getattr(usage, "prompt_tokens_details", None)
+                   or getattr(usage, "input_tokens_details", None))
+        cached = _number(getattr(details, "cached_tokens", None))
+    output_tokens = (_number(getattr(usage, "completion_tokens", None))
+                     or _number(getattr(usage, "output_tokens", None)))
+    return input_tokens, cached, output_tokens
+
+
 def record(provider: str, model: str, response: object) -> None:
     """Count one call, from whatever shape the provider reports usage in.
 
-    Silent when there is no counter installed and when a provider reports
-    nothing: a missing count is a gap in what we know, never a reason to fail
-    a generation that has otherwise succeeded.
+    Counted twice over, for two readers: the run's per-model totals, and the
+    trace span of the call that spent it. Silent when neither is installed
+    and when a provider reports nothing: a missing count is a gap in what we
+    know, never a reason to fail a generation that has otherwise succeeded.
     """
+    input_tokens, cached, output_tokens = counts(response)
+    trace.record_usage(input_tokens=input_tokens, cached_input_tokens=cached,
+                       output_tokens=output_tokens)
     run = _usage.get()
     if run is None:
         return
-    usage = getattr(response, "usage", None)
-    if usage is None:
-        run.record(provider, model)
-        return
-    # OpenAI-shaped and Anthropic-shaped, which name the same two numbers
-    # differently and are the only two shapes in this codebase.
-    input_tokens = (getattr(usage, "prompt_tokens", None)
-                    or getattr(usage, "input_tokens", None) or 0)
-    output_tokens = (getattr(usage, "completion_tokens", None)
-                     or getattr(usage, "output_tokens", None) or 0)
     run.record(provider, model, input_tokens=input_tokens,
-               output_tokens=output_tokens)
+               cached_input_tokens=cached, output_tokens=output_tokens)
