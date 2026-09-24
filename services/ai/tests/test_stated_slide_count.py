@@ -45,7 +45,7 @@ class TestThePromptStatesOneCount:
         await _run(monkeypatch, llm, target_slide_count=3)
         prompt = llm.calls[0][0]["content"]
         assert "Plan roughly" not in prompt
-        assert "EXACTLY 3 slides, the title slide included" in prompt
+        assert "EXACTLY 3 slides, any title slide included" in prompt
 
     @pytest.mark.asyncio
     async def test_a_short_deck_spends_no_slide_on_a_recap(self, monkeypatch):
@@ -114,3 +114,38 @@ class TestThePlansLengthIsCheckedInCode:
         result = await plan_tool.PlanPresentationStructureTool.run(
             content_summary="x", deck_format="poster", target_slide_count=3)
         assert len(llm.calls) == 1 and result.data["totalSlides"] == 1
+
+
+class TestReviewedGaps:
+    @pytest.mark.asyncio
+    async def test_a_failed_correction_keeps_the_first_plan(self, monkeypatch):
+        class _Flaky(_LLM):
+            async def chat(self, messages, tools=None):
+                if self.calls:
+                    self.calls.append(messages)
+                    raise TimeoutError("provider timed out")
+                return await super().chat(messages, tools)
+
+        result = await _run(monkeypatch, _Flaky(_plan(7)), target_slide_count=6)
+        assert result.success and result.data["totalSlides"] == 7
+
+    @pytest.mark.asyncio
+    async def test_the_declared_total_follows_the_listed_slides(self, monkeypatch):
+        """A total that agrees with the brief but not the list must not hide the miss."""
+        llm = _LLM(_plan(12, total=6), "sorry")
+        result = await _run(monkeypatch, llm, target_slide_count=6)
+        assert result.data["totalSlides"] == 12
+
+    @pytest.mark.asyncio
+    async def test_a_one_or_two_slide_deck_spends_nothing_on_a_cover(self, monkeypatch):
+        llm = _LLM(_plan(2))
+        await _run(monkeypatch, llm, target_slide_count=2)
+        prompt = llm.calls[0][0]["content"]
+        assert "Do NOT plan a separate title slide" in prompt
+        assert "First slide should be a title slide" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_three_slides_still_open_on_a_cover(self, monkeypatch):
+        llm = _LLM(_plan(3))
+        await _run(monkeypatch, llm, target_slide_count=3)
+        assert "First slide should be a title slide" in llm.calls[0][0]["content"]

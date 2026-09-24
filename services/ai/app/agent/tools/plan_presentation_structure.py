@@ -94,10 +94,12 @@ def _format_guidance(fmt, target_slide_count: int = 0) -> str:
 
 # Below this many slides a closing recap or a section divider is a page the
 # brief's own topics needed: six slides asked to cover five things leave four
-# for them once a cover and a recap are spent. The cover stays at any count:
-# the design engine reads the first page as the cover by position, so a plan
-# that opened on content would be styled as one anyway.
+# for them once a cover and a recap are spent. The cover stays from three
+# slides up: the design engine reads the first page as the cover by position
+# (#347), so a plan that opened on content would be styled as one anyway.
 MIN_SLIDES_FOR_A_CLOSING_RECAP = 8
+# Below this a body-less cover would leave the deck with almost no content.
+MIN_SLIDES_FOR_A_COVER = 3
 
 
 def _count_rules(target_slide_count: int) -> str:
@@ -111,6 +113,15 @@ def _count_rules(target_slide_count: int) -> str:
         "carries only a title and an optional subtitle, no body bullets, so "
         "give it 0-1 key points."
     )
+    if 0 < target_slide_count < MIN_SLIDES_FOR_A_COVER:
+        # A title slide with no body would be half of a two-slide deck and
+        # all of a one-slide one; the first page carries content instead.
+        cover = (
+            "- Do NOT plan a separate title slide: every slide carries "
+            'content (contentType "content", "twoColumn", "chart" or '
+            '"table") with its key points, and the first one\'s headline '
+            "names the subject."
+        )
     if target_slide_count <= 0:
         return cover + (
             "\n- Last slide should be a conclusion/summary slide. If it recaps "
@@ -119,7 +130,7 @@ def _count_rules(target_slide_count: int) -> str:
             '"conclusion" (title-only) for a slide with no body content.'
         )
     count = (
-        f"- The deck has EXACTLY {target_slide_count} slides, the title slide "
+        f"- The deck has EXACTLY {target_slide_count} slides, any title slide "
         f'included: "totalSlides" is {target_slide_count} and "slides" lists '
         f"{target_slide_count} entries. If the material has more parts than "
         "that, combine them; if it has fewer, give each more room. Neither is "
@@ -143,20 +154,24 @@ def _count_rules(target_slide_count: int) -> str:
     return "\n".join((count, cover, closing))
 
 
+def _listed(structure: dict) -> int:
+    return len([s for s in structure.get("slides") or [] if isinstance(s, dict)])
+
+
 def _distance(structure: dict, target_slide_count: int) -> int:
-    return abs(len(structure.get("slides") or []) - target_slide_count)
+    return abs(_listed(structure) - target_slide_count)
 
 
 def _count_violation(structure: dict, target_slide_count: int) -> str | None:
     """What is wrong with a plan's length against a stated count, or None."""
     if target_slide_count <= 0:
         return None
-    listed = len([s for s in structure.get("slides") or [] if isinstance(s, dict)])
+    listed = _listed(structure)
     declared = int(structure.get("totalSlides") or 0)
     if listed == target_slide_count and declared == target_slide_count:
         return None
     return (
-        f"The brief asks for exactly {target_slide_count} slides, the title "
+        f"The brief asks for exactly {target_slide_count} slides, any title "
         f"slide included. Your plan lists {listed} slides"
         + (f" and declares totalSlides {declared}" if declared != listed else "")
         + f". Return the whole plan again as ONLY the JSON object, with "
@@ -572,19 +587,33 @@ Rules:
             if violation:
                 logger.info("plan_count_missed", target=target_slide_count,
                             planned=len(structure.get("slides") or []))
-                retry = await llm.chat(
-                    messages=[
-                        {"role": "user", "content": prompt},
-                        {"role": "assistant", "content": result_text},
-                        {"role": "user", "content": violation},
-                    ],
-                    tools=None,
-                )
-                replanned = extract_json_object(retry.get("message", {}).get("content", "{}"))
+                try:
+                    retry = await llm.chat(
+                        messages=[
+                            {"role": "user", "content": prompt},
+                            {"role": "assistant", "content": result_text},
+                            {"role": "user", "content": violation},
+                        ],
+                        tools=None,
+                    )
+                    replanned = extract_json_object(
+                        retry.get("message", {}).get("content", "{}"))
+                except Exception as exc:
+                    # The first plan parsed; losing it to a failed correction
+                    # would turn a wrong length into no plan at all.
+                    logger.warning("plan_count_correction_failed", error=str(exc))
+                    replanned = None
                 if replanned is not None and replanned.get("slides") and (
                         _distance(replanned, target_slide_count)
                         <= _distance(structure, target_slide_count)):
                     structure = replanned
+
+            if not fmt.single_page:
+                # Drafting walks range(totalSlides) and the loop's own count
+                # check reads it, so a total that disagrees with the list
+                # would draft some other number of slides than was planned
+                # and hide the miss from the user.
+                structure["totalSlides"] = _listed(structure)
 
             duration_ms = int((time.time() - start) * 1000)
             if fmt.single_page and int(structure.get("totalSlides") or 0) != 1:
