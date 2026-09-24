@@ -139,13 +139,13 @@ def _slides_outstanding(loop: "AgentLoop") -> list[int]:
     if missing:
         return missing
 
-    # Nothing has been rewritten since validation complained, so its findings
-    # still stand. An empty slides_needing_revision means the opposite of
-    # nothing: it is compute_slides_needing_revision saying the defect is
-    # spread widely enough that the whole deck is in scope.
-    if ws.validation_issues and ws.validated_serial == ws.design_serial:
-        return ws.slides_needing_revision or list(range(total))
-    return []
+    # The slides the last validation flagged and this round has not redrafted
+    # yet. A queue rather than "nothing changed since validation": that test
+    # went false the moment the first flagged slide was redrafted, so a round
+    # revised one slide and re-rendered with the rest untouched (#299). The
+    # queue is emptied when validation settles, so a run at its cap does not
+    # draft again after its last check.
+    return list(ws.revision_queue)
 
 
 def _wants_code_amendment(loop: "AgentLoop") -> bool:

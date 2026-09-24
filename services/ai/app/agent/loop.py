@@ -613,6 +613,10 @@ class WorkingState:
         # need its other slides rewritten, and regenerating them costs an LLM
         # call each and risks changing copy the user was happy with.
         self.slides_needing_revision: list[int] = []
+        # Slides a revision round still has to redraft, in order. Filled when
+        # validation reports issues, drained as each is redrafted, emptied when
+        # validation settles.
+        self.revision_queue: list[int] = []
         # How many times each slide has been revised for its *layout*, and
         # which arrangements it has already been placed on.
         #
@@ -772,6 +776,19 @@ class WorkingState:
         """What `compose` should not offer each slide again."""
         return {index: frozenset(seen)
                 for index, seen in self.arrangements_tried.items() if seen}
+
+    def revision_round(self, issues: list[dict], exclude=()) -> list[int]:
+        """The slides a revision round redrafts for these findings.
+
+        A finding with no slide - a package fault, a deck-wide pattern - puts
+        every slide in the round, as it always did: there is no one slide to
+        send back, and an empty round would only re-validate the same file.
+        """
+        total = len(self.accumulated_slides) or int(
+            (self.presentation_structure or {}).get("totalSlides") or 0)
+        if any(not isinstance(i.get("slideIndex"), int) for i in issues):
+            return [i for i in range(total) if i not in exclude]
+        return sorted({i["slideIndex"] for i in issues if i["slideIndex"] not in exclude})
 
     def compute_slides_needing_revision(self, issues: list[dict]) -> list[int]:
         """
@@ -1099,6 +1116,7 @@ class WorkingState:
         self.validation_clean = False
         self.validation_issues = []
         self.slides_needing_revision = []
+        self.revision_queue = []
         self.layout_revisions = {}
         self.arrangements_tried = {}
         self.validation_attempts = 0
@@ -1623,6 +1641,7 @@ class AgentLoop:
             "code_edits_applied": self.working_state.code_edits_applied,
             "validation_issues": self.working_state.validation_issues,
             "slides_needing_revision": self.working_state.slides_needing_revision,
+            "revision_queue": self.working_state.revision_queue,
             # Without these a resumed run forgets what it has already tried
             # and starts the ladder again from the bottom - which is not a cap
             # of two, it is a cap of two per reload.
@@ -1716,6 +1735,15 @@ class AgentLoop:
                 "code_edits_applied", 0)
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
+            if "revision_queue" in state_dict:
+                self.working_state.revision_queue = state_dict["revision_queue"]
+            elif (state_dict.get("validation_issues")
+                  and state_dict.get("validated_serial") == state_dict.get("design_serial")):
+                # Saved before the queue existed: validation's findings still
+                # stood, which is what used to make those slides outstanding.
+                self.working_state.revision_queue = (
+                    list(state_dict.get("slides_needing_revision") or [])
+                    or self.working_state.revision_round(state_dict["validation_issues"]))
             self.working_state.layout_revisions = {
                 int(k): int(v) for k, v in
                 (state_dict.get("layout_revisions") or {}).items()}
@@ -3349,7 +3377,20 @@ class AgentLoop:
             # of dead call `_withheld_tools` exists to prevent, the same
             # reasoning `TEMPLATE_GEOMETRY_TOOLS` already gets above.
             withheld.add("edit_deck_with_code")
+        elif self._render_will_follow():
+            # A script edits the rendered file; a render rebuilds it from the
+            # slides. Offered while another slide of the round is still to be
+            # redrafted - or after one already was - the script's fix would be
+            # overwritten by the render that redraft brings, and its slide,
+            # already taken off the round, would ship unfixed.
+            withheld.add("edit_deck_with_code")
         return frozenset(withheld)
+
+    def _render_will_follow(self) -> bool:
+        ws = self.working_state
+        redrafted_since_validation = (ws.validated_serial >= 0
+                                      and ws.design_serial != ws.validated_serial)
+        return len(ws.revision_queue) > 1 or redrafted_since_validation
 
     def slide_directive(self) -> str:
         """What to do with the one slide the drafting phase is currently on."""
@@ -3362,7 +3403,7 @@ class AgentLoop:
         plan = (self.working_state.presentation_structure or {}).get("slides") or []
         planned = plan[index] if index < len(plan) else {}
         title = planned.get("title") or planned.get("heading") or ""
-        revising = index in self.working_state.slides_needing_revision
+        revising = index in self.working_state.revision_queue
 
         if revising:
             # Named only when it is actually offered - see the same rule
@@ -3379,9 +3420,10 @@ class AgentLoop:
             return (
                 f"Revise slide {index + 1}"
                 + (f' ("{title}")' if title else "")
-                + " - it is the only slide being changed; every other slide is carried "
-                "over unchanged. Validation reported:\n"
-                + self._describe_validation_issues()
+                + " - the slides this round revises are redrafted one at a time, and "
+                "every slide validation did not flag is carried over unchanged. "
+                "Validation reported, for this slide:\n"
+                + self._describe_validation_issues(slide_index=index)
                 + "\nShorten the copy, give an oversized visual a smaller region, or move "
                 "it onto its own slide, then call design_slide_content for this slide."
                 + code_option
@@ -4262,12 +4304,19 @@ class AgentLoop:
                 issues = (tool_result.data or {}).get("issues", [])
                 self.working_state.validation_issues = issues
                 self.working_state.validation_clean = not issues
+                at_cap = (
+                    self.working_state.validation_attempts
+                    >= self.working_state.MAX_VALIDATION_ATTEMPTS
+                )
                 # A layout verdict is answered by placing the page again, not
                 # by rewriting it. Redrafting a slide to move a frame down
                 # throws away copy nobody complained about and brings back
                 # different copy, which is how a page that had one thing wrong
                 # comes back with three.
-                relayout = self.working_state.layout_revision_for(issues)
+                # At the cap nothing is scheduled: no re-placement, no redraft.
+                # Anything done now would be rendered and shipped without a
+                # validation after it.
+                relayout = {} if at_cap else self.working_state.layout_revision_for(issues)
                 placed = run_context.get_placed_arrangements()
                 for index, rung in relayout.items():
                     # Only a "replace" rules an arrangement out. A nudge keeps
@@ -4292,11 +4341,10 @@ class AgentLoop:
                          if i.get("slideIndex") not in relayout])
                 )
                 self.working_state.validated_serial = self.working_state.design_serial
-                at_cap = (
-                    self.working_state.validation_attempts
-                    >= self.working_state.MAX_VALIDATION_ATTEMPTS
-                )
                 validation_done = not issues or at_cap
+                self.working_state.revision_queue = (
+                    [] if validation_done
+                    else self.working_state.revision_round(issues, exclude=relayout))
             else:
                 self.working_state.validation_failures += 1
                 validation_done = (
@@ -4357,6 +4405,9 @@ class AgentLoop:
                     self.working_state.resolve_and_add_slide(
                         tool_result.data, insert=inserting
                     )
+                    redrafted = tool_result.data.get("slideIndex")
+                    if redrafted in self.working_state.revision_queue:
+                        self.working_state.revision_queue.remove(redrafted)
 
             # Recorded by slide_index so design_slide_content's
             # layout_info can be auto-supplied later (see the
@@ -4513,6 +4564,8 @@ class AgentLoop:
                         # into `validate` to actually check the edited file
                         # rather than taking the fix on faith.
                         target = fn_args.get("slide_index")
+                        if target in self.working_state.revision_queue:
+                            self.working_state.revision_queue.remove(target)
                         if target in self.working_state.slides_needing_revision:
                             self.working_state.slides_needing_revision = [
                                 i for i in self.working_state.slides_needing_revision
@@ -5381,9 +5434,13 @@ class AgentLoop:
         revisit_kind = "error" if reasons else "adjustment"
         return True, "; ".join(dict.fromkeys(r for r in reasons if r)), revisit_kind
 
-    def _describe_validation_issues(self, limit: int = 8) -> str:
-        """Render the last validation run's issues as a slide-numbered list."""
+    def _describe_validation_issues(self, limit: int = 8, slide_index: int | None = None) -> str:
+        """Render the last validation run's issues as a slide-numbered list,
+        or only those on one slide and the deck-wide ones."""
         issues = self.working_state.validation_issues
+        if slide_index is not None:
+            issues = [i for i in issues
+                      if i.get("slideIndex") in (slide_index, None)]
         if not issues:
             return "  (no specific issues recorded)"
 

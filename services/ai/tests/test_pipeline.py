@@ -431,14 +431,16 @@ class TestRevisionWalksBackwards:
         # Validation comes back with a problem on slide 2.
         ws.validation_clean = False
         ws.validation_issues = [{"slideIndex": 1, "type": "overflow"}]
-        ws.slides_needing_revision = [1]
+        ws.revision_queue = [1]
         ws.validated_serial = ws.design_serial
 
         assert pipeline.next_phase(loop).name == "draft"
 
         # Rewriting it settles the finding: what is outstanding now is a fresh
-        # render, not another go at the same slide.
+        # render, not another go at the same slide. (The dispatcher drains the
+        # queue as each flagged slide is redrafted.)
         ws.add_slide({"slideIndex": 1, "title": "shorter"})
+        ws.revision_queue.remove(1)
 
         assert pipeline.next_phase(loop).name == "render"
 

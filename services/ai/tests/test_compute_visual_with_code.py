@@ -310,6 +310,7 @@ class TestSlideDirectiveNamesTheOptionWhenItIsReachable:
             {"slideIndex": 0}, {"slideIndex": 1},
         ]
         loop.working_state.slides_needing_revision = [1]
+        loop.working_state.revision_queue = [1]
         loop.working_state.validation_issues = [
             {"slideIndex": 1, "type": "overflow", "detail": "runs off the slide"},
         ]
