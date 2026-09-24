@@ -164,3 +164,60 @@ class TestSinks:
         draft = next(line for line in lines if "phase:draft" in line)
         chart = next(line for line in lines if "tool:build_chart" in line)
         assert chart.index("tool:") > draft.index("phase:")
+
+
+class TestARunExplainsItself:
+    @pytest.mark.asyncio
+    async def test_a_paused_run_says_it_paused_and_where(self, monkeypatch):
+        from tests.test_pipeline import INTAKE, _loop, _text
+
+        loop, session_id, _ = _loop([_text(INTAKE)], monkeypatch=monkeypatch)
+        sink = ListSink()
+        loop.trace_sinks = [sink]
+
+        [e async for e in loop.run(session_id)]
+
+        (t,) = sink.traces
+        assert t.root.attrs["termination"] == trace.PAUSED
+        phases = [s for s in t.spans if s.kind == "phase" and s.status != "skipped"]
+        assert [p.name for p in phases][:1] == ["intake"]
+        assert any(s.kind == "tool" and s.name == "web_search"
+                   and s.reason == "called by the loop" for s in t.spans)
+
+    @pytest.mark.asyncio
+    async def test_a_finished_run_records_validation_and_every_phase_it_skipped(self, monkeypatch):
+        from tests.test_pipeline import INTAKE, TOOL_RESULTS, _calls, _loop, _text
+
+        loop, session_id, _ = _loop(
+            [_calls(("select_layout", {"slide_index": 0}),
+                    ("design_slide_content", {"slide_index": 0})),
+             _calls(("select_layout", {"slide_index": 1}),
+                    ("design_slide_content", {"slide_index": 1})),
+             _text("Done.")],
+            state={
+                "brief": json.loads(INTAKE), "scouted": True,
+                "consulted_before_planning": True, "autonomy_confirmed": True,
+                "reviewed_outline_with_user": True, "offered_directions": True,
+                "presentation_structure": TOOL_RESULTS["plan_presentation_structure"],
+                "design_system": {"palette": {}, "layouts": []},
+                "web_search_calls": 9,
+                "researched_urls": [f"https://s/{i}" for i in range(8)],
+                "mode": "deep", "detail_level": "detailed",
+            },
+            messages=[{"role": "user", "content": "Go ahead as planned"}],
+            monkeypatch=monkeypatch,
+        )
+        sink = ListSink()
+        loop.trace_sinks = [sink]
+
+        [e async for e in loop.run(session_id)]
+
+        (t,) = sink.traces
+        assert t.root.attrs["termination"] == trace.COMPLETE
+        validate = next(s for s in t.spans if s.kind == "phase" and s.name == "validate")
+        assert validate.attrs["clean"] is True and validate.attrs["issues"] == 0
+        skipped = {s.name: s.reason for s in t.spans if s.status == "skipped"}
+        assert skipped["intake"] == "already satisfied"
+        assert "amend" in skipped
+        drafted = [s for s in t.spans if s.kind == "tool" and s.name == "design_slide_content"]
+        assert {s.reason for s in drafted} == {"called by the model"}

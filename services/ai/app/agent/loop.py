@@ -46,7 +46,9 @@ from app.llm.retry_notices import (
     reset_retry_observer,
     set_retry_observer,
 )
+from app.observability import trace
 from app.observability.logging import get_logger
+from app.llm.traced import TracedChatProvider, TracedVisionProvider
 import asyncio
 import json
 import re
@@ -1172,6 +1174,8 @@ class AgentLoop:
     figure_connection = None
     mcp_servers: list = []
     mcp_tools_by_phase: dict = {}
+    trace_sinks: list = []
+    termination = trace.COMPLETE
 
     # Transient provider failures (5xx, timeouts) are a wait, not a failure.
     # Rate limits are retried in the provider layer instead - see
@@ -1191,8 +1195,12 @@ class AgentLoop:
         org_id: uuid.UUID | None = None,
         detail_level: str | None = None,
         include_sources: bool | None = None,
+        trace_sinks: list | None = None,
     ) -> None:
         """
+        ``trace_sinks`` receive the run's span tree when it ends. None means
+        the run_spans table, through this loop's own database session.
+
         ``mode`` is the effort level the user picked in the composer. Pass None
         to inherit the mode of the run being resumed (see _load_working_state),
         which is what the answer-a-question path does - the resume request has
@@ -1210,6 +1218,13 @@ class AgentLoop:
         no composer to read it from, so None inherits it from the paused run.
         """
         self.db = db
+        if trace_sinks is None:
+            from app.observability.trace_store import DatabaseSink
+
+            trace_sinks = [DatabaseSink(db)] if db is not None else []
+        self.trace_sinks = trace_sinks
+        # Set on every way out of _run, and recorded on the trace's root span.
+        self.termination = trace.COMPLETE
         # A fork, not the global singleton: run-scoped tools discovered from one
         # organisation's MCP server must not still be registered when another
         # organisation's run starts, in a service that is shared.
@@ -1299,7 +1314,7 @@ class AgentLoop:
         if credentials is None:
             raise AINotConfiguredError()
         try:
-            self.llm = build_chat_provider(credentials)
+            self.llm = TracedChatProvider(build_chat_provider(credentials))
         except ValueError as e:
             logger.error(
                 "configured_chat_provider_unusable",
@@ -1331,7 +1346,7 @@ class AgentLoop:
         # qualitative pass skips rather than failing the run.
         try:
             self._vision_token = run_context.set_vision_provider(
-                build_vision_provider(credentials)
+                TracedVisionProvider(build_vision_provider(credentials))
             )
         except ValueError as e:
             logger.info(
@@ -1696,11 +1711,18 @@ class AgentLoop:
         run context is torn down however the loop ends - including when the
         consumer stops iterating early.
         """
+        self._phase_visits: dict[str, int] = {}
+        run_trace = trace.begin(
+            "run",
+            sessionId=str(session_id),
+            organisationId=str(self.org_id) if self.org_id else None,
+        )
         try:
             async for event in self._run(session_id):
                 yield event
             self._log_usage(session_id)
         except AINotConfiguredError as e:
+            self.termination = trace.NOT_CONFIGURED
             # A workspace with no model configured cannot generate anything.
             # Said once, plainly, with a code the interface can act on - rather
             # than let each of a dozen LLM calls discover it separately.
@@ -1714,7 +1736,18 @@ class AgentLoop:
                 "code": "ai_not_configured",
                 "timestamp": _iso_now(),
             })
+        except BaseException:
+            self.termination = trace.ERROR
+            raise
         finally:
+            run_trace.root.set(
+                mode=self.mode,
+                detailLevel=self.detail_level,
+                slides=len(self.working_state.accumulated_slides),
+                validationAttempts=self.working_state.validation_attempts,
+            )
+            self._record_skipped_phases()
+            await trace.finish(run_trace, self.trace_sinks, termination=self.termination)
             if self._usage_token is not None:
                 usage.reset(self._usage_token)
                 self._usage_token = None
@@ -1972,20 +2005,37 @@ class AgentLoop:
             before = self._progress_marker()
             paused = False
             failed = False
+            visits = self._phase_visits[phase.name] = self._phase_visits.get(phase.name, 0) + 1
 
-            async for kind, payload in self._run_phase(
-                phase, context, chat_messages, session_id
-            ):
-                if kind == "event":
-                    yield payload
-                elif kind == "paused":
-                    paused = True
-                elif kind == "provider_failed":
-                    failed = True
+            with trace.span(
+                "phase", phase.name,
+                reason="first phase that applies and is not finished"
+                       + (f" (visit {visits})" if visits > 1 else ""),
+                driver=phase.driver,
+                visit=visits,
+            ) as phase_span:
+                async for kind, payload in self._run_phase(
+                    phase, context, chat_messages, session_id
+                ):
+                    if kind == "event":
+                        yield payload
+                    elif kind == "paused":
+                        paused = True
+                    elif kind == "provider_failed":
+                        failed = True
+                if phase_span is not None:
+                    phase_span.set(
+                        progressed=self._progress_marker() != before,
+                        done=phase.done(self),
+                        paused=paused,
+                        **self._phase_outcome(phase.name),
+                    )
 
             if paused:
+                self.termination = trace.PAUSED
                 return
             if failed:
+                self.termination = trace.PROVIDER_FAILED
                 return
 
             if self._progress_marker() != before:
@@ -2034,7 +2084,9 @@ class AgentLoop:
                         # resume would otherwise pick the stalled state back
                         # up and try the same unconverging fix again.
                         await self._clear_working_state(session_id)
+                        self.termination = trace.STALLED_WITH_DECK
                         break
+                    self.termination = trace.STALLED
                     yield _event("error", phase.label, {
                         "message": (
                             f"The run could not get past the {phase.name} step. "
@@ -2053,6 +2105,45 @@ class AgentLoop:
             yield preview_event
         async for event in self._closing_message(context, chat_messages):
             yield event
+    # ── Tracing ───────────────────────────────────────────────────────────
+
+    def _phase_outcome(self, name: str) -> dict:
+        """What a phase visit left behind that the trace should keep.
+
+        For validation this is the convergence series: blocking findings per
+        attempt, which is how a run shows it improved, stalled or gave up.
+        """
+        ws = self.working_state
+        if name == "validate":
+            return {
+                "attempt": ws.validation_attempts,
+                "issues": len(ws.validation_issues or []),
+                "clean": bool(ws.validation_clean),
+                "atCap": bool(ws.at_validation_cap),
+            }
+        if name == "draft":
+            return {"slidesDrafted": len(ws.accumulated_slides),
+                    "revising": list(ws.slides_needing_revision or [])}
+        if name == "research":
+            return {"searches": ws.web_search_calls, "sources": len(ws.researched_urls)}
+        if name == "plan":
+            return {"plannedSlides": int((ws.presentation_structure or {}).get("totalSlides") or 0)}
+        return {}
+
+    def _record_skipped_phases(self) -> None:
+        """Say why each phase that never ran did not run."""
+        for phase in pipeline.PIPELINE:
+            if phase.name in self._phase_visits:
+                continue
+            try:
+                applies = phase.applies(self)
+                reason = "already satisfied" if applies else "does not apply to this run"
+            except Exception:  # noqa: BLE001 - a partial run may lack what a predicate reads
+                reason = "not reached"
+            if self.termination != trace.COMPLETE and reason == "already satisfied":
+                reason = "not reached"
+            trace.event("phase", phase.name, reason=reason, status="skipped")
+
     # ── The phases the loop drives itself ─────────────────────────────────
 
     def _read_the_arc(self, structure: dict) -> None:
@@ -3031,6 +3122,7 @@ class AgentLoop:
             session_id=session_id,
             current_phase=phase.label,
             step=phase.name,
+            chosen_by="loop",
         ):
             yield kind, payload
 
@@ -3690,6 +3782,37 @@ class AgentLoop:
         )
 
     async def _dispatch_tool(
+        self,
+        fn_name: str,
+        fn_args: dict,
+        call_id: str,
+        *,
+        context: dict,
+        session_id: uuid.UUID,
+        current_phase: str,
+        step: str | None = None,
+        chosen_by: str = "model",
+    ) -> AsyncIterator[tuple[str, object]]:
+        """Dispatch one tool call inside its own trace span."""
+        with trace.span(
+            "tool", fn_name,
+            reason=f"called by the {chosen_by}",
+            step=step,
+            callId=call_id,
+        ) as tool_span:
+            async for kind, payload in self._dispatch_tool_body(
+                fn_name, fn_args, call_id,
+                context=context, session_id=session_id,
+                current_phase=current_phase, step=step,
+            ):
+                if kind == "result" and tool_span is not None:
+                    tool_span.set(success=bool(payload.success))
+                    if not payload.success:
+                        tool_span.status = "failed"
+                        tool_span.error = str(payload.error or "")[:2000]
+                yield kind, payload
+
+    async def _dispatch_tool_body(
         self,
         fn_name: str,
         fn_args: dict,
