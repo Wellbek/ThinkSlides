@@ -262,5 +262,29 @@ class TestADiagramIsNotAFigure:
     def test_a_chart_is_caught_whatever_it_carries(self):
         assert self._blocked({"items": []}, tool="build_chart") is True
 
-    def test_a_table_is_caught_whatever_it_carries(self):
-        assert self._blocked({"items": []}, tool="build_table") is True
+    def test_a_table_of_figures_is_caught(self):
+        assert self._blocked({"columns": ["Region", "Revenue"],
+                              "rows": [["EMEA", "$4.2bn"], ["APAC", "31%"]]},
+                             tool="build_table") is True
+
+    def test_a_table_of_names_and_verdicts_is_allowed(self):
+        """A comparison with no measurement in it asserts nothing that could be
+        wrong; refusing it left technical decks with prose and half an empty
+        page (#301)."""
+        assert self._blocked({"columns": ["Directive", "May be stored", "Reused without asking"],
+                              "rows": [["max-age=N", "Yes", "For N seconds"],
+                                       ["no-store", "No", "Never"]]},
+                             tool="build_table") is False
+
+    def test_a_sequence_diagram_of_status_codes_is_allowed(self):
+        source = ("sequenceDiagram\n    C->>O: GET /page\n    O-->>C: 200 + ETag v42\n"
+                  "    C->>O: If-None-Match v42\n    O-->>C: 304 Not Modified")
+        assert self._blocked({"source": source}, tool="build_mermaid") is False
+
+    def test_a_graph_labelled_with_measurements_is_caught(self):
+        source = "graph LR\n    A[Cache hit 94%] --> B[Origin 1.2 s]"
+        assert self._blocked({"source": source}, tool="build_mermaid") is True
+
+    def test_a_diagram_whose_labels_carry_figures_is_caught(self):
+        assert self._blocked({"items": [{"label": "Visitors", "detail": "120,000 a month"},
+                                        {"label": "Signups"}]}) is True
