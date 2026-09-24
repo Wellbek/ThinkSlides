@@ -107,3 +107,23 @@ class TestWhatTheRenderedPagesSay:
         assert checks["body_legible"]["detail"].startswith("page 3: 10")
         assert checks["headlines_within_the_ramp"]["passed"] is True
         assert checks["text_within_the_page"]["passed"] is True
+
+
+class TestReviewedGaps:
+    def test_a_tool_that_raised_or_never_finished_counts_as_failed(self, tmp_path):
+        spans = [_span("tool", "build_table", status="error"),
+                 _span("tool", "render", status="unfinished")]
+        check = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["no_failed_tool_calls"]
+        assert check["passed"] is False and "build_table x1" in check["detail"]
+
+    def test_a_script_edit_after_validation_is_an_unvalidated_deck(self, tmp_path):
+        spans = [
+            _span("phase", "validate", started="2026-09-24T10:00:02", attrs={"clean": False}),
+            _span("tool", "edit_deck_with_code", started="2026-09-24T10:00:05"),
+        ]
+        check = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["shipped_what_was_validated"]
+        assert check["passed"] is False and "edit_deck_with_code" in check["detail"]
+
+    def test_a_run_without_its_task_file_says_so(self, tmp_path):
+        with pytest.raises(ValueError, match="pass the task explicitly"):
+            check_run(_run(tmp_path, manifest={"taskFile": None}))

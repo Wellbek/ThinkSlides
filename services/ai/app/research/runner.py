@@ -327,10 +327,21 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
             "errors": outcome.errors,
         })
         (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        _check(run_dir, task)
+    return outcome
+
+
+def _check(run_dir: Path, task: Task) -> None:
+    """Check the run however it ended - the runs that fail hardest most need it -
+    and never let a check that cannot read what the run left undo the run."""
+    import logging
+
     from app.research.checks import check_run
 
-    check_run(run_dir, task)
-    return outcome
+    try:
+        check_run(run_dir, task)
+    except Exception as e:  # noqa: BLE001 - the run's own outcome stands either way
+        logging.getLogger(__name__).warning("run checks failed for %s: %s", run_dir, e)
 
 
 def summarise(run_dir: Path) -> str:

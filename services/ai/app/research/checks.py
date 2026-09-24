@@ -100,16 +100,26 @@ def _checks(run_dir: Path, task: Task, manifest: dict, spans: list[dict], pdf: P
             "validation_converged", bool(last.get("clean")),
             f"{len(validations)} round(s), {last.get('issues', '?')} issue(s) left",
         ))
-        renders = [s for s in spans if s["kind"] == "phase" and s["name"] == "render"
-                   and s["status"] != "skipped"]
-        unchecked = bool(renders) and renders[-1]["startedAt"] > validations[-1]["startedAt"]
+        # Anything that changed the file after the last validation: a render,
+        # or a script editing the rendered deck in the amend phase, which never
+        # goes back through render or validate.
+        validated_at = validations[-1]["startedAt"]
+        changed_after = [
+            s["name"] for s in spans
+            if s["startedAt"] > validated_at and s["status"] == "ok" and (
+                (s["kind"] == "phase" and s["name"] == "render")
+                or (s["kind"] == "tool" and s["name"] == "edit_deck_with_code"))
+        ]
         checks.append(Check(
-            "shipped_what_was_validated", not unchecked,
-            "the last render came after the last validation (#299)" if unchecked
-            else "the delivered render is the one validation saw",
+            "shipped_what_was_validated", not changed_after,
+            f"changed after the last validation by {', '.join(sorted(set(changed_after)))} (#299)"
+            if changed_after else "the delivered file is the one validation saw",
         ))
 
-    failed = [s["name"] for s in spans if s["kind"] == "tool" and s["status"] == "failed"]
+    # "failed" is a tool that returned an error; "error" one that raised; and
+    # "unfinished" one still open when the trace was written.
+    failed = [s["name"] for s in spans if s["kind"] == "tool"
+              and s["status"] in ("failed", "error", "unfinished")]
     checks.append(Check(
         "no_failed_tool_calls", not failed,
         ", ".join(f"{n} x{failed.count(n)}" for n in sorted(set(failed))) or "none failed",
@@ -141,6 +151,8 @@ def check_run(run_dir: Path, task: Task | None = None) -> dict:
     """Check a run directory, write checks.json into it, and return what was written."""
     manifest = json.loads((run_dir / "manifest.json").read_text())
     if task is None:
+        if not manifest.get("taskFile"):
+            raise ValueError(f"{run_dir} does not record its task file; pass the task explicitly")
         task = Task.load(Path(manifest["taskFile"]).expanduser())
     spans = _spans(run_dir)
     pdf = _pdf(run_dir)
