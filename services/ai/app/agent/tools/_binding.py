@@ -83,5 +83,7 @@ def slot_key(block: dict) -> tuple:
     exactly: a revision rebuilt "decision-matrix" as "decision_matrix" and the
     page shipped both tables.
     """
-    slot = re.sub(r"[^a-z0-9]", "", str(block.get("slot") or "").lower())
+    raw = str(block.get("slot") or "").strip()
+    # Separators only: a slot named in Chinese or Cyrillic is still a name.
+    slot = re.sub(r"[\W_]+", "", raw.casefold()) or raw
     return (block.get("type"), block.get("regionId"), slot or None)

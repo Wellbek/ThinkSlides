@@ -198,6 +198,16 @@ def test_a_slot_restated_with_other_separators_is_the_same_slot():
     assert [b["table"]["title"] for b in ws.prepared_visuals[5]] == ["new"]
 
 
+def test_slots_named_outside_ascii_stay_distinct():
+    loop = AgentLoop(db=None)
+    ws = loop.working_state
+    ws.prepare_visual(0, _table("成本"))
+    ws.prepare_visual(0, _table("风险"))
+    ws.prepare_visual(0, _table("coûts"))
+
+    assert len(ws.prepared_visuals[0]) == 3
+
+
 def test_a_first_draft_keeps_two_exhibits_of_one_type():
     loop = AgentLoop(db=None)
     ws = loop.working_state
