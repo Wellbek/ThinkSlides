@@ -9,7 +9,8 @@ import { SlideStage } from "./SlideStage";
 import { ChatFlow } from "./ChatFlow";
 import { SetupBanner } from "./SetupBanner";
 import { SettingsModal } from "@/components/layout/SettingsModal";
-import { Share2, Eye } from "lucide-react";
+import { Eye } from "lucide-react";
+import { ShareButton } from "./ShareButton";
 import { UserAvatar } from "./UserAvatar";
 
 type View = "home" | "workspace";
@@ -208,7 +209,7 @@ export function WorkspaceShell() {
                     <Eye size={13} /> Show preview
                   </button>
                 )}
-                <button className="ws-tb-btn"><Share2 size={13} /> Share</button>
+                <ShareButton />
                 <UserAvatar />
               </header>
 

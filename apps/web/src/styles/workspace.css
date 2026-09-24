@@ -363,6 +363,15 @@
 }
 .ws-av.indigo { background: linear-gradient(135deg,#6366F1,#8B5CF6); }
 
+/* Share (in development): a popover that hands over the file. */
+.ws-share { position: relative; }
+.ws-share-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 50; width: 280px; padding: 12px; border: 1px solid var(--ws-border-sub); border-radius: var(--ws-radius-md); background: var(--ws-surface-2); box-shadow: 0 12px 32px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 10px; }
+.ws-share-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #CCC; }
+.ws-share-text { margin: 0; font-size: 12px; line-height: 1.5; color: #888; }
+.ws-share-text.muted { color: #555; }
+.ws-share-file { font-size: 11px; color: #AAA; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-share-pop .ws-tb-btn { align-self: flex-start; text-decoration: none; }
+
 /* ---------- Body: resizable / retractable panes ---------- */
 .ws-body { flex: 1; display: flex; min-height: 0; }
 .ws-panel { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
