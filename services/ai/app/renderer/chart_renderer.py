@@ -2281,10 +2281,13 @@ def render_table_to_png(
         return None
     header_row = bool(table_data.get("headerRow"))
 
-    layout = table_layout.plan_table(rows, header_row, width_in, height_in)
+    style = table_style_module.resolve_table_style(design_system)
+    # Planned in the face it is drawn in, so the rows it measures are the
+    # rows the drawn lines need.
+    layout = table_layout.plan_table(rows, header_row, width_in, height_in,
+                                     family=style.font_name)
     if layout is None:
         return None
-    style = table_style_module.resolve_table_style(design_system)
 
     fig_height = max(0.1, layout.height_in)
     fig = plt.figure(figsize=(width_in, fig_height), dpi=dpi)

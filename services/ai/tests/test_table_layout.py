@@ -183,3 +183,33 @@ class TestTheHeightATableNeeds:
                             sizes=(table_layout.LEGIBLE_CELL_PT,))
         assert layout.body_pt == table_layout.LEGIBLE_CELL_PT
         assert table_layout.needed_height_in(MATRIX, True, 5.7) == layout.height_in
+
+
+class TestTheRowsFitTheLinesDrawnInThem:
+    """The plan measured in regular Arial while the image wrapped in the
+    design's own face, bold in the header and total rows - so a drawn cell
+    could need more lines than its row had, and spilled over its neighbours."""
+
+    @pytest.mark.parametrize("family", ["Arial", "DejaVu Serif", "Liberation Serif"])
+    def test_every_drawn_cell_fits_its_planned_row(self, family):
+        from app.renderer.typeset.shape import wrap
+
+        rows = [*MATRIX, ["Total", "Varies", "Ingress integrations supported",
+                          "Medium-high", "Kubernetes-native progressive delivery",
+                          "Pick per service"]]
+        width_in = 5.73
+        layout = plan_table(rows, True, width_in, float("inf"), family=family)
+        assert layout.total_row_index == len(rows) - 1
+        for index, row in enumerate(rows):
+            header = index == 0
+            bold = header or index == layout.total_row_index
+            size = layout.header_pt if header else layout.body_pt
+            for col, cell in enumerate(row):
+                usable = (layout.col_fractions[col] * width_in * 72.0
+                          - table_layout.CELL_PAD_H_PT)
+                lines = len(wrap(cell, usable, family, size, bold=bold)) or 1
+                needed = (lines * size * 1.2) / 72.0
+                assert needed <= layout.row_heights_in[index] + 1e-6, (family, cell)
+
+    def test_a_zero_width_region_still_plans(self):
+        assert plan_table(MATRIX, True, 0.0, 2.0) is not None

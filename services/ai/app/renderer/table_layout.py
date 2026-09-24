@@ -112,18 +112,20 @@ def _natural_widths(rows: list[list[str]], n_cols: int, font_pt: float) -> list[
     return widths
 
 
-def _word_width_pt(word: str, font_pt: float, bold: bool) -> float:
-    """A word's advance width, in the face tables are measured in."""
+def _word_width_pt(word: str, font_pt: float, bold: bool,
+                   family: str = text_fit.DEFAULT_MEASURE_FAMILY) -> float:
+    """A word's advance width, in the face the table is drawn in."""
     from app.renderer.typeset.fonts import width_pt
 
     try:
-        return width_pt(word, text_fit.DEFAULT_MEASURE_FAMILY, font_pt, bold=bold)
+        return width_pt(word, family, font_pt, bold=bold)
     except Exception:
         return len(word) * font_pt * text_fit.AVG_CHAR_WIDTH_RATIO
 
 
 def _word_floors(rows: list[list[str]], n_cols: int, font_pt: float,
-                 has_header: bool) -> list[float]:
+                 has_header: bool, total_row: Optional[int],
+                 family: str) -> list[float]:
     """Each column's narrowest width in points: its longest word, unbroken.
 
     Proportional widths come from a column's longest *cell*, so a column of
@@ -135,11 +137,12 @@ def _word_floors(rows: list[list[str]], n_cols: int, font_pt: float,
         longest = 0.0
         for index, row in enumerate(rows):
             text = str(row[col]) if col < len(row) else ""
-            # A header is set a point larger, and bold.
+            # A header is set a point larger, and bold; a total row bold.
             header = has_header and index == 0
             size = font_pt + 1.0 if header else font_pt
+            bold = header or index == total_row
             for word in text.split():
-                longest = max(longest, _word_width_pt(word, size, header))
+                longest = max(longest, _word_width_pt(word, size, bold, family))
         floors.append(longest + CELL_PAD_H_PT)
     return floors
 
@@ -151,6 +154,8 @@ def _fit_floors(fractions: tuple[float, ...], floors_pt: list[float],
     None when the floors alone are wider than the table, which is the
     caller's cue to try a smaller size.
     """
+    if width_pt <= 0:
+        return None
     floors = [f / width_pt for f in floors_pt]
     if sum(floors) > 1.0:
         return None
@@ -184,13 +189,18 @@ def _fractions(widths: list[float]) -> tuple[float, ...]:
     return tuple(lifted)
 
 
-def _row_height_in(row: list[str], col_widths_pt: list[float], font_pt: float) -> float:
-    """How tall a row has to be for its tallest wrapped cell."""
+def _row_height_in(row: list[str], col_widths_pt: list[float], font_pt: float,
+                   bold: bool = False,
+                   family: str = text_fit.DEFAULT_MEASURE_FAMILY) -> float:
+    """How tall a row has to be for its tallest wrapped cell, measured in the
+    face and weight it is drawn in: a bold header measured regular wrapped
+    onto a line more than its row had room for."""
     lines = 1
     for col, width_pt in enumerate(col_widths_pt):
         text = str(row[col]) if col < len(row) else ""
         usable = max(1.0, width_pt - CELL_PAD_H_PT)
-        lines = max(lines, text_fit.estimate_wrapped_lines(text, font_pt, usable))
+        lines = max(lines, text_fit.estimate_wrapped_lines(
+            text, font_pt, usable, family=family, bold=bold))
     height_pt = lines * font_pt * text_fit.LINE_HEIGHT_RATIO + font_pt * _CELL_PAD_RATIO
     return height_pt / 72.0
 
@@ -201,7 +211,8 @@ LEGIBLE_CELL_PT = 10.0
 
 
 def needed_height_in(rows: list[list[str]], has_header: bool,
-                     width_in: float, body_pt: float = LEGIBLE_CELL_PT) -> float:
+                     width_in: float, body_pt: float = LEGIBLE_CELL_PT,
+                     family: str = text_fit.DEFAULT_MEASURE_FAMILY) -> float:
     """How tall this table is at this width and size, with nothing compressed.
 
     What a layout has to offer a table for it to be read: `plan_table` fits
@@ -210,7 +221,7 @@ def needed_height_in(rows: list[list[str]], has_header: bool,
     printed over each other.
     """
     layout = plan_table(rows, has_header, width_in, float("inf"),
-                        sizes=(body_pt,))
+                        sizes=(body_pt,), family=family)
     return layout.height_in if layout else 0.0
 
 
@@ -220,9 +231,14 @@ def plan_table(
     region_width_in: float,
     region_height_in: float,
     sizes: tuple[float, ...] = _SIZE_STEPS,
+    family: str = text_fit.DEFAULT_MEASURE_FAMILY,
 ) -> TableLayout | None:
     """
     Resolve a table's column widths, alignment, type size and row heights.
+
+    ``family`` is the face the table will be drawn in. Measuring in one face
+    and drawing in another is how planned rows came out too short for the
+    lines drawn in them.
 
     Returns None for an empty table. The returned height may be less than
     ``region_height_in`` - a table that needs four rows should occupy four
@@ -249,14 +265,19 @@ def plan_table(
         fractions = _fractions(_natural_widths(normalised, n_cols, body_pt))
         floored = _fit_floors(
             fractions,
-            _word_floors(normalised, n_cols, body_pt, has_header),
+            _word_floors(normalised, n_cols, body_pt, has_header,
+                         total_row_index, family),
             region_width_pt)
         if floored is None and body_pt != sizes[-1]:
             continue          # some word cannot be set whole at this size
         fractions = floored or fractions
         col_widths_pt = [f * region_width_pt for f in fractions]
         heights = [
-            _row_height_in(row, col_widths_pt, header_pt if (has_header and i == 0) else body_pt)
+            _row_height_in(
+                row, col_widths_pt,
+                header_pt if (has_header and i == 0) else body_pt,
+                bold=(has_header and i == 0) or i == total_row_index,
+                family=family)
             for i, row in enumerate(normalised)
         ]
         chosen = (fractions, header_pt, body_pt, heights)
