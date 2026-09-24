@@ -632,6 +632,9 @@ class WorkingState:
         # has three rungs and the first two are the cheap ones.
         self.layout_revisions: dict[int, int] = {}
         self.arrangements_tried: dict[int, set[str]] = {}
+        # What the last render placed each slide on, from its result - what a
+        # "replace" verdict rules out.
+        self.placed_arrangements: dict[int, list[str]] = {}
         self.validation_attempts: int = 0
         self.MAX_VALIDATION_ATTEMPTS = 3
         # Checks that could not run at all (LibreOffice conversion error, a
@@ -1166,6 +1169,7 @@ class WorkingState:
         self.revision_queue = []
         self.layout_revisions = {}
         self.arrangements_tried = {}
+        self.placed_arrangements = {}
         self.validation_attempts = 0
         self.validation_failures = 0
         self.last_rendered_path = None
@@ -4298,6 +4302,9 @@ class AgentLoop:
         if fn_name == "finalize_and_render_pptx" and tool_result.success:
             self.working_state.has_called_finalize = True
             self.working_state.last_rendered_path = tool_result.data.get("filePath")
+            self.working_state.placed_arrangements = {
+                int(index): list(archetypes) for index, archetypes in
+                (tool_result.data.get("placedArrangements") or {}).items()}
             # Visible to the tools as well as to the loop, so a tool that
             # edits the deck edits the same file the download and the vision
             # check read rather than a copy of it.
@@ -4378,7 +4385,7 @@ class AgentLoop:
                 # Anything done now would be rendered and shipped without a
                 # validation after it.
                 relayout = {} if at_cap else self.working_state.layout_revision_for(issues)
-                placed = run_context.get_placed_arrangements()
+                placed = self.working_state.placed_arrangements
                 for index, rung in relayout.items():
                     # Only a "replace" rules an arrangement out. A nudge keeps
                     # the page it has and moves something within it, so

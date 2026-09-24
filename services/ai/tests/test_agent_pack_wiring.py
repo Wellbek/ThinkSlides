@@ -187,11 +187,12 @@ class TestTheRenderRoutesWithoutBeingAsked:
             ]},
         ]
         out = str(tmp_path / "composed.pptx")
-        written = FinalizeAndRenderPptxTool._render_composed(
+        written, placed = FinalizeAndRenderPptxTool._render_composed(
             slides, pack, {"title": "Deck"}, out, {}
         )
         import os
         assert os.path.getsize(written) > 0
+        assert sorted(placed) == [0, 1] and all(placed.values())
 
     def test_it_refuses_a_document_that_cannot_be_placed(self, tmp_path):
         """Validation runs in code here. The check it replaces was a tool the

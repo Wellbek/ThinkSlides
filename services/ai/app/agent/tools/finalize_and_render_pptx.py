@@ -174,11 +174,18 @@ class FinalizeAndRenderPptxTool:
                             "will render on stock Office placeholders"),
                 )
 
+            # What each slide landed on, returned rather than left in a
+            # context variable: the loop awaits this tool as its own task,
+            # which runs in a *copy* of the context, so anything set here
+            # never reached the loop. Every "replace" verdict was answered
+            # with an empty list to avoid, and the page came back on the
+            # arrangement it had been flagged for (#344).
+            placed: dict[int, list[str]] = {}
             for attempt in range(1, max_retries + 1):
                 try:
                     if pack is not None:
                         try:
-                            result_path = cls._render_composed(
+                            result_path, placed = cls._render_composed(
                                 slides, pack, metadata, output_path,
                                 design_system,
                             )
@@ -299,6 +306,7 @@ class FinalizeAndRenderPptxTool:
                     "renderedOutline": cls._rendered_outline(slides, designed_count),
                     "fallbackMarkdownPath": markdown_path,
                     "assets": assets,
+                    "placedArrangements": placed,
                 },
                 duration_ms=duration_ms,
             )
@@ -414,8 +422,12 @@ class FinalizeAndRenderPptxTool:
 
     @classmethod
     def _render_composed(cls, slides: list, pack, metadata: dict,
-                         output_path: str, design_system: dict) -> str:
+                         output_path: str, design_system: dict
+                         ) -> tuple[str, dict[int, list[str]]]:
         """Lay the deck out in its pack and render it.
+
+        Returns the written path and, per source slide, the archetypes its
+        pages were placed on.
 
         Composition, repair and validation all run here, in code. The
         validator this replaces was a tool the model could decline to call,
@@ -446,8 +458,7 @@ class FinalizeAndRenderPptxTool:
             source = page.provenance.source_slide
             if source is not None:
                 placed.setdefault(source, []).append(page.archetype)
-        run_context.set_placed_arrangements(placed)
-        return render_doc(doc, pack, output_path, design_system=design_system)
+        return render_doc(doc, pack, output_path, design_system=design_system), placed
 
     @classmethod
     def _generate_markdown_fallback(cls, slides: list[dict], metadata: dict) -> str:
