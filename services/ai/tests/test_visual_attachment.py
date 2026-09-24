@@ -244,3 +244,20 @@ def test_a_revision_leaves_other_types_and_regions_alone():
     assert kept == [("diagram", None, "flow"), ("table", "right", "right"),
                     ("table", "left", "left-rebuilt")]
 
+
+def test_the_revision_directive_names_what_the_slide_carries():
+    loop = AgentLoop(db=None)
+    ws = loop.working_state
+    ws.presentation_structure = {"slides": [{"title": "Cover"}, {"title": "Compare"}]}
+    ws.accumulated_slides = [{"slideIndex": 0}, {"slideIndex": 1}]
+    ws.prepare_visual(1, _table("strategy-comparison"))
+    ws.prepare_visual(1, {"type": "diagram"})
+    ws.validation_issues = [{"slideIndex": 1, "message": "Text extends past the slide"}]
+    ws.revision_queue = [1]
+
+    directive = loop.slide_directive()
+
+    assert "Revise slide 2" in directive
+    assert '- table (slot "strategy-comparison")' in directive
+    assert "- diagram\n" in directive
+    assert "replaces it rather than adding another" in directive

@@ -3463,6 +3463,7 @@ class AgentLoop:
                 + self._describe_validation_issues(slide_index=index)
                 + "\nShorten the copy, give an oversized visual a smaller region, or move "
                 "it onto its own slide, then call design_slide_content for this slide."
+                + self._attached_exhibits_directive(index)
                 + code_option
             )
         # Named only when it is actually offered. This instruction reaches the
@@ -3486,6 +3487,29 @@ class AgentLoop:
             + self._format_directive()
             + self._structure_directive()
             + self._arc_directive(index)
+        )
+
+    def _attached_exhibits_directive(self, index: int) -> str:
+        """The exhibits a slide being revised already carries, by slot.
+
+        A revising model that cannot see what the page holds rebuilds its
+        table under a new name, and the page gains a second table instead of
+        a better one. `prepare_visual` makes that rebuild a replacement; this
+        tells the model so, and gives it the names to keep another exhibit on
+        a page that carries several.
+        """
+        attached = self.working_state.prepared_visuals.get(index) or []
+        if not attached:
+            return ""
+        lines = "\n".join(
+            f"- {block.get('type')}"
+            + (f' (slot "{block["slot"]}")' if block.get("slot") else "")
+            for block in attached
+        )
+        return (
+            "\nThis slide already carries:\n" + lines
+            + "\nRebuilding one of these replaces it rather than adding "
+            "another; to fix one of several of a kind, pass its slot."
         )
 
     def _content_type_directive(self, planned: dict) -> str:
