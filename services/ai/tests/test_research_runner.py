@@ -23,6 +23,36 @@ from app.research.exchange import (
     recorded_search,
     to_loop_response,
 )
+from app.research.task import Task
+
+
+def _write_task(tmp_path, **fields):
+    data = {"id": "t-1", "category": "technical", "prompt": "Three slides on caching.", **fields}
+    path = tmp_path / "task.yaml"
+    path.write_text("\n".join(f"{k}: {json.dumps(v)}" for k, v in data.items()))
+    return path
+
+
+class TestTasks:
+    def test_a_task_file_loads_with_its_defaults(self, tmp_path):
+        task = Task.load(_write_task(tmp_path))
+        assert (task.id, task.mode, task.detail) == ("t-1", "simple", "detailed")
+
+    def test_a_typo_in_a_key_is_an_error_not_a_silent_default(self, tmp_path):
+        with pytest.raises(ValueError, match="unknown keys answer"):
+            Task.load(_write_task(tmp_path, answer=["first"]))
+
+    def test_first_takes_each_questions_first_option(self):
+        task = Task(id="t", category="c", prompt="p")
+        reply = task.answer(0, {"questions": [
+            {"question": "What kind?", "options": ["Pitch", "Poster"]},
+            {"question": "Which direction?", "options": [{"label": "Dark console", "id": "dc"}]},
+        ]})
+        assert reply == "What kind? Pitch\nWhich direction? Dark console"
+
+    def test_a_scripted_answer_is_sent_as_written(self):
+        task = Task(id="t", category="c", prompt="p", answers=["first", "Go ahead as planned"])
+        assert task.answer(1, {"question": "Shall I build this outline?"}) == "Go ahead as planned"
 
 
 class TestAnswers:

@@ -73,17 +73,18 @@ class DatabaseSink:
 
 
 class JsonlSink:
-    """``trace.jsonl`` (one span per line) and ``trace.md`` in a run directory."""
+    """``<name>.jsonl`` (one span per line) and ``<name>.md`` in a run directory."""
 
-    def __init__(self, directory: str | Path) -> None:
+    def __init__(self, directory: str | Path, name: str = "trace") -> None:
         self.directory = Path(directory)
+        self.name = name
 
     async def write(self, trace: Trace) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
-        with open(self.directory / "trace.jsonl", "w") as f:
+        with open(self.directory / f"{self.name}.jsonl", "w") as f:
             for span in trace.spans:
                 f.write(json.dumps(span.to_dict(), default=str) + "\n")
-        (self.directory / "trace.md").write_text(render_timeline(trace))
+        (self.directory / f"{self.name}.md").write_text(render_timeline(trace))
 
 
 def render_timeline(trace: Trace) -> str:

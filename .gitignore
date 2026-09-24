@@ -59,3 +59,6 @@ services/orchestrator/bin/
 services/ai/eval_scorecards/*.json
 services/ai/eval_scorecards/*.md
 !services/ai/eval_scorecards/README.md
+
+# Headless research runs (benchmark/runs/<task>/<run>/)
+benchmark/runs/
