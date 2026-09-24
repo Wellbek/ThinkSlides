@@ -221,3 +221,61 @@ class TestARunExplainsItself:
         assert "amend" in skipped
         drafted = [s for s in t.spans if s.kind == "tool" and s.name == "design_slide_content"]
         assert {s.reason for s in drafted} == {"called by the model"}
+
+
+class _FailingSession:
+    def __init__(self, log):
+        self.log = log
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        self.log.append("closed")
+        return False
+
+    def add_all(self, rows):
+        self.log.append(("add_all", len(rows)))
+
+    async def commit(self):
+        raise RuntimeError('relation "run_spans" does not exist')
+
+
+class TestTracingNeverHurtsTheRun:
+    @pytest.mark.asyncio
+    async def test_the_database_sink_writes_through_a_session_of_its_own(self):
+        """The API saves the reply on the run's session after the loop returns.
+        A failed insert on that session left it needing a rollback, and a run
+        that had built its deck was then reported as an error."""
+        from app.observability.trace_store import DatabaseSink
+
+        log = []
+        t = trace.begin("run", sessionId="not-a-uuid")
+        with trace.span("phase", "plan"):
+            pass
+        await trace.finish(t, [DatabaseSink(lambda: _FailingSession(log))],
+                           termination=trace.COMPLETE)
+
+        assert log == [("add_all", 2), "closed"]
+        assert trace.current_trace() is None
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_trace_write_still_unwinds_the_run_context(self, monkeypatch):
+        import asyncio
+
+        from app.agent import run_context
+        from tests.test_pipeline import INTAKE, _loop, _text
+
+        class CancellingSink:
+            async def write(self, t):
+                raise asyncio.CancelledError()
+
+        loop, session_id, _ = _loop([_text(INTAKE)], monkeypatch=monkeypatch)
+        loop.trace_sinks = [CancellingSink()]
+
+        with pytest.raises(asyncio.CancelledError):
+            [e async for e in loop.run(session_id)]
+
+        assert loop._design_system_token is None
+        assert run_context.get_design_system() is None
+        assert trace.current_trace() is None

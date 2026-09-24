@@ -161,13 +161,15 @@ async def finish(trace: Trace, sinks: list[TraceSink], *, termination: str) -> N
         if span.ended_at is None:
             span.end(status="unfinished" if span is not trace.root else None)
     trace.root.set(termination=termination, **trace.totals())
-    for sink in sinks:
-        try:
-            await sink.write(trace)
-        except Exception as e:  # noqa: BLE001 - tracing never fails a run
-            logger.warning("trace_sink_failed", sink=type(sink).__name__, error=str(e))
-    _trace.set(None)
-    _span.set(None)
+    try:
+        for sink in sinks:
+            try:
+                await sink.write(trace)
+            except Exception as e:  # noqa: BLE001 - tracing never fails a run
+                logger.warning("trace_sink_failed", sink=type(sink).__name__, error=str(e))
+    finally:
+        _trace.set(None)
+        _span.set(None)
 
 
 @contextmanager

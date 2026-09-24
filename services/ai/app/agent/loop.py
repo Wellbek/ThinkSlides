@@ -1199,7 +1199,7 @@ class AgentLoop:
     ) -> None:
         """
         ``trace_sinks`` receive the run's span tree when it ends. None means
-        the run_spans table, through this loop's own database session.
+        the run_spans table, for a loop that has a database at all.
 
         ``mode`` is the effort level the user picked in the composer. Pass None
         to inherit the mode of the run being resumed (see _load_working_state),
@@ -1221,7 +1221,7 @@ class AgentLoop:
         if trace_sinks is None:
             from app.observability.trace_store import DatabaseSink
 
-            trace_sinks = [DatabaseSink(db)] if db is not None else []
+            trace_sinks = [DatabaseSink()] if db is not None else []
         self.trace_sinks = trace_sinks
         # Set on every way out of _run, and recorded on the trace's root span.
         self.termination = trace.COMPLETE
@@ -1740,52 +1740,58 @@ class AgentLoop:
             self.termination = trace.ERROR
             raise
         finally:
-            run_trace.root.set(
-                mode=self.mode,
-                detailLevel=self.detail_level,
-                slides=len(self.working_state.accumulated_slides),
-                validationAttempts=self.working_state.validation_attempts,
-            )
-            self._record_skipped_phases()
-            await trace.finish(run_trace, self.trace_sinks, termination=self.termination)
-            if self._usage_token is not None:
-                usage.reset(self._usage_token)
-                self._usage_token = None
-            if self._search_token is not None:
-                run_context.reset_search_config(self._search_token)
-                self._search_token = None
-            if self._provider_token is not None:
-                run_context.reset_chat_provider(self._provider_token)
-                self._provider_token = None
-            if self._vision_token is not None:
-                run_context.reset_vision_provider(self._vision_token)
-                self._vision_token = None
-            if self._image_token is not None:
-                run_context.reset_image_connection(self._image_token)
-                self._image_token = None
-            if self._figure_token is not None:
-                run_context.reset_figure_connection(self._figure_token)
-                self._figure_token = None
-            if self._design_system_token is not None:
-                run_context.reset_design_system(self._design_system_token)
-                self._design_system_token = None
-            if self._pack_token is not None:
-                run_context.reset_pack(self._pack_token)
-                self._pack_token = None
-            if self._material_token is not None:
-                run_context.reset_slide_material(self._material_token)
-                self._material_token = None
-            # Reset in reverse, so nested sets unwind to what was there before.
-            while self._citation_tokens:
-                token = self._citation_tokens.pop()
-                try:
-                    if token.var is run_context._include_sources:
-                        run_context.reset_include_sources(token)
-                    else:
-                        run_context.reset_research_findings(token)
-                except ValueError:
-                    # Set in a different context than the one tearing down.
-                    pass
+            try:
+                run_trace.root.set(
+                    mode=self.mode,
+                    detailLevel=self.detail_level,
+                    slides=len(self.working_state.accumulated_slides),
+                    validationAttempts=self.working_state.validation_attempts,
+                )
+                self._record_skipped_phases()
+                await trace.finish(run_trace, self.trace_sinks, termination=self.termination)
+            finally:
+                self._reset_run_context()
+
+    def _reset_run_context(self) -> None:
+        """Unwind everything _configure and _run published, however the run ended."""
+        if self._usage_token is not None:
+            usage.reset(self._usage_token)
+            self._usage_token = None
+        if self._search_token is not None:
+            run_context.reset_search_config(self._search_token)
+            self._search_token = None
+        if self._provider_token is not None:
+            run_context.reset_chat_provider(self._provider_token)
+            self._provider_token = None
+        if self._vision_token is not None:
+            run_context.reset_vision_provider(self._vision_token)
+            self._vision_token = None
+        if self._image_token is not None:
+            run_context.reset_image_connection(self._image_token)
+            self._image_token = None
+        if self._figure_token is not None:
+            run_context.reset_figure_connection(self._figure_token)
+            self._figure_token = None
+        if self._design_system_token is not None:
+            run_context.reset_design_system(self._design_system_token)
+            self._design_system_token = None
+        if self._pack_token is not None:
+            run_context.reset_pack(self._pack_token)
+            self._pack_token = None
+        if self._material_token is not None:
+            run_context.reset_slide_material(self._material_token)
+            self._material_token = None
+        # Reset in reverse, so nested sets unwind to what was there before.
+        while self._citation_tokens:
+            token = self._citation_tokens.pop()
+            try:
+                if token.var is run_context._include_sources:
+                    run_context.reset_include_sources(token)
+                else:
+                    run_context.reset_research_findings(token)
+            except ValueError:
+                # Set in a different context than the one tearing down.
+                pass
 
     async def _run(
         self,

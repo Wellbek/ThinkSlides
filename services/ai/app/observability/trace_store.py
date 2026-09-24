@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
+from typing import Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,15 +29,27 @@ def _uuid(value: str | None) -> uuid.UUID | None:
 
 
 class DatabaseSink:
-    def __init__(self, db: AsyncSession) -> None:
-        self.db = db
+    """Writes through a session of its own, never the run's.
+
+    The API keeps using the run's session after the loop returns - to save
+    the assistant's reply - so an insert failing here (a database created
+    before run_spans existed) must roll back where it cannot reach that one.
+    """
+
+    def __init__(self, session_factory: Callable[[], AsyncSession] | None = None) -> None:
+        self.session_factory = session_factory
 
     async def write(self, trace: Trace) -> None:
         from app.db.models import RunSpan
 
+        if self.session_factory is None:
+            from app.db.session import async_session
+
+            self.session_factory = async_session
         session_id = _uuid(trace.root.attrs.get("sessionId"))
+        rows = []
         for span in trace.spans:
-            self.db.add(RunSpan(
+            rows.append(RunSpan(
                 id=uuid.UUID(span.span_id),
                 run_id=uuid.UUID(span.run_id),
                 session_id=session_id,
@@ -54,7 +67,9 @@ class DatabaseSink:
                 output_tokens=span.output_tokens,
                 attrs=json.loads(json.dumps(span.attrs, default=str)),
             ))
-        await self.db.commit()
+        async with self.session_factory() as db:
+            db.add_all(rows)
+            await db.commit()
 
 
 class JsonlSink:
