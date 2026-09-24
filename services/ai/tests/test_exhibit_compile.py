@@ -20,6 +20,8 @@ issue was confirmed - composing a doc and reading `frame.content` back is not
 enough, because that only proves the material was *bound*, not that it drew.
 """
 
+import pytest
+
 from app.design.authored import Language, PageKind, Slot, to_pack
 from app.design.geometry import check_doc
 from app.design import run as design_run
@@ -213,6 +215,26 @@ class TestRenderTableToPng:
             {}, 4.0, 1.5)
         assert png is not None
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_a_cell_is_drawn_on_the_lines_the_plan_measured(self):
+        """The image drew every cell on one line, so a cell the plan had
+        wrapped ran into the next column (#351)."""
+        from app.renderer.chart_renderer import _wrap_cell
+
+        text = "Analysis, pauses, promotion and rollback controls"
+        assert _wrap_cell(text, 90.0, "Arial", 10.0, False).count("\n") >= 2
+        assert _wrap_cell("Low", 90.0, "Arial", 10.0, False) == "Low"
+
+    def test_a_table_is_drawn_in_the_face_it_is_measured_in(self):
+        """Asked for by name, matplotlib drew Arial as its own, far wider,
+        DejaVu Sans."""
+        from app.renderer.chart_renderer import _table_faces
+        from app.renderer.typeset.fonts import resolve_path
+
+        path = resolve_path("Arial")
+        if not path:
+            pytest.skip("fontconfig is not available")
+        assert _table_faces("Arial")[False].get_file() == path
 
     def test_a_numeric_column_is_detected_and_used(self):
         """Reuses `table_layout.plan_table` rather than reinventing column

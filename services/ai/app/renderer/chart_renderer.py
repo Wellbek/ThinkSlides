@@ -2204,6 +2204,38 @@ def _draw_data_labels(
         ax.set_ylim(bottom, top + (top - bottom) * 0.12)
 
 
+def _table_faces(family: str) -> dict[bool, "font_manager.FontProperties"]:
+    """The regular and bold faces a table is drawn in, from the files it is
+    measured with.
+
+    Asked for by name, matplotlib substitutes its own DejaVu Sans for a face
+    it has not registered - Arial among them - and DejaVu is far wider than
+    the Liberation Sans the table was measured in, so every planned column
+    width came out too narrow for the text drawn in it.
+    """
+    from matplotlib import font_manager
+    from app.renderer.typeset.fonts import resolve_path
+
+    faces = {}
+    for bold in (False, True):
+        path = resolve_path(family, bold=bold)
+        faces[bold] = (font_manager.FontProperties(fname=path) if path
+                       else font_manager.FontProperties(family=family))
+    return faces
+
+
+def _wrap_cell(text: str, width_pt: float, family: str, size_pt: float,
+               bold: bool) -> str:
+    """A cell's text broken where the table plan measured it breaking."""
+    from app.renderer.typeset.shape import wrap
+
+    try:
+        lines = wrap(text, max(1.0, width_pt), family, size_pt, bold=bold)
+    except Exception:
+        return text
+    return "\n".join(lines) or text
+
+
 def render_table_to_png(
     table_data: dict,
     design_system: dict | None,
@@ -2254,7 +2286,6 @@ def render_table_to_png(
         return None
     style = table_style_module.resolve_table_style(design_system)
 
-    n_rows = len(rows)
     fig_height = max(0.1, layout.height_in)
     fig = plt.figure(figsize=(width_in, fig_height), dpi=dpi)
     fig.patch.set_alpha(0.0)
@@ -2266,7 +2297,15 @@ def render_table_to_png(
     col_edges = [0.0]
     for fraction in layout.col_fractions:
         col_edges.append(col_edges[-1] + fraction)
-    row_h = 1.0 / n_rows
+    # Rows as tall as the plan measured them, and cells wrapped where it
+    # wrapped them. Every row used to be an equal share and every cell one
+    # line, so a cell the plan had given two lines ran into the next column
+    # and the last column was clipped at the frame (#351).
+    row_tops = [1.0]
+    for height in layout.row_heights_in:
+        row_tops.append(row_tops[-1] - height / fig_height)
+    faces = _table_faces(style.font_name)
+    width_pt = width_in * 72.0
     header_rgb = style.header_bg
     header_fg = style.header_fg
     band_rgb = style.band_bg
@@ -2277,7 +2316,8 @@ def render_table_to_png(
     for r_idx, row in enumerate(rows):
         is_header = header_row and r_idx == 0
         is_total = r_idx == layout.total_row_index
-        top = 1.0 - r_idx * row_h
+        top = row_tops[r_idx]
+        row_h = top - row_tops[r_idx + 1]
         if is_header:
             face = header_rgb
         elif is_total:
@@ -2299,11 +2339,16 @@ def render_table_to_png(
             right_align = c_idx in layout.numeric_columns
             left, right = col_edges[c_idx], col_edges[c_idx + 1]
             x = right - pad if right_align else left + pad
+            bold = is_header or is_total
+            usable_pt = (right - left) * width_pt - table_layout.CELL_PAD_H_PT
             ax.text(
-                x, top - row_h / 2, cell, transform=ax.transAxes,
+                x, top - row_h / 2, _wrap_cell(cell, usable_pt, style.font_name,
+                                               size_pt, bold),
+                transform=ax.transAxes,
                 ha="right" if right_align else "left", va="center",
-                fontsize=size_pt, fontname=style.font_name, color=fg,
-                fontweight="bold" if (is_header or is_total) else "normal",
+                fontsize=size_pt, color=fg, linespacing=1.2,
+                fontproperties=faces[bold],
+                fontweight="bold" if bold else "normal",
                 clip_on=True,
             )
 
