@@ -69,3 +69,33 @@ async def test_a_run_is_graded_from_its_rendered_pages(tmp_path):
     assert judge.seen[1] == 3 and "Stale content" in judge.seen[0]
     assert result["passed"] == 1 and result["answered"] == 2
     assert json.loads((tmp_path / "grade-cheap-judge.json").read_text())["judge"] == "cheap-judge"
+
+
+def test_a_reply_in_the_wrong_shape_leaves_items_unanswered_rather_than_crashing():
+    """A live judge has been paid for by the time its reply is read."""
+    for reply in ('{"items": ["yes", "no"]}', '{"items": {"1": "yes"}}', "not json"):
+        assert [i["answer"] for i in read_verdict(TASK, reply)] == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_grading_the_same_run_twice_asks_again(tmp_path):
+    """The exchange numbers after what the folder holds, so a second grade
+    cannot pick up the first grade's answer as its own."""
+    import asyncio
+
+    from app.research.exchange import Cassette, ClaudeCodeExchange
+
+    folder = tmp_path / "grade-llm"
+    first = ClaudeCodeExchange(folder, Cassette(tmp_path / "c.jsonl"))
+
+    async def answer(stem, text):
+        while not (folder / f"{stem}.pending").exists():
+            await asyncio.sleep(0.02)
+        (folder / f"{stem}.response.json").write_text(json.dumps({"content": text}))
+
+    reply, _ = await asyncio.gather(first.ask("vision", {"prompt": "a"}, "a"), answer("0001", "old"))
+    assert reply["content"] == "old"
+
+    second = ClaudeCodeExchange(folder, Cassette(tmp_path / "c.jsonl"))
+    reply, _ = await asyncio.gather(second.ask("vision", {"prompt": "b"}, "b"), answer("0002", "new"))
+    assert reply["content"] == "new"

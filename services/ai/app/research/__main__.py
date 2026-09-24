@@ -95,6 +95,8 @@ def main() -> int:
         from app.research.grade import render as render_grade
 
         manifest = _json.loads((args.run_dir / "manifest.json").read_text())
+        if not (args.task or manifest.get("taskFile")):
+            parser.error(f"{args.run_dir} does not record its task file; pass --task")
         task = Task.load(args.task or manifest["taskFile"])
         live = None
         if args.mode == runner.LIVE:

@@ -65,7 +65,10 @@ def build_prompt(task: Task, texts: list[str]) -> str:
 def read_verdict(task: Task, reply: str) -> list[dict]:
     """The judge's answers, one per checklist item; an item it skipped counts as unanswered."""
     answers = {}
-    for entry in (extract_json_object(reply) or {}).get("items") or []:
+    entries = (extract_json_object(reply) or {}).get("items")
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
         try:
             number = int(entry.get("item"))
         except (TypeError, ValueError):
