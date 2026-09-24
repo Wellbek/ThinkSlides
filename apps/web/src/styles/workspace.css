@@ -363,6 +363,15 @@
 }
 .ws-av.indigo { background: linear-gradient(135deg,#6366F1,#8B5CF6); }
 
+/* Share (in development): a popover that hands over the file. */
+.ws-share { position: relative; }
+.ws-share-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 50; width: 280px; padding: 12px; border: 1px solid var(--ws-border-sub); border-radius: var(--ws-radius-md); background: var(--ws-surface-2); box-shadow: 0 12px 32px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 10px; }
+.ws-share-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #CCC; }
+.ws-share-text { margin: 0; font-size: 12px; line-height: 1.5; color: #888; }
+.ws-share-text.muted { color: #555; }
+.ws-share-file { font-size: 11px; color: #AAA; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-share-pop .ws-tb-btn { align-self: flex-start; text-decoration: none; }
+
 /* ---------- Body: resizable / retractable panes ---------- */
 .ws-body { flex: 1; display: flex; min-height: 0; }
 .ws-panel { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -477,10 +486,15 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-tool { width: 28px; height: 28px; border-radius: var(--ws-radius-sm); display: flex; align-items: center; justify-content: center; color: #555; cursor: pointer; border: 1px solid transparent; background: transparent; }
 .ws-tool:hover { background: var(--ws-surface-3); color: #AAA; }
 .ws-tool.active { background: #1A1A2E; color: var(--ws-ai-text); border-color: var(--ws-ai-border); }
+.ws-tool:disabled, .ws-cm:disabled { color: #333; cursor: not-allowed; background: transparent; }
+
+/* Marks a control whose first, minimal version is live but still in development. */
+.ws-dev-tag { display: inline-flex; align-items: center; height: 16px; padding: 0 6px; border: 1px solid #3A3320; border-radius: 999px; background: #1A1710; color: #C9A95B; font-size: 10px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
 .ws-tool-sep { width: 1px; height: 18px; background: var(--ws-border); margin: 0 5px; }
 .ws-pill { border: 1px solid var(--ws-border); border-radius: var(--ws-radius-sm); padding: 3px 8px; color: #888; font-variant-numeric: tabular-nums; font-size: 12px; }
 .ws-send-edit { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ws-ai-text); background: var(--ws-ai-bg); border: 1px solid var(--ws-ai-border); padding: 4px 10px; border-radius: var(--ws-radius-sm); cursor: pointer; }
 .ws-send-edit:hover { background: #161630; }
+.ws-send-edit:disabled { color: #4A4A6A; border-color: #22223A; background: transparent; cursor: not-allowed; }
 
 .ws-stage { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 22px; }
 .ws-slide-wrap { position: relative; width: min(100%, 960px); aspect-ratio: 16 / 9; border-radius: var(--ws-radius-md); box-shadow: 0 24px 60px rgba(0,0,0,0.55), 0 0 0 1px var(--ws-border); overflow: hidden; background: #FAFAF7; }
@@ -499,8 +513,10 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
    slide image is available, so it is never mistaken for the final output. */
 .ws-draft-badge { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 5px 12px; border-radius: 999px; background: rgba(13,13,13,0.78); color: #EDEDED; font-size: 11px; font-weight: 500; letter-spacing: 0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; backdrop-filter: blur(4px); box-shadow: 0 2px 10px rgba(0,0,0,0.35); pointer-events: none; }
 
-.ws-anno { position: absolute; left: 30%; top: 36%; width: 40%; height: 30%; border: 1.5px solid var(--ws-ai-text); border-radius: var(--ws-radius-sm); background: rgba(129,140,248,0.10); cursor: pointer; }
-.ws-anno-pin { position: absolute; top: -11px; left: -11px; width: 20px; height: 20px; border-radius: 50%; background: var(--ws-ai-text); color: #0D0D0D; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px rgba(129,140,248,0.18); }
+/* Mark and pin tools (beta): numbered points placed where the user clicked. */
+.ws-slide-wrap.marking { cursor: crosshair; }
+.ws-anno-pin { position: absolute; transform: translate(-50%, -50%); width: 20px; height: 20px; border-radius: 50%; background: var(--ws-ai-text); color: #0D0D0D; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px rgba(129,140,248,0.28), 0 2px 6px rgba(0,0,0,0.35); pointer-events: none; }
+.ws-anno-pin.pin { border-radius: 50% 50% 50% 0; background: #F5C451; box-shadow: 0 0 0 3px rgba(245,196,81,0.28), 0 2px 6px rgba(0,0,0,0.35); }
 
 .ws-filmstrip { height: 70px; flex-shrink: 0; border-top: 1px solid var(--ws-border); background: var(--ws-surface-1); display: flex; align-items: center; gap: 8px; padding: 0 14px; overflow-x: auto; }
 .ws-thumb { width: 92px; height: 52px; border-radius: var(--ws-radius-sm); border: 1px solid var(--ws-border); background: #FAFAF7; position: relative; flex-shrink: 0; cursor: pointer; overflow: hidden; }
@@ -707,6 +723,7 @@ a.ws-src .s-tag { color: var(--ws-blue-text); background: rgba(96,165,250,0.10);
 .ws-hint-collapsible { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
 .ws-cm { width: 26px; height: 26px; border-radius: var(--ws-radius-sm); display: flex; align-items: center; justify-content: center; color: #555; cursor: pointer; background: transparent; border: none; }
 .ws-cm:hover { background: var(--ws-surface-3); color: #999; }
+.ws-cm.active { background: #1A1A2E; color: var(--ws-ai-text); }
 .ws-hint { font-size: 11px; color: #3A3A3A; }
 .ws-send { display: inline-flex; align-items: center; gap: 6px; background: var(--ws-ai-text); color: #0D0D0D; border: none; border-radius: var(--ws-radius-sm); padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .ws-send:hover { background: #9aa0f9; }
@@ -1327,16 +1344,17 @@ a.ws-tb-btn, a.ws-restore-btn, a.ws-src-dl, a.ws-file-dl { text-decoration: none
   margin: 6px 0 22px; padding: 0;
 }
 .ws-run-divider .rule {
-  flex: 1; height: 1px; min-width: 0;
+  flex: 1; height: 1px; min-width: 16px;
   background: linear-gradient(90deg, rgba(62, 207, 142, 0) 0%, var(--ws-green-border) 100%);
 }
 .ws-run-divider .rule:last-child {
   background: linear-gradient(90deg, var(--ws-green-border) 0%, rgba(62, 207, 142, 0) 100%);
 }
 .ws-run-divider .txt {
-  flex: 0 0 auto;
+  /* Wraps rather than running off a narrow chat panel. */
+  flex: 0 1 auto; min-width: 0; text-align: center;
   font-family: var(--ws-font-code); font-size: 10px; letter-spacing: 0.04em;
-  color: var(--ws-green-text); white-space: nowrap;
+  color: var(--ws-green-text);
   border: 1px solid var(--ws-green-border); border-radius: 999px;
   padding: 2px 10px; background: var(--ws-green-bg);
 }
