@@ -5,6 +5,7 @@ Command line for headless runs.
                                [--org UUID --model ID --max-cost USD]
     python -m app.research show <run-dir>
     python -m app.research check <run-dir> [--task <task.yaml>]
+    python -m app.research grade <run-dir> [--mode claude-code|live] [--org --model --max-cost]
 
 Runs against the dev Postgres and Redis on localhost (``make infra``). Search
 goes through Tavily when TAVILY_API_KEY is set, read from the environment or
@@ -72,6 +73,13 @@ def main() -> int:
     check = commands.add_parser("check", help="re-run the deterministic checks on a finished run")
     check.add_argument("run_dir", type=Path)
     check.add_argument("--task", type=Path, help="task file, when the manifest's path no longer resolves")
+    grade = commands.add_parser("grade", help="grade a finished deck against its task checklist")
+    grade.add_argument("run_dir", type=Path)
+    grade.add_argument("--task", type=Path)
+    grade.add_argument("--mode", default="claude-code", help="claude-code or live")
+    grade.add_argument("--org")
+    grade.add_argument("--model")
+    grade.add_argument("--max-cost", type=float, default=0.0)
     args = parser.parse_args()
 
     _environment()
@@ -80,6 +88,21 @@ def main() -> int:
 
     if args.command == "show":
         print(runner.summarise(args.run_dir))
+        return 0
+    if args.command == "grade":
+        import json as _json
+
+        from app.research.grade import render as render_grade
+
+        manifest = _json.loads((args.run_dir / "manifest.json").read_text())
+        task = Task.load(args.task or manifest["taskFile"])
+        live = None
+        if args.mode == runner.LIVE:
+            if not (args.org and args.model):
+                parser.error("live grading needs --org, --model and --max-cost")
+            live = runner.Live(org_id=uuid.UUID(args.org), model=args.model,
+                               max_cost=args.max_cost, benchmark_dir=REPO / "benchmark")
+        print(render_grade(asyncio.run(runner.grade(args.run_dir, task, mode=args.mode, live=live))))
         return 0
     if args.command == "check":
         from app.research.checks import check_run, render
