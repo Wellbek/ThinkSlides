@@ -103,3 +103,32 @@ async def test_nothing_is_drafted_or_rendered_after_the_last_validation(monkeypa
     assert "finalize_and_render_pptx" not in after
     assert "design_slide_content" not in after
     assert seen.count("validate_rendered_output") == loop.working_state.MAX_VALIDATION_ATTEMPTS
+
+
+class TestWhatAReviewOfTheRoundFound:
+    def test_a_finding_on_no_slide_puts_the_whole_deck_in_the_round(self):
+        from app.agent.loop import WorkingState
+
+        ws = WorkingState()
+        ws.accumulated_slides = [{"slideIndex": i} for i in range(3)]
+        assert ws.revision_round([{"type": "package", "detail": "corrupt entry"}]) == [0, 1, 2]
+        assert ws.revision_round([{"slideIndex": 2, "type": "overflow"}]) == [2]
+
+    def test_a_script_is_offered_only_when_no_render_will_undo_it(self, monkeypatch):
+        from app.agent.loop import AgentLoop
+
+        loop = AgentLoop(db=None, mode="simple")
+        monkeypatch.setattr(AgentLoop, "code_amendment_enabled", property(lambda self: True))
+        ws = loop.working_state
+        ws.has_called_finalize = True
+        ws.validated_serial = ws.design_serial
+
+        ws.revision_queue = [0, 1]
+        assert "edit_deck_with_code" in loop._withheld_tools()
+
+        ws.revision_queue = [1]
+        assert "edit_deck_with_code" not in loop._withheld_tools()
+
+        # Slide 0 was redrafted this round, so a render follows regardless.
+        ws.design_serial += 1
+        assert "edit_deck_with_code" in loop._withheld_tools()

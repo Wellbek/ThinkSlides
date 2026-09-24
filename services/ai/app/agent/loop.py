@@ -777,6 +777,19 @@ class WorkingState:
         return {index: frozenset(seen)
                 for index, seen in self.arrangements_tried.items() if seen}
 
+    def revision_round(self, issues: list[dict], exclude=()) -> list[int]:
+        """The slides a revision round redrafts for these findings.
+
+        A finding with no slide - a package fault, a deck-wide pattern - puts
+        every slide in the round, as it always did: there is no one slide to
+        send back, and an empty round would only re-validate the same file.
+        """
+        total = len(self.accumulated_slides) or int(
+            (self.presentation_structure or {}).get("totalSlides") or 0)
+        if any(not isinstance(i.get("slideIndex"), int) for i in issues):
+            return [i for i in range(total) if i not in exclude]
+        return sorted({i["slideIndex"] for i in issues if i["slideIndex"] not in exclude})
+
     def compute_slides_needing_revision(self, issues: list[dict]) -> list[int]:
         """
         Which slides the next revision pass should touch.
@@ -1728,10 +1741,9 @@ class AgentLoop:
                   and state_dict.get("validated_serial") == state_dict.get("design_serial")):
                 # Saved before the queue existed: validation's findings still
                 # stood, which is what used to make those slides outstanding.
-                flagged = state_dict.get("slides_needing_revision") or sorted({
-                    i.get("slideIndex") for i in state_dict["validation_issues"]
-                    if isinstance(i.get("slideIndex"), int)})
-                self.working_state.revision_queue = list(flagged)
+                self.working_state.revision_queue = (
+                    list(state_dict.get("slides_needing_revision") or [])
+                    or self.working_state.revision_round(state_dict["validation_issues"]))
             self.working_state.layout_revisions = {
                 int(k): int(v) for k, v in
                 (state_dict.get("layout_revisions") or {}).items()}
@@ -3365,7 +3377,20 @@ class AgentLoop:
             # of dead call `_withheld_tools` exists to prevent, the same
             # reasoning `TEMPLATE_GEOMETRY_TOOLS` already gets above.
             withheld.add("edit_deck_with_code")
+        elif self._render_will_follow():
+            # A script edits the rendered file; a render rebuilds it from the
+            # slides. Offered while another slide of the round is still to be
+            # redrafted - or after one already was - the script's fix would be
+            # overwritten by the render that redraft brings, and its slide,
+            # already taken off the round, would ship unfixed.
+            withheld.add("edit_deck_with_code")
         return frozenset(withheld)
+
+    def _render_will_follow(self) -> bool:
+        ws = self.working_state
+        redrafted_since_validation = (ws.validated_serial >= 0
+                                      and ws.design_serial != ws.validated_serial)
+        return len(ws.revision_queue) > 1 or redrafted_since_validation
 
     def slide_directive(self) -> str:
         """What to do with the one slide the drafting phase is currently on."""
@@ -4317,10 +4342,9 @@ class AgentLoop:
                 )
                 self.working_state.validated_serial = self.working_state.design_serial
                 validation_done = not issues or at_cap
-                self.working_state.revision_queue = [] if validation_done else sorted({
-                    i["slideIndex"] for i in issues
-                    if isinstance(i.get("slideIndex"), int) and i["slideIndex"] not in relayout
-                })
+                self.working_state.revision_queue = (
+                    [] if validation_done
+                    else self.working_state.revision_round(issues, exclude=relayout))
             else:
                 self.working_state.validation_failures += 1
                 validation_done = (
