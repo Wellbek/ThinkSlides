@@ -33,6 +33,7 @@ from app.agent.tools.generate_image import GenerateImageTool
 from app.connections.catalog import KIND_FIGURE, KIND_IMAGE, KIND_MCP
 from app.llm.provider import (
     AINotConfiguredError,
+    LLMProvider,
     _is_quota_exhausted,
     _is_rate_limit_error,
     _is_request_too_large,
@@ -1196,10 +1197,19 @@ class AgentLoop:
         detail_level: str | None = None,
         include_sources: bool | None = None,
         trace_sinks: list | None = None,
+        chat_provider: LLMProvider | None = None,
+        vision_provider=None,
+        search_config: ai_settings.SearchConfig | None = None,
     ) -> None:
         """
         ``trace_sinks`` receive the run's span tree when it ends. None means
         the run_spans table, for a loop that has a database at all.
+
+        ``chat_provider``, ``vision_provider`` and ``search_config`` replace
+        what the workspace's settings would resolve to. Headless runs use them
+        to put a run on a provider nobody saved in Settings - a recorded
+        cassette, or requests answered by hand - without touching the
+        workspace.
 
         ``mode`` is the effort level the user picked in the composer. Pass None
         to inherit the mode of the run being resumed (see _load_working_state),
@@ -1223,6 +1233,9 @@ class AgentLoop:
 
             trace_sinks = [DatabaseSink()] if db is not None else []
         self.trace_sinks = trace_sinks
+        self._chat_override = chat_provider
+        self._vision_override = vision_provider
+        self._search_override = search_config
         # Set on every way out of _run, and recorded on the trace's root span.
         self.termination = trace.COMPLETE
         # A fork, not the global singleton: run-scoped tools discovered from one
@@ -1311,20 +1324,23 @@ class AgentLoop:
         self._settings_row = row
 
         credentials = ai_settings.resolve_chat_credentials(row)
-        if credentials is None:
+        if self._chat_override is not None:
+            self.llm = TracedChatProvider(self._chat_override)
+        elif credentials is None:
             raise AINotConfiguredError()
-        try:
-            self.llm = TracedChatProvider(build_chat_provider(credentials))
-        except ValueError as e:
-            logger.error(
-                "configured_chat_provider_unusable",
-                provider=credentials.provider,
-                error=str(e),
-            )
-            raise AINotConfiguredError(
-                f"The AI model saved in Settings cannot be used: {e}. Open "
-                "Settings and correct the provider, model or API key."
-            ) from e
+        else:
+            try:
+                self.llm = TracedChatProvider(build_chat_provider(credentials))
+            except ValueError as e:
+                logger.error(
+                    "configured_chat_provider_unusable",
+                    provider=credentials.provider,
+                    error=str(e),
+                )
+                raise AINotConfiguredError(
+                    f"The AI model saved in Settings cannot be used: {e}. Open "
+                    "Settings and correct the provider, model or API key."
+                ) from e
         # Tools make their own LLM calls (slide content, planning, key data,
         # image prompts) and cannot be passed a provider through the registry.
         # Publishing it on the run context is what makes the Settings choice
@@ -1344,16 +1360,21 @@ class AgentLoop:
         # the Settings choice applies to what looks at the deck too. Best
         # effort: a provider with no vision support leaves this None, and the
         # qualitative pass skips rather than failing the run.
-        try:
+        if self._vision_override is not None:
             self._vision_token = run_context.set_vision_provider(
-                TracedVisionProvider(build_vision_provider(credentials))
+                TracedVisionProvider(self._vision_override)
             )
-        except ValueError as e:
-            logger.info(
-                "vision_provider_unavailable",
-                provider=credentials.provider,
-                reason=str(e),
-            )
+        elif credentials is not None:
+            try:
+                self._vision_token = run_context.set_vision_provider(
+                    TracedVisionProvider(build_vision_provider(credentials))
+                )
+            except ValueError as e:
+                logger.info(
+                    "vision_provider_unavailable",
+                    provider=credentials.provider,
+                    reason=str(e),
+                )
 
         # Resolved whatever the mode is. A Simple run needs to know whether
         # there is a backend to research *with* before it can offer the user
@@ -1361,7 +1382,10 @@ class AgentLoop:
         # unreachable: `_can_offer_research` requires a search config, which
         # only existed once Deep was already on. Every Simple run therefore
         # declined to ask, however plainly its brief stood on facts.
-        config, reason = ai_settings.resolve_search_config(row)
+        if self._search_override is not None:
+            config, reason = self._search_override, ""
+        else:
+            config, reason = ai_settings.resolve_search_config(row)
         self.search_config = config
         if self.mode == MODE_DEEP:
             if config is None:
@@ -1381,7 +1405,8 @@ class AgentLoop:
             "agent_run_configured",
             mode=self.mode,
             organisation_id=str(self.org_id) if self.org_id else None,
-            chat_provider=credentials.provider if credentials else None,
+            chat_provider=(type(self._chat_override).__name__ if self._chat_override
+                           else credentials.provider if credentials else None),
             search_backend=self.search_config.backend if self.search_config else None,
             mcp_servers=len(self.mcp_servers),
         )
