@@ -70,7 +70,6 @@ class ValidateSlideJsonTool:
         if slide is None:
             return ToolResult(
                 success=False,
-                rejected=True,
                 error=f"Invalid JSON: could not parse slide_json (got: {str(slide_json)[:200]!r})",
                 duration_ms=int((time.time() - start) * 1000),
             )
@@ -81,7 +80,6 @@ class ValidateSlideJsonTool:
         if isinstance(slide, list):
             return ToolResult(
                 success=False,
-                rejected=True,
                 error=(
                     "validate_slide_json expects a single slide object, but received an array. "
                     "Call it once per slide with one slide object as slide_json."
@@ -92,7 +90,6 @@ class ValidateSlideJsonTool:
         if not isinstance(slide, dict):
             return ToolResult(
                 success=False,
-                rejected=True,
                 error=(
                     f"validate_slide_json expects a slide object (dict), but got "
                     f"{type(slide).__name__}. Pass a single slide object as slide_json."

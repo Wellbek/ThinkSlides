@@ -308,3 +308,12 @@ class TestAVerdictIsNotABreakage:
         result, span = await self._traced("build_table", {"slide_index": 0})
         assert result.success is False and result.rejected is False
         assert span.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_a_call_the_validator_could_not_read_is_failed(self):
+        """An array or unparseable JSON is the model misusing the tool: there
+        was no draft to turn down."""
+        result, span = await self._traced(
+            "validate_slide_json", {"slide_json": json.dumps([{"slideIndex": 0}])})
+        assert result.success is False and result.rejected is False
+        assert span.status == "failed"
