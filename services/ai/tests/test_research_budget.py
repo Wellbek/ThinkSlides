@@ -7,6 +7,7 @@ left, stopped once it spends its cap, and what it spent is written down.
 """
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -59,6 +60,14 @@ class TestPrices:
 
 
 class TestTheLedger:
+    def test_the_ledger_lives_outside_the_checkout(self):
+        """Money is spent once. A ledger per branch or worktree would let each
+        of them see the whole budget still unspent."""
+        from app.research.budget import LEDGER_PATH
+
+        repo = Path(__file__).resolve().parents[3]
+        assert repo not in LEDGER_PATH.resolve().parents
+
     def test_a_cap_larger_than_what_is_left_is_refused(self, benchmark):
         ledger = Ledger(benchmark / "ledger.jsonl", benchmark / "budget.json")
         ledger.record(task="t", costUsd=2.5)
@@ -73,20 +82,24 @@ class TestTheLedger:
 
 class TestTheMeter:
     @pytest.mark.asyncio
-    async def test_a_run_stops_once_it_has_spent_its_cap(self):
-        # Each call: 100k in, 10k out at luna prices = $0.032.
-        meter = Meter(LUNA, cap=0.05)
+    async def test_a_call_that_could_take_the_run_past_its_cap_is_not_made(self):
+        # Each call spends 100k in and 10k out at luna prices: $0.032. Its
+        # worst case is priced on its request size and full output budget.
+        meter = Meter(LUNA, cap=0.08)
         provider = MeteredProvider(_Spender(), meter)
+        messages = [{"role": "user", "content": "x" * 350_000}]   # ~100k tokens
         token = usage.start()
         try:
-            await provider.chat([])
-            await provider.chat([])   # starts under the cap, ends over it
-            with pytest.raises(BudgetExceeded, match="cap is"):
-                await provider.chat([])
+            await provider.chat(messages, max_tokens=10_000)
+            await provider.chat(messages, max_tokens=10_000)
+            with pytest.raises(BudgetExceeded, match="could cost up to"):
+                await provider.chat(messages, max_tokens=10_000)
         finally:
             usage.reset(token)
         assert provider.inner.calls == 2
-        assert meter.summary()["costUsd"] == pytest.approx(0.064)
+        # Never over the cap: the run ends where the next call might have
+        # crossed it, not after it did.
+        assert meter.cost <= meter.cap
 
     @pytest.mark.asyncio
     async def test_spend_carries_across_the_parts_of_a_run(self):

@@ -15,7 +15,8 @@ In claude-code mode the run blocks on each model call until
 A live run bills an API: it runs on an organisation's saved credentials with
 the model named, is refused if --max-cost exceeds what is left in
 benchmark/budget.json, stops once it has spent --max-cost, and appends what it
-spent to benchmark/ledger.jsonl.
+spent to the ledger (~/.local/share/thinkslides/ledger.jsonl, or
+$THINKSLIDES_LEDGER) - one ledger per machine, whatever the checkout.
 """
 
 from __future__ import annotations
@@ -48,7 +49,8 @@ def _environment() -> None:
     if env_file.exists():
         for line in env_file.read_text().splitlines():
             name, _, value = line.partition("=")
-            if name in ("TAVILY_API_KEY", "SETTINGS_ENCRYPTION_KEY") and name not in os.environ:
+            if name in ("TAVILY_API_KEY", "SETTINGS_ENCRYPTION_KEY",
+                        "SETTINGS_ENCRYPTION_KEYS_RETIRED") and name not in os.environ:
                 os.environ[name] = value.strip()
 
 

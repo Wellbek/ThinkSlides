@@ -7,21 +7,36 @@ explicit rather than observed afterwards:
 - ``benchmark/prices.json`` - a dated price table with its source. A model
   that is not in it cannot be run live: an unpriced run is an unbounded one.
 - ``benchmark/budget.json`` - the total that live runs may spend.
-- ``benchmark/ledger.jsonl`` - one line per live run: tokens and cost.
+- the ledger - one line per live run: tokens and cost. It lives outside any
+  checkout (``LEDGER_PATH``), because money is spent once: a copy per branch
+  or worktree would let each of them see the whole budget still unspent.
 
 A live run declares its own cap. It is refused before it starts if the cap
-exceeds what is left, and stopped mid-run the moment its spend passes the cap.
+exceeds what is left, and each call is refused before it is made if its worst
+case would take the run past the cap - so a run never ends over it.
 """
 
 from __future__ import annotations
 
 import datetime
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.llm import usage
 from app.llm.provider import LLMProvider, VisionLLMProvider
+
+
+LEDGER_PATH = Path(os.environ.get(
+    "THINKSLIDES_LEDGER", Path.home() / ".local" / "share" / "thinkslides" / "ledger.jsonl"))
+
+# Estimating a request's input tokens from its characters: the lower end of
+# English-plus-JSON, so estimates err expensive.
+CHARS_PER_TOKEN = 3.5
+# What one rendered page costs as vision input; the conservative end for a
+# slide-sized image.
+TOKENS_PER_IMAGE = 1000
 
 
 class BudgetExceeded(RuntimeError):
@@ -75,6 +90,7 @@ class Ledger:
 
     def record(self, **entry) -> None:
         entry = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(), **entry}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "a") as f:
             f.write(json.dumps(entry) + "\n")
 
@@ -106,9 +122,17 @@ class Meter:
                 sum(e.cached_input_tokens for e in entries),
                 sum(e.output_tokens for e in entries))
 
-    async def measure(self, call):
-        if self.cost >= self.cap:
-            raise BudgetExceeded(f"run stopped at ${self.cost:.4f}, its cap is ${self.cap:.2f}")
+    def worst_case(self, input_chars: int, max_output_tokens: int, images: int = 0) -> float:
+        """The most one call could cost: its whole input uncached, its whole output budget."""
+        input_tokens = int(input_chars / CHARS_PER_TOKEN) + images * TOKENS_PER_IMAGE
+        return self.price.cost(input_tokens, 0, max_output_tokens)
+
+    async def measure(self, call, *, worst_case: float):
+        if self.cost + worst_case > self.cap:
+            raise BudgetExceeded(
+                f"run stopped at ${self.cost:.4f}: the next call could cost up to "
+                f"${worst_case:.4f}, and the run's cap is ${self.cap:.2f}"
+            )
         before = self._snapshot()
         result = await call()
         after = self._snapshot()
@@ -131,8 +155,15 @@ class MeteredProvider(LLMProvider):
         self.model = getattr(inner, "model", "unknown")
 
     async def chat(self, messages, tools=None, temperature=0.7, max_tokens=4096) -> dict:
-        return await self.meter.measure(lambda: self.inner.chat(
-            messages, tools=tools, temperature=temperature, max_tokens=max_tokens))
+        # A provider may raise the output budget above what was asked (Anthropic
+        # has a floor for thinking); the larger of the two is what can be billed.
+        output = max(max_tokens, getattr(self.inner, "MIN_MAX_TOKENS", 0))
+        chars = len(json.dumps(messages, default=str)) + len(json.dumps(tools or [], default=str))
+        return await self.meter.measure(
+            lambda: self.inner.chat(messages, tools=tools, temperature=temperature,
+                                    max_tokens=max_tokens),
+            worst_case=self.meter.worst_case(chars, output),
+        )
 
 
 class MeteredVisionProvider(VisionLLMProvider):
@@ -142,8 +173,11 @@ class MeteredVisionProvider(VisionLLMProvider):
         self.model = getattr(inner, "model", "unknown")
 
     async def chat_with_images(self, prompt, images, *args, **kwargs) -> str:
+        output = kwargs.get("max_tokens", 4096)
         return await self.meter.measure(
-            lambda: self.inner.chat_with_images(prompt, images, *args, **kwargs))
+            lambda: self.inner.chat_with_images(prompt, images, *args, **kwargs),
+            worst_case=self.meter.worst_case(len(prompt), output, images=len(images)),
+        )
 
 
 def projected_cost(run_dir: Path, price: Price) -> float:

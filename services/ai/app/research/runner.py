@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.research.budget import (
+    LEDGER_PATH,
     Ledger,
     MeteredProvider,
     MeteredVisionProvider,
@@ -217,7 +218,7 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
         prices = load_prices(live.benchmark_dir / "prices.json")
         if live.model not in prices:
             raise ValueError(f"{live.model} is not in prices.json; an unpriced run is unbounded")
-        ledger = Ledger(live.benchmark_dir / "ledger.jsonl", live.benchmark_dir / "budget.json")
+        ledger = Ledger(LEDGER_PATH, live.benchmark_dir / "budget.json")
         ledger.authorise(live.max_cost)
         meter = Meter(prices[live.model], live.max_cost)
 
