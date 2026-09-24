@@ -1,7 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
+import { useAnnotationStore } from "@/stores/annotation-store";
 import { useAiReadiness } from "@/hooks/useAiReadiness";
 import { EffortSelector } from "./EffortSelector";
 import { DetailLevelSelector } from "./DetailLevelSelector";
@@ -20,6 +21,13 @@ export function Composer() {
   const [content, setContent] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const composerInsert = useAnnotationStore((s) => s.composerInsert);
+
+  useEffect(() => {
+    if (!composerInsert) return;
+    setContent((c) => (c && !c.endsWith(" ") ? `${c} ` : c) + composerInsert.text);
+  }, [composerInsert]);
 
   // Show the most recent user attachments as context chips.
   const lastAttachments = (() => {
@@ -63,7 +71,7 @@ export function Composer() {
         <textarea
           placeholder={
             ready
-              ? "Ask the agent to edit, regenerate, or explain a slide... (mark a region in the preview to target an edit)"
+              ? "Ask the agent to edit, regenerate, or explain a slide... (mark a spot in the preview to target an edit)"
               : "Set up an AI model to continue this session."
           }
           value={content}

@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
+import { describeMarks, useAnnotationStore, type MarkKind } from "@/stores/annotation-store";
 import { collectPreviewSlides, type PreviewSlide } from "@/lib/slides";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
 import {
@@ -23,6 +24,29 @@ export function SlideStage({ onCollapse }: { collapsed: boolean; onCollapse: () 
   const slide = slides[idx];
   const total = slides.length;
 
+  const marks = useAnnotationStore((s) => s.marks);
+  const setPreviewSlide = useAnnotationStore((s) => s.setPreviewSlide);
+  const addMark = useAnnotationStore((s) => s.addMark);
+  const clearMarks = useAnnotationStore((s) => s.clearMarks);
+  const insertIntoComposer = useAnnotationStore((s) => s.insertIntoComposer);
+  const slideMarks = marks.filter((m) => m.slide === idx);
+
+  useEffect(() => { setPreviewSlide(idx, total); }, [idx, total, setPreviewSlide]);
+
+  const placeMark = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (tool !== "mark" && tool !== "pin") return;
+    const box = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - box.left) / box.width) * 100;
+    const y = ((e.clientY - box.top) / box.height) * 100;
+    addMark(idx, tool as MarkKind, x, y);
+  };
+
+  const sendMarks = () => {
+    if (!slideMarks.length) return;
+    insertIntoComposer(describeMarks(slideMarks));
+    clearMarks(idx);
+  };
+
   // activeFiles now also holds individual chart/image assets (#187), which
   // insert into generated_files after the deck's own row - array position
   // is no longer "the deck", it's "whatever was persisted last". The
@@ -36,9 +60,10 @@ export function SlideStage({ onCollapse }: { collapsed: boolean; onCollapse: () 
       <div className="ws-preview-toolbar">
         <div className="ws-tool-group">
           <button className={`ws-tool ${tool === "select" ? "active" : ""}`} onClick={() => setTool("select")} title="Select"><MousePointer2 size={15} /></button>
-          <button className={`ws-tool ${tool === "mark" ? "active" : ""}`} onClick={() => setTool("mark")} title="Highlight / mark region"><Highlighter size={15} /></button>
-          <button className={`ws-tool ${tool === "pin" ? "active" : ""}`} onClick={() => setTool("pin")} title="Comment pin"><MessageSquareDot size={15} /></button>
-          <button className={`ws-tool ${tool === "draw" ? "active" : ""}`} onClick={() => setTool("draw")} title="Draw"><Pencil size={15} /></button>
+          <button className={`ws-tool ${tool === "mark" ? "active" : ""}`} onClick={() => setTool("mark")} title="Mark a spot to edit (beta): click the slide, then Send mark to chat"><Highlighter size={15} /></button>
+          <button className={`ws-tool ${tool === "pin" ? "active" : ""}`} onClick={() => setTool("pin")} title="Comment pin (beta): click the slide, then Send mark to chat"><MessageSquareDot size={15} /></button>
+          <button className="ws-tool" disabled title="Draw - in development"><Pencil size={15} /></button>
+          <span className="ws-dev-tag" title="Marks reach the agent as a text description of where you clicked. Drawing is not available yet.">Beta</span>
         </div>
         <div className="ws-tool-sep" />
         <div className="ws-tool-group">
@@ -58,13 +83,24 @@ export function SlideStage({ onCollapse }: { collapsed: boolean; onCollapse: () 
             <Download size={13} /> Download
           </a>
         )}
-        <button className="ws-send-edit"><Send size={13} /> Send mark to chat</button>
+        <button
+          className="ws-send-edit"
+          disabled={!slideMarks.length}
+          onClick={sendMarks}
+          title={slideMarks.length ? "Describe the marks on this slide in the message box" : "Pick the mark or pin tool and click the slide first"}
+        >
+          <Send size={13} /> Send mark{slideMarks.length > 1 ? "s" : ""} to chat
+        </button>
         <button className="ws-collapse" onClick={onCollapse} title="Hide preview"><PanelLeftClose size={15} /></button>
       </div>
 
       <div className="ws-stage">
         {slide ? (
-          <div className="ws-slide-wrap" style={{ width: `min(100%, ${960 * zoom / 75}px)` }}>
+          <div
+            className={`ws-slide-wrap ${tool === "mark" || tool === "pin" ? "marking" : ""}`}
+            style={{ width: `min(100%, ${960 * zoom / 75}px)` }}
+            onClick={placeMark}
+          >
             {slide.previewUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img className="ws-slide-img" src={slide.previewUrl} alt={slide.title} />
@@ -82,11 +118,16 @@ export function SlideStage({ onCollapse }: { collapsed: boolean; onCollapse: () 
                 </div>
               </>
             )}
-            {tool === "mark" && (
-              <div className="ws-anno" title="Marked for edit">
-                <div className="ws-anno-pin">1</div>
+            {slideMarks.map((m, i) => (
+              <div
+                key={m.id}
+                className={`ws-anno-pin ${m.kind}`}
+                style={{ left: `${m.x}%`, top: `${m.y}%` }}
+                title={m.kind === "pin" ? "Comment pin" : "Marked for edit"}
+              >
+                {i + 1}
               </div>
-            )}
+            ))}
           </div>
         ) : (
           <div className="ws-restore" style={{ width: "100%" }}>
