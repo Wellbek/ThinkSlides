@@ -23,7 +23,7 @@ from app.agent import pipeline
 from app.design import deck_format
 from app.agent.summaries import summarize_tool_result
 from app.agent.tools._binding import slot_key
-from app.agent.tools._json_extract import extract_json_object
+from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
 from app.agent.tools.search_backends import normalize_recency
 from app.agent.tools.build_blocks import BLOCK_BUILDER_TOOLS
@@ -1146,21 +1146,31 @@ def _tool_arguments(fn_name: str, fn_args: dict) -> dict:
     return {k: v for k, v in fn_args.items() if k not in consumed}
 
 
-# A token that reads as a measurement: a percentage, a currency amount, a
-# number with a magnitude or unit, a decimal, a grouped thousand, or a year.
-# Deliberately not a bare integer: a status code (304), a version tag (v42),
-# a step number or a replica count identifies something rather than
-# measuring it.
+# A number stated with what it measures: a percentage, a currency amount, or
+# a number carrying a magnitude or unit, joined by a space or a hyphen
+# ("18 weeks", "18-week", "4.2bn", "5x"), a grouped count ("120,000"), or a
+# year. Not a bare number and not a bare
+# decimal in running text: "304 Not Modified", "v42", "HTTP/1.1" and
+# "TLS 1.3" name things rather than measure them.
 _MEASUREMENT_RE = re.compile(
     r"\d(?:[\d,.]*\d)?\s?%"
     r"|[$€£¥]\s?\d"
-    r"|\d(?:[\d,.]*\d)?\s?(?:k|m|bn|mn|thousand|million|billion|trillion"
-    r"|ms|sec|secs|seconds|minutes|hours|days|years|x|×|kb|mb|gb|tb|kg|km|usd|eur|gbp)\b"
-    r"|\b\d+\.\d+\b"
+    r"|\d(?:[\d,.]*\d)?[\s-]?(?:k|m|bn|mn|thousand|million|billion|trillion"
+    r"|ms|s|sec|secs|seconds?|mins?|minutes?|hrs?|hours?|days?|weeks?|months?|years?"
+    r"|pp|bps|kb|mb|gb|tb|kg|km|t|tonnes?|kw|mw|gw|kwh|mwh|gwh|usd|eur|gbp)\b"
+    r"|\d\s?[x×](?=\W|$)"
     r"|\b\d{1,3}(?:,\d{3})+\b"
     r"|\b(?:19|20)\d{2}\b",
     re.IGNORECASE,
 )
+
+# A table cell that is a number and nothing else - "42", "3,200", "4.2",
+# "-7", "~450" - is data. Units belong in the header ("Revenue ($B)"), which
+# is exactly what build_table asks for, so a figure table's cells are bare.
+_NUMERIC_CELL_RE = re.compile(r"^[~<>≈+-]?\s*[$€£¥]?\s*\d[\d,.\s]*%?$")
+
+# Mermaid diagram types that are charts: their whole content is quantities.
+_MERMAID_CHARTS = ("pie", "xychart", "sankey", "quadrantchart", "gantt")
 
 # Builders whose whole purpose is a quantity, or whose content cannot be read
 # before it runs.
@@ -1174,13 +1184,22 @@ def _asserts_measurement(text: str) -> bool:
     return bool(_MEASUREMENT_RE.search(text))
 
 
+def _cells(value) -> list:
+    """A table argument as a flat list of cells, however the model sent it."""
+    value = coerce_json_arg(value, value)
+    if isinstance(value, list):
+        return [cell for item in value for cell in (_cells(item) if isinstance(item, list) else [item])]
+    return [value] if value not in (None, "") else []
+
+
 def _visual_asserts_figures(fn_name: str, fn_args: dict) -> bool:
     """Whether this visual would present a number as measured.
 
     Decided from what the visual carries, not from which builder draws it.
-    A chart or a metric row exists to carry figures. A table, a diagram or a
-    Mermaid graph carries figures only when a cell or label reads as a
-    measurement: a table of directives against yes and no, or a sequence
+    A chart or a metric row exists to carry figures. A table carries them
+    when any cell is a number or states a measurement; a diagram or a
+    Mermaid graph when a label states a measurement, or when the graph is a
+    chart type. A table of directives against yes and no, or a sequence
     whose arrows read "304 Not Modified", asserts nothing that could be
     wrong, and refusing them left conceptual and technical decks with prose
     and half an empty page (#301).
@@ -1188,21 +1207,20 @@ def _visual_asserts_figures(fn_name: str, fn_args: dict) -> bool:
     if fn_name in _ALWAYS_FIGURES:
         return True
     if fn_name == "build_table":
-        cells = list(fn_args.get("columns") or [])
-        for row in fn_args.get("rows") or []:
-            cells += row if isinstance(row, list) else [row]
-        return any(_asserts_measurement(str(cell)) for cell in cells)
+        cells = [str(c).strip() for c in _cells(fn_args.get("columns")) + _cells(fn_args.get("rows"))]
+        return any(_NUMERIC_CELL_RE.match(c) or _asserts_measurement(c) for c in cells if c)
     if fn_name == "build_mermaid":
-        return _asserts_measurement(str(fn_args.get("source") or ""))
+        source = str(fn_args.get("source") or "")
+        first = source.strip().split(None, 1)[0].lower() if source.strip() else ""
+        return first.startswith(_MERMAID_CHARTS) or _asserts_measurement(source)
     if fn_name == "build_diagram":
-        items = fn_args.get("items")
+        items = coerce_json_arg(fn_args.get("items"), fn_args.get("items"))
         if not isinstance(items, list):
             return False
         return any(
-            (field in ("value", "date") and str(item.get(field) or "").strip())
-            or (field in ("label", "detail") and _asserts_measurement(str(item.get(field) or "")))
+            str(item.get("value") or "").strip() or str(item.get("date") or "").strip()
+            or _asserts_measurement(f"{item.get('label') or ''} {item.get('detail') or ''}")
             for item in items if isinstance(item, dict)
-            for field in ("value", "date", "label", "detail")
         )
     return True
 

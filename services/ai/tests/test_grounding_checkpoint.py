@@ -285,6 +285,33 @@ class TestADiagramIsNotAFigure:
         source = "graph LR\n    A[Cache hit 94%] --> B[Origin 1.2 s]"
         assert self._blocked({"source": source}, tool="build_mermaid") is True
 
+    def test_a_table_with_the_unit_in_its_header_is_caught(self):
+        """build_table asks for units in the header, so a figure table's cells
+        are bare numbers."""
+        assert self._blocked({"columns": ["Region", "Revenue ($B)"],
+                              "rows": [["EMEA", "42"], ["APAC", "17"]]},
+                             tool="build_table") is True
+
+    def test_rows_sent_as_a_json_string_are_read_as_rows(self):
+        import json
+
+        assert self._blocked({"columns": json.dumps(["Region", "Share"]),
+                              "rows": json.dumps([["EMEA", "31%"], ["APAC", "22%"]])},
+                             tool="build_table") is True
+
+    def test_a_mermaid_chart_is_caught_whatever_its_labels(self):
+        assert self._blocked({"source": 'pie\n    "Cloud" : 42\n    "On-prem" : 58'},
+                             tool="build_mermaid") is True
+
+    def test_durations_with_their_unit_are_measurements(self):
+        assert self._blocked({"columns": ["Specialty", "Wait"],
+                              "rows": [["Orthopaedics", "18-week target missed"]]},
+                             tool="build_table") is True
+
+    def test_protocol_versions_are_not_measurements(self):
+        source = "sequenceDiagram\n    C->>S: GET / HTTP/1.1\n    S-->>C: TLS 1.3 handshake, OAuth 2.0 token"
+        assert self._blocked({"source": source}, tool="build_mermaid") is False
+
     def test_a_diagram_whose_labels_carry_figures_is_caught(self):
         assert self._blocked({"items": [{"label": "Visitors", "detail": "120,000 a month"},
                                         {"label": "Signups"}]}) is True
