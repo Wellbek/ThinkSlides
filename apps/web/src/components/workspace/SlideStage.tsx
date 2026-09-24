@@ -15,6 +15,7 @@ import type { TextRun, SlideContentItem } from "@thinkslides/schemas";
 export function SlideStage({ onCollapse }: { collapsed: boolean; onCollapse: () => void }) {
   const activeMessages = useChatStore((s) => s.activeMessages);
   const activeFiles = useChatStore((s) => s.activeFiles);
+  const sessionId = useChatStore((s) => s.activeSessionId) ?? "";
   const slides = useMemo(() => collectPreviewSlides(activeMessages), [activeMessages]);
   const [current, setCurrent] = useState(0);
   const [tool, setTool] = useState<string>("select");
@@ -29,7 +30,7 @@ export function SlideStage({ onCollapse }: { collapsed: boolean; onCollapse: () 
   const addMark = useAnnotationStore((s) => s.addMark);
   const clearMarks = useAnnotationStore((s) => s.clearMarks);
   const insertIntoComposer = useAnnotationStore((s) => s.insertIntoComposer);
-  const slideMarks = marks.filter((m) => m.slide === idx);
+  const slideMarks = marks.filter((m) => m.sessionId === sessionId && m.slide === idx);
 
   useEffect(() => { setPreviewSlide(idx, total); }, [idx, total, setPreviewSlide]);
 
@@ -38,13 +39,13 @@ export function SlideStage({ onCollapse }: { collapsed: boolean; onCollapse: () 
     const box = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - box.left) / box.width) * 100;
     const y = ((e.clientY - box.top) / box.height) * 100;
-    addMark(idx, tool as MarkKind, x, y);
+    addMark(sessionId, idx, tool as MarkKind, x, y);
   };
 
   const sendMarks = () => {
     if (!slideMarks.length) return;
     insertIntoComposer(describeMarks(slideMarks));
-    clearMarks(idx);
+    clearMarks(sessionId, idx);
   };
 
   // activeFiles now also holds individual chart/image assets (#187), which

@@ -10,6 +10,7 @@ export type MarkKind = "mark" | "pin";
 
 export interface SlideMark {
   id: number;
+  sessionId: string;
   slide: number; // 0-based index into the preview's slide list
   kind: MarkKind;
   x: number; // percent of slide width
@@ -20,26 +21,34 @@ interface AnnotationState {
   previewSlide: number;
   slideCount: number;
   marks: SlideMark[];
-  // Text for the composer to append. `nonce` lets the same text be inserted twice.
+  // Text waiting for the composer to append. Taken, not read, so a composer
+  // that remounts does not append it a second time.
   composerInsert: { text: string; nonce: number } | null;
   setPreviewSlide: (index: number, count: number) => void;
-  addMark: (slide: number, kind: MarkKind, x: number, y: number) => void;
-  clearMarks: (slide: number) => void;
+  addMark: (sessionId: string, slide: number, kind: MarkKind, x: number, y: number) => void;
+  clearMarks: (sessionId: string, slide: number) => void;
   insertIntoComposer: (text: string) => void;
+  takeComposerInsert: () => string | null;
 }
 
 let nextId = 1;
 
-export const useAnnotationStore = create<AnnotationState>()((set) => ({
+export const useAnnotationStore = create<AnnotationState>()((set, get) => ({
   previewSlide: 0,
   slideCount: 0,
   marks: [],
   composerInsert: null,
   setPreviewSlide: (index, count) => set({ previewSlide: index, slideCount: count }),
-  addMark: (slide, kind, x, y) =>
-    set((s) => ({ marks: [...s.marks, { id: nextId++, slide, kind, x, y }] })),
-  clearMarks: (slide) => set((s) => ({ marks: s.marks.filter((m) => m.slide !== slide) })),
+  addMark: (sessionId, slide, kind, x, y) =>
+    set((s) => ({ marks: [...s.marks, { id: nextId++, sessionId, slide, kind, x, y }] })),
+  clearMarks: (sessionId, slide) =>
+    set((s) => ({ marks: s.marks.filter((m) => m.sessionId !== sessionId || m.slide !== slide) })),
   insertIntoComposer: (text) => set({ composerInsert: { text, nonce: Date.now() } }),
+  takeComposerInsert: () => {
+    const pending = get().composerInsert;
+    if (pending) set({ composerInsert: null });
+    return pending?.text ?? null;
+  },
 }));
 
 /** Marks on one slide as a sentence the agent can act on. */

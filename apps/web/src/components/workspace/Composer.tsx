@@ -26,12 +26,14 @@ export function Composer() {
   const previewSlide = useAnnotationStore((s) => s.previewSlide);
   const slideCount = useAnnotationStore((s) => s.slideCount);
   const composerInsert = useAnnotationStore((s) => s.composerInsert);
+  const takeComposerInsert = useAnnotationStore((s) => s.takeComposerInsert);
   const insertIntoComposer = useAnnotationStore((s) => s.insertIntoComposer);
 
   useEffect(() => {
-    if (!composerInsert) return;
-    setContent((c) => (c && !c.endsWith(" ") ? `${c} ` : c) + composerInsert.text);
-  }, [composerInsert]);
+    const text = composerInsert && takeComposerInsert();
+    if (!text) return;
+    setContent((c) => (c && !c.endsWith(" ") ? `${c} ` : c) + text);
+  }, [composerInsert, takeComposerInsert]);
 
   // Show the most recent user attachments as context chips.
   const lastAttachments = (() => {
