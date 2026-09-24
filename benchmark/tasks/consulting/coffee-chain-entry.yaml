@@ -1,0 +1,19 @@
+id: consulting-coffee-entry
+category: consulting
+prompt: |
+  Five slides for the board of a European coffee chain on entering the
+  South Korean market: market attractiveness, competition, entry options
+  (own stores, franchise, joint venture), and a recommendation.
+mode: deep
+detail: concise
+answers:
+  - first
+  - first
+  - Go ahead as planned
+checklist:
+  - The deck has exactly 5 slides
+  - Market figures (size, consumption, store counts) carry a named source
+  - Competitors named are real chains operating in Korea
+  - Entry options are compared on the same criteria
+  - The recommendation follows from the comparison
+  - Titles state a finding rather than a topic

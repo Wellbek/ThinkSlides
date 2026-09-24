@@ -1,0 +1,20 @@
+id: technical-oauth-pkce
+category: technical
+prompt: |
+  Three slides for mobile and single-page-app developers explaining the
+  OAuth 2.0 authorization code flow with PKCE: why the implicit flow was
+  retired, the steps of the flow, and what the code verifier protects
+  against.
+mode: simple
+detail: concise
+answers:
+  - first
+  - first
+  - Go ahead as planned
+checklist:
+  - The deck has exactly 3 slides
+  - The flow shows authorization request with code_challenge, redirect with code, and token request with code_verifier
+  - It says the verifier defends against an intercepted authorization code
+  - It says why the implicit flow is discouraged (tokens in the redirect URL)
+  - The flow is drawn as a sequence between app, authorization server and resource server
+  - Titles state what each slide shows
