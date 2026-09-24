@@ -117,7 +117,9 @@ def _checks(run_dir: Path, task: Task, manifest: dict, spans: list[dict], pdf: P
         ))
 
     # "failed" is a tool that returned an error; "error" one that raised; and
-    # "unfinished" one still open when the trace was written.
+    # "unfinished" one still open when the trace was written. A validator
+    # turning a draft down is "rejected" - the tool working, not breaking -
+    # and is counted in the metrics as draftsRejected instead (#345).
     failed = [s["name"] for s in spans if s["kind"] == "tool"
               and s["status"] in ("failed", "error", "unfinished")]
     checks.append(Check(
@@ -139,6 +141,8 @@ def _metrics(manifest: dict, spans: list[dict], pages: list) -> dict:
         "tokensEstimated": estimated,
         "costUsd": (manifest.get("spend") or {}).get("costUsd"),
         "runSeconds": round(sum(s["durationMs"] for s in spans if s["kind"] == "run") / 1000, 1),
+        "draftsRejected": sum(1 for s in spans if s["kind"] == "tool"
+                              and s["status"] == "rejected"),
         "validationRounds": sum(1 for s in spans if s["kind"] == "phase" and s["name"] == "validate"
                                 and s["status"] != "skipped"),
         "pages": manifest.get("pages") or 0,
@@ -189,4 +193,6 @@ def render(result: dict) -> str:
     cost = f"${m['costUsd']:.3f}" if m["costUsd"] is not None else "not billed"
     lines.append(f"  {m['modelCalls']} model calls, {m['inputTokens']} in ({m['cachedInputTokens']} cached)"
                  f"{' estimated' if m['tokensEstimated'] else ''}, {m['outputTokens']} out, {cost}")
+    if m.get("draftsRejected"):
+        lines.append(f"  {m['draftsRejected']} draft(s) rejected by validation")
     return "\n".join(lines)
