@@ -294,6 +294,7 @@ class TestTheCapSurvivesAPause:
         loop.working_state.record_layout_revision(1, "page")
         loop.working_state.record_layout_revision(1, "page-stacked")
         loop.working_state.record_layout_revision(4, "other")
+        loop.working_state.placed_arrangements = {1: ["page-wide"]}
         await loop._save_working_state(session_id)
 
         resumed = _loop()
@@ -305,6 +306,7 @@ class TestTheCapSurvivesAPause:
             1: frozenset({"page", "page-stacked"}),
             4: frozenset({"other"}),
         }
+        assert resumed.working_state.placed_arrangements == {1: ["page-wide"]}
 
     @pytest.mark.asyncio
     async def test_a_run_with_nothing_to_remember_resumes_clean(self):
@@ -330,7 +332,6 @@ class TestTheLadderClosesTheLoop:
     records it, and the next render composes differently."""
 
     def test_a_replace_verdict_rules_out_what_was_placed(self, pack):
-        from app.agent import run_context
         from app.agent.tools.finalize_and_render_pptx import (
             FinalizeAndRenderPptxTool,
         )
@@ -345,15 +346,16 @@ class TestTheLadderClosesTheLoop:
                 placed.setdefault(source, []).append(page.archetype)
         assert placed, "a composed page must say which slide it came from"
 
-        run_context.set_placed_arrangements(placed)
         loop = _loop()
+        loop.working_state.placed_arrangements = placed
         wanted = loop.working_state.layout_revision_for([
             {"slideIndex": 1, "type": "aesthetic", "fix": "replace"}])
         assert wanted == {1: "replace"}
 
         for index in wanted:
             loop.working_state.record_layout_revision(
-                index, (placed.get(index) or [""])[0])
+                index, (loop.working_state.placed_arrangements.get(index)
+                        or [""])[0])
 
         avoid = loop.working_state.arrangements_to_avoid()
         assert avoid[1] == frozenset({placed[1][0]})
@@ -362,6 +364,46 @@ class TestTheLadderClosesTheLoop:
                                    avoid=avoid)
         assert again.pages[1].archetype != first.pages[1].archetype
         assert FinalizeAndRenderPptxTool is not None
+
+    def test_what_was_placed_crosses_the_task_the_render_runs_in(
+            self, pack, tmp_path, monkeypatch):
+        """The loop awaits every tool as its own task, which runs in a copy of
+        the context. The renderer used to leave what it placed in a context
+        variable, set inside that copy and never seen by the loop, so every
+        "replace" verdict ruled out nothing and the page came back on the
+        arrangement it was flagged for (#344). This runs the real tool across
+        that same boundary."""
+        import asyncio
+        import json
+
+        from app.agent import run_context
+        from app.agent.tools import finalize_and_render_pptx as finalize
+        from tests.test_agent_loop_workflow import _loop
+
+        monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(finalize.PreviewGenerator, "generate_previews",
+                            lambda self, path, session_id: [])
+        loop = _loop()
+
+        async def render():
+            token = run_context.set_pack(pack)
+            try:
+                return await loop._with_retry_notices(
+                    finalize.FinalizeAndRenderPptxTool.run(
+                        slides_json=json.dumps(language_specimen_slides()),
+                        session_id="probe"),
+                    phase="render",
+                ).__anext__()
+            finally:
+                run_context.reset_pack(token)
+
+        kind, result = asyncio.run(render())
+        assert kind == "result" and result.success, result.error
+
+        placed = result.data["placedArrangements"]
+        first = design_run.compose(language_specimen_slides(), pack)
+        assert placed[1] == [p.archetype for p in first.pages
+                             if p.provenance.source_slide == 1]
 
     def test_a_nudge_verdict_keeps_the_arrangement(self):
         """A nudge moves something *within* the page it has, so forbidding
