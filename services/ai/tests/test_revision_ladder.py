@@ -294,6 +294,7 @@ class TestTheCapSurvivesAPause:
         loop.working_state.record_layout_revision(1, "page")
         loop.working_state.record_layout_revision(1, "page-stacked")
         loop.working_state.record_layout_revision(4, "other")
+        loop.working_state.placed_arrangements = {1: ["page-wide"]}
         await loop._save_working_state(session_id)
 
         resumed = _loop()
@@ -305,6 +306,7 @@ class TestTheCapSurvivesAPause:
             1: frozenset({"page", "page-stacked"}),
             4: frozenset({"other"}),
         }
+        assert resumed.working_state.placed_arrangements == {1: ["page-wide"]}
 
     @pytest.mark.asyncio
     async def test_a_run_with_nothing_to_remember_resumes_clean(self):

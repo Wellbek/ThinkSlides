@@ -1702,6 +1702,9 @@ class AgentLoop:
             "arrangements_tried": {
                 str(k): sorted(v) for k, v in
                 self.working_state.arrangements_tried.items()},
+            "placed_arrangements": {
+                str(k): list(v) for k, v in
+                self.working_state.placed_arrangements.items()},
             "last_rendered_path": self.working_state.last_rendered_path,
             "pending_slide_previews": self.working_state.pending_slide_previews,
             "previews_published": self.working_state.previews_published,
@@ -1801,6 +1804,9 @@ class AgentLoop:
             self.working_state.arrangements_tried = {
                 int(k): set(v) for k, v in
                 (state_dict.get("arrangements_tried") or {}).items()}
+            self.working_state.placed_arrangements = {
+                int(k): list(v) for k, v in
+                (state_dict.get("placed_arrangements") or {}).items()}
             self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
             self.working_state.pending_slide_previews = state_dict.get("pending_slide_previews", [])
             self.working_state.previews_published = state_dict.get("previews_published", False)
