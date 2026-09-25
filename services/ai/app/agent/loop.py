@@ -635,6 +635,10 @@ class WorkingState:
         # What the last render placed each slide on, from its result - what a
         # "replace" verdict rules out.
         self.placed_arrangements: dict[int, list[str]] = {}
+        # Per slide, the fields whose copy the last render could not fit at the
+        # size their frames were designed for: [{"field", "chars", "fits"}].
+        # Turned into a redraft finding with a budget after validation (#348).
+        self.copy_over_budget: dict[int, list[dict]] = {}
         self.validation_attempts: int = 0
         self.MAX_VALIDATION_ATTEMPTS = 3
         # Checks that could not run at all (LibreOffice conversion error, a
@@ -779,6 +783,31 @@ class WorkingState:
         self.layout_revisions[index] = self.layout_revisions.get(index, 0) + 1
         if archetype:
             self.arrangements_tried.setdefault(index, set()).add(archetype)
+
+    def copy_findings(self) -> list[dict]:
+        """A redraft finding, with a budget, for each slide whose copy the
+        last render could not fit at a readable size.
+
+        Measured rather than seen: repair keeps copy at the size its frame was
+        designed for (#348), so copy that does not fit stays too long, and
+        the only remedy left is fewer words. A budget - "cut it to about N
+        characters" - is something a writer can act on; "it overflows" is not.
+        """
+        findings = []
+        for index, fields in sorted(self.copy_over_budget.items()):
+            over = [f for f in fields
+                    if 0 < int(f.get("fits", 0)) < int(f.get("chars", 0))]
+            if not over:
+                continue
+            parts = "; ".join(
+                f"{f['field']} is about {f['chars']} characters where the page "
+                f"sets about {f['fits']} at a readable size" for f in over)
+            findings.append({
+                "slideIndex": index, "type": "copy_over_budget", "fix": "redraft",
+                "detail": (f"{parts[0].upper()}{parts[1:]} - cut each to about "
+                           "that, rather than cutting fields that fit"),
+            })
+        return findings
 
     def arrangements_to_avoid(self) -> dict[int, frozenset[str]]:
         """What `compose` should not offer each slide again."""
@@ -1170,6 +1199,7 @@ class WorkingState:
         self.layout_revisions = {}
         self.arrangements_tried = {}
         self.placed_arrangements = {}
+        self.copy_over_budget = {}
         self.validation_attempts = 0
         self.validation_failures = 0
         self.last_rendered_path = None
@@ -1705,6 +1735,9 @@ class AgentLoop:
             "placed_arrangements": {
                 str(k): list(v) for k, v in
                 self.working_state.placed_arrangements.items()},
+            "copy_over_budget": {
+                str(k): list(v) for k, v in
+                self.working_state.copy_over_budget.items()},
             "last_rendered_path": self.working_state.last_rendered_path,
             "pending_slide_previews": self.working_state.pending_slide_previews,
             "previews_published": self.working_state.previews_published,
@@ -1807,6 +1840,9 @@ class AgentLoop:
             self.working_state.placed_arrangements = {
                 int(k): list(v) for k, v in
                 (state_dict.get("placed_arrangements") or {}).items()}
+            self.working_state.copy_over_budget = {
+                int(k): list(v) for k, v in
+                (state_dict.get("copy_over_budget") or {}).items()}
             self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
             self.working_state.pending_slide_previews = state_dict.get("pending_slide_previews", [])
             self.working_state.previews_published = state_dict.get("previews_published", False)
@@ -4365,6 +4401,9 @@ class AgentLoop:
             self.working_state.placed_arrangements = {
                 int(index): list(archetypes) for index, archetypes in
                 (tool_result.data.get("placedArrangements") or {}).items()}
+            self.working_state.copy_over_budget = {
+                int(index): [dict(field) for field in fields] for index, fields in
+                (tool_result.data.get("copyOverBudget") or {}).items()}
             # Visible to the tools as well as to the loop, so a tool that
             # edits the deck edits the same file the download and the vision
             # check read rather than a copy of it.
@@ -4429,7 +4468,8 @@ class AgentLoop:
                 # deck, and burning an attempt on it used to push a
                 # still-broken deck to the cap and out the door.
                 self.working_state.validation_attempts += 1
-                issues = (tool_result.data or {}).get("issues", [])
+                issues = list((tool_result.data or {}).get("issues", []))
+                issues.extend(self.working_state.copy_findings())
                 self.working_state.validation_issues = issues
                 self.working_state.validation_clean = not issues
                 at_cap = (
@@ -4650,6 +4690,10 @@ class AgentLoop:
                     # progress even though it moves none of the other fields
                     # `_progress_marker` watches.
                     self.working_state.code_edits_applied += 1
+                    # The file changed without a render, in whichever phase,
+                    # so every copy budget measured before it is stale; the
+                    # next render measures afresh.
+                    self.working_state.copy_over_budget = {}
                     # `code_amendment_done` closes the `amend` phase
                     # specifically - scoped to it, or a fix applied earlier
                     # while drafting would mark that later, unrelated

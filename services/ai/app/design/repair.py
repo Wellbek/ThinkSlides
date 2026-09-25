@@ -107,16 +107,33 @@ def overflow_findings(doc: DesignDoc, page: Page, pack: Pack) -> list[Finding]:
     return findings
 
 
-def _next_smaller_role(pack: Pack, current: str) -> Optional[str]:
-    """The largest rung of this pack's ramp below the one in use."""
+def _next_smaller_role(pack: Pack, current: str,
+                       minimum_pt: float = 0.0) -> Optional[str]:
+    """The largest rung of this pack's ramp below the one in use, and not
+    below `minimum_pt`."""
     here = pack.type_roles.get(current)
     if here is None:
         return None
     smaller = [
         (role.size_pt, name) for name, role in pack.type_roles.items()
-        if role.size_pt < here.size_pt
+        if minimum_pt <= role.size_pt < here.size_pt
     ]
     return max(smaller)[1] if smaller else None
+
+
+def designed_floor_pt(pack: Pack, frame: Frame) -> float:
+    """The smallest size copy in this frame may be set at.
+
+    Read from the rung the frame was *designed* for, not the one its copy has
+    been stepped down to. Checked against the rung in use, body copy set one
+    rung smaller as a caption was held to the caption floor, passed, and could
+    be stepped down again: a deck's prose ended at 12.6pt against a body
+    floor of 16.2pt (#348).
+    """
+    from app.design.roles import type_role_for
+    from app.renderer.typeset.policy import floor_for
+
+    return floor_for(pack, type_role_for(frame.role, "text", pack, frame.type_role))
 
 
 def _overflow_patch(pack: Pack, frame: Frame, block) -> PatchOp:
@@ -132,7 +149,8 @@ def _overflow_patch(pack: Pack, frame: Frame, block) -> PatchOp:
     score falls, so a step down that costs more in legibility than it saves
     in overflow is reverted.
     """
-    smaller = _next_smaller_role(pack, block.type_role)
+    smaller = _next_smaller_role(pack, block.type_role,
+                                 designed_floor_pt(pack, frame))
     if smaller is not None:
         return PatchOp(
             op="set_type_role",
@@ -207,6 +225,11 @@ def legibility_findings(page: Page, pack: Pack) -> list[Finding]:
             if role is None:
                 continue
             message = check(pack, block.type_role, role.size_pt)
+            floor = designed_floor_pt(pack, frame)
+            if message is None and role.size_pt < floor - 1e-6:
+                message = (f"{block.type_role} at {role.size_pt:.1f}pt is below "
+                           f"the {floor:.1f}pt this frame's copy is set at "
+                           "no smaller than")
             if message:
                 findings.append(Finding(
                     frame_id=frame.id, property="legibility",

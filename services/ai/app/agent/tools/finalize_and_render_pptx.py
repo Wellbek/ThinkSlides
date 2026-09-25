@@ -182,6 +182,9 @@ class FinalizeAndRenderPptxTool:
             # with an empty list to avoid, and the page came back on the
             # arrangement it had been flagged for (#344).
             placed: dict[int, list[str]] = {}
+            # Copy still too long for its frames after repair, per slide, with
+            # how much fits - the writer's budget (#348).
+            over_budget: dict[int, dict] = {}
             # Which renderer the deck actually went through, so a run can be
             # checked for it rather than only logged: "composed" in its design
             # language, "template" on an uploaded template, "fallback" when
@@ -192,7 +195,7 @@ class FinalizeAndRenderPptxTool:
                 try:
                     if pack is not None:
                         try:
-                            result_path, placed = cls._render_composed(
+                            result_path, placed, over_budget = cls._render_composed(
                                 slides, pack, metadata, output_path,
                                 design_system,
                             )
@@ -317,6 +320,7 @@ class FinalizeAndRenderPptxTool:
                     "assets": assets,
                     "placedArrangements": placed,
                     "renderPath": render_path,
+                    "copyOverBudget": over_budget,
                     # Slides set on the pack's plain page because none of its
                     # own arrangements could carry them (#322).
                     "plainPages": sorted(
@@ -438,7 +442,7 @@ class FinalizeAndRenderPptxTool:
     @classmethod
     def _render_composed(cls, slides: list, pack, metadata: dict,
                          output_path: str, design_system: dict
-                         ) -> tuple[str, dict[int, list[str]]]:
+                         ) -> tuple[str, dict[int, list[str]], dict[int, dict]]:
         """Lay the deck out in its pack and render it.
 
         Returns the written path and, per source slide, the archetypes its
@@ -449,7 +453,7 @@ class FinalizeAndRenderPptxTool:
         and it was called zero times across every observed run.
         """
         from app.agent import run_context
-        from app.design.run import compose
+        from app.design.run import compose, copy_over_budget
         from app.renderer.designdoc_renderer import render_doc
 
         # What the previous pass already tried and validation disliked. Empty
@@ -473,7 +477,8 @@ class FinalizeAndRenderPptxTool:
             source = page.provenance.source_slide
             if source is not None:
                 placed.setdefault(source, []).append(page.archetype)
-        return render_doc(doc, pack, output_path, design_system=design_system), placed
+        return (render_doc(doc, pack, output_path, design_system=design_system),
+                placed, copy_over_budget(doc, pack))
 
     @classmethod
     def _generate_markdown_fallback(cls, slides: list[dict], metadata: dict) -> str:
