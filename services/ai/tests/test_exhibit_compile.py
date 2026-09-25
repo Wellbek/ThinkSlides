@@ -243,6 +243,43 @@ class TestATableIsANativeTable:
         heights = [row.height for row in frame.table.rows]
         assert frame.height == sum(heights)
 
+    @staticmethod
+    def _draw(table, ground, design_system):
+        from pptx import Presentation
+
+        from app.renderer import native_table
+        from app.renderer.layout import PositionConfig
+        from app.renderer.primitives import PaintContext
+        from app.renderer.typography import TypeScale
+
+        slide = Presentation().slides.add_slide(Presentation().slide_layouts[6])
+        context = PaintContext(ground=ground, default_color="#FFFFFF",
+                               type_scale=TypeScale())
+        native_table.add_native_table(
+            slide, table, PositionConfig(0.5, 0.5, 8.0, 3.0), design_system,
+            context, id_prefix="t", placement="top")
+        (frame,) = [s for s in slide.shapes if s.has_table]
+        return frame.table
+
+    def test_text_on_a_hairline_table_reads_on_a_dark_page(self):
+        """A hairline table's cells are transparent; its text sits on the
+        page and was always near-black, so it vanished on a dark one."""
+        from app import colors
+
+        table = self._draw({"headerRow": True, "rows": [["A", "B"], ["x", "y"]]},
+                           "#101418", {"dataViz": {"tableTreatment": "hairline",
+                                                   "tableHeaderFilled": False}})
+        run = table.cell(1, 0).text_frame.paragraphs[0].runs[0]
+        assert colors.contrast_ratio("#101418", f"#{run.font.color.rgb}") >= 4.5
+
+    def test_a_footnote_marker_takes_its_cells_colour(self):
+        """A marked run in an unfilled header took the header's white."""
+        table = self._draw({"headerRow": True, "rows": [["Revenue[1]", "B"], ["x", "y"]]},
+                           "#FFFFFF", {"dataViz": {"tableTreatment": "hairline",
+                                                   "tableHeaderFilled": False}})
+        runs = table.cell(0, 0).text_frame.paragraphs[0].runs
+        assert len({str(r.font.color.rgb) for r in runs}) == 1
+
     def test_the_template_path_draws_it_the_same_way(self):
         from app.renderer import native_table, pptx_renderer
 

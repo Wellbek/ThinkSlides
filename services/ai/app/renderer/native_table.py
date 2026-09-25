@@ -20,11 +20,14 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Inches, Pt
 
 from app import colors
+from app.observability.logging import get_logger
 from app.renderer import apparatus as apparatus_markers
 from app.renderer import deck_theme, table_layout, table_style
 from app.renderer import primitives as prim
 from app.renderer.default_template import _hex_to_rgbcolor
 from app.renderer.layout import PositionConfig
+
+logger = get_logger(__name__)
 
 Placement = Literal["optical", "top"]
 
@@ -59,6 +62,10 @@ def add_native_table(slide, table_data: dict, pos: PositionConfig,
     )
     if layout is None:
         return None
+    if layout.overflows:
+        logger.warning("table_exceeds_its_frame", rows=n_rows, columns=n_cols,
+                       needed_in=round(layout.height_in, 2),
+                       frame_in=round(pos.height, 2), id=id_prefix)
 
     # Sit the table in its band rather than filling it: a short table
     # stretched to a tall region is what left a dead strip above and below
@@ -94,6 +101,11 @@ def add_native_table(slide, table_data: dict, pos: PositionConfig,
     band_rgb = _hex_to_rgbcolor(style.band_bg)
     row_rgb = _hex_to_rgbcolor(style.row_bg)
     body_fg_rgb = _hex_to_rgbcolor(deck_theme.BODY_ON_LIGHT)
+    # A hairline table's cells are transparent, so its text sits on whatever
+    # is behind the table and must read on it; a filled row is light.
+    ground = getattr(paint_context, "ground", None) or "#FFFFFF"
+    open_fg_rgb = _hex_to_rgbcolor(colors.readable_on(
+        ground, deck_theme.BODY_ON_LIGHT, ("#FFFFFF", "#000000")))
 
     for r_idx, row in enumerate(rows_data):
         is_header = header_row and r_idx == 0
@@ -129,8 +141,12 @@ def add_native_table(slide, table_data: dict, pos: PositionConfig,
             alignment = (PP_ALIGN.RIGHT if c_idx in layout.numeric_columns
                          else PP_ALIGN.LEFT)
             size = Pt(layout.header_pt if is_header else layout.body_pt)
-            color = (header_fg_rgb if is_header and style.header_filled
-                     else body_fg_rgb)
+            filled = (style.treatment != "hairline"
+                      or (is_header and style.header_filled))
+            if is_header and style.header_filled:
+                color = header_fg_rgb
+            else:
+                color = body_fg_rgb if filled else open_fg_rgb
             for paragraph in cell.text_frame.paragraphs:
                 paragraph.alignment = alignment
                 for run in paragraph.runs:
@@ -140,8 +156,7 @@ def add_native_table(slide, table_data: dict, pos: PositionConfig,
                     run.font.color.rgb = color
                 if apparatus_markers.has_marker(raw_cell) and paragraph.runs:
                     _mark_cell(paragraph, raw_cell, style.font_name, size,
-                               header_fg_rgb if is_header else body_fg_rgb,
-                               is_header or is_total)
+                               color, is_header or is_total)
     return layout.height_in
 
 
