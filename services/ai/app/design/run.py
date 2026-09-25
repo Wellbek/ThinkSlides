@@ -402,6 +402,7 @@ def _divisible(shape: MaterialShape) -> bool:
 def _place(shape: MaterialShape, pack: Pack,
            previous: Optional[str],
            avoid: frozenset[str] = frozenset(),
+           plain: bool = True,
            ) -> list[tuple[MaterialShape, object]]:
     """This material, bound to archetypes, split as many times as it takes.
 
@@ -444,11 +445,33 @@ def _place(shape: MaterialShape, pack: Pack,
         hopeless = bool(pages) and not all(
             readable_somewhere(item, pack, pages) for item in current.items)
         indivisible = splits >= ceiling or not _divisible(current)
+        if hopeless:
+            # No arrangement of the pack can show this exhibit legibly, and
+            # splitting the prose around it cannot change that. The pack's
+            # plain page has a figure frame the width of the grid and most of
+            # its height, so it is tried before setting the exhibit cramped:
+            # a six-column table forced into a short slot came out at 8pt and
+            # still ran into the prose below it (#357). A readable table on a
+            # plainer page beats an unreadable one on a designed page.
+            from app.design.vocabulary import PLAIN_ID, plain_content
+
+            # Never in a preview: a specimen shows what the language itself
+            # can do, and the plain page is a delivery fallback, not part of it.
+            if plain and all(a.id != PLAIN_ID for a in pack.archetypes):
+                selection = choose(
+                    current,
+                    pack.model_copy(update={"archetypes": (plain_content(pack),)}),
+                    previous_archetype=last)
+                if selection is not None:
+                    logger.warning("exhibit_placed_on_plain_page",
+                                   pack=pack.id)
+                    placed.append((current, selection))
+                    last = selection.archetype.id
+                    continue
         if hopeless or indivisible:
-            # An exhibit no slot in the pack can show legibly - which
-            # splitting the prose around it cannot fix - or nothing left to
-            # divide. Placing it cramped is better than refusing it: a
-            # refusal takes the whole deck to the stock renderer (#351).
+            # An exhibit no slot can show legibly, or nothing left to divide.
+            # Placing it cramped is better than refusing it: a refusal takes
+            # the whole deck to the stock renderer (#351).
             selection = choose(current, pack, previous_archetype=last,
                                candidates=candidates, legible=False)
             if selection is not None:
@@ -523,7 +546,8 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
         avoided = (avoid or {}).get(index, frozenset())
         try:
             try:
-                placed = _place(shape, pack, previous, avoided)
+                placed = _place(shape, pack, previous, avoided,
+                                plain=not skip_unplaceable)
             except Unplaceable:
                 if not avoided:
                     raise
@@ -531,7 +555,8 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
                 # arrangement it was on held it a render ago, and placing it
                 # the way we already did beats downgrading it to the plain
                 # page because a revision was asked for.
-                placed = _place(shape, pack, previous)
+                placed = _place(shape, pack, previous,
+                                plain=not skip_unplaceable)
         except Unplaceable as refused:
             if not skip_unplaceable:
                 # One page the pack cannot carry is set on the pack's plainest
