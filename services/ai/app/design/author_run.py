@@ -151,11 +151,12 @@ def _problem(language: Language, canvas: Canvas, floor_pt: float) -> str:
 
 # What a language is compiled against before it is offered: every role a deck
 # has, a page of prose, and the two exhibits a deck most often argues from, at
-# the size they usually come. Five rows of four short columns is the median
-# comparison table in the benchmark runs; smaller than that proves nothing.
+# the size they usually come. The table is the median of the twelve tables in
+# the recorded benchmark runs (`benchmark/evidence`): a header and five rows,
+# four columns, cells of about fourteen characters.
 PROBE_TABLE = [["Option", "Cost", "Risk", "Best for"],
-               *[[f"Option {n}", "Moderate spare capacity",
-                  "Partial exposure on rollback", "Routine releases"]
+               *[[f"Option {n}", "Spare capacity", "Partial exposure",
+                  "Routine release"]
                  for n in range(1, 6)]]
 PROBE_CHART = {"type": "bar", "categories": ["2023", "2024", "2025", "2026"],
                "series": [{"name": "Share", "values": [12, 18, 25, 31]}]}

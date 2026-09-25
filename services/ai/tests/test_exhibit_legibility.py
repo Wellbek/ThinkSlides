@@ -162,3 +162,89 @@ class TestOnePageNeverTakesTheDeckDown:
 
         for pack_id in run.available():
             assert PLAIN_ID not in {a.id for a in run.load(pack_id).archetypes}
+
+
+class TestATableIsSetAtALegibleSize:
+    """#357: a table's floor is an exact measurement, so it gets no
+    tolerance; with the 25% the estimated floors get, half-width tables came
+    out at 8 and 9pt."""
+
+    def test_a_table_has_no_tolerance_and_a_chart_keeps_its(self):
+        chart = MaterialItem(id="c", kind="chart", payload={"chart": {}})
+        assert select.legible_tolerance(TABLE) == 0.0
+        assert select.legible_tolerance(chart) == select.LEGIBLE_TOLERANCE
+
+    def test_a_table_no_arrangement_can_hold_goes_on_the_plain_page(self):
+        """Before being set cramped - where a six-column table came out at
+        8pt and ran into the prose below it."""
+        from app.design import authoring
+        from app.design.authored import to_pack
+        from app.design.schema import Canvas, Exhibit
+        from app.design.vocabulary import PLAIN_ID, ensure
+        from tests.test_author_run import CRAMPED
+
+        (language,) = authoring.read({"languages": [CRAMPED]})
+        pack = ensure(to_pack(language, Canvas(w_in=13.333, h_in=7.5)))
+        slides = [{"slideIndex": 0, "contents": [
+                       {"type": "text", "runs": [{"text": "Cover"}]}]},
+                  {"slideIndex": 1, "role": "content", "contents": [
+                       {"type": "text", "runs": [{"text": "A comparison"}]},
+                       {"type": "table", "table": {"headerRow": True, "rows": ROWS}}]},
+                  {"slideIndex": 2, "contents": [
+                       {"type": "text", "runs": [{"text": "Close"}]}]}]
+        from app.design.geometry import resolve_page
+
+        doc = run.compose(slides, pack)
+        page = doc.pages[1]
+        assert page.archetype == PLAIN_ID
+        table_frame = next(f for f in page.frames
+                           if any(isinstance(c, Exhibit) for c in f.content))
+        rect = {r.id: r for r in resolve_page(doc, page)}[table_frame.id].rect
+        assert select.legibility_shortfall(TABLE, pack, (rect.width, rect.height)) == 0.0
+
+    def test_prose_is_split_off_so_the_table_can_have_the_plain_page(self):
+        """With more prose than the plain page's column holds, the page used
+        to go straight to a cramped slot (a 0.33 shortfall reproduced)."""
+        from app.design import authoring
+        from app.design.authored import to_pack
+        from app.design.schema import Canvas, Exhibit
+        from app.design.vocabulary import PLAIN_ID, ensure
+        from tests.test_author_run import CRAMPED
+
+        (language,) = authoring.read({"languages": [CRAMPED]})
+        pack = ensure(to_pack(language, Canvas(w_in=13.333, h_in=7.5)))
+        paragraph = ("A long paragraph of argument that a page carries beside "
+                     "its table, written out at the length a real draft reaches. ") * 12
+        slides = [{"slideIndex": 0, "contents": [
+                       {"type": "text", "runs": [{"text": "Cover"}]}]},
+                  {"slideIndex": 1, "role": "content", "contents": [
+                       {"type": "text", "runs": [{"text": "A comparison"}]},
+                       *[{"type": "text", "runs": [{"text": paragraph}]}
+                         for _ in range(3)],
+                       {"type": "table", "table": {"headerRow": True, "rows": ROWS}}]},
+                  {"slideIndex": 2, "contents": [
+                       {"type": "text", "runs": [{"text": "Close"}]}]}]
+        doc = run.compose(slides, pack)
+        (page,) = [p for p in doc.pages
+                   if any(isinstance(c, Exhibit) for f in p.frames for c in f.content)]
+        assert page.archetype == PLAIN_ID
+
+    def test_a_revision_that_avoids_the_plain_page_is_obeyed(self):
+        from app.design import authoring
+        from app.design.authored import to_pack
+        from app.design.schema import Canvas
+        from app.design.vocabulary import PLAIN_ID, ensure
+        from tests.test_author_run import CRAMPED
+
+        (language,) = authoring.read({"languages": [CRAMPED]})
+        pack = ensure(to_pack(language, Canvas(w_in=13.333, h_in=7.5)))
+        slides = [{"slideIndex": 0, "contents": [
+                       {"type": "text", "runs": [{"text": "Cover"}]}]},
+                  {"slideIndex": 1, "role": "content", "contents": [
+                       {"type": "text", "runs": [{"text": "A comparison"}]},
+                       {"type": "table", "table": {"headerRow": True, "rows": ROWS}}]},
+                  {"slideIndex": 2, "contents": [
+                       {"type": "text", "runs": [{"text": "Close"}]}]}]
+        doc = run.compose(slides, pack, avoid={1: frozenset({PLAIN_ID})})
+        assert all(p.archetype != PLAIN_ID for p in doc.pages
+                   if p.provenance.source_slide == 1)

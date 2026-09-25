@@ -80,6 +80,17 @@ TABLE_ROW_LEADING = 1.8
 # of every other arrangement, and the table lost. A page with no slot its
 # exhibit can be read in is split instead, which gives the exhibit a page.
 LEGIBLE_TOLERANCE = 0.25
+
+
+def legible_tolerance(item: MaterialItem) -> float:
+    """How far short of its floor an exhibit may fall before it is refused.
+
+    Zero for a table: its floor is an exact measurement - the table itself,
+    wrapped at the slot's width, at the smallest size it is read at - so any
+    shortfall means the table is set smaller than that. With the 25% allowed
+    to the estimated floors, half-width tables came out at 8 and 9pt (#357).
+    """
+    return 0.0 if item.kind == "table" else LEGIBLE_TOLERANCE
 # How strongly a required slot pulls material into itself. The assignment
 # minimises total cost and has no concept of "this column must be used", so
 # without a bias the cheapest solution routinely leaves the headline slot
@@ -390,7 +401,7 @@ def readable_somewhere(item: MaterialItem, pack: Pack,
             if not _accepts(slot, item):
                 continue
             size = _slot_rect(archetype, slot, pack, grid)
-            if size and legibility_shortfall(item, pack, size) <= LEGIBLE_TOLERANCE:
+            if size and legibility_shortfall(item, pack, size) <= legible_tolerance(item):
                 return True
     return False
 
@@ -413,7 +424,7 @@ def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,
         return INFEASIBLE
     size = _slot_rect(archetype, slot, pack, grid)
     shortfall = legibility_shortfall(item, pack, size)
-    if legible and shortfall > LEGIBLE_TOLERANCE:
+    if legible and shortfall > legible_tolerance(item):
         return INFEASIBLE
     cost = (
         W_CAPACITY * capacity_strain(item, slot, pack, size, frame_role,

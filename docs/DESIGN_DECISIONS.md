@@ -120,12 +120,14 @@ Each refusal names what to change, and that sentence is put into the retry promp
    Each archetype's bare frames pass the same geometry check the renderer runs.
    A cover whose frames overlapped at equal depth was refused at render and shipped nothing (#306).
 4. **An exhibit can be read somewhere.**
-   Some content arrangement must show a probe table (a header and five rows of four short columns, the median comparison table in the benchmark runs) and a probe chart legibly, by the rule in section 7.
+   Some content arrangement must show a probe table and a probe chart legibly, by the rule in section 7.
+   The probe table is the median of the 12 tables in the recorded runs: a header and five rows, four columns, cells of about 14 characters.
    The refusal quotes the measured numbers, for example "its tallest figure slot is 1.0in by 7.7in, and a five-row table needs about 1.7in of height at that width".
 5. **A deck of every page kind composes on the language's own pages.**
    A probe deck (cover, section, prose page, table page, chart page, closing) must compose and pass the geometry check without any page needing the plain fallback of section 9.
 
-Against the 17 distinct languages authored in the evidence runs, the gate refuses 2, both for check 4 (their tallest figure slot is 1.0in tall where a five-row table needs 1.7in).
+Against the 17 distinct languages authored in the evidence runs, the gate refuses 5, all for check 4: their tallest figure slots are 1.0 to 1.7in tall, and the median table needs about 1.71in at 10pt.
+Refusing them costs a retry, whose prompt states the height needed; accepting them would set every typical table in the deck below 10pt, which is the defect section 7 exists to prevent.
 `python -m app.research.gate_audit ../../benchmark/evidence` reproduces this, and `tests/test_gate_audit.py` pins it, so a change to the gate fails until this sentence is updated.
 
 ## 5. From a slide to material
@@ -204,11 +206,19 @@ Each exhibit has a minimum slot height:
 **The shortfall** is `max(0, floor - height) / floor`, from 0 (fits) to 1.
 
 **The decision.**
-- A shortfall above 0.25 (`LEGIBLE_TOLERANCE`) makes the slot **infeasible**.
+- For a **table**, any shortfall makes the slot infeasible: its floor is an exact measurement of the table itself, so falling short means setting it below 10pt.
+  With the tolerance the estimated floors get, tables in half-width slots came out at 8 and 9pt (#357).
+- For a chart, diagram or metrics row, whose floors are estimates, a shortfall above 0.25 (`LEGIBLE_TOLERANCE`) makes the slot **infeasible**.
   As a cost, it was outbid by the text overflow of every other arrangement, and a five-row table was set in a slot 0.2in tall with its rows printed over each other (#351).
 - A shortfall within tolerance is charged at weight 12.0, so a slot that fits wins over one that nearly does.
 - If no content arrangement in the pack has a slot the exhibit could be read in (`readable_somewhere` is false), splitting the prose around it cannot help, because legibility depends on the slot and not on the prose.
-  The page is then placed cramped straight away, with the floor relaxed and a `exhibit_placed_below_legible_size` warning, rather than split pointlessly (section 8).
+  Such an exhibit is handled in three steps:
+  1. **The pack's plain page** (section 9), whose figure frame is the width of the grid and most of the page tall, is tried with the page's whole material.
+  2. If that fails because of the prose around the exhibit, and the plain page could show the exhibit legibly on its own, the page is **split** until the exhibit stands on a part the plain page can hold.
+     One paragraph and one exhibit can be divided for this, the exhibit continuing on its own page.
+  3. If even the plain page is too small for the exhibit (a forty-row table), no split can help, so the page is **placed cramped** at once, with the floor relaxed and an `exhibit_placed_below_legible_size` warning.
+  A six-column table forced into a short slot came out at 8pt and still ran into the prose below it, since a native table row grows to its text.
+  The plain page is never used in a preview, which shows only what the language itself can do, and a revision that avoids the plain page for a slide is obeyed.
 
 **Margins.**
 A slot that bleeds off the page keeps its bleed for a photograph and loses it for an exhibit (`bind._fill`).
@@ -227,7 +237,7 @@ When no archetype can carry a page's material, the page is split and each part p
 - **Bounded.**
   A page is split at most `max(4, number of non-figure items)` times, and a part with fewer than two paragraphs and fewer than two visuals is not divisible.
 - **When not to split.**
-  A page whose exhibit no slot could show legibly is not split for that (section 7).
+  A page whose exhibit not even the plain page could show legibly is not split for that, since legibility depends on the slot and not on the prose around it (section 7).
 
 Splitting adds pages the plan did not count, so drafting is told the design's exhibit capacity up front (section 14).
 
@@ -237,7 +247,8 @@ Each step is tried only when the one before it fails, and each affects the small
 
 1. **The cheapest feasible archetype** for the page (section 6).
 2. **A split** of the page into parts that each fit (section 8).
-3. **A cramped placement**, with the legibility floor relaxed, when an exhibit cannot be shown legibly anywhere or nothing is left to divide (section 7).
+3. **The pack's plain page, for an exhibit** no arrangement can show legibly (section 7), logged as `exhibit_placed_on_plain_page`.
+   **A cramped placement**, with the legibility floor relaxed, when even the plain page cannot hold it or nothing is left to divide.
 4. **The whole pack again, without the avoid list**, when the failure came from a `replace` verdict's avoid list (section 13).
    The cheapest arrangement is taken again, which is the one the page was on unless its material or neighbours changed; placing it as before beats downgrading it because a revision was asked for.
 5. **The pack's plain page**, for that page only (`vocabulary.plain_content`, #322).
@@ -249,7 +260,7 @@ Each step is tried only when the one before it fails, and each affects the small
 
 Previews are different: a specimen page no archetype can carry is skipped, since three preview cards showing two pages each are still a comparison a user can make.
 
-Steps 3, 5 and 6 are logged (`exhibit_placed_below_legible_size`, `page_placed_on_plain_fallback`, `pack_could_not_place_deck`), and steps 5 and 6 are also recorded on the render's trace span and named by the run checks (section 15).
+Steps 3, 5 and 6 are logged (step 3 as `exhibit_placed_on_plain_page` or `exhibit_placed_below_legible_size`, then `page_placed_on_plain_fallback` and `pack_could_not_place_deck`), and steps 5 and 6 are also recorded on the render's trace span and named by the run checks (section 15).
 Steps 2 and 4 are ordinary outcomes and are not logged; a split shows in the page count.
 
 ## 10. Binding material into frames
@@ -383,7 +394,7 @@ The ones that report on the decisions above:
 | `REQUIRED_BONUS` | 5.0 | `design/select.py` |
 | `COMFORTABLE_FILL` | 0.72 | `design/select.py` |
 | `ASPECT_SATURATION` | 4.0 | `design/select.py` |
-| `LEGIBLE_TOLERANCE` | 0.25 | `design/select.py` |
+| `LEGIBLE_TOLERANCE` | 0.25 (charts, diagrams, metrics); 0 for tables | `design/select.py` |
 | `MIN_EXHIBIT_IN` | chart 1.6, diagram 1.0, metrics 0.6 | `design/select.py` |
 | `LEGIBLE_CELL_PT` | 10.0 | `renderer/table_layout.py` |
 | table body sizes | 14 to 8pt | `renderer/table_layout.py` |

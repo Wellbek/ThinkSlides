@@ -17,5 +17,5 @@ def test_the_recorded_languages_and_what_the_gate_refuses():
     verdicts = [author_run._problem(language, fmt.canvas, fmt.floor_pt(fmt.canvas))
                 for _, language in authored_languages(EVIDENCE)]
     refused = [why for why in verdicts if why]
-    assert (len(verdicts), len(refused)) == (17, 2)
+    assert (len(verdicts), len(refused)) == (17, 5)
     assert all(why.startswith("no content page gives a table room") for why in refused)
