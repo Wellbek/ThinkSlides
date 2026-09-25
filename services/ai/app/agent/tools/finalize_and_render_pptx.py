@@ -11,6 +11,7 @@ from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
 from app.agent.tools._json_extract import coerce_json_arg
 from app.agent import run_context
 from app.design.run import Unplaceable
+from app.design.vocabulary import PLAIN_ID
 from app.renderer.citations import apply_source_citations
 from app.titles import slide_title
 from app.renderer.pptx_renderer import PPTXRenderer
@@ -316,6 +317,11 @@ class FinalizeAndRenderPptxTool:
                     "assets": assets,
                     "placedArrangements": placed,
                     "renderPath": render_path,
+                    # Slides set on the pack's plain page because none of its
+                    # own arrangements could carry them (#322).
+                    "plainPages": sorted(
+                        index for index, archetypes in placed.items()
+                        if PLAIN_ID in archetypes),
                 },
                 duration_ms=duration_ms,
             )

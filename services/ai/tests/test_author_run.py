@@ -230,3 +230,58 @@ class TestWhatTheUserIsOffered:
         languages, _ = _author(_LLM(GOOD))
         packs = author_run.packs_for(languages, CANVAS)
         assert packs[index].grid.columns == expected
+
+
+# A ledger whose only figure slot sits under a heading, a standfirst, two
+# stat rows and a caption: it derives, it has a figure slot, and it passed the
+# old gate - and every table set in it was a sliver (#351). Both recorded runs
+# authored languages like this one.
+CRAMPED = {
+    "name": "Cramped ledger", "rationale": "everything stacked", "columns": 6,
+    "bodyPt": 14, "ratios": {"headline": 2.4}, "displayFace": "Georgia",
+    "bodyFace": "Arial", "accent": "#7A1F1F",
+    "pages": [{"name": "Stack", "role": "content", "frequency": 1.0,
+               "slots": [{"kind": "heading", "span": 6, "required": True},
+                         {"kind": "standfirst", "span": 6},
+                         {"kind": "statistic", "span": 6},
+                         {"kind": "statistic", "span": 6},
+                         {"kind": "figure", "span": 6},
+                         {"kind": "prose", "span": 6},
+                         {"kind": "caption", "span": 6}]}],
+}
+
+
+class TestALanguageIsCompiledBeforeItIsOffered:
+    """#322. The gate was the derivation alone, so a language could pass it
+    and still ship nothing (#306, a cover that would not compile) or ship
+    every table as a sliver (#351)."""
+
+    def test_the_shipped_languages_compile(self):
+        from app.design import authoring
+
+        for payload in (LEDGER, WIDE, STUB):
+            (language,) = authoring.read({"languages": [payload]})
+            assert author_run._problem(language, CANVAS, 12.0) == "", payload["name"]
+
+    def test_one_with_no_room_for_a_table_is_refused_with_the_numbers(self):
+        from app.design import authoring
+
+        (language,) = authoring.read({"languages": [CRAMPED]})
+        why = author_run._problem(language, CANVAS, 12.0)
+        assert why.startswith("no content page gives a table room to be read")
+        assert "tallest figure slot is" in why and "needs about" in why
+
+    def test_a_failing_language_is_not_let_through_by_a_twin_of_its_name(self):
+        twin = {**CRAMPED, "name": LEDGER["name"]}
+        llm = _LLM({"languages": [LEDGER, twin]})
+        languages, _ = asyncio.run(
+            author_run.author(llm, "a deck", CANVAS, wanted=1))
+        assert len(languages) == 1 and languages[0].pages[0].name == "receipts"
+
+    def test_the_retry_carries_the_reason(self):
+        llm = _LLM({"languages": [CRAMPED]})
+        languages, _ = asyncio.run(
+            author_run.author(llm, "a deck", CANVAS, wanted=1))
+        assert languages == []
+        assert llm.calls == 2
+        assert "Cramped ledger: no content page gives a table room" in llm.prompts[-1]

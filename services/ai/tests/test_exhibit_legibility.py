@@ -108,3 +108,57 @@ class TestAPageWithNoReadableSlotIsStillPlaced:
         doc = run.compose([cover, slide], run.load("bxsl-investor"))
         pages = [p for p in doc.pages if p.provenance.source_slide == 1]
         assert len(pages) == 1
+
+
+class TestOnePageNeverTakesTheDeckDown:
+    """#322: a page no arrangement of the pack can carry is set on the pack's
+    plain page, in its own grid, type and colours, and every other page keeps
+    its arrangement."""
+
+    def test_the_plain_page_is_sound_geometry_in_every_shipped_pack(self):
+        from app.design.geometry import check_page
+        from app.design.schema import DesignDoc, Page, PackRef
+        from app.design.vocabulary import plain_content
+
+        for pack_id in run.available():
+            pack = run.load(pack_id)
+            plain = plain_content(pack)
+            doc = DesignDoc(pack=PackRef(id=pack.id, version=pack.version),
+                            canvas=pack.canvas, grid=pack.grid, pages=())
+            page = Page(id="p", archetype=plain.id, frames=plain.frames)
+            assert check_page(doc, page) == [], pack_id
+
+    def test_a_re_placement_that_finds_nothing_keeps_the_page_designed(self):
+        """Avoiding the only arrangement that held a page must not downgrade
+        it to the plain page: placing it as before beats that."""
+        from app.design.vocabulary import PLAIN_ID
+
+        pack = run.load("bxsl-investor")
+
+        def text(line):
+            return {"type": "text", "runs": [{"text": line}]}
+
+        slides = [{"slideIndex": 0, "contents": [text("Cover")]},
+                  {"slideIndex": 1, "role": "content",
+                   "contents": [text("A finding"), text("One paragraph.")]},
+                  {"slideIndex": 2, "contents": [text("Close")]}]
+        held = run.compose(slides, pack).pages[1].archetype
+        original = next(a for a in pack.archetypes if a.id == held)
+        # Another arrangement is left once the one that held the page is
+        # avoided, but it takes nothing except figures, so it refuses a page
+        # of prose - the case where the avoid set leaves candidates, none of
+        # which can hold the page.
+        blocker = original.model_copy(update={"id": "blocker", "slots": tuple(
+            slot.model_copy(update={"accepts": ("figure",), "required": True})
+            for slot in original.slots)})
+        narrowed = pack.model_copy(update={"archetypes": tuple(
+            a for a in pack.archetypes
+            if a.role not in ("content", "exhibit") or a.id == held) + (blocker,)})
+        again = run.compose(slides, narrowed, avoid={1: frozenset({held})})
+        assert again.pages[1].archetype == held != PLAIN_ID
+
+    def test_it_is_never_offered_alongside_the_packs_own_pages(self):
+        from app.design.vocabulary import PLAIN_ID
+
+        for pack_id in run.available():
+            assert PLAIN_ID not in {a.id for a in run.load(pack_id).archetypes}

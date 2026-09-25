@@ -280,6 +280,62 @@ def _section(pack: Pack, ground: str) -> PageArchetype:
     )
 
 
+# The page a deck falls back to, one page at a time, when none of its own
+# arrangements can carry that page's material (#322). A headline, one column
+# the width of the grid, and a figure frame beneath it the width of the grid:
+# the arrangement with the fewest ways to fail, in the pack's own grid, type
+# and colours. It is never offered to the selector alongside the pack's
+# archetypes - it would win on capacity and flatten every deck - only after
+# they have all refused a page.
+PLAIN_ID = "composed-plain"
+PLAIN_HEADLINE_LINES = 2
+# The column's share of the height left below the headline; the figure takes
+# the rest. An empty figure frame is dropped at bind and the column closes up.
+PLAIN_COLUMN_SHARE = 0.34
+
+
+def plain_content(pack: Pack) -> PageArchetype:
+    """The plainest content page this pack can set, built from its tokens."""
+    columns = pack.grid.columns
+    width = _width_in(pack, columns)
+    gap = _gap_fraction(pack)
+    headline_role = "headline" if "headline" in pack.type_roles else "body"
+    headline_h = _height_fraction(pack, headline_role, PLAIN_HEADLINE_LINES)
+    rest = max(0.0, 1.0 - headline_h - 2 * gap)
+    column_y = headline_h + gap
+    column_h = rest * PLAIN_COLUMN_SHARE
+    figure_y = column_y + column_h + gap
+    figure_h = max(0.05, 1.0 - figure_y)
+
+    body = pack.type_roles.get("body")
+    box = content_box(pack.canvas, pack.grid)
+    column_lines = max(1, int(column_h * box.height * 72.0
+                              / max(1.0, body.line_height_pt if body else 14.0)))
+    frames = (
+        Frame(id="plain-headline", role="headline", type_role=headline_role,
+              place=GridPlace(col=0, span=columns, y=0.0, h=headline_h), z=1),
+        Frame(id="plain-column", role="column", type_role="body",
+              place=GridPlace(col=0, span=columns, y=column_y, h=column_h), z=1),
+        Frame(id="plain-figure", role="figure",
+              place=GridPlace(col=0, span=columns, y=figure_y, h=figure_h), z=1),
+    )
+    slots = (
+        SlotSpec(frame_id="plain-headline", accepts=("text",), required=True,
+                 prominence=1.0, max_lines=PLAIN_HEADLINE_LINES,
+                 max_chars=fits_in(pack, headline_role, width,
+                                   PLAIN_HEADLINE_LINES)),
+        SlotSpec(frame_id="plain-column", accepts=("text",), prominence=0.5,
+                 max_chars=fits_in(pack, "body", width, column_lines)),
+        SlotSpec(frame_id="plain-figure",
+                 accepts=("figure", "chart", "table", "diagram", "metrics"),
+                 prominence=0.7),
+    )
+    return PageArchetype(
+        id=PLAIN_ID, label="Plain page", role="content",
+        frequency=0.0, frames=frames, slots=slots, note=COMPOSED_NOTE,
+    )
+
+
 def _opener_ground(pack: Pack) -> str:
     """Which colour role an opener's ground takes.
 

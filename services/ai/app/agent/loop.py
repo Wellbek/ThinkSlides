@@ -4054,7 +4054,8 @@ class AgentLoop:
                 if kind == "result" and tool_span is not None:
                     tool_span.set(success=bool(payload.success))
                     if isinstance(payload.data, dict) and payload.data.get("renderPath"):
-                        tool_span.set(renderPath=payload.data["renderPath"])
+                        tool_span.set(renderPath=payload.data["renderPath"],
+                                      plainPages=payload.data.get("plainPages") or [])
                     if not payload.success:
                         tool_span.status = (
                             "rejected" if payload.rejected else "failed")

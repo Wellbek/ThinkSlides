@@ -341,19 +341,26 @@ class TestAPreviewShowsWhatItCan:
         )
         return ensure(to_pack(language, CANVAS))
 
-    def test_a_real_deck_still_fails_loudly(self):
-        """The default stays strict. A deck that silently loses a slide is
-        worse than one that fails: the user gets a file, ships it, and finds
-        out in the room."""
+    def test_a_real_deck_never_loses_the_slide(self):
+        """A deck that silently loses a slide is worse than one that fails:
+        the user gets a file, ships it, and finds out in the room. Failing the
+        deck was the other half of that, and #351 showed its cost - every
+        page on stock placeholders for one slide. So the slide is set on the
+        pack's plain page, with its chart, and nothing is lost (#322)."""
         from app.design import run as design_run
+        from app.design.schema import Exhibit
+        from app.design.vocabulary import PLAIN_ID
 
         chart = {"type": "chart", "chartType": "bar",
                  "series": [{"name": "a", "values": [1, 2]}],
                  "categories": ["x", "y"]}
         slides = [{"slideIndex": 0, "role": "content", "heading": "H",
                    "contents": [chart]}]
-        with pytest.raises(design_run.Unplaceable):
-            design_run.compose(slides, self._one_page_pack())
+        doc = design_run.compose(slides, self._one_page_pack())
+        (page,) = doc.pages
+        assert page.archetype == PLAIN_ID
+        assert any(isinstance(c, Exhibit)
+                   for f in page.frames for c in f.content)
 
     def test_a_specimen_drops_the_page_and_keeps_the_rest(self):
         from app.design import run as design_run

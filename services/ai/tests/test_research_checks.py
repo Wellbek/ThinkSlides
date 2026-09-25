@@ -135,6 +135,13 @@ class TestReviewedGaps:
         check = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["rendered_in_its_design"]
         assert check["passed"] is False and check["detail"] == "last render: fallback"
 
+    def test_a_page_on_the_plain_fallback_is_named(self, tmp_path):
+        spans = [_span("tool", "finalize_and_render_pptx",
+                       attrs={"renderPath": "composed", "plainPages": [3]})]
+        check = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["rendered_in_its_design"]
+        assert check["passed"] is True
+        assert check["detail"] == "last render: composed; slide(s) 4 on the plain page"
+
     def test_a_script_edit_after_validation_is_an_unvalidated_deck(self, tmp_path):
         spans = [
             _span("phase", "validate", started="2026-09-24T10:00:02", attrs={"clean": False}),
