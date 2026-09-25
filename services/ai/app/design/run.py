@@ -807,3 +807,56 @@ def for_deck(slides: Sequence[dict],
         if total < best_cost:
             best, best_cost = pack, total
     return best
+
+
+# What a frame's copy is called when the writer is asked to cut it. Frames the
+# system fills itself - a source line, footnotes, a folio - are not the
+# writer's to shorten and are never reported.
+_FIELD_FOR_FRAME = {
+    "headline": "the headline", "standfirst": "the standfirst",
+    "column": "the body copy", "body": "the body copy",
+    "pullquote": "the pull quote", "caption": "the caption",
+    "eyebrow": "the eyebrow", "statRow": "the figures",
+}
+
+
+def copy_over_budget(doc: DesignDoc, pack: Pack) -> dict[int, list[dict]]:
+    """Per designed slide and per field, copy still running past its frames.
+
+    Repair no longer sets copy below the size its frame was designed for
+    (#348), so copy that does not fit stays too long - and that is the
+    writer's to fix, with a number for the field that is over: `chars` is how
+    much it carries, `fits` about how much its frames hold at the size they
+    are set in. Measured by typesetting, like everything else here.
+    """
+    from app.design.geometry import resolve_page
+    from app.renderer.typeset.shape import layout
+
+    totals: dict[int, dict[str, dict]] = {}
+    for page in doc.pages:
+        slide = page.provenance.source_slide
+        if slide is None:
+            continue
+        for resolved in resolve_page(doc, page):
+            field = _FIELD_FOR_FRAME.get(resolved.frame.role)
+            if field is None:
+                continue
+            for block in resolved.frame.content:
+                if not isinstance(block, TextBlock) or not block.text:
+                    continue
+                role = pack.type_roles.get(block.type_role)
+                if role is None:
+                    continue
+                height_pt = resolved.rect.height * 72.0
+                result = layout(block.text, resolved.rect.width * 72.0, height_pt,
+                                pack.face_for(role), role.size_pt,
+                                line_height_pt=role.line_height_pt,
+                                columns=block.columns)
+                if result.overflow_pt <= 0.02 * height_pt:
+                    continue
+                share = height_pt / (height_pt + result.overflow_pt)
+                entry = totals.setdefault(slide, {}).setdefault(
+                    field, {"field": field, "chars": 0, "fits": 0})
+                entry["chars"] += len(block.text)
+                entry["fits"] += int(len(block.text) * share)
+    return {slide: list(fields.values()) for slide, fields in totals.items()}

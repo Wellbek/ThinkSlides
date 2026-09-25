@@ -314,7 +314,11 @@ An operation outside it raises when applied, and the loop skips that patch, so n
 The loop runs at most 3 rounds (`MAX_ROUNDS`).
 A round is **kept only if it lowers the page's score by at least 0.01** (`MIN_IMPROVEMENT`), and the loop stops at the first round that does not, so it can make a page better or leave it alone and has no path to making it worse.
 
-The most common patch is `set_type_role`: copy that overruns its frame is set one rung smaller on the pack's ramp.
+The most common patch is `set_type_role`: copy that overruns its frame is set one rung smaller on the pack's ramp, **never below the floor of the rung its frame was designed for** (`repair.designed_floor_pt`).
+The legibility check reads that same designed floor.
+Checked against the rung in use instead, body copy stepped down to a caption was held to the caption floor, passed, and could step again: a paragraph ended on the footnote rung at 11.3pt against its pack's 12.15pt body floor (#348, reproduced in `tests/test_body_copy_floor.py`).
+The body floor itself is 75% of the 3% of page height an authored language may not invent body type below (`authored.POLICY_FLOOR_SHARE`), about 12.2pt on a 16:9 slide; the benchmark's `body_legible` check holds body to 14pt, following the PowerPoint guidance of 14 to 16pt.
+Copy that still does not fit is left too long, measured, and handed back to the writer with a budget (section 13).
 Because repair works page by page, a headline stepped down on one page and not another made one deck's headlines differ between pages (#357).
 So after repair, headings are grouped by the rung their arrangement designed them on (recorded on the page as `Provenance.heading_rung`, with the frame they were bound to as `heading_frame`), and each group takes the smallest rung repair stepped any member down to, which every member is known to fit.
 A measured pack's deliberate differences between arrangements, an assertion in a pull quote on one page and a headline on another, are kept, and a group is never taken to body size or below: a heading that had to be set as body copy to fit is one broken page, not the deck's new voice.
@@ -346,6 +350,14 @@ Rules of the ladder:
 - A deck is validated at most **3 times** (`MAX_VALIDATION_ATTEMPTS`); only a completed check spends an attempt.
   When 60% or more of the deck is flagged (`FULL_REWRITE_ISSUE_RATIO`), the revision is no longer restricted to the flagged slides.
   Nothing is scheduled at the cap, since it would be rendered and shipped without a validation after it.
+
+**Copy over budget.**
+After each render, composition measures the copy still running past its frames (`run.copy_over_budget`): per slide **and per field** (the headline, the body copy, a caption), how many characters it carries and about how many its frames hold at the size they are set in.
+Frames the system fills itself, a source line, footnotes, a folio, are never reported: they are not the writer's to shorten.
+After validation, each such slide gets a `redraft` finding naming the fields over budget, for example "the headline is about 90 characters where the page sets about 70" (`WorkingState.copy_findings`), which the revision directive passes to the writer.
+A code edit changes the file without a render, so it drops every budget measured before it.
+A budget is something a writer can act on; "it overflows" is not.
+This is the fit-before-render order the project plan sets out: fit in code first, and only then ask the model to shorten a specific field to a character budget.
 
 A validator turning a draft down (`validate_slide_json` rejecting a slide) is recorded as a verdict, `rejected`, not as a failed tool call; a call the validator could not even read stays a failure (#345).
 
