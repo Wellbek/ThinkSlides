@@ -25,6 +25,7 @@ from app.design.compile import compile_page
 from app.design.geometry import check_doc, resolve_page
 from app.design.pack import Pack
 from app.design.schema import DesignDoc
+from app.renderer import native_table
 from app.renderer import primitives
 from app.renderer.primitives import PaintContext, Primitive
 from app.renderer.typography import TypeScale
@@ -96,22 +97,16 @@ def _materialise_charts(marks: list[Primitive], pack: Pack,
     """
     from dataclasses import replace
 
-    from app.renderer.chart_renderer import render_chart_to_png, render_table_to_png
+    from app.renderer.chart_renderer import render_chart_to_png
 
     out: list[Primitive] = []
     for mark in marks:
         image = mark.image or {}
         chart_payload = image.get("chart") if mark.kind == "image" else None
-        table_payload = image.get("table") if mark.kind == "image" else None
         if chart_payload:
             png = render_chart_to_png(
                 chart_payload, design_system, mark.box.width, mark.box.height,
                 dpi=200, ground=pack.colors.ground,
-            )
-        elif table_payload:
-            png = render_table_to_png(
-                table_payload, design_system, mark.box.width, mark.box.height,
-                dpi=200,
             )
         else:
             out.append(mark)
@@ -187,6 +182,14 @@ def render_doc(doc: DesignDoc, pack: Pack, output_path: str, *,
         resolved = resolve_page(doc, page)
         for mark in marks:
             local = _context_for(mark, resolved, pack, context)
+            table = _table_of(mark)
+            if table is not None:
+                # A native table, never a picture: it is data the user edits
+                # after delivery, and fitted by its type size, never scaled.
+                native_table.add_native_table(
+                    slide, table, mark.box, system, local,
+                    id_prefix=f"{page.id}-{mark.id}", placement="top")
+                continue
             primitives.paint(slide, mark, local)
 
     directory = os.path.dirname(os.path.abspath(output_path))
@@ -194,6 +197,19 @@ def render_doc(doc: DesignDoc, pack: Pack, output_path: str, *,
         os.makedirs(directory, exist_ok=True)
     presentation.save(output_path)
     return output_path
+
+
+def _table_of(mark: Primitive) -> Optional[dict]:
+    """The table this mark carries, if it is one.
+
+    The design compiler carries a table as an image mark with a table
+    payload, so the geometry and measurement layers treat it as the boxed
+    exhibit it is; only here is it drawn, and it is drawn natively.
+    """
+    if mark.kind != "image" or not isinstance(mark.image, dict):
+        return None
+    table = mark.image.get("table")
+    return table if isinstance(table, dict) else None
 
 
 def _ground_under(frame_id: str, resolved, pack: Pack,
