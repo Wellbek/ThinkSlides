@@ -471,6 +471,26 @@ def _place(shape: MaterialShape, pack: Pack,
     return placed
 
 
+def _place_plainly(shape: MaterialShape, pack: Pack, previous: Optional[str],
+                   index: int, refused: Unplaceable
+                   ) -> list[tuple[MaterialShape, object]]:
+    """This page on the pack's plain arrangement, split as it needs.
+
+    Raises what the pack's own arrangements raised when even the plain page
+    cannot carry it, so the caller's last resort still applies.
+    """
+    from app.design.vocabulary import plain_content
+
+    plain = pack.model_copy(update={"archetypes": (plain_content(pack),)})
+    try:
+        placed = _place(shape, plain, previous)
+    except Unplaceable:
+        raise refused
+    logger.warning("page_placed_on_plain_fallback", pack=pack.id,
+                   slide_index=index, reason=str(refused))
+    return placed
+
+
 def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
             skip_unplaceable: bool = False,
             avoid: Optional[dict[int, frozenset[str]]] = None) -> DesignDoc:
@@ -503,10 +523,19 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
         try:
             placed = _place(shape, pack, previous,
                             (avoid or {}).get(index, frozenset()))
-        except Unplaceable:
+        except Unplaceable as refused:
             if not skip_unplaceable:
-                raise
-            # Logged rather than swallowed: a preview that quietly shows two
+                # One page the pack cannot carry is set on the pack's plainest
+                # page instead of taking every other page down with it: a
+                # deck rendered on stock placeholders because of its fourth
+                # slide is the failure #351 found, and a worse outcome for the
+                # user than one plain page in an otherwise designed deck
+                # (#322). Raises only if even the plain page refuses it.
+                placed = _place_plainly(shape, pack, previous, index, refused)
+            else:
+                placed = []
+        if not placed:
+            # A preview only. Logged rather than swallowed: a preview that quietly shows two
             # pages instead of three has still found a defect in the pack, and
             # nobody looking at the card can tell.
             logger.info("specimen_page_skipped", pack=pack.id,

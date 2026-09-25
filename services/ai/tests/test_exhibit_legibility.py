@@ -108,3 +108,28 @@ class TestAPageWithNoReadableSlotIsStillPlaced:
         doc = run.compose([cover, slide], run.load("bxsl-investor"))
         pages = [p for p in doc.pages if p.provenance.source_slide == 1]
         assert len(pages) == 1
+
+
+class TestOnePageNeverTakesTheDeckDown:
+    """#322: a page no arrangement of the pack can carry is set on the pack's
+    plain page, in its own grid, type and colours, and every other page keeps
+    its arrangement."""
+
+    def test_the_plain_page_is_sound_geometry_in_every_shipped_pack(self):
+        from app.design.geometry import check_page
+        from app.design.schema import DesignDoc, Page, PackRef
+        from app.design.vocabulary import plain_content
+
+        for pack_id in run.available():
+            pack = run.load(pack_id)
+            plain = plain_content(pack)
+            doc = DesignDoc(pack=PackRef(id=pack.id, version=pack.version),
+                            canvas=pack.canvas, grid=pack.grid, pages=())
+            page = Page(id="p", archetype=plain.id, frames=plain.frames)
+            assert check_page(doc, page) == [], pack_id
+
+    def test_it_is_never_offered_alongside_the_packs_own_pages(self):
+        from app.design.vocabulary import PLAIN_ID
+
+        for pack_id in run.available():
+            assert PLAIN_ID not in {a.id for a in run.load(pack_id).archetypes}

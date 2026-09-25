@@ -92,16 +92,23 @@ def _checks(run_dir: Path, task: Task, manifest: dict, spans: list[dict], pdf: P
             or f"all body copy at {MIN_BODY_PT:.0f}pt or larger",
         ))
 
-    renders = [s["attrs"].get("renderPath") for s in spans
-               if s["kind"] == "tool" and s["name"] == "finalize_and_render_pptx"
-               and s["status"] == "ok" and s["attrs"].get("renderPath")]
+    render_spans = [s for s in spans
+                    if s["kind"] == "tool" and s["name"] == "finalize_and_render_pptx"
+                    and s["status"] == "ok" and s["attrs"].get("renderPath")]
+    renders = [s["attrs"]["renderPath"] for s in render_spans]
     if renders:
+        # A page set on the plain fallback page is still in the design - its
+        # grid, type and colours - so it passes, but it is named: it is a page
+        # the design's own arrangements could not carry (#322).
+        plain = render_spans[-1]["attrs"].get("plainPages") or []
         # A deck that fell out of its design language still renders and still
         # passes every geometry check, which is how the Kubernetes run shipped
         # on stock placeholders with nothing but a log line saying so (#351).
         checks.append(Check(
             "rendered_in_its_design", renders[-1] in ("composed", "template"),
-            f"last render: {renders[-1]}",
+            f"last render: {renders[-1]}"
+            + (f"; slide(s) {', '.join(str(i + 1) for i in plain)} on the plain page"
+               if plain else ""),
         ))
 
     validations = [s for s in spans if s["kind"] == "phase" and s["name"] == "validate"
