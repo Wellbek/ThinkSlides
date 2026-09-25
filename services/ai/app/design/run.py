@@ -388,6 +388,18 @@ def _place(shape: MaterialShape, pack: Pack,
         if splits >= ceiling or len(
                 [i for i in current.items
                  if i.kind == "text" and i.role_hint != "heading"]) < 2:
+            # Nothing left to divide, and no slot the exhibit can be read in.
+            # Placing it cramped is better than refusing it: a refusal takes
+            # the whole deck to the stock renderer (#351).
+            selection = choose(current, pack, previous_archetype=last,
+                               candidates=candidates, legible=False)
+            if selection is not None:
+                logger.warning("exhibit_placed_below_legible_size",
+                               pack=pack.id,
+                               archetype=selection.archetype.id)
+                placed.append((current, selection))
+                last = selection.archetype.id
+                continue
             raise Unplaceable(
                 f"no archetype in pack {pack.id!r} can carry a page of "
                 f"{current.total_chars} characters in "
