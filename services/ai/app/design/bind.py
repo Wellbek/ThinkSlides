@@ -86,10 +86,14 @@ def _fill(frames: tuple[Frame, ...], contents: dict[str, list],
         structural = bool(frame.ground or frame.scrim)
         if not content and not children and not structural:
             continue
-        out.append(frame.model_copy(update={
-            "children": children,
-            "content": content,
-        }))
+        update = {"children": children, "content": content}
+        # A bleed is for a photograph. A table, chart or diagram carries text
+        # that has to sit inside the margins the rest of the page keeps: a
+        # language whose figure slot bleeds set every exhibit bound to it
+        # hard against the edge of the page, with its first column clipped.
+        if frame.bleed and any(isinstance(c, Exhibit) for c in payload):
+            update["bleed"] = ()
+        out.append(frame.model_copy(update=update))
     return tuple(out)
 
 
