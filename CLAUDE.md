@@ -147,6 +147,11 @@ File uploads flow through:
 6. Frontend receives events in real time via SSE
 7. On "done" event, SSE auto-closes
 
+### Design Decision Record
+
+`docs/DESIGN_DECISIONS.md` states every rule the design engine uses to decide what goes where - archetype selection costs, the exhibit legibility floor, splitting, the fallback chain, table layout, repair and the revision ladder - with parameter values, rationale and the runs that motivated each.
+A change to any of those rules, weights, thresholds or fallbacks updates it in the same pull request; it is meant to be citable in a paper.
+
 ### Tool Phase Mapping
 
 Tools are mapped to logical phases in `services/ai/app/agent/loop.py` (TOOL_PHASES) for progress tracking:

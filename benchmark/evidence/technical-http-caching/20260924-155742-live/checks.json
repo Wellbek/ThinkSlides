@@ -1,0 +1,58 @@
+{
+  "task": "technical-http-caching",
+  "run": "20260924-155742-live",
+  "mode": "live",
+  "model": "gpt-5.6-luna",
+  "commit": "f4b7513-dirty",
+  "passed": 0,
+  "decided": 4,
+  "blockingFailures": [
+    "delivered",
+    "slide_count"
+  ],
+  "checks": [
+    {
+      "name": "delivered",
+      "passed": false,
+      "detail": "deck: none",
+      "blocking": true
+    },
+    {
+      "name": "terminated_cleanly",
+      "passed": false,
+      "detail": "termination: stalled",
+      "blocking": false
+    },
+    {
+      "name": "slide_count",
+      "passed": false,
+      "detail": "0 pages, task asks for 3",
+      "blocking": true
+    },
+    {
+      "name": "text_within_the_page",
+      "passed": null,
+      "detail": "no rendered PDF",
+      "blocking": false
+    },
+    {
+      "name": "no_failed_tool_calls",
+      "passed": false,
+      "detail": "design_slide_content x2, finalize_and_render_pptx x2",
+      "blocking": false
+    }
+  ],
+  "metrics": {
+    "modelCalls": 15,
+    "inputTokens": 123604,
+    "cachedInputTokens": 41340,
+    "outputTokens": 8993,
+    "tokensEstimated": false,
+    "costUsd": 0.028071,
+    "runSeconds": 129.4,
+    "validationRounds": 0,
+    "pages": 0,
+    "wordsPerPage": [],
+    "inkCoverage": []
+  }
+}

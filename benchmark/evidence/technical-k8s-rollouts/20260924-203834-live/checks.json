@@ -1,0 +1,95 @@
+{
+  "task": "technical-k8s-rollouts",
+  "run": "20260924-203834-live",
+  "mode": "live",
+  "model": "gpt-5.6-luna",
+  "commit": "436bcc9",
+  "passed": 4,
+  "decided": 9,
+  "blockingFailures": [
+    "text_within_the_page"
+  ],
+  "checks": [
+    {
+      "name": "delivered",
+      "passed": true,
+      "detail": "deck: deck.pptx",
+      "blocking": true
+    },
+    {
+      "name": "terminated_cleanly",
+      "passed": true,
+      "detail": "termination: complete",
+      "blocking": false
+    },
+    {
+      "name": "slide_count",
+      "passed": true,
+      "detail": "6 pages, task asks for 6",
+      "blocking": true
+    },
+    {
+      "name": "text_within_the_page",
+      "passed": false,
+      "detail": "slide 2: Text extends past the slide boundary: 'Strategy comparison at a'; slide 2: Overlapping content: 'Best fit' overlaps 'Strategy'; slide 2: Overlapping content: 'Fast reversal and clean cutover' overlaps 'Rollback pattern'; slide 2: Overlapping content: 'High-risk changes needing evidence' overlaps 'Best fit'; slide 6: Text extends past the slide boundary: 'The smallest release pattern that meets blast-'",
+      "blocking": true
+    },
+    {
+      "name": "headlines_within_the_ramp",
+      "passed": false,
+      "detail": "page 2: 52pt",
+      "blocking": false
+    },
+    {
+      "name": "body_legible",
+      "passed": false,
+      "detail": "page 2: 12.2pt, page 3: 9.8pt, page 4: 11.1pt, page 6: 11.1pt",
+      "blocking": false
+    },
+    {
+      "name": "validation_converged",
+      "passed": false,
+      "detail": "3 round(s), 10 issue(s) left",
+      "blocking": false
+    },
+    {
+      "name": "shipped_what_was_validated",
+      "passed": true,
+      "detail": "the delivered file is the one validation saw",
+      "blocking": false
+    },
+    {
+      "name": "no_failed_tool_calls",
+      "passed": false,
+      "detail": "validate_slide_json x7",
+      "blocking": false
+    }
+  ],
+  "metrics": {
+    "modelCalls": 75,
+    "inputTokens": 846768,
+    "cachedInputTokens": 202968,
+    "outputTokens": 21935,
+    "tokensEstimated": false,
+    "costUsd": 0.159141,
+    "runSeconds": 348.0,
+    "validationRounds": 3,
+    "pages": 6,
+    "wordsPerPage": [
+      29,
+      281,
+      189,
+      157,
+      80,
+      278
+    ],
+    "inkCoverage": [
+      0.29,
+      0.732,
+      0.753,
+      0.715,
+      0.736,
+      0.716
+    ]
+  }
+}

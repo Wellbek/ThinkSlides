@@ -1,0 +1,87 @@
+{
+  "task": "technical-http-caching",
+  "run": "20260924-191957-live",
+  "mode": "live",
+  "model": "gpt-5.6-luna",
+  "commit": "c660200",
+  "passed": 5,
+  "decided": 9,
+  "blockingFailures": [],
+  "checks": [
+    {
+      "name": "delivered",
+      "passed": true,
+      "detail": "deck: deck.pptx",
+      "blocking": true
+    },
+    {
+      "name": "terminated_cleanly",
+      "passed": true,
+      "detail": "termination: complete",
+      "blocking": false
+    },
+    {
+      "name": "slide_count",
+      "passed": true,
+      "detail": "3 pages, task asks for 3",
+      "blocking": true
+    },
+    {
+      "name": "text_within_the_page",
+      "passed": true,
+      "detail": "no overflow or overlap in the rendered geometry",
+      "blocking": true
+    },
+    {
+      "name": "headlines_within_the_ramp",
+      "passed": true,
+      "detail": "every content headline at or below 48pt",
+      "blocking": false
+    },
+    {
+      "name": "body_legible",
+      "passed": false,
+      "detail": "page 3: 11.1pt",
+      "blocking": false
+    },
+    {
+      "name": "validation_converged",
+      "passed": false,
+      "detail": "3 round(s), 2 issue(s) left",
+      "blocking": false
+    },
+    {
+      "name": "shipped_what_was_validated",
+      "passed": false,
+      "detail": "the last render came after the last validation (#299)",
+      "blocking": false
+    },
+    {
+      "name": "no_failed_tool_calls",
+      "passed": false,
+      "detail": "validate_slide_json x1",
+      "blocking": false
+    }
+  ],
+  "metrics": {
+    "modelCalls": 32,
+    "inputTokens": 208097,
+    "cachedInputTokens": 57723,
+    "outputTokens": 11262,
+    "tokensEstimated": false,
+    "costUsd": 0.044744,
+    "runSeconds": 173.1,
+    "validationRounds": 3,
+    "pages": 3,
+    "wordsPerPage": [
+      14,
+      94,
+      140
+    ],
+    "inkCoverage": [
+      0.212,
+      0.469,
+      0.6
+    ]
+  }
+}

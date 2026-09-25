@@ -1,0 +1,27 @@
+{
+  "search": "tavily",
+  "task": "technical-k8s-rollouts",
+  "category": "technical",
+  "mode": "live",
+  "taskFile": "benchmark/tasks/technical/kubernetes-rollouts.yaml",
+  "commit": "436bcc9",
+  "startedAt": "2026-09-24T20:38:34.301362",
+  "replayOf": null,
+  "model": "gpt-5.6-luna",
+  "maxCostUsd": 0.3,
+  "provider": "openai",
+  "sessionId": "32fe5198-e772-45dc-a290-a8065352d421",
+  "spend": {
+    "calls": 75,
+    "inputTokens": 846768,
+    "cachedInputTokens": 202968,
+    "outputTokens": 21935,
+    "costUsd": 0.159141
+  },
+  "finishedAt": "2026-09-24T20:44:26.223082",
+  "parts": 4,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 6,
+  "errors": []
+}
