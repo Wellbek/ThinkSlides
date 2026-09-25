@@ -394,5 +394,21 @@ class TestAPageWithTwoExhibitsStillComposes:
                      if page.provenance.source_slide == 1]
         assert len(continued) == 2
 
+    def test_an_image_beside_a_chart_divides_like_two_exhibits(self):
+        """Images take the same figure slots, so a chart and an image on a
+        one-slot pack used to take the deck to the stock renderer."""
+        pack = run.load("bxsl-investor")
+        slide = {"slideIndex": 1, "contents": [
+            text("Rolling updates are the efficient default"),
+            text("One paragraph beside a chart and a photograph."),
+            {"type": "chart", "chart": {"type": "bar", "categories": ["A", "B"],
+                                        "series": [{"name": "S", "values": [1, 2]}]}},
+            {"type": "image", "image": {"source": {"type": "url",
+                                                   "url": "https://example.invalid/a.png"}}},
+        ]}
+        cover = {"slideIndex": 0, "contents": [text("Choosing a rollout")]}
+        doc = run.compose([cover, slide], pack)
+        assert len([p for p in doc.pages if p.provenance.source_slide == 1]) == 2
+
     def test_a_pack_with_room_for_two_says_so(self):
         assert run.exhibits_per_page(run.load("wti-2025")) == 2

@@ -292,4 +292,4 @@ def test_the_draft_is_told_how_many_exhibits_a_page_holds():
     finally:
         run_context.reset_pack(token)
     assert directive.startswith("Draft slide 1")
-    assert "holds at most one chart, table or diagram" in directive
+    assert "holds at most one chart, table, diagram or image" in directive

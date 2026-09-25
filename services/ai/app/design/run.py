@@ -321,6 +321,10 @@ def material_from(slide: dict, *, index: int = 0, total: int = 1) -> MaterialSha
     )
 
 
+# What takes a figure slot: every exhibit, and an image.
+_VISUAL_KINDS = frozenset({"chart", "table", "diagram", "metrics", "figure"})
+
+
 def _split(shape: MaterialShape) -> tuple[MaterialShape, MaterialShape]:
     """Halve a page's prose and its exhibits, keeping its heading on both parts.
 
@@ -332,23 +336,33 @@ def _split(shape: MaterialShape) -> tuple[MaterialShape, MaterialShape]:
     """
     texts = [item.text for item in shape.items
              if item.kind == "text" and item.role_hint != "heading"]
-    exhibits = [dict(item.payload or {}) for item in shape.items
-                if item.kind in ("chart", "table", "diagram", "metrics")]
-    figures = [dict(item.payload or {}) for item in shape.items
-               if item.kind == "figure"]
-    # A page with one paragraph and two exhibits still divides - at the
-    # exhibits, with the paragraph staying beside the first of them.
-    cut = max(1, len(texts) // 2) if len(texts) > 1 or len(exhibits) < 2 else 1
-    shown = max(1, len(exhibits) // 2) if len(exhibits) > 1 else len(exhibits)
+    # Exhibits and images compete for the same figure slots, so they are
+    # divided together: an image beside a chart on a pack with one figure
+    # slot is as unplaceable as two charts.
+    visuals = [item for item in shape.items if item.kind in _VISUAL_KINDS]
+    # A page with one paragraph and two visuals still divides - at the
+    # visuals, with the paragraph staying beside the first of them.
+    cut = max(1, len(texts) // 2) if len(texts) > 1 or len(visuals) < 2 else 1
+    shown = max(1, len(visuals) // 2) if len(visuals) > 1 else len(visuals)
+
+    def exhibits(part):
+        return [dict(i.payload or {}) for i in part if i.kind != "figure"]
+
+    def figures(part):
+        return [dict(i.payload or {}) for i in part if i.kind == "figure"]
+
     first = shape_from(shape.role, shape.heading, texts[:cut],
-                       exhibits=exhibits[:shown], citations=shape.citations)
+                       exhibits=exhibits(visuals[:shown]),
+                       figures=figures(visuals[:shown]),
+                       citations=shape.citations)
     # The continuation keeps the heading. Dropping it left the second page
     # with nothing whose role is "heading", and an archetype that requires a
     # headline then refuses it - so a page that had to be split could not be
     # placed at all. Repeating the heading on a continued page is also what a
     # publication does.
     second = shape_from("content", shape.heading, texts[cut:],
-                        exhibits=exhibits[shown:], figures=figures)
+                        exhibits=exhibits(visuals[shown:]),
+                        figures=figures(visuals[shown:]))
     return first, second
 
 
@@ -359,7 +373,7 @@ _EXHIBIT_SLOT_KINDS = frozenset({"figure", "chart", "table", "diagram"})
 
 
 def exhibits_per_page(pack: Pack) -> int:
-    """The most exhibits any content page in this pack can carry.
+    """The most exhibits or images any content page in this pack can carry.
 
     Told to the drafting turn, because a page drafted with more exhibits than
     any arrangement holds is split onto continuation pages: the deck keeps its
@@ -381,9 +395,8 @@ def _divisible(shape: MaterialShape) -> bool:
     """
     body = [i for i in shape.items
             if i.kind == "text" and i.role_hint != "heading"]
-    exhibits = [i for i in shape.items
-                if i.kind in ("chart", "table", "diagram", "metrics")]
-    return len(body) >= 2 or len(exhibits) >= 2
+    visuals = [i for i in shape.items if i.kind in _VISUAL_KINDS]
+    return len(body) >= 2 or len(visuals) >= 2
 
 
 def _place(shape: MaterialShape, pack: Pack,

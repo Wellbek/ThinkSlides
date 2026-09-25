@@ -3540,8 +3540,8 @@ class AgentLoop:
         capacity = design_run.exhibits_per_page(pack)
         if capacity < 1:
             return ""
-        most = "one chart, table or diagram" if capacity == 1 else (
-            f"{capacity} charts, tables or diagrams")
+        most = "one chart, table, diagram or image" if capacity == 1 else (
+            f"{capacity} charts, tables, diagrams or images, counted together")
         return (
             f"\nA page in this deck's design holds at most {most}; build no "
             "more than that for this slide. Material that needs more is more "
