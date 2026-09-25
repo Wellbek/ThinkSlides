@@ -64,6 +64,22 @@ W_SEQUENCE = 2.2
 # strain in with everything else lets an archetype win on the strength of
 # its other slots while one of them is unreadable.
 W_OVERFLOW = 6.0
+# An exhibit too short to read is broken, the way overflowing copy is. Tables
+# and diagrams declare no natural aspect, so the aspect term said nothing about
+# them, and a five-row table was set in a slot a quarter of an inch tall with
+# its rows printed over each other (#351). Weighted like overflow, and as a
+# pair cost - so it is doubled to stay decisive once averaged over a page.
+W_LEGIBLE = 12.0
+# The shortest slot each kind of exhibit stays readable in, in inches. A table
+# is measured instead: one row per line of the pack's body type, with the
+# leading a ruled table needs.
+MIN_EXHIBIT_IN = {"chart": 1.6, "diagram": 1.0, "metrics": 0.6}
+TABLE_ROW_LEADING = 1.8
+# Past this shortfall an exhibit is not tight, it is unreadable, and the slot
+# is refused rather than charged: as a cost it was outbid by the text overflow
+# of every other arrangement, and the table lost. A page with no slot its
+# exhibit can be read in is split instead, which gives the exhibit a page.
+LEGIBLE_TOLERANCE = 0.25
 # How strongly a required slot pulls material into itself. The assignment
 # minimises total cost and has no concept of "this column must be used", so
 # without a bias the cheapest solution routinely leaves the headline slot
@@ -267,7 +283,7 @@ def capacity_strain(item: MaterialItem, slot: SlotSpec, pack: Pack,
 
     if item.kind not in _TEXT_KINDS:
         # An exhibit fills whatever it is given; what matters for it is
-        # aspect and legibility, both counted elsewhere.
+        # aspect and legibility, both counted in `pair_cost`.
         return 0.0
 
     from app.renderer.typeset.shape import layout
@@ -320,11 +336,75 @@ def aspect_penalty(item: MaterialItem,
                / math.log(ASPECT_SATURATION))
 
 
+def exhibit_floor_in(item: MaterialItem, pack: Pack,
+                     width_in: Optional[float] = None) -> float:
+    """The shortest slot this exhibit can be read in, in inches.
+
+    A table is measured at the slot's width, wrapped the way it will be
+    drawn: a row count alone said nothing about a six-column table whose
+    cells each break onto three lines in a half-width column.
+    """
+    if item.kind == "table":
+        table = (item.payload or {}).get("table") or {}
+        rows = [[str(c) for c in row] for row in (table.get("rows") or [])]
+        if width_in and rows:
+            from app.renderer import text_fit
+            from app.renderer.table_layout import needed_height_in
+
+            # The table is drawn in the design's data-viz face, which the
+            # pack does not carry: measured in both it and the pack's body
+            # face, and the taller kept, the floor is never the optimistic one.
+            faces = {text_fit.DEFAULT_MEASURE_FAMILY, pack.body_face or ""} - {""}
+            header = bool(table.get("headerRow"))
+            return max(needed_height_in(rows, header, width_in, family=face)
+                       for face in faces)
+        body = pack.type_roles.get("body")
+        size_pt = body.size_pt if body else 12.0
+        return max(1, len(rows)) * size_pt * TABLE_ROW_LEADING / 72.0
+    return MIN_EXHIBIT_IN.get(item.kind, 0.0)
+
+
+def legibility_shortfall(item: MaterialItem, pack: Pack,
+                         size: Optional[tuple[float, float]]) -> float:
+    """How far short of readable this slot leaves an exhibit, from 0 to 1."""
+    if item.kind not in _EXHIBIT_KINDS or size is None:
+        return 0.0
+    floor = exhibit_floor_in(item, pack, size[0])
+    if floor <= 0:
+        return 0.0
+    return min(1.0, max(0.0, floor - size[1]) / floor)
+
+
+def readable_somewhere(item: MaterialItem, pack: Pack,
+                       candidates: Optional[Sequence[PageArchetype]] = None) -> bool:
+    """Whether any slot of these archetypes can show this exhibit legibly.
+
+    Legibility depends on the slot, not on the prose around the exhibit, so
+    when this is False no amount of splitting a page's prose will help.
+    """
+    if item.kind not in _EXHIBIT_KINDS:
+        return True
+    for archetype in candidates or pack.archetypes:
+        grid = archetype.grid or pack.grid
+        for slot in archetype.slots:
+            if not _accepts(slot, item):
+                continue
+            size = _slot_rect(archetype, slot, pack, grid)
+            if size and legibility_shortfall(item, pack, size) <= LEGIBLE_TOLERANCE:
+                return True
+    return False
+
+
 def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,
               archetype: PageArchetype, grid: GridSpec, *,
               item_order: Optional[float] = None,
-              slot_order: Optional[float] = None) -> float:
-    """What it costs to put this item in this slot."""
+              slot_order: Optional[float] = None,
+              legible: bool = True) -> float:
+    """What it costs to put this item in this slot.
+
+    ``legible`` refuses a slot an exhibit cannot be read in. Relaxed only as a
+    last resort, for material that cannot be divided any further.
+    """
     if not _accepts(slot, item):
         return INFEASIBLE
     frame = _slot_frame(archetype, slot)
@@ -332,10 +412,14 @@ def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,
     if not _role_compatible(frame_role, item):
         return INFEASIBLE
     size = _slot_rect(archetype, slot, pack, grid)
+    shortfall = legibility_shortfall(item, pack, size)
+    if legible and shortfall > LEGIBLE_TOLERANCE:
+        return INFEASIBLE
     cost = (
         W_CAPACITY * capacity_strain(item, slot, pack, size, frame_role,
                                      frame.type_role if frame else None)
         + W_ASPECT * aspect_penalty(item, size)
+        + W_LEGIBLE * shortfall
     )
     # Prominent material belongs in prominent slots. Stated as a preference
     # rather than a rule, so it bends when the geometry disagrees.
@@ -467,7 +551,8 @@ def _grouped(items: list[MaterialItem], slots: Sequence[SlotSpec],
 
 
 def fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
-        previous_archetype: Optional[str] = None) -> Optional[Selection]:
+        previous_archetype: Optional[str] = None,
+        legible: bool = True) -> Optional[Selection]:
     """Bind this material into this archetype, and say what it cost.
 
     Returns None when the archetype cannot carry the material at all - a
@@ -508,7 +593,8 @@ def fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
         [
             pair_cost(item, slot, pack, archetype, grid,
                       item_order=item_order.get(item.id),
-                      slot_order=slot_order.get(slot.frame_id))
+                      slot_order=slot_order.get(slot.frame_id),
+                      legible=legible)
             for slot in slots
         ]
         for item in items
@@ -630,12 +716,14 @@ def _rhythm_penalty(archetype: PageArchetype,
 
 def choose(shape: MaterialShape, pack: Pack, *,
            previous_archetype: Optional[str] = None,
-           candidates: Optional[Sequence[PageArchetype]] = None) -> Optional[Selection]:
+           candidates: Optional[Sequence[PageArchetype]] = None,
+           legible: bool = True) -> Optional[Selection]:
     """The archetype from this pack that best carries this material."""
     considered = list(candidates if candidates is not None else pack.archetypes)
     scored = [
         selection for selection in (
-            fit(shape, archetype, pack, previous_archetype=previous_archetype)
+            fit(shape, archetype, pack, previous_archetype=previous_archetype,
+                legible=legible)
             for archetype in considered
         )
         if selection is not None

@@ -550,7 +550,8 @@ def _stack(kind: PageKind, language: Language, roles: dict[str, TypeRole],
         any(kind.slots[i].kind not in FIXED_HEIGHT_SLOTS for i in row)
         for row in rows
     ]
-    row_height = _fill(row_natural, row_flexible, gap)
+    row_figure = [any(kind.slots[i].kind == "figure" for i in row) for row in rows]
+    row_height = _fill(row_natural, row_flexible, gap, protected=row_figure)
 
     cells: list[Optional[_Cell]] = [None] * len(kind.slots)
     y = 0.0
@@ -664,8 +665,13 @@ FIXED_HEIGHT_SLOTS = frozenset({
 MIN_SLOT_HEIGHT = 0.01
 
 
+# The share of its natural height a prose band keeps when a page is too tall
+# and a figure on it is kept at its own height instead.
+PROSE_SHRINK_FLOOR = 0.35
+
+
 def _fill(natural: list[float], flexible: list[bool],
-          gap: float) -> list[float]:
+          gap: float, protected: Optional[list[bool]] = None) -> list[float]:
     """Bands sized to fill the page, given what each one naturally wants.
 
     The natural heights come from the type. They rarely add up to a page: a
@@ -706,6 +712,23 @@ def _fill(natural: list[float], flexible: list[bool],
     # where nothing renders. The flexible bands give the room back first,
     # since they are the ones that flow.
     wanted = -spare
+    # Prose before figures. Prose that loses room is measured, and a page
+    # whose copy no longer fits is split or placed elsewhere; an exhibit that
+    # loses room is simply drawn smaller. Shrinking both in proportion took a
+    # stacked page's figure from a third of the page to a fifth of an inch,
+    # and every table set in it came out as a sliver (#351, #350).
+    guarded = [index for index in growable if protected and protected[index]]
+    yielding = [index for index in growable if index not in guarded]
+    if guarded and yielding:
+        # Down to a floor, so a column keeps at least a few lines' height.
+        give = sum(heights[index] * (1 - PROSE_SHRINK_FLOOR) for index in yielding)
+        taken = min(wanted, give)
+        for index in yielding:
+            heights[index] -= taken * heights[index] * (1 - PROSE_SHRINK_FLOOR) / give
+        wanted -= taken
+        if wanted <= 1e-9:
+            return heights
+        share = sum(heights[index] for index in growable)
     if wanted < share:
         for index in growable:
             heights[index] -= wanted * heights[index] / share
