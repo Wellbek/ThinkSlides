@@ -39,7 +39,7 @@ from app.design.bind import build_page
 from app.design.material import MaterialShape, shape_from
 from app.design.pack import ColorRoles, Pack
 from app.design.repair import repair
-from app.design.schema import DesignDoc, Page, PackRef
+from app.design.schema import DesignDoc, Frame, Page, PackRef, TextBlock
 from app.design.select import choose, readable_somewhere
 from app.design.vocabulary import ensure
 from app.observability.logging import get_logger
@@ -562,7 +562,83 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
                     canvas=pack.canvas, grid=pack.grid,
                     pages=tuple(pages), title=title)
     healed = tuple(repair(doc, page, pack).page for page in doc.pages)
-    return doc.model_copy(update={"pages": healed})
+    return doc.model_copy(update={"pages": _one_headline_rung(healed, pack)})
+
+
+# The page roles whose headlines read as one series. Openers and dividers set
+# theirs at display size on purpose.
+SERIES_ROLES = ("content", "exhibit")
+
+
+def _one_headline_rung(pages: Sequence[Page], pack: Pack) -> tuple[Page, ...]:
+    """Every content page's headline on the same rung of the ramp.
+
+    Repair fits each page on its own, and a headline that overran its two
+    lines was stepped down the ramp there and nowhere else: a Kubernetes deck
+    set five of its seven content headlines at 31.6pt regular and two at 45pt
+    bold, so the deck read as assembled rather than designed (#357). A reader
+    takes the headline style as the deck's voice; it is set once.
+
+    The smallest rung any page needed is used for all of them, because that
+    is the one every headline is known to fit - setting a headline smaller
+    than it needs never makes it overflow.
+    """
+    def headlines(page: Page):
+        return [block for frame in page.all_frames()
+                if frame.id == page.provenance.heading_frame
+                for block in frame.content if isinstance(block, TextBlock)]
+
+    used = {block.type_role for page in pages if page.role in SERIES_ROLES
+            for block in headlines(page)}
+    known = [name for name in used if name in pack.type_roles]
+    if len(known) < 2:
+        return tuple(pages)
+    smallest = min(known, key=lambda name: pack.type_roles[name].size_pt)
+
+    def lower(frame: Frame, heading: str) -> Frame:
+        content = tuple(
+            block.model_copy(update={"type_role": smallest})
+            if frame.id == heading and isinstance(block, TextBlock)
+            else block
+            for block in frame.content)
+        return frame.model_copy(update={
+            "content": content,
+            "children": tuple(lower(child, heading) for child in frame.children)})
+
+    return tuple(
+        page.model_copy(update={"frames": tuple(
+            lower(f, page.provenance.heading_frame) for f in page.frames)})
+        if page.role in SERIES_ROLES and page.provenance.heading_frame else page
+        for page in pages)
+
+
+def headline_capacity(pack: Pack) -> int:
+    """The longest headline any content arrangement sets at full size.
+
+    What drafting is told, so a headline is written to fit rather than
+    stepped down the ramp after the fact. The roomiest arrangement rather
+    than the tightest: a measured pack's pages differ widely - BXSL's hold
+    between 7 and 55 characters, because some set the page's assertion in a
+    label - and past the roomiest, a headline fits nowhere at full size.
+    """
+    from app.design.select import fit
+
+    # Where a heading actually lands is the selector's answer, not a frame
+    # role's: a measured pack may set it in a pull-quote beside a label.
+    probe = shape_from("content", "A headline", [
+        "A paragraph of ordinary length, as a content page carries beside "
+        "its headline, long enough to be placed as body copy."])
+    capacities = []
+    for archetype in pack.archetypes:
+        if archetype.role not in SERIES_ROLES:
+            continue
+        selection = fit(probe, archetype, pack)
+        if selection is None:
+            continue
+        for placement in selection.placements:
+            if placement.item.role_hint == "heading" and placement.slot.max_chars:
+                capacities.append(placement.slot.max_chars)
+    return max(capacities) if capacities else 0
 
 
 # ── Which pack ───────────────────────────────────────────────────────────

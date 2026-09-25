@@ -118,6 +118,9 @@ def build_page(page_id: str, shape: MaterialShape, selection: Selection,
             fit_cost=round(selection.cost, 4),
             considered=considered,
             source_slide=source_slide,
+            heading_frame=next(
+                (p.slot.frame_id for p in selection.placements
+                 if p.item.role_hint == "heading"), ""),
         ),
     )
 
