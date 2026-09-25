@@ -348,9 +348,16 @@ def exhibit_floor_in(item: MaterialItem, pack: Pack,
         table = (item.payload or {}).get("table") or {}
         rows = [[str(c) for c in row] for row in (table.get("rows") or [])]
         if width_in and rows:
+            from app.renderer import text_fit
             from app.renderer.table_layout import needed_height_in
 
-            return needed_height_in(rows, bool(table.get("headerRow")), width_in)
+            # The table is drawn in the design's data-viz face, which the
+            # pack does not carry: measured in both it and the pack's body
+            # face, and the taller kept, the floor is never the optimistic one.
+            faces = {text_fit.DEFAULT_MEASURE_FAMILY, pack.body_face or ""} - {""}
+            header = bool(table.get("headerRow"))
+            return max(needed_height_in(rows, header, width_in, family=face)
+                       for face in faces)
         body = pack.type_roles.get("body")
         size_pt = body.size_pt if body else 12.0
         return max(1, len(rows)) * size_pt * TABLE_ROW_LEADING / 72.0
@@ -366,6 +373,26 @@ def legibility_shortfall(item: MaterialItem, pack: Pack,
     if floor <= 0:
         return 0.0
     return min(1.0, max(0.0, floor - size[1]) / floor)
+
+
+def readable_somewhere(item: MaterialItem, pack: Pack,
+                       candidates: Optional[Sequence[PageArchetype]] = None) -> bool:
+    """Whether any slot of these archetypes can show this exhibit legibly.
+
+    Legibility depends on the slot, not on the prose around the exhibit, so
+    when this is False no amount of splitting a page's prose will help.
+    """
+    if item.kind not in _EXHIBIT_KINDS:
+        return True
+    for archetype in candidates or pack.archetypes:
+        grid = archetype.grid or pack.grid
+        for slot in archetype.slots:
+            if not _accepts(slot, item):
+                continue
+            size = _slot_rect(archetype, slot, pack, grid)
+            if size and legibility_shortfall(item, pack, size) <= LEGIBLE_TOLERANCE:
+                return True
+    return False
 
 
 def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,

@@ -40,7 +40,7 @@ from app.design.material import MaterialShape, shape_from
 from app.design.pack import ColorRoles, Pack
 from app.design.repair import repair
 from app.design.schema import DesignDoc, Page, PackRef
-from app.design.select import choose
+from app.design.select import choose, readable_somewhere
 from app.design.vocabulary import ensure
 from app.observability.logging import get_logger
 
@@ -385,12 +385,18 @@ def _place(shape: MaterialShape, pack: Pack,
         # divided at, and counting it meant a shape with one paragraph left
         # looked divisible, split into itself plus nothing, and went round
         # again until the cap.
-        if splits >= ceiling or len(
-                [i for i in current.items
-                 if i.kind == "text" and i.role_hint != "heading"]) < 2:
-            # Nothing left to divide, and no slot the exhibit can be read in.
-            # Placing it cramped is better than refusing it: a refusal takes
-            # the whole deck to the stock renderer (#351).
+        pages = [a for a in (candidates or pack.archetypes)
+                 if a.role in ("content", "exhibit")]
+        hopeless = bool(pages) and not all(
+            readable_somewhere(item, pack, pages) for item in current.items)
+        indivisible = splits >= ceiling or len(
+            [i for i in current.items
+             if i.kind == "text" and i.role_hint != "heading"]) < 2
+        if hopeless or indivisible:
+            # An exhibit no slot in the pack can show legibly - which
+            # splitting the prose around it cannot fix - or nothing left to
+            # divide. Placing it cramped is better than refusing it: a
+            # refusal takes the whole deck to the stock renderer (#351).
             selection = choose(current, pack, previous_archetype=last,
                                candidates=candidates, legible=False)
             if selection is not None:
@@ -400,6 +406,7 @@ def _place(shape: MaterialShape, pack: Pack,
                 placed.append((current, selection))
                 last = selection.archetype.id
                 continue
+        if indivisible:
             raise Unplaceable(
                 f"no archetype in pack {pack.id!r} can carry a page of "
                 f"{current.total_chars} characters in "

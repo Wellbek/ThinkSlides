@@ -91,3 +91,20 @@ class TestAPageWithNoReadableSlotIsStillPlaced:
             {"type": "text", "runs": [{"text": "Cover"}]}]}
         doc = run.compose([cover, slide], run.load("bxsl-investor"))
         assert any(p.provenance.source_slide == 1 for p in doc.pages)
+
+    def test_a_page_is_not_split_for_an_exhibit_no_slot_could_hold(self):
+        """Legibility depends on the slot, not the prose beside it, so
+        splitting the prose only multiplied the page."""
+        rows = [["Step", "Detail"], *[[f"Step {i}", "A long detail " * 6]
+                                      for i in range(40)]]
+        paragraphs = [{"type": "text", "runs": [{"text": f"Paragraph {i} of the "
+                                                  "argument, a sentence long."}]}
+                      for i in range(8)]
+        slide = {"slideIndex": 1, "contents": [
+            {"type": "text", "runs": [{"text": "Every step"}]}, *paragraphs,
+            {"type": "table", "table": {"headerRow": True, "rows": rows}}]}
+        cover = {"slideIndex": 0, "contents": [
+            {"type": "text", "runs": [{"text": "Cover"}]}]}
+        doc = run.compose([cover, slide], run.load("bxsl-investor"))
+        pages = [p for p in doc.pages if p.provenance.source_slide == 1]
+        assert len(pages) == 1
