@@ -181,6 +181,12 @@ class FinalizeAndRenderPptxTool:
             # with an empty list to avoid, and the page came back on the
             # arrangement it had been flagged for (#344).
             placed: dict[int, list[str]] = {}
+            # Which renderer the deck actually went through, so a run can be
+            # checked for it rather than only logged: "composed" in its design
+            # language, "template" on an uploaded template, "fallback" when
+            # the pack could not place the deck, "stock" on neither.
+            render_path = "template" if pack is None and template_path and \
+                os.path.exists(template_path) else "stock"
             for attempt in range(1, max_retries + 1):
                 try:
                     if pack is not None:
@@ -189,6 +195,7 @@ class FinalizeAndRenderPptxTool:
                                 slides, pack, metadata, output_path,
                                 design_system,
                             )
+                            render_path = "composed"
                         except Unplaceable as exc:
                             # Material no archetype can carry, even split.
                             # Retrying is pointless - the answer is
@@ -203,6 +210,7 @@ class FinalizeAndRenderPptxTool:
                                 error=str(exc),
                             )
                             pack = None
+                            render_path = "fallback"
                     if pack is None:
                         renderer = PPTXRenderer(
                             template_path=template_path if template_path and os.path.exists(template_path) else None,
@@ -307,6 +315,7 @@ class FinalizeAndRenderPptxTool:
                     "fallbackMarkdownPath": markdown_path,
                     "assets": assets,
                     "placedArrangements": placed,
+                    "renderPath": render_path,
                 },
                 duration_ms=duration_ms,
             )

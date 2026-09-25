@@ -271,3 +271,25 @@ def test_the_revision_directive_names_what_the_slide_carries():
     assert '- table (slot "strategy-comparison")' in directive
     assert "- diagram\n" in directive
     assert "replaces it rather than adding another" in directive
+
+
+def test_the_draft_is_told_how_many_exhibits_a_page_holds():
+    """A slide drafted with more exhibits than any arrangement holds is split
+    onto a page the plan never counted (#351)."""
+    from app.agent import run_context
+    from app.design import run as design_run
+
+    loop = AgentLoop(db=None)
+    ws = loop.working_state
+    ws.presentation_structure = {"totalSlides": 2,
+                                 "slides": [{"title": "Cover"}, {"title": "Compare"}]}
+
+    assert "at most" not in loop.slide_directive()
+
+    token = run_context.set_pack(design_run.load("bxsl-investor"))
+    try:
+        directive = loop.slide_directive()
+    finally:
+        run_context.reset_pack(token)
+    assert directive.startswith("Draft slide 1")
+    assert "holds at most one chart, table, diagram or image" in directive

@@ -321,24 +321,82 @@ def material_from(slide: dict, *, index: int = 0, total: int = 1) -> MaterialSha
     )
 
 
+# What takes a figure slot: every exhibit, and an image.
+_VISUAL_KINDS = frozenset({"chart", "table", "diagram", "metrics", "figure"})
+
+
 def _split(shape: MaterialShape) -> tuple[MaterialShape, MaterialShape]:
-    """Halve a page's prose, keeping its heading on the first part."""
+    """Halve a page's prose and its exhibits, keeping its heading on both parts.
+
+    Exhibits are divided as well as prose. Every archetype in most packs has
+    one exhibit slot, so a page carrying a diagram *and* a table could never
+    be placed however its paragraphs were divided: both exhibits stayed on
+    the first part, that part ran out of prose to split, and the whole deck
+    dropped to the stock renderer (#351).
+    """
     texts = [item.text for item in shape.items
              if item.kind == "text" and item.role_hint != "heading"]
-    exhibits = [dict(item.payload or {}) for item in shape.items
-                if item.kind in ("chart", "table", "diagram", "metrics")]
-    figures = [dict(item.payload or {}) for item in shape.items
-               if item.kind == "figure"]
-    cut = max(1, len(texts) // 2)
+    # Exhibits and images compete for the same figure slots, so they are
+    # divided together: an image beside a chart on a pack with one figure
+    # slot is as unplaceable as two charts.
+    visuals = [item for item in shape.items if item.kind in _VISUAL_KINDS]
+    # A page with one paragraph and two visuals still divides - at the
+    # visuals, with the paragraph staying beside the first of them.
+    cut = max(1, len(texts) // 2) if len(texts) > 1 or len(visuals) < 2 else 1
+    shown = max(1, len(visuals) // 2) if len(visuals) > 1 else len(visuals)
+
+    def exhibits(part):
+        return [dict(i.payload or {}) for i in part if i.kind != "figure"]
+
+    def figures(part):
+        return [dict(i.payload or {}) for i in part if i.kind == "figure"]
+
     first = shape_from(shape.role, shape.heading, texts[:cut],
-                       exhibits=exhibits, citations=shape.citations)
+                       exhibits=exhibits(visuals[:shown]),
+                       figures=figures(visuals[:shown]),
+                       citations=shape.citations)
     # The continuation keeps the heading. Dropping it left the second page
     # with nothing whose role is "heading", and an archetype that requires a
     # headline then refuses it - so a page that had to be split could not be
     # placed at all. Repeating the heading on a continued page is also what a
     # publication does.
-    second = shape_from("content", shape.heading, texts[cut:], figures=figures)
+    second = shape_from("content", shape.heading, texts[cut:],
+                        exhibits=exhibits(visuals[shown:]),
+                        figures=figures(visuals[shown:]))
     return first, second
+
+
+# What a slot names when it can take a chart, table or diagram. "figure" is
+# one of them: every measured pack declares its exhibit slots that way, and
+# `select._accepts` places any exhibit in one.
+_EXHIBIT_SLOT_KINDS = frozenset({"figure", "chart", "table", "diagram"})
+
+
+def exhibits_per_page(pack: Pack) -> int:
+    """The most exhibits or images any content page in this pack can carry.
+
+    Told to the drafting turn, because a page drafted with more exhibits than
+    any arrangement holds is split onto continuation pages: the deck keeps its
+    design but gains pages nobody planned.
+    """
+    return max((
+        sum(1 for slot in archetype.slots if _EXHIBIT_SLOT_KINDS & set(slot.accepts))
+        for archetype in pack.archetypes
+        if archetype.role in ("content", "exhibit")), default=0)
+
+
+def _divisible(shape: MaterialShape) -> bool:
+    """Whether `_split` has anything to divide.
+
+    Only the body counts: a heading is not a paragraph the page can be
+    divided at, and counting it meant a shape with one paragraph left looked
+    divisible, split into itself plus nothing, and went round again until the
+    cap.
+    """
+    body = [i for i in shape.items
+            if i.kind == "text" and i.role_hint != "heading"]
+    visuals = [i for i in shape.items if i.kind in _VISUAL_KINDS]
+    return len(body) >= 2 or len(visuals) >= 2
 
 
 def _place(shape: MaterialShape, pack: Pack,
@@ -362,7 +420,7 @@ def _place(shape: MaterialShape, pack: Pack,
     placed: list[tuple[MaterialShape, object]] = []
     splits = 0
     ceiling = max(MIN_SPLITS,
-                  len([i for i in shape.items if i.kind == "text"]))
+                  len([i for i in shape.items if i.kind != "figure"]))
     last = previous
     while pending:
         current = pending.pop(0)
@@ -381,17 +439,11 @@ def _place(shape: MaterialShape, pack: Pack,
             placed.append((current, selection))
             last = selection.archetype.id
             continue
-        # Only the body counts: a heading is not a paragraph the page can be
-        # divided at, and counting it meant a shape with one paragraph left
-        # looked divisible, split into itself plus nothing, and went round
-        # again until the cap.
         pages = [a for a in (candidates or pack.archetypes)
                  if a.role in ("content", "exhibit")]
         hopeless = bool(pages) and not all(
             readable_somewhere(item, pack, pages) for item in current.items)
-        indivisible = splits >= ceiling or len(
-            [i for i in current.items
-             if i.kind == "text" and i.role_hint != "heading"]) < 2
+        indivisible = splits >= ceiling or not _divisible(current)
         if hopeless or indivisible:
             # An exhibit no slot in the pack can show legibly - which
             # splitting the prose around it cannot fix - or nothing left to

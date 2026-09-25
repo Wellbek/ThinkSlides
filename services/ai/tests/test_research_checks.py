@@ -126,6 +126,15 @@ class TestReviewedGaps:
         assert result["metrics"]["draftsRejected"] == 3
         assert "3 draft(s) rejected by validation" in render(result)
 
+    def test_a_deck_that_fell_out_of_its_design_is_caught(self, tmp_path):
+        """It renders and passes every geometry check regardless (#351)."""
+        spans = [
+            _span("tool", "finalize_and_render_pptx", attrs={"renderPath": "composed"}),
+            _span("tool", "finalize_and_render_pptx", attrs={"renderPath": "fallback"}),
+        ]
+        check = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["rendered_in_its_design"]
+        assert check["passed"] is False and check["detail"] == "last render: fallback"
+
     def test_a_script_edit_after_validation_is_an_unvalidated_deck(self, tmp_path):
         spans = [
             _span("phase", "validate", started="2026-09-24T10:00:02", attrs={"clean": False}),

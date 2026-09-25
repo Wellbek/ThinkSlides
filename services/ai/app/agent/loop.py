@@ -3474,6 +3474,7 @@ class AgentLoop:
                 + "\nShorten the copy, give an oversized visual a smaller region, or move "
                 "it onto its own slide, then call design_slide_content for this slide."
                 + self._attached_exhibits_directive(index)
+                + self._exhibit_capacity_directive()
                 + code_option
             )
         # Named only when it is actually offered. This instruction reaches the
@@ -3494,6 +3495,7 @@ class AgentLoop:
             "row for figures; a block for content with a shape), then "
             f"design_slide_content for slide_index={index}. This slide only."
             + self._content_type_directive(planned)
+            + self._exhibit_capacity_directive()
             + self._format_directive()
             + self._structure_directive()
             + self._arc_directive(index)
@@ -3520,6 +3522,30 @@ class AgentLoop:
             "\nThis slide already carries:\n" + lines
             + "\nRebuilding one of these replaces it rather than adding "
             "another; to fix one of several of a kind, pass its slot."
+        )
+
+    def _exhibit_capacity_directive(self) -> str:
+        """How many exhibits a page of this deck's design language can hold.
+
+        Every arrangement in most packs has one exhibit slot. A slide drafted
+        with a diagram and a table had nowhere to go: it used to take the
+        whole deck down to the stock renderer (#351), and now it is split onto
+        a continuation page the plan never counted.
+        """
+        from app.design import run as design_run
+
+        pack = run_context.get_pack()
+        if pack is None:
+            return ""
+        capacity = design_run.exhibits_per_page(pack)
+        if capacity < 1:
+            return ""
+        most = "one chart, table, diagram or image" if capacity == 1 else (
+            f"{capacity} charts, tables, diagrams or images, counted together")
+        return (
+            f"\nA page in this deck's design holds at most {most}; build no "
+            "more than that for this slide. Material that needs more is more "
+            "than one slide."
         )
 
     def _content_type_directive(self, planned: dict) -> str:
@@ -4027,6 +4053,8 @@ class AgentLoop:
             ):
                 if kind == "result" and tool_span is not None:
                     tool_span.set(success=bool(payload.success))
+                    if isinstance(payload.data, dict) and payload.data.get("renderPath"):
+                        tool_span.set(renderPath=payload.data["renderPath"])
                     if not payload.success:
                         tool_span.status = (
                             "rejected" if payload.rejected else "failed")

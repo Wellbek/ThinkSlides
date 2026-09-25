@@ -400,6 +400,7 @@ class TestTheLadderClosesTheLoop:
         kind, result = asyncio.run(render())
         assert kind == "result" and result.success, result.error
 
+        assert result.data["renderPath"] == "composed"
         placed = result.data["placedArrangements"]
         first = design_run.compose(language_specimen_slides(), pack)
         assert placed[1] == [p.archetype for p in first.pages

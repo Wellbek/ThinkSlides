@@ -92,6 +92,18 @@ def _checks(run_dir: Path, task: Task, manifest: dict, spans: list[dict], pdf: P
             or f"all body copy at {MIN_BODY_PT:.0f}pt or larger",
         ))
 
+    renders = [s["attrs"].get("renderPath") for s in spans
+               if s["kind"] == "tool" and s["name"] == "finalize_and_render_pptx"
+               and s["status"] == "ok" and s["attrs"].get("renderPath")]
+    if renders:
+        # A deck that fell out of its design language still renders and still
+        # passes every geometry check, which is how the Kubernetes run shipped
+        # on stock placeholders with nothing but a log line saying so (#351).
+        checks.append(Check(
+            "rendered_in_its_design", renders[-1] in ("composed", "template"),
+            f"last render: {renders[-1]}",
+        ))
+
     validations = [s for s in spans if s["kind"] == "phase" and s["name"] == "validate"
                    and s["status"] != "skipped"]
     if validations:
