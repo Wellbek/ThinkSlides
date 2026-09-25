@@ -357,3 +357,42 @@ class TestMaterialHasAnOrder:
         ranked = [value for value in ranked if value is not None]
         if len(ranked) > 1:
             assert ranked[0] <= ranked[-1]
+
+
+class TestAPageWithTwoExhibitsStillComposes:
+    """Every arrangement in most packs has one exhibit slot. A Kubernetes
+    deck drafted a slide with a flow diagram and a table; splitting divided
+    only its prose, both exhibits stayed together, and the whole six-slide
+    deck dropped to the stock renderer (#351)."""
+
+    @staticmethod
+    def _slide(paragraphs):
+        return {"slideIndex": 1, "contents": [
+            text("Rolling updates are the efficient default"),
+            *[text(p) for p in paragraphs],
+            {"type": "diagram", "diagram": {"kind": "process", "items": [
+                {"label": "Old"}, {"label": "Surge"}, {"label": "New"}]}},
+            {"type": "table", "table": {"columns": ["Dimension", "Rolling"],
+                                        "rows": [["Capacity", "Low"]]}},
+        ]}
+
+    @pytest.mark.parametrize("paragraphs", [
+        ["A Deployment replaces pods incrementally while the Service routes "
+         "across old and new replicas.",
+         "A rollback restores a prior ReplicaSet only after users may have "
+         "seen the new version."],
+        ["One paragraph beside two exhibits still divides, at the exhibits."],
+    ])
+    def test_each_exhibit_lands_on_a_page(self, paragraphs):
+        pack = run.load("bxsl-investor")
+        assert run.exhibits_per_page(pack) == 1
+
+        cover = {"slideIndex": 0, "contents": [text("Choosing a rollout")]}
+        doc = run.compose([cover, self._slide(paragraphs)], pack)
+
+        continued = [page for page in doc.pages
+                     if page.provenance.source_slide == 1]
+        assert len(continued) == 2
+
+    def test_a_pack_with_room_for_two_says_so(self):
+        assert run.exhibits_per_page(run.load("wti-2025")) == 2
