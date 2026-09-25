@@ -271,6 +271,13 @@ class TestALanguageIsCompiledBeforeItIsOffered:
         assert why.startswith("no content page gives a table room to be read")
         assert "tallest figure slot is" in why and "needs about" in why
 
+    def test_a_failing_language_is_not_let_through_by_a_twin_of_its_name(self):
+        twin = {**CRAMPED, "name": LEDGER["name"]}
+        llm = _LLM({"languages": [LEDGER, twin]})
+        languages, _ = asyncio.run(
+            author_run.author(llm, "a deck", CANVAS, wanted=1))
+        assert len(languages) == 1 and languages[0].pages[0].name == "receipts"
+
     def test_the_retry_carries_the_reason(self):
         llm = _LLM({"languages": [CRAMPED]})
         languages, _ = asyncio.run(

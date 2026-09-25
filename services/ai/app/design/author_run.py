@@ -67,14 +67,17 @@ async def author(llm, brief: str, canvas: Canvas, *, answers: str = "",
         payload = extract_json_object(
             (response.get("message") or {}).get("content", "{}")) or {}
         languages = authoring.read(payload)
-        verdicts = {language.name: _problem(language, canvas, floor_pt)
-                    for language in languages}
-        usable = [language for language in languages
-                  if not verdicts[language.name]]
+        # By position, not by name: two languages may share a name, and a
+        # verdict keyed on it let a failing twin through on the other's pass.
+        verdicts = [_problem(language, canvas, floor_pt)
+                    for language in languages]
+        usable = [language for language, why in zip(languages, verdicts)
+                  if not why]
         if len(usable) > len(best):
             best = usable
 
-        problems = [f"{name}: {why}" for name, why in verdicts.items()
+        problems = [f"{language.name}: {why}"
+                    for language, why in zip(languages, verdicts)
                     if why and why != NO_EXHIBIT_PAGE]
         no_exhibit = [language.name for language in languages
                       if language not in usable

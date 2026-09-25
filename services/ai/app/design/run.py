@@ -520,9 +520,18 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
     previous: Optional[str] = None
     for index, slide in enumerate(ordered):
         shape = material_from(slide, index=index, total=len(ordered))
+        avoided = (avoid or {}).get(index, frozenset())
         try:
-            placed = _place(shape, pack, previous,
-                            (avoid or {}).get(index, frozenset()))
+            try:
+                placed = _place(shape, pack, previous, avoided)
+            except Unplaceable:
+                if not avoided:
+                    raise
+                # A re-placement found nothing new that holds the page. The
+                # arrangement it was on held it a render ago, and placing it
+                # the way we already did beats downgrading it to the plain
+                # page because a revision was asked for.
+                placed = _place(shape, pack, previous)
         except Unplaceable as refused:
             if not skip_unplaceable:
                 # One page the pack cannot carry is set on the pack's plainest
