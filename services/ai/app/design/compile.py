@@ -333,10 +333,10 @@ def _exhibit_primitives(exhibit: Exhibit, rect: PositionConfig, pack: Pack,
             )
         ]
     if exhibit.exhibit_kind == "table":
-        # Drawn as an image for the same reason a chart is - see
-        # `chart_renderer.render_table_to_png`. A native PowerPoint table
-        # would be a sixth primitive kind, and the primitive layer's whole
-        # guarantee is that there is no sixth.
+        # Carried as an image mark so geometry and measurement treat it as the
+        # boxed exhibit it is - the primitive layer keeps its five kinds - and
+        # drawn by `designdoc_renderer` as a native, editable table, never as
+        # a picture (`renderer/native_table.py`).
         table = exhibit.payload.get("table") or exhibit.payload
         return [
             Primitive(

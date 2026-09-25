@@ -93,18 +93,20 @@ class TestRowHeights:
         assert plan.row_heights_in[2] > plan.row_heights_in[1]
 
     def test_a_long_table_shrinks_its_type_to_fit(self):
-        rows = [["Metric", "Value"]] + [[f"Row {i}", str(i)] for i in range(24)]
+        rows = [["Metric", "Value"]] + [[f"Row {i}", str(i)] for i in range(12)]
         plan = plan_table(rows, has_header=True, region_width_in=11.63, region_height_in=4.55)
 
         assert plan.body_pt < 14.0
-        assert plan.height_in <= 4.55 + 1e-6
+        assert plan.height_in <= 4.55 + 1e-6 and not plan.overflows
 
-    def test_an_impossible_table_is_compressed_rather_than_overflowing(self):
+    def test_an_impossible_table_says_it_overflows_rather_than_hiding_it(self):
+        """A native row grows to its text, so rows shortened on paper hid an
+        overflow the rendered table still had."""
         rows = [["Metric", "Value"]] + [[f"Row {i}", str(i)] for i in range(80)]
         plan = plan_table(rows, has_header=True, region_width_in=11.63, region_height_in=4.55)
 
         assert plan.body_pt == table_layout.MIN_CELL_PT
-        assert plan.height_in <= 4.55 + 1e-6
+        assert plan.overflows and plan.height_in > 4.55
 
 
 class TestTotalRow:

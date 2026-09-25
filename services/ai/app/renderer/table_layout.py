@@ -66,6 +66,10 @@ class TableLayout:
     body_pt: float
     row_heights_in: tuple[float, ...]
     total_row_index: int | None
+    # True when the table is taller than its band even at the smallest size.
+    # Rows keep the height their text needs - a native table row grows to its
+    # text regardless, so shortening it on paper only hid the overflow.
+    overflows: bool = False
 
     @property
     def height_in(self) -> float:
@@ -286,14 +290,12 @@ def plan_table(
 
     fractions, header_pt, body_pt, heights = chosen
 
-    # Still too tall at the smallest legible size: compress proportionally
-    # rather than let the table run off the slide. Stage G's validation on
-    # the real rendered file is what catches a table that genuinely cannot
-    # fit at all.
-    overflow = sum(heights)
-    if overflow > region_height_in and overflow > 0:
-        scale = region_height_in / overflow
-        heights = [h * scale for h in heights]
+    # Still too tall at the smallest size. Said, not hidden: rows used to be
+    # compressed to the band here, but PowerPoint and LibreOffice grow a
+    # native row to its text anyway, so the table ran past its frame while
+    # the plan said it fit. The caller reports it; layout keeps a table out
+    # of a band it cannot read in (`select.exhibit_floor_in`).
+    overflows = sum(heights) > region_height_in + 1e-6
 
     return TableLayout(
         col_fractions=fractions,
@@ -302,4 +304,5 @@ def plan_table(
         body_pt=body_pt,
         row_heights_in=tuple(heights),
         total_row_index=total_row_index,
+        overflows=overflows,
     )

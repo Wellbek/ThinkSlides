@@ -20,7 +20,6 @@ issue was confirmed - composing a doc and reading `frame.content` back is not
 enough, because that only proves the material was *bound*, not that it drew.
 """
 
-import pytest
 
 from app.design.authored import Language, PageKind, Slot, to_pack
 from app.design.geometry import check_doc
@@ -50,10 +49,9 @@ def _shape_kinds(pptx_path: str) -> list[str]:
     return [shape.shape_type for shape in slide.shapes]
 
 
-class TestATableRendersAsAnImage:
-    """A native pptx table would be a sixth primitive kind - see
-    `primitives.PRIMITIVE_KINDS`, which is deliberately closed at five. A
-    table is drawn as an image for the same reason a chart is."""
+class TestATableRendersAsANativeTable:
+    """A table is carried as an image mark, so the primitive layer keeps its
+    five kinds, and drawn as a native, editable table - never a picture."""
 
     @staticmethod
     def _slide():
@@ -78,11 +76,12 @@ class TestATableRendersAsAnImage:
         out = str(tmp_path / "table.pptx")
         render_doc(doc, pack, out)
         kinds = _shape_kinds(out)
-        # Ground panel/heading text box plus the table image - three shapes,
-        # not two. Two shapes is the bug: the exhibit bound and drew nothing.
+        # A heading text box plus the table. One shape is the bug: the
+        # exhibit bound and drew nothing.
         assert len(kinds) >= 2
         from pptx.enum.shapes import MSO_SHAPE_TYPE
-        assert MSO_SHAPE_TYPE.PICTURE in kinds
+        assert MSO_SHAPE_TYPE.TABLE in kinds
+        assert MSO_SHAPE_TYPE.PICTURE not in kinds
 
     def test_an_empty_table_draws_nothing_but_does_not_crash(self, tmp_path):
         from app.renderer.designdoc_renderer import render_doc
@@ -193,60 +192,100 @@ class TestTheGeometryStaysSound:
         assert check_doc(doc) == []
 
 
-class TestRenderTableToPng:
-    """The rasteriser itself, independent of the compose/compile pipeline."""
+class TestATableIsANativeTable:
+    """A table is data a user edits after delivery, so it is never a picture.
+    The composed path rasterised every table and placed the image in its
+    frame, where a short table in a tall frame was stretched until it read as
+    a condensed face."""
 
-    def test_an_empty_table_returns_none(self):
-        from app.renderer.chart_renderer import render_table_to_png
+    ROWS = [["Strategy", "Capacity", "Rollback"],
+            ["Rolling", "Low", "Prior revision; may reverse partial exposure"],
+            ["Blue-green", "High", "Route traffic back to blue"],
+            ["Canary", "Medium", "Return traffic to stable; scale down canary"]]
 
-        assert render_table_to_png({"rows": []}, {}, 6.0, 2.0) is None
+    def _render(self, tmp_path):
+        from pptx import Presentation
 
-    def test_a_zero_size_region_returns_none(self):
-        from app.renderer.chart_renderer import render_table_to_png
+        from app.design import run
+        from app.renderer.designdoc_renderer import render_doc
 
-        assert render_table_to_png(
-            {"rows": [["a"]]}, {}, 0.0, 2.0) is None
+        pack = run.load("bxsl-investor")
+        slides = [
+            {"slideIndex": 0, "contents": [
+                {"type": "text", "runs": [{"text": "Cover"}]}]},
+            {"slideIndex": 1, "role": "content", "contents": [
+                {"type": "text", "runs": [{"text": "Three strategies compared"}]},
+                {"type": "table", "table": {"headerRow": True, "rows": self.ROWS}}]},
+        ]
+        doc = run.compose(slides, pack)
+        out = str(tmp_path / "deck.pptx")
+        render_doc(doc, pack, out, design_system={})
+        return Presentation(out).slides[1]
 
-    def test_a_real_table_returns_png_bytes(self):
-        from app.renderer.chart_renderer import render_table_to_png
+    def test_it_is_an_editable_table_not_a_picture(self, tmp_path):
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
 
-        png = render_table_to_png(
-            {"headerRow": True, "rows": [["A", "B"], ["1", "2"]]},
-            {}, 4.0, 1.5)
-        assert png is not None
-        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+        slide = self._render(tmp_path)
+        tables = [s for s in slide.shapes if s.has_table]
+        assert len(tables) == 1
+        assert not any(s.shape_type == MSO_SHAPE_TYPE.PICTURE for s in slide.shapes)
+        table = tables[0].table
+        assert table.cell(1, 2).text == "Prior revision; may reverse partial exposure"
 
-    def test_a_cell_is_drawn_on_the_lines_the_plan_measured(self):
-        """The image drew every cell on one line, so a cell the plan had
-        wrapped ran into the next column (#351)."""
-        from app.renderer.chart_renderer import _wrap_cell
+    def test_it_is_fitted_by_type_size_never_scaled(self, tmp_path):
+        from app.renderer import table_layout
 
-        text = "Analysis, pauses, promotion and rollback controls"
-        assert _wrap_cell(text, 90.0, "Arial", 10.0, False).count("\n") >= 2
-        assert _wrap_cell("Low", 90.0, "Arial", 10.0, False) == "Low"
+        slide = self._render(tmp_path)
+        (frame,) = [s for s in slide.shapes if s.has_table]
+        sizes = {run.font.size.pt for row in frame.table.rows for cell in row.cells
+                 for paragraph in cell.text_frame.paragraphs for run in paragraph.runs}
+        assert min(sizes) >= table_layout.MIN_CELL_PT
+        heights = [row.height for row in frame.table.rows]
+        assert frame.height == sum(heights)
 
-    def test_a_table_is_drawn_in_the_face_it_is_measured_in(self):
-        """Asked for by name, matplotlib drew Arial as its own, far wider,
-        DejaVu Sans."""
-        from app.renderer.chart_renderer import _table_faces
-        from app.renderer.typeset.fonts import resolve_path
+    @staticmethod
+    def _draw(table, ground, design_system):
+        from pptx import Presentation
 
-        path = resolve_path("Arial")
-        if not path:
-            pytest.skip("fontconfig is not available")
-        assert _table_faces("Arial")[False].get_file() == path
+        from app.renderer import native_table
+        from app.renderer.layout import PositionConfig
+        from app.renderer.primitives import PaintContext
+        from app.renderer.typography import TypeScale
 
-    def test_a_numeric_column_is_detected_and_used(self):
-        """Reuses `table_layout.plan_table` rather than reinventing column
-        alignment - this just confirms the wiring reaches it."""
-        from app.renderer.chart_renderer import render_table_to_png
-        from app.renderer.table_layout import plan_table
+        slide = Presentation().slides.add_slide(Presentation().slide_layouts[6])
+        context = PaintContext(ground=ground, default_color="#FFFFFF",
+                               type_scale=TypeScale())
+        native_table.add_native_table(
+            slide, table, PositionConfig(0.5, 0.5, 8.0, 3.0), design_system,
+            context, id_prefix="t", placement="top")
+        (frame,) = [s for s in slide.shapes if s.has_table]
+        return frame.table
 
-        rows = [["Year", "Revenue"], ["2024", "100"], ["2025", "120"]]
-        layout = plan_table(rows, True, 4.0, 1.5)
-        assert 1 in layout.numeric_columns
-        assert render_table_to_png(
-            {"headerRow": True, "rows": rows}, {}, 4.0, 1.5) is not None
+    def test_text_on_a_hairline_table_reads_on_a_dark_page(self):
+        """A hairline table's cells are transparent; its text sits on the
+        page and was always near-black, so it vanished on a dark one."""
+        from app import colors
+
+        table = self._draw({"headerRow": True, "rows": [["A", "B"], ["x", "y"]]},
+                           "#101418", {"dataViz": {"tableTreatment": "hairline",
+                                                   "tableHeaderFilled": False}})
+        run = table.cell(1, 0).text_frame.paragraphs[0].runs[0]
+        assert colors.contrast_ratio("#101418", f"#{run.font.color.rgb}") >= 4.5
+
+    def test_a_footnote_marker_takes_its_cells_colour(self):
+        """A marked run in an unfilled header took the header's white."""
+        table = self._draw({"headerRow": True, "rows": [["Revenue[1]", "B"], ["x", "y"]]},
+                           "#FFFFFF", {"dataViz": {"tableTreatment": "hairline",
+                                                   "tableHeaderFilled": False}})
+        runs = table.cell(0, 0).text_frame.paragraphs[0].runs
+        assert len({str(r.font.color.rgb) for r in runs}) == 1
+
+    def test_the_template_path_draws_it_the_same_way(self):
+        from app.renderer import native_table, pptx_renderer
+
+        assert "native_table.add_native_table" in __import__("inspect").getsource(
+            pptx_renderer.PPTXRenderer._add_table)
+        assert native_table.add_native_table is not None
 
 
 class TestTheStatCalloutCompilerReadsEitherContract:
