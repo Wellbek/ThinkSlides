@@ -393,6 +393,8 @@ class Provenance(_Model):
     # pack sets its assertion wherever the house does - EY in a pull-quote -
     # so the frame's role does not say which frame is the headline.
     heading_frame: str = ""
+    # The rung the heading was designed to be set on, before repair fitted it.
+    heading_rung: str = ""
 
 
 class Page(_Model):

@@ -3475,6 +3475,7 @@ class AgentLoop:
                 "it onto its own slide, then call design_slide_content for this slide."
                 + self._attached_exhibits_directive(index)
                 + self._exhibit_capacity_directive()
+                + self._headline_capacity_directive()
                 + code_option
             )
         # Named only when it is actually offered. This instruction reaches the
@@ -3566,9 +3567,9 @@ class AgentLoop:
         if capacity < 20:
             return ""
         return (
-            f"\nA headline in this deck's design fits at most about "
-            f"{capacity} characters at full size; keep it within that, or "
-            "every headline in the deck is set smaller to match."
+            f"\nA headline in this deck's design fits about {capacity} "
+            "characters at full size; keep it within that, or every headline "
+            "set at that size is made smaller to match."
         )
 
     def _content_type_directive(self, planned: dict) -> str:

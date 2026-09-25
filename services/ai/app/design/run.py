@@ -571,60 +571,93 @@ SERIES_ROLES = ("content", "exhibit")
 
 
 def _one_headline_rung(pages: Sequence[Page], pack: Pack) -> tuple[Page, ...]:
-    """Every content page's headline on the same rung of the ramp.
+    """Headlines designed on one rung stay on one rung after repair.
 
-    Repair fits each page on its own, and a headline that overran its two
-    lines was stepped down the ramp there and nowhere else: a Kubernetes deck
-    set five of its seven content headlines at 31.6pt regular and two at 45pt
+    Repair fits each page on its own, and a headline that overran its lines
+    was stepped down the ramp on that page and no other: a Kubernetes deck set
+    five of its seven content headlines at 31.6pt regular and two at 45pt
     bold, so the deck read as assembled rather than designed (#357). A reader
-    takes the headline style as the deck's voice; it is set once.
+    takes the headline style as the deck's voice.
 
-    The smallest rung any page needed is used for all of them, because that
-    is the one every headline is known to fit - setting a headline smaller
-    than it needs never makes it overflow.
+    Only what repair changed is evened out. Headings are grouped by the rung
+    their arrangement set them on - a measured pack deliberately sets some in
+    a pull-quote and some at headline size, and that difference is the house
+    style - and each group takes the smallest rung repair stepped any of its
+    members down to, which every member is known to fit. A group is never
+    taken to body size or below: a heading that had to be set as body copy
+    to fit is one broken page, not the deck's new voice.
     """
-    def headlines(page: Page):
+    body = pack.type_roles.get("body")
+    floor = body.size_pt if body else 0.0
+
+    def heading_blocks(page: Page):
         return [block for frame in page.all_frames()
                 if frame.id == page.provenance.heading_frame
                 for block in frame.content if isinstance(block, TextBlock)]
 
-    used = {block.type_role for page in pages if page.role in SERIES_ROLES
-            for block in headlines(page)}
-    known = [name for name in used if name in pack.type_roles]
-    if len(known) < 2:
-        return tuple(pages)
-    smallest = min(known, key=lambda name: pack.type_roles[name].size_pt)
+    def size(rung: str) -> float:
+        role = pack.type_roles.get(rung)
+        return role.size_pt if role else 0.0
 
-    def lower(frame: Frame, heading: str) -> Frame:
+    target: dict[str, str] = {}
+    for page in pages:
+        designed = page.provenance.heading_rung
+        if page.role not in SERIES_ROLES or not designed:
+            continue
+        for block in heading_blocks(page):
+            if size(block.type_role) <= floor or size(block.type_role) >= size(designed):
+                continue
+            current = target.get(designed, designed)
+            if size(block.type_role) < size(current):
+                target[designed] = block.type_role
+    if not target:
+        return tuple(pages)
+
+    def lower(frame: Frame, heading: str, rung: str) -> Frame:
         content = tuple(
-            block.model_copy(update={"type_role": smallest})
+            block.model_copy(update={"type_role": rung})
             if frame.id == heading and isinstance(block, TextBlock)
+            and size(block.type_role) > size(rung)
             else block
             for block in frame.content)
         return frame.model_copy(update={
             "content": content,
-            "children": tuple(lower(child, heading) for child in frame.children)})
+            "children": tuple(lower(child, heading, rung)
+                              for child in frame.children)})
 
-    return tuple(
-        page.model_copy(update={"frames": tuple(
-            lower(f, page.provenance.heading_frame) for f in page.frames)})
-        if page.role in SERIES_ROLES and page.provenance.heading_frame else page
-        for page in pages)
+    out = []
+    for page in pages:
+        rung = target.get(page.provenance.heading_rung)
+        if page.role in SERIES_ROLES and rung and page.provenance.heading_frame:
+            page = page.model_copy(update={"frames": tuple(
+                lower(f, page.provenance.heading_frame, rung) for f in page.frames)})
+        out.append(page)
+    return tuple(out)
+
+
+def _bound_rung(frame: Frame, pack: Pack, item) -> str:
+    """The rung this item is set on in this frame - bind's own answer."""
+    from app.design.bind import _type_role
+
+    return _type_role(frame, pack, item)
 
 
 def headline_capacity(pack: Pack) -> int:
-    """The longest headline any content arrangement sets at full size.
+    """The longest headline every content arrangement sets at headline size.
 
     What drafting is told, so a headline is written to fit rather than
-    stepped down the ramp after the fact. The roomiest arrangement rather
-    than the tightest: a measured pack's pages differ widely - BXSL's hold
-    between 7 and 55 characters, because some set the page's assertion in a
-    label - and past the roomiest, a headline fits nowhere at full size.
+    stepped down the ramp after the fact - and, since headlines designed on
+    one rung are evened out after repair, rather than taking every headline
+    in the deck down with it. Measured where the selector actually puts a
+    heading, and only where that is the pack's `headline` rung: a measured
+    pack may set a page's assertion in a pull-quote or a standfirst, whose
+    capacity says nothing about a headline. The tightest such slot, because
+    a headline has to fit whichever arrangement its page lands on.
     """
     from app.design.select import fit
 
-    # Where a heading actually lands is the selector's answer, not a frame
-    # role's: a measured pack may set it in a pull-quote beside a label.
+    if "headline" not in pack.type_roles:
+        return 0
     probe = shape_from("content", "A headline", [
         "A paragraph of ordinary length, as a content page carries beside "
         "its headline, long enough to be placed as body copy."])
@@ -635,10 +668,14 @@ def headline_capacity(pack: Pack) -> int:
         selection = fit(probe, archetype, pack)
         if selection is None:
             continue
+        frames = {f.id: f for frame in archetype.frames for f in frame.walk()}
         for placement in selection.placements:
-            if placement.item.role_hint == "heading" and placement.slot.max_chars:
+            frame = frames.get(placement.slot.frame_id)
+            if (placement.item.role_hint == "heading" and placement.slot.max_chars
+                    and frame is not None
+                    and _bound_rung(frame, pack, placement.item) == "headline"):
                 capacities.append(placement.slot.max_chars)
-    return max(capacities) if capacities else 0
+    return min(capacities) if capacities else 0
 
 
 # ── Which pack ───────────────────────────────────────────────────────────

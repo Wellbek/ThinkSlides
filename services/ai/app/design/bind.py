@@ -106,21 +106,25 @@ def build_page(page_id: str, shape: MaterialShape, selection: Selection,
     for placement in selection.placements:
         contents.setdefault(placement.slot.frame_id, []).append(placement.item)
 
+    heading_frame = next((p.slot.frame_id for p in selection.placements
+                          if p.item.role_hint == "heading"), "")
+    frames = _compact(_fill(archetype.frames, contents, pack), archetype.frames)
+    heading_rung = next(
+        (block.type_role for frame in _walk(frames) if frame.id == heading_frame
+         for block in frame.content if isinstance(block, TextBlock)), "")
     return Page(
         id=page_id,
         archetype=archetype.id,
         role=shape.role,
         grid=archetype.grid,
-        frames=_compact(_fill(archetype.frames, contents, pack),
-                        archetype.frames),
+        frames=frames,
         provenance=Provenance(
             selected_by="fit",
             fit_cost=round(selection.cost, 4),
             considered=considered,
             source_slide=source_slide,
-            heading_frame=next(
-                (p.slot.frame_id for p in selection.placements
-                 if p.item.role_hint == "heading"), ""),
+            heading_frame=heading_frame,
+            heading_rung=heading_rung,
         ),
     )
 
