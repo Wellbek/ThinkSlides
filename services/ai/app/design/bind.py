@@ -276,24 +276,57 @@ def _closed_up(rows: list[list[Frame]],
                   if f.id in spans and _same_band(f, row)]
         if len(before) <= len(placed):
             continue
+        # Only a true row is redistributed: members side by side, no two in
+        # the same columns. A tall figure beside a heading stacked over prose
+        # shares a height band with both, and spreading the three across the
+        # band set the heading and the prose beside each other.
+        if not _side_by_side(before):
+            continue
         left = min(col for col, _ in before)
         width = max(col + span for col, span in before) - left
         placed.sort(key=lambda f: spans[f.id][0])
+        if len(placed) == 1:
+            out[placed[0].id] = {"col": left, "span": max(1, width)}
+            continue
         # The survivors share the row's whole width, in proportion to the
         # widths they had. Packing them left at their old widths moved the
         # hole from the middle of the row to its end: two of three prose
         # columns came out at a third of the page each with a third of the
         # page white beside them (#357).
-        total = sum(spans[f.id][1] for f in placed)
+        shares = _shares([spans[f.id][1] for f in placed], width)
+        if shares is None:
+            continue
         cursor = left
-        for index, frame in enumerate(placed):
-            if index == len(placed) - 1:
-                span = left + width - cursor
-            else:
-                span = max(1, round(spans[frame.id][1] * width / total))
-            out[frame.id] = {"col": cursor, "span": max(1, span)}
-            cursor += max(1, span)
+        for frame, span in zip(placed, shares):
+            out[frame.id] = {"col": cursor, "span": span}
+            cursor += span
     return out
+
+
+def _side_by_side(spans: list[tuple[int, int]]) -> bool:
+    """Whether these column spans sit beside each other without sharing any."""
+    ordered = sorted(spans)
+    return all(a[0] + a[1] <= b[0] for a, b in zip(ordered, ordered[1:]))
+
+
+def _shares(weights: list[int], width: int) -> Optional[list[int]]:
+    """`width` whole columns split in proportion to `weights`, each at least
+    one, summing exactly to `width` - largest remainder, so rounding can
+    never push the last member off the grid. None when they cannot all fit."""
+    if width < len(weights):
+        return None
+    total = sum(weights) or len(weights)
+    exact = [w * width / total for w in weights]
+    spans = [max(1, int(e)) for e in exact]
+    while sum(spans) > width:
+        spans[spans.index(max(spans))] -= 1
+    order = sorted(range(len(weights)), key=lambda i: exact[i] - int(exact[i]),
+                   reverse=True)
+    index = 0
+    while sum(spans) < width:
+        spans[order[index % len(order)]] += 1
+        index += 1
+    return spans
 
 
 def _stacked_over(ordered: list[Frame], tolerance: float = 0.0) -> bool:
