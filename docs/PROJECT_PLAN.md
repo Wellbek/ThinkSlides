@@ -120,7 +120,7 @@ What success looks like, stated so it can be measured (section 12):
 | Orchestration | `agent/loop.py` (5,452 lines), `agent/pipeline.py` | A phase table walked by the loop: intake, scout, consult, design, research, plan, review, draft, render, validate, amend |
 | Tools | `agent/registry.py`, `agent/tools/*` (31 tools) | Research, planning, per-slide builders (`build_chart`, `build_table`, `build_diagram`, block builders), `design_slide_content`, render, validate, questions, directions, sandboxed code tools |
 | LLM layer | `llm/provider.py`, `llm/catalog.py`, `llm/openai_compat.py`, `llm/usage.py` | Anthropic, OpenAI, Zhipu, Azure providers behind an OpenAI-shaped `chat()`; per-run token counting |
-| Design engine | `design/*` (authoring, authored, pack, select, bind, repair, compile, deck_format, vocabulary) | Authored design languages, derived packs of page archetypes, cost-based archetype selection, monotone repair |
+| Design engine | `design/*` (authoring, authored, pack, select, bind, repair, compile, deck_format, vocabulary) | Authored design languages, derived packs of page archetypes, cost-based archetype selection, monotone repair; every decision rule is written up in [`DESIGN_DECISIONS.md`](DESIGN_DECISIONS.md) |
 | Measurement | `measure/*` | Page and deck metrics, density, grammar, clusters, archetypes |
 | Rendering | `renderer/*` | XML-clone renderer for templates, python-pptx path for packs, matplotlib charts (PNG), diagrams, Mermaid, SVG import, previews via LibreOffice and PyMuPDF |
 | Grounding | `grounding/*`, `narrative.py`, `titles.py` | Figure-to-span grounding report, outline arc check, title register |
