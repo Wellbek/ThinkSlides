@@ -88,13 +88,18 @@ A row is as tall as its tallest slot.
 **Filling the page (`_fill`).**
 The natural heights rarely add up to the page.
 - When there is room to spare, it is given to the rows that flow (prose and figures) in proportion to their natural height; a page with neither keeps its white space, as a section divider should.
-- When the page asks for more than it has, **prose gives room back first**, down to 35% of its natural height (`PROSE_SHRINK_FLOOR`), and figures keep theirs.
-  Only if that is not enough does everything shrink in proportion.
-  Shrinking everything in proportion from the start took a stacked page's figure band from a third of the page to a fifth of an inch, and every table set in it came out as a sliver (#351, #355).
+- When the page asks for more than it has, the room is taken back in three steps:
+  1. **prose gives room back first**, down to 35% of its natural height (`PROSE_SHRINK_FLOOR`), while figures keep theirs;
+  2. if that is not enough, every flowing band, figures included, shrinks in proportion;
+  3. if even emptying the flowing bands is not enough, every band shrinks in proportion, so the page is never taller than the page.
+  Starting at step 2 took a stacked page's figure band from a third of the page to a fifth of an inch, and every table set in it came out as a sliver (#351, fixed in #355).
+  Figures are protected only by step 1, which is why a figure can still be drawn small on an overfull arrangement (#350).
   Prose that loses room is measured and split later (section 8); an exhibit that loses room is simply drawn smaller, which is why it is protected.
 
 **Capacities.**
-Each text slot's `max_chars` is measured from its face, size and final geometry (`_capacity`), so the selector's overflow check reads the page rather than a string length.
+Each text slot's `max_chars` is computed from its size, line height and final geometry (`_capacity`), so the selector's overflow check reads the page rather than a string length.
+**Known gap (#361):** the per-character width is measured in Arial whatever the slot's face, so a language set in a wider face gets capacities that are too generous.
+The composed openers (`vocabulary.fits_in`) already measure in the slot's own face.
 
 **Openers.**
 A pack with no cover, section or closing page gets one composed from its own grid, ramp and colours (`app/design/vocabulary.py`, `ensure`).
@@ -120,13 +125,14 @@ Each refusal names what to change, and that sentence is put into the retry promp
 5. **A deck of every page kind composes on the language's own pages.**
    A probe deck (cover, section, prose page, table page, chart page, closing) must compose and pass the geometry check without any page needing the plain fallback of section 9.
 
-Against the 17 languages authored in the recorded benchmark runs, the gate refuses 2, both for check 4.
+Against the 17 distinct languages authored in the evidence runs, the gate refuses 2, both for check 4 (their tallest figure slot is 1.0in tall where a five-row table needs 1.7in).
+`python -m app.research.gate_audit ../../benchmark/evidence` reproduces this, and `tests/test_gate_audit.py` pins it, so a change to the gate fails until this sentence is updated.
 
 ## 5. From a slide to material
 
 A drafted slide is read into a *material shape* (`run.material_from`, `material.shape_from`): an ordered list of items, each with a kind.
 
-- The first single-line text block is the **heading**.
+- The **heading** is the slide's own `heading` or `title` field, or else its first single-line text block.
 - Further text is **body** paragraphs.
 - `chart`, `table`, `diagram` and `metrics` / `statCallout` blocks are **exhibits**; an exhibit whose figure declares an aspect ratio (an SVG's view box) carries it, so shape can be matched before placement.
 - `image` blocks are **figures**.
@@ -163,13 +169,16 @@ Otherwise its cost is the sum of:
 | Term | Weight | What it measures |
 | --- | --- | --- |
 | capacity strain | 2.0 | How badly text over- or under-fills the slot, measured by typesetting it. Overrun costs `min(4, 4(f-1)^2 + (f-1))` at fill `f > 1`; underfill below 0.72 costs `(0.72 - f)^2`. Two-sided on purpose: penalising only overrun makes the roomiest archetype always safest, and a deck of half-empty pages is what the previous system produced. |
-| aspect | 6.0 | How far the slot's shape is from the exhibit's declared shape, `min(1, abs(ln(a_item / a_slot)) / ln 4)`. 6.0 is the smallest weight at which the arrangement tracks the exhibit; the shipped packs' choices do not change at any weight from 1 to 12. |
+| aspect | 6.0 | How far the slot's shape is from the exhibit's declared shape, `min(1, abs(ln(a_item / a_slot)) / ln 4)`. 6.0 is the smallest weight at which the arrangement tracks the exhibit; the shipped packs' choices did not change at any of the weights measured (1, 2, 4, 6, 8 and 12). |
 | legibility | 12.0 | How far short of readable the slot leaves an exhibit (section 7). Weighted like overflow, doubled because pair costs are averaged over a page. |
 | prominence | 0.4 | Mismatch between the item's importance and the slot's prominence. |
 | frame hint | -2.0 | A bonus when the material is the kind the frame is for (a heading in a headline frame). A heading set as a body paragraph is penalised. |
 | sequence | 2.2 | Preference for the k-th paragraph to land in the k-th text slot in reading order, so a page reads as a page rather than three fragments. |
+| over the slot's `max_chars` | up to 2.0 | `min(2, (chars - max_chars) / max_chars)`: a fast character-count check alongside the typeset one. |
+| under the slot's `min_chars` | 0.3 | A slot built for more copy than it is given. |
 
 A required slot pulls material into itself with a bonus of 5.0, because the assignment has no concept of "this column must be used".
+The bonus applies only when the item suits the slot (no more than 1.5 times its `max_chars`); applied flatly it outweighed every other term, and a three-hundred-character paragraph won the headline slot.
 
 ### 6.4 The cost of an archetype
 
@@ -229,8 +238,8 @@ Each step is tried only when the one before it fails, and each affects the small
 1. **The cheapest feasible archetype** for the page (section 6).
 2. **A split** of the page into parts that each fit (section 8).
 3. **A cramped placement**, with the legibility floor relaxed, when an exhibit cannot be shown legibly anywhere or nothing is left to divide (section 7).
-4. **The page's previous arrangement**, when the failure came from a `replace` verdict's avoid list (section 13).
-   The arrangement it was on held it a render ago, and placing it as before beats downgrading it because a revision was asked for.
+4. **The whole pack again, without the avoid list**, when the failure came from a `replace` verdict's avoid list (section 13).
+   The cheapest arrangement is taken again, which is the one the page was on unless its material or neighbours changed; placing it as before beats downgrading it because a revision was asked for.
 5. **The pack's plain page**, for that page only (`vocabulary.plain_content`, #322).
    A headline, one full-width column and a full-width figure frame, composed from the pack's own grid, type and colours.
    It is never offered alongside the pack's archetypes, because it would win on capacity and flatten every deck; it is used only after all of them have refused a page.
@@ -240,7 +249,8 @@ Each step is tried only when the one before it fails, and each affects the small
 
 Previews are different: a specimen page no archetype can carry is skipped, since three preview cards showing two pages each are still a comparison a user can make.
 
-Every step past the first is logged, and steps 5 and 6 are recorded on the render's trace span and named by the run checks (section 15).
+Steps 3, 5 and 6 are logged (`exhibit_placed_below_legible_size`, `page_placed_on_plain_fallback`, `pack_could_not_place_deck`), and steps 5 and 6 are also recorded on the render's trace span and named by the run checks (section 15).
+Steps 2 and 4 are ordinary outcomes and are not logged; a split shows in the page count.
 
 ## 10. Binding material into frames
 
@@ -273,10 +283,14 @@ A table is laid out from its content, not split evenly (`app/renderer/table_layo
 ## 12. Repair: fixing a composed page in code
 
 After composition, each page is repaired in code before rendering (`app/design/repair.py`).
-A finding names a frame and a patch names an operation on that frame, from a closed vocabulary: `set_columns`, `set_type_role`, `set_fit`, `drop_content`, `set_ground`, `set_z`.
-Nothing outside it can be applied, so a hallucinated repair is rejected at parse time.
+A finding names a frame and a patch names an operation on that frame, from a closed vocabulary (`repair.PATCHES`): `set_columns`, `set_type_role`, `set_fit`, `drop_content`, `set_ground`, `set_z`, `move_band`.
+An operation outside it raises when applied, and the loop skips that patch, so nothing unaccounted for reaches a page.
 
-The loop runs at most 3 rounds (`MAX_ROUNDS`) and **keeps a round only if the page's score falls**, so it can make a page better or leave it alone and has no path to making it worse.
+The loop runs at most 3 rounds (`MAX_ROUNDS`).
+A round is **kept only if it lowers the page's score by at least 0.01** (`MIN_IMPROVEMENT`), and the loop stops at the first round that does not, so it can make a page better or leave it alone and has no path to making it worse.
+
+The most common patch is `set_type_role`: copy that overruns its frame is set one rung smaller on the pack's ramp.
+Because repair works page by page, a headline stepped down on one page and not another made one deck's headlines differ between pages; every content page's headline is therefore set, after repair, on the smallest rung any of them needed (#357).
 Text within 2% of its frame (`OVERFLOW_TOLERANCE`) is not a finding.
 Repair runs in code rather than as a tool because the validator it replaced was a tool the model could decline to call, and it was called zero times across every observed run.
 
@@ -316,6 +330,9 @@ Some decisions are made by telling the model a constraint, because the cheapest 
   Each drafting and revision turn states how many charts, tables, diagrams or images, counted together, a page of the design can hold (`run.exhibits_per_page`): the most figure slots any content arrangement has.
   Material that needs more is more than one slide.
   A draft with more exhibits than any arrangement holds is otherwise split onto a continuation page the plan never counted.
+- **Headline length.**
+  Each drafting turn states the longest headline any content arrangement sets at full size (`run.headline_capacity`, measured by fitting a probe heading through the selector).
+  One headline past it is stepped down the ramp by repair, and then every content headline in the deck is set at that rung to match (section 12), so one long headline shrinks all of them (#357).
 - **The exhibits a revised slide already carries**, with their slot names, so a rebuild replaces the right one (#312).
 - **The plan's content type** for the slide (chart, table, dashboard, image) and the deck's format vocabulary.
 
@@ -370,7 +387,15 @@ The ones that report on the decisions above:
 ## 17. Evidence log
 
 The runs that motivated rules in this document.
-Each is reproducible at no cost by replaying its cassette with the headless runner (`python -m app.research run <task> --mode replay --cassette <run>/cassette.jsonl`).
+Their cassettes, manifests and check results are committed under [`benchmark/evidence/`](../benchmark/evidence/), so each is reproducible at no cost by replaying it with the headless runner:
+
+```
+cd services/ai
+PYTHONPATH=. .venv/bin/python -m app.research run ../../benchmark/tasks/<category>/<task>.yaml \
+    --mode replay --cassette ../../benchmark/evidence/<task>/<run>/cassette.jsonl
+```
+
+A replay feeds the recorded model answers to the current code, so it tests the deterministic engine; a change to a prompt cannot show in a replay.
 
 | Issue | Run | What it showed | Rule |
 | --- | --- | --- | --- |
@@ -378,7 +403,9 @@ Each is reproducible at no cost by replaying its cassette with the headless runn
 | #312 | `technical-http-caching/20260924-191957-live` | A revision rebuilt a diagram under a new slot name and the page carried it twice. | Rebuilt exhibits replace their predecessors (section 13). |
 | #344 | `technical-http-caching/20260924-152618-claude-code` | Three `replace` verdicts re-placed slide 1 identically; `avoided={}` on every recomposition. | Placements travel in the render result (section 13). |
 | #345 | `technical-k8s-rollouts/20260924-203834-live` | Seven rejected drafts reported as seven failed tool calls. | Rejections are verdicts (section 13). |
-| #348, #312 | `technical-k8s-rollouts/20260924-203834-live` | Slide 2 shipped three stacked copies of its comparison table, text run off the page, body at 9.8pt. | Rebuilt exhibits replace their predecessors. |
+| #348, #312 | `technical-k8s-rollouts/20260924-203834-live` | Slide 2 shipped three stacked copies of its comparison table and text ran off the page; body copy measured 9.8 to 12.2pt on four pages. | Rebuilt exhibits replace their predecessors. |
 | #351 | `technical-k8s-rollouts/20260924-203834-live`, replayed as `20260925-091641-replay` | Two slides with a diagram and a table could not be placed in a one-exhibit-slot language; the whole deck fell back to stock. Once composed, tables were drawn as slivers against the page edge, with cells overprinting. | Splitting divides visuals (section 8); legibility floor (section 7); prose yields first (section 3); no bleed for exhibits; table face, columns and rows (section 11); the render-path check. |
+| #357 | `technical-k8s-rollouts/20260925-091641-replay` | Five of seven content headlines stepped down to 31.6pt regular by repair, two left at 45pt bold. | One headline rung per deck (section 12); headline length told to drafting (section 14). |
+| #361 | found by review of this document | Authored slot capacities are measured in Arial whatever the face. | Documented as a known gap (section 3). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | Documented as a known gap (section 13). |
-| #322 | the 17 languages authored in the recorded runs | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |
+| #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

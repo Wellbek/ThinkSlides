@@ -1,0 +1,12 @@
+{
+  "search": "tavily",
+  "task": "technical-k8s-rollouts",
+  "category": "technical",
+  "mode": "claude-code",
+  "taskFile": "benchmark/tasks/technical/kubernetes-rollouts.yaml",
+  "commit": "3d4ecb7-dirty",
+  "startedAt": "2026-09-24T20:34:55.900395",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null
+}

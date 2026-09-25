@@ -1,0 +1,16 @@
+{
+  "task": "technical-http-caching",
+  "category": "technical",
+  "mode": "claude-code",
+  "taskFile": "../../benchmark/tasks/technical/http-caching.yaml",
+  "commit": "0a3e8f7",
+  "startedAt": "2026-09-24T15:26:18.632975",
+  "replayOf": null,
+  "sessionId": "2860d6ca-6668-47df-aeb7-6c92cd2ea292",
+  "finishedAt": "2026-09-24T15:36:38.958851",
+  "parts": 4,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "errors": []
+}
