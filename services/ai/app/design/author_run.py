@@ -67,12 +67,15 @@ async def author(llm, brief: str, canvas: Canvas, *, answers: str = "",
         payload = extract_json_object(
             (response.get("message") or {}).get("content", "{}")) or {}
         languages = authoring.read(payload)
+        verdicts = {language.name: _problem(language, canvas, floor_pt)
+                    for language in languages}
         usable = [language for language in languages
-                  if _derives(language, canvas, floor_pt)]
+                  if not verdicts[language.name]]
         if len(usable) > len(best):
             best = usable
 
-        problems = []
+        problems = [f"{name}: {why}" for name, why in verdicts.items()
+                    if why and why != NO_EXHIBIT_PAGE]
         no_exhibit = [language.name for language in languages
                       if language not in usable
                       and not _carries_an_exhibit(language)]
@@ -102,21 +105,30 @@ async def author(llm, brief: str, canvas: Canvas, *, answers: str = "",
     return best[:wanted], "; ".join(problems)
 
 
-def _derives(language: Language, canvas: Canvas, floor_pt: float) -> bool:
-    """Whether this language becomes a pack that would actually render.
+NO_EXHIBIT_PAGE = "declared no content page with a figure slot"
 
-    The check is the derivation itself: a language whose ramp or measure
-    cannot produce placeable frames fails here, where it costs a retry, rather
-    than at render, where it costs the deck.
+
+def _derives(language: Language, canvas: Canvas, floor_pt: float) -> bool:
+    """Whether this language becomes a pack that would actually render."""
+    return not _problem(language, canvas, floor_pt)
+
+
+def _problem(language: Language, canvas: Canvas, floor_pt: float) -> str:
+    """Why this language cannot be offered, or "" when it can.
+
+    The gate is the derivation and a compile of every page it will be asked
+    to set, run here, where a failure costs a retry, rather than at render,
+    where it cost the deck (#306, #351). Each answer names what to change,
+    because it is read back to the model: "try again" gets the same set back.
     """
     try:
         pack = ensure(to_pack(language, canvas, floor_pt=floor_pt))
     except Exception as exc:
         logger.info("authored_language_underivable",
                     name=language.name, error=str(exc))
-        return False
+        return f"could not be derived into pages ({exc})"
     if not pack.archetypes or not pack.type_roles:
-        return False
+        return "derived into no pages"
     if not _carries_an_exhibit(language):
         # A deck argues from charts and tables, and they go in figure slots.
         # A language with none composed its cover and its prose pages and
@@ -126,8 +138,123 @@ def _derives(language: Language, canvas: Canvas, floor_pt: float) -> bool:
         # the model is told what is missing and writes a page for it.
         logger.info("authored_language_has_no_exhibit_page",
                     name=language.name)
-        return False
-    return True
+        return NO_EXHIBIT_PAGE
+    problem = compile_problem(pack)
+    if problem:
+        logger.info("authored_language_does_not_compile",
+                    name=language.name, problem=problem)
+    return problem
+
+
+# What a language is compiled against before it is offered: every role a deck
+# has, a page of prose, and the two exhibits a deck most often argues from, at
+# the size they usually come. Five rows of four short columns is the median
+# comparison table in the benchmark runs; smaller than that proves nothing.
+PROBE_TABLE = [["Option", "Cost", "Risk", "Best for"],
+               *[[f"Option {n}", "Moderate spare capacity",
+                  "Partial exposure on rollback", "Routine releases"]
+                 for n in range(1, 6)]]
+PROBE_CHART = {"type": "bar", "categories": ["2023", "2024", "2025", "2026"],
+               "series": [{"name": "Share", "values": [12, 18, 25, 31]}]}
+
+
+def _probe_slides() -> list[dict]:
+    def text(line: str) -> dict:
+        return {"type": "text", "runs": [{"text": line}]}
+
+    prose = ("The platform team ships most changes as routine releases, and "
+             "a smaller number carry enough risk to need staged exposure.")
+    return [
+        {"slideIndex": 0, "role": "cover", "contents": [
+            text("A deck title of ordinary length"), text(prose)]},
+        {"slideIndex": 1, "role": "section", "contents": [
+            text("A section divider")]},
+        {"slideIndex": 2, "role": "content", "contents": [
+            text("A headline that states the page's finding"), text(prose),
+            text(prose)]},
+        {"slideIndex": 3, "role": "content", "contents": [
+            text("A comparison set as a table"), text(prose),
+            {"type": "table", "table": {"headerRow": True, "rows": PROBE_TABLE}}]},
+        {"slideIndex": 4, "role": "content", "contents": [
+            text("A trend set as a chart"), text(prose),
+            {"type": "chart", "chart": PROBE_CHART}]},
+        {"slideIndex": 5, "role": "closing", "contents": [
+            text("What to do next"), text(prose)]},
+    ]
+
+
+def compile_problem(pack) -> str:
+    """What stops this pack setting a deck, in words a designer can act on.
+
+    Three checks, cheapest first:
+    - every arrangement's own frames are sound geometry, with and without
+      anything in them - a cover whose frames overlapped at equal depth was
+      refused at render and shipped nothing (#306);
+    - some content arrangement shows a table and a chart legibly - a language
+      whose largest figure slot was an inch and a half tall set every table
+      as a sliver (#351);
+    - a deck of every role composes and passes the same geometry check the
+      renderer runs.
+    """
+    from app.design.geometry import check_page
+    from app.design.material import MaterialItem
+    from app.design.run import Unplaceable, compose
+    from app.design.schema import DesignDoc, Page, PackRef
+    from app.design.select import (
+        _accepts, _slot_rect, exhibit_floor_in,
+        readable_somewhere,
+    )
+    from app.design.vocabulary import PLAIN_ID
+
+    shell = DesignDoc(pack=PackRef(id=pack.id, version=pack.version),
+                      canvas=pack.canvas, grid=pack.grid, pages=())
+    for archetype in pack.archetypes:
+        bare = Page(id="probe", archetype=archetype.id, role=archetype.role,
+                    frames=archetype.frames)
+        broken = check_page(shell, bare)
+        if broken:
+            return (f"its {archetype.label or archetype.id} page is unsound "
+                    f"geometry: {broken[0]}")
+
+    pages = [a for a in pack.archetypes if a.role in ("content", "exhibit")]
+    for kind, payload in (("table", {"table": {"headerRow": True,
+                                               "rows": PROBE_TABLE}}),
+                          ("chart", {"chart": PROBE_CHART})):
+        item = MaterialItem(id=f"probe-{kind}", kind=kind, payload=payload)
+        if not readable_somewhere(item, pack, pages):
+            sizes = [
+                _slot_rect(a, slot, pack, a.grid or pack.grid)
+                for a in pages for slot in a.slots if _accepts(slot, item)
+            ]
+            sizes = [s for s in sizes if s]
+            tallest = max(sizes, key=lambda s: s[1]) if sizes else (0.0, 0.0)
+            need = exhibit_floor_in(item, pack, tallest[0] or None)
+            return (f"no content page gives a {kind} room to be read: its "
+                    f"tallest figure slot is {tallest[1]:.1f}in by "
+                    f"{tallest[0]:.1f}in, and a five-row {kind} needs about "
+                    f"{need:.1f}in of height at that width. Give at least one "
+                    f"content page a figure slot that tall - fewer fixed "
+                    f"slots above and below it, or a figure beside the prose "
+                    f"rather than under it")
+
+    try:
+        doc = compose(_probe_slides(), pack, title="probe")
+    except Unplaceable as exc:
+        return f"a deck of every page kind could not be composed ({exc})"
+    from app.design.geometry import check_doc
+
+    broken = check_doc(doc)
+    if broken:
+        return f"a composed page is unsound geometry: {broken[0]}"
+    plain = sorted({page.provenance.source_slide + 1 for page in doc.pages
+                    if page.archetype == PLAIN_ID
+                    and page.provenance.source_slide is not None})
+    if plain:
+        # Placed, but only on the fallback page: the language itself has no
+        # page for that material, which is what this gate exists to find.
+        return (f"none of its own pages could set probe page(s) "
+                f"{', '.join(map(str, plain))} of a deck of every page kind")
+    return ""
 
 
 def _carries_an_exhibit(language: Language) -> bool:
