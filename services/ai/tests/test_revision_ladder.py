@@ -490,6 +490,61 @@ class TestARowClosesUpWhenItLosesAMember:
         prose = next(f for f in doc.pages[0].frames if f.role == "column")
         assert prose.place.span == 6
 
+    def test_two_survivors_of_three_share_the_row(self):
+        """#357: a row of three prose columns that lost one packed the other
+        two to the left at a third of the page each, or - when the survivors
+        sat side by side - was not closed up at all, since two frames sharing
+        a band read as an overlap."""
+        pack = ensure(to_pack(Language(
+            name="Three", rationale="a probe", columns=6, body_pt=18.0,
+            pages=(PageKind(name="three", role="content", frequency=1.0,
+                            slots=(Slot(kind="heading", span=6, required=True),
+                                   Slot(kind="figure", span=6),
+                                   Slot(kind="prose", span=2),
+                                   Slot(kind="prose", span=2),
+                                   Slot(kind="prose", span=2))),),
+        ), CANVAS))
+        from app.design.bind import build_page
+        from app.design.material import shape_from
+        from app.design.select import fit
+
+        shape = shape_from("content", "A heading", [
+            "One point that runs a reasonable length.",
+            "A second point of about the same size."])
+        selection = fit(shape, pack.archetype("three"), pack)
+        assert selection is not None
+        page = build_page("p1", shape, selection, pack)
+        prose = sorted((f for f in page.frames if f.role == "column"),
+                       key=lambda f: f.place.col)
+        assert len(prose) == 2
+        assert [f.place.col for f in prose] == [0, prose[0].place.span]
+        assert sum(f.place.span for f in prose) == 6
+
+    def test_shares_always_fill_the_row_exactly(self):
+        from app.design.bind import _shares
+
+        for weights, width in (([1, 1, 1, 1], 6), ([2, 2], 6), ([3, 1, 1], 5),
+                               ([1, 1, 1], 12)):
+            spans = _shares(weights, width)
+            assert sum(spans) == width and min(spans) >= 1, (weights, width)
+        assert _shares([1, 1, 1], 2) is None
+
+    def test_frames_stacked_in_one_band_are_not_spread_across_it(self):
+        """A tall figure beside a heading stacked over prose shares a height
+        band with both; spreading them across the band set the heading and
+        the prose beside each other."""
+        from app.design.bind import _closed_up
+        from app.design.schema import Frame, GridPlace
+
+        def frame(name, col, span, y, h):
+            return Frame(id=name, role="column",
+                         place=GridPlace(col=col, span=span, y=y, h=h))
+
+        original = (frame("figure", 0, 6, 0.2, 0.7), frame("heading", 6, 6, 0.2, 0.1),
+                    frame("chart", 6, 6, 0.35, 0.2), frame("prose", 6, 6, 0.6, 0.3))
+        kept = [original[0], original[1], original[3]]
+        assert _closed_up([kept], original) == {}
+
     def test_a_row_that_kept_everything_is_untouched(self):
         """A page that lost nothing is composed exactly as its archetype
         states, which is what a measured pack is for."""

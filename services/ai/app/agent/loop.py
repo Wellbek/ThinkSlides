@@ -3475,6 +3475,7 @@ class AgentLoop:
                 "it onto its own slide, then call design_slide_content for this slide."
                 + self._attached_exhibits_directive(index)
                 + self._exhibit_capacity_directive()
+                + self._headline_capacity_directive()
                 + code_option
             )
         # Named only when it is actually offered. This instruction reaches the
@@ -3496,6 +3497,7 @@ class AgentLoop:
             f"design_slide_content for slide_index={index}. This slide only."
             + self._content_type_directive(planned)
             + self._exhibit_capacity_directive()
+            + self._headline_capacity_directive()
             + self._format_directive()
             + self._structure_directive()
             + self._arc_directive(index)
@@ -3546,6 +3548,28 @@ class AgentLoop:
             f"\nA page in this deck's design holds at most {most}; build no "
             "more than that for this slide. Material that needs more is more "
             "than one slide."
+        )
+
+    def _headline_capacity_directive(self) -> str:
+        """How long a headline this deck's design can set at headline size.
+
+        A headline that overran its two lines was stepped down the ramp by
+        repair, and then every content headline was set at that smaller rung
+        so the deck keeps one voice (#357) - so one long headline shrinks all
+        of them. Stated here, it is written to fit instead.
+        """
+        from app.design import run as design_run
+
+        pack = run_context.get_pack()
+        if pack is None:
+            return ""
+        capacity = design_run.headline_capacity(pack)
+        if capacity < 20:
+            return ""
+        return (
+            f"\nA headline in this deck's design fits about {capacity} "
+            "characters at full size; keep it within that, or every headline "
+            "set at that size is made smaller to match."
         )
 
     def _content_type_directive(self, planned: dict) -> str:

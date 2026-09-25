@@ -389,6 +389,12 @@ class Provenance(_Model):
     # position - it is what the page is attributable *to*, which is what a
     # caller needs to say "place that slide again, differently".
     source_slide: Optional[int] = None
+    # The frame the page's heading was bound to. Recorded because a measured
+    # pack sets its assertion wherever the house does - EY in a pull-quote -
+    # so the frame's role does not say which frame is the headline.
+    heading_frame: str = ""
+    # The rung the heading was designed to be set on, before repair fitted it.
+    heading_rung: str = ""
 
 
 class Page(_Model):

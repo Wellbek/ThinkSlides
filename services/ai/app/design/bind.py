@@ -106,18 +106,25 @@ def build_page(page_id: str, shape: MaterialShape, selection: Selection,
     for placement in selection.placements:
         contents.setdefault(placement.slot.frame_id, []).append(placement.item)
 
+    heading_frame = next((p.slot.frame_id for p in selection.placements
+                          if p.item.role_hint == "heading"), "")
+    frames = _compact(_fill(archetype.frames, contents, pack), archetype.frames)
+    heading_rung = next(
+        (block.type_role for frame in _walk(frames) if frame.id == heading_frame
+         for block in frame.content if isinstance(block, TextBlock)), "")
     return Page(
         id=page_id,
         archetype=archetype.id,
         role=shape.role,
         grid=archetype.grid,
-        frames=_compact(_fill(archetype.frames, contents, pack),
-                        archetype.frames),
+        frames=frames,
         provenance=Provenance(
             selected_by="fit",
             fit_cost=round(selection.cost, 4),
             considered=considered,
             source_slide=source_slide,
+            heading_frame=heading_frame,
+            heading_rung=heading_rung,
         ),
     )
 
@@ -173,16 +180,20 @@ def _compact(frames: tuple[Frame, ...],
         if frame.ground or frame.scrim:
             continue
         band = _band(frame)
-        if band is None:
+        # Grid-placed frames only. A measured pack mixes grid and fractional
+        # placement, and their vertical fractions are not of the same box -
+        # the content box and the page - so a band from one cannot be
+        # compared with a band from the other. Such a page is left exactly as
+        # its archetype states, which is what a measured pack is for.
+        if band is None or not isinstance(frame.place, GridPlace):
             return frames
         placed.append(frame)
     if len(placed) < 2:
         return frames
 
     ordered = sorted(placed, key=lambda f: _band(f)[0])
-    for upper, lower in zip(ordered, ordered[1:]):
-        if _band(lower)[0] < _band(upper)[1]:
-            return frames
+    if _stacked_over(ordered):
+        return frames
 
     # The archetype's own spacing, taken from the layout that still has every
     # frame in it. Measuring between survivors instead would preserve the gap
@@ -229,9 +240,8 @@ def _compact(frames: tuple[Frame, ...],
     # with its hole, which is ugly and correct.
     compacted = [f for f in out if f.id in moved]
     compacted.sort(key=lambda f: _band(f)[0])
-    for upper, lower in zip(compacted, compacted[1:]):
-        if _band(lower)[0] < _band(upper)[1] - 1e-6:
-            return frames
+    if _stacked_over(compacted, tolerance=1e-6):
+        return frames
     if compacted and _band(compacted[-1])[1] > 1.0 + 1e-6:
         return frames
     return tuple(out)
@@ -266,17 +276,90 @@ def _closed_up(rows: list[list[Frame]],
                   if f.id in spans and _same_band(f, row)]
         if len(before) <= len(placed):
             continue
+        # Only a true row is redistributed: members side by side, no two in
+        # the same columns. A tall figure beside a heading stacked over prose
+        # shares a height band with both, and spreading the three across the
+        # band set the heading and the prose beside each other.
+        if not _side_by_side(before):
+            continue
         left = min(col for col, _ in before)
         width = max(col + span for col, span in before) - left
         placed.sort(key=lambda f: spans[f.id][0])
         if len(placed) == 1:
             out[placed[0].id] = {"col": left, "span": max(1, width)}
             continue
+        # The survivors share the row's whole width, in proportion to the
+        # widths they had. Packing them left at their old widths moved the
+        # hole from the middle of the row to its end: two of three prose
+        # columns came out at a third of the page each with a third of the
+        # page white beside them (#357).
+        shares = _shares([spans[f.id][1] for f in placed], width)
+        if shares is None:
+            continue
         cursor = left
-        for frame in placed:
-            out[frame.id] = {"col": cursor}
-            cursor += spans[frame.id][1]
+        for frame, span in zip(placed, shares):
+            out[frame.id] = {"col": cursor, "span": span}
+            cursor += span
     return out
+
+
+def _side_by_side(spans: list[tuple[int, int]]) -> bool:
+    """Whether these column spans sit beside each other without sharing any."""
+    ordered = sorted(spans)
+    return all(a[0] + a[1] <= b[0] for a, b in zip(ordered, ordered[1:]))
+
+
+def _shares(weights: list[int], width: int) -> Optional[list[int]]:
+    """`width` whole columns split in proportion to `weights`, each at least
+    one, summing exactly to `width` - largest remainder, so rounding can
+    never push the last member off the grid. None when they cannot all fit."""
+    if width < len(weights):
+        return None
+    total = sum(weights) or len(weights)
+    exact = [w * width / total for w in weights]
+    spans = [max(1, int(e)) for e in exact]
+    while sum(spans) > width:
+        spans[spans.index(max(spans))] -= 1
+    order = sorted(range(len(weights)), key=lambda i: exact[i] - int(exact[i]),
+                   reverse=True)
+    index = 0
+    while sum(spans) < width:
+        spans[order[index % len(order)]] += 1
+        index += 1
+    return spans
+
+
+def _stacked_over(ordered: list[Frame], tolerance: float = 0.0) -> bool:
+    """Whether any two frames overlap on the page, not merely in height.
+
+    Two frames side by side share a band - that is what a row is - and
+    checking height alone read every row as an overlap, so no page with one
+    was ever compacted (#357).
+    """
+    for index, upper in enumerate(ordered):
+        for lower in ordered[index + 1:]:
+            if _band(lower)[0] >= _band(upper)[1] - tolerance:
+                break
+            if _across(upper, lower):
+                return True
+    return False
+
+
+def _across(a: Frame, b: Frame) -> bool:
+    """Whether two frames overlap horizontally. Unknown extents count as yes."""
+    def extent(frame: Frame):
+        place = frame.place
+        if isinstance(place, GridPlace):
+            return (place.col, place.col + place.span)
+        x, w = getattr(place, "x", None), getattr(place, "w", None)
+        if x is None or w is None:
+            return None
+        return (float(x), float(x) + float(w))
+
+    ea, eb = extent(a), extent(b)
+    if ea is None or eb is None or type(a.place) is not type(b.place):
+        return True
+    return ea[0] < eb[1] and eb[0] < ea[1]
 
 
 def _same_band(frame: Frame, row: list[Frame]) -> bool:
