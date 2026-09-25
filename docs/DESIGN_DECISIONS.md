@@ -212,8 +212,13 @@ Each exhibit has a minimum slot height:
   As a cost, it was outbid by the text overflow of every other arrangement, and a five-row table was set in a slot 0.2in tall with its rows printed over each other (#351).
 - A shortfall within tolerance is charged at weight 12.0, so a slot that fits wins over one that nearly does.
 - If no content arrangement in the pack has a slot the exhibit could be read in (`readable_somewhere` is false), splitting the prose around it cannot help, because legibility depends on the slot and not on the prose.
-  The page is then set on the pack's plain page (section 9), whose figure frame is the width of the grid and most of the page tall, and only if even that cannot hold it is it placed cramped, with the floor relaxed and a `exhibit_placed_below_legible_size` warning.
+  Such an exhibit is handled in three steps:
+  1. **The pack's plain page** (section 9), whose figure frame is the width of the grid and most of the page tall, is tried with the page's whole material.
+  2. If that fails because of the prose around the exhibit, and the plain page could show the exhibit legibly on its own, the page is **split** until the exhibit stands on a part the plain page can hold.
+     One paragraph and one exhibit can be divided for this, the exhibit continuing on its own page.
+  3. If even the plain page is too small for the exhibit (a forty-row table), no split can help, so the page is **placed cramped** at once, with the floor relaxed and an `exhibit_placed_below_legible_size` warning.
   A six-column table forced into a short slot came out at 8pt and still ran into the prose below it, since a native table row grows to its text.
+  The plain page is never used in a preview, which shows only what the language itself can do, and a revision that avoids the plain page for a slide is obeyed.
 
 **Margins.**
 A slot that bleeds off the page keeps its bleed for a photograph and loses it for an exhibit (`bind._fill`).
@@ -232,7 +237,7 @@ When no archetype can carry a page's material, the page is split and each part p
 - **Bounded.**
   A page is split at most `max(4, number of non-figure items)` times, and a part with fewer than two paragraphs and fewer than two visuals is not divisible.
 - **When not to split.**
-  A page whose exhibit no slot could show legibly is not split for that (section 7).
+  A page whose exhibit not even the plain page could show legibly is not split for that, since legibility depends on the slot and not on the prose around it (section 7).
 
 Splitting adds pages the plan did not count, so drafting is told the design's exhibit capacity up front (section 14).
 

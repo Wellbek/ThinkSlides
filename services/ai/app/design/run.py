@@ -341,9 +341,16 @@ def _split(shape: MaterialShape) -> tuple[MaterialShape, MaterialShape]:
     # slot is as unplaceable as two charts.
     visuals = [item for item in shape.items if item.kind in _VISUAL_KINDS]
     # A page with one paragraph and two visuals still divides - at the
-    # visuals, with the paragraph staying beside the first of them.
+    # visuals, with the paragraph staying beside the first of them. One
+    # paragraph and one visual divides too, the visual continuing on its own:
+    # that is only asked for when no arrangement holds the two together.
     cut = max(1, len(texts) // 2) if len(texts) > 1 or len(visuals) < 2 else 1
-    shown = max(1, len(visuals) // 2) if len(visuals) > 1 else len(visuals)
+    if len(visuals) > 1:
+        shown = max(1, len(visuals) // 2)
+    elif len(texts) == 1 and visuals:
+        shown = 0
+    else:
+        shown = len(visuals)
 
     def exhibits(part):
         return [dict(i.payload or {}) for i in part if i.kind != "figure"]
@@ -396,7 +403,7 @@ def _divisible(shape: MaterialShape) -> bool:
     body = [i for i in shape.items
             if i.kind == "text" and i.role_hint != "heading"]
     visuals = [i for i in shape.items if i.kind in _VISUAL_KINDS]
-    return len(body) >= 2 or len(visuals) >= 2
+    return len(body) >= 2 or len(visuals) >= 2 or (body and visuals)
 
 
 def _place(shape: MaterialShape, pack: Pack,
@@ -446,21 +453,21 @@ def _place(shape: MaterialShape, pack: Pack,
             readable_somewhere(item, pack, pages) for item in current.items)
         indivisible = splits >= ceiling or not _divisible(current)
         if hopeless:
-            # No arrangement of the pack can show this exhibit legibly, and
-            # splitting the prose around it cannot change that. The pack's
-            # plain page has a figure frame the width of the grid and most of
-            # its height, so it is tried before setting the exhibit cramped:
-            # a six-column table forced into a short slot came out at 8pt and
-            # still ran into the prose below it (#357). A readable table on a
-            # plainer page beats an unreadable one on a designed page.
+            # No arrangement of the pack can show this exhibit legibly. The
+            # pack's plain page has a figure frame the width of the grid and
+            # most of its height, so it is the next place to try: a six-column
+            # table forced into a short slot came out at 8pt and still ran
+            # into the prose below it (#357). A readable table on a plainer
+            # page beats an unreadable one on a designed page. Never in a
+            # preview: a specimen shows what the language itself can do.
             from app.design.vocabulary import PLAIN_ID, plain_content
 
-            # Never in a preview: a specimen shows what the language itself
-            # can do, and the plain page is a delivery fallback, not part of it.
-            if plain and all(a.id != PLAIN_ID for a in pack.archetypes):
+            offered = (plain and PLAIN_ID not in avoid
+                       and all(a.id != PLAIN_ID for a in pack.archetypes))
+            fallback = plain_content(pack) if offered else None
+            if fallback is not None:
                 selection = choose(
-                    current,
-                    pack.model_copy(update={"archetypes": (plain_content(pack),)}),
+                    current, pack.model_copy(update={"archetypes": (fallback,)}),
                     previous_archetype=last)
                 if selection is not None:
                     logger.warning("exhibit_placed_on_plain_page",
@@ -468,10 +475,20 @@ def _place(shape: MaterialShape, pack: Pack,
                     placed.append((current, selection))
                     last = selection.archetype.id
                     continue
-        if hopeless or indivisible:
-            # An exhibit no slot can show legibly, or nothing left to divide.
-            # Placing it cramped is better than refusing it: a refusal takes
-            # the whole deck to the stock renderer (#351).
+            # Splitting only helps if the exhibit could stand legibly on the
+            # plain page once the prose around it is gone. If even that page
+            # is too small for it - a forty-row table - more parts would only
+            # repeat the heading, so the page is set cramped as it is.
+            if fallback is None or not all(
+                    readable_somewhere(item, pack, [fallback])
+                    for item in current.items):
+                indivisible = True
+        if indivisible:
+            # Nothing left to divide. Placing it cramped is better than
+            # refusing it: a refusal takes the whole deck to the stock
+            # renderer (#351). A page whose exhibit fits nowhere but which can
+            # still be divided is split instead, until the exhibit stands on
+            # a part the plain page can hold (#357).
             selection = choose(current, pack, previous_archetype=last,
                                candidates=candidates, legible=False)
             if selection is not None:
@@ -481,7 +498,6 @@ def _place(shape: MaterialShape, pack: Pack,
                 placed.append((current, selection))
                 last = selection.archetype.id
                 continue
-        if indivisible:
             raise Unplaceable(
                 f"no archetype in pack {pack.id!r} can carry a page of "
                 f"{current.total_chars} characters in "
