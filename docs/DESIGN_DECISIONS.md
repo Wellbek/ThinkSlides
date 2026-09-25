@@ -255,16 +255,28 @@ Steps 2 and 4 are ordinary outcomes and are not logged; a split shows in the pag
 ## 10. Binding material into frames
 
 Placed items are copied into their archetype's frames (`app/design/bind.py`).
-A frame nothing was bound to is dropped, unless it carries a ground or scrim, and the rows below it close up (`_compact`), so a figure slot on a page with no figure does not leave a third of the page white.
+A frame nothing was bound to is dropped, unless it carries a ground or scrim, and the page closes up around it (`_compact`), so a figure slot on a page with no figure does not leave a third of the page white.
+
+- **Vertically**, rows below a dropped frame move up by the archetype's own smallest row gap, and whatever is left at the bottom goes to the last row.
+- **Horizontally**, a true row that lost a member (its original members side by side, no two in the same columns) shares its full width among the survivors, in proportion to the widths they had.
+  Spans use the largest remainder, so they always sum to the row's width.
+  Packing survivors left at their old widths only moved the hole to the end of the row (#357).
+- Two frames overlap only if they share columns as well as height.
+  Reading side-by-side frames as an overlap made compaction skip every page with a row (#357).
+- Only pages whose frames are all grid-placed are compacted.
+  A measured pack mixes grid and fractional placement, whose vertical fractions are not of the same box, so its pages are left exactly as the archetype states.
+- A compaction that does not come out as a clean stack is discarded, and the page renders as its archetype states.
 
 ## 11. Laying out a table
 
-A table is laid out from its content, not split evenly (`app/renderer/table_layout.py`, `plan_table`), and on the composed path drawn as an image that follows that plan exactly (`chart_renderer.render_table_to_png`).
+A table is laid out from its content, not split evenly (`app/renderer/table_layout.py`, `plan_table`), and **always drawn as a native, editable PowerPoint table, never as a picture**, on both render paths (`app/renderer/native_table.py`).
+A table is data a user edits after the deck is delivered; the composed path used to rasterise tables, and a short table placed in a tall frame was stretched until it read as a condensed face.
+The design compiler still carries a table as a boxed image mark, so geometry and measurement treat it as an exhibit, and only the renderer draws it, natively.
+On a composed page it sits at the top of its frame; on a template slide it hangs a third of the way into any surplus.
 
 - **Face.**
   The table is planned in the face it is drawn in, bold for the header and total rows.
   Measuring in one face and drawing in another is how planned rows came out too short for the lines drawn in them.
-  The image is drawn from the font file fontconfig resolves for the face, the same file LibreOffice uses; asked by name, matplotlib silently substituted its own, far wider DejaVu Sans for Arial.
 - **Columns.**
   Widths are proportional to each column's longest cell, with a floor of 8% of the table, and **no column narrower than its longest unbroken word** (a point larger and bold in the header).
   Proportional widths alone squeezed a column of one-word labels beside a column of sentences below its own words, and "Strategy" was set as "Stra / tegy".
@@ -272,12 +284,14 @@ A table is laid out from its content, not split evenly (`app/renderer/table_layo
   Body sizes 14, 13, 12, 11, 10, 9 and 8pt are tried in turn, largest first; a size at which some word cannot be set whole is skipped.
   The first size whose rows fit the band is used.
 - **Rows.**
-  Each row is as tall as its tallest wrapped cell, and the image draws each row at that height and each cell on the lines the plan measured.
-  Drawing every row at an equal share and every cell on one line made cells run into their neighbours.
+  Each row is as tall as its tallest wrapped cell, and the native table is given those heights.
 - **Numbers.**
   A column of figures (ignoring blanks and placeholders such as "-" and "n/a") is right-aligned; a last row labelled Total, Sum or similar gets the total treatment.
-- **Last resort.**
-  If the table is still too tall at 8pt, its rows are compressed proportionally.
+- **Colour.**
+  Filled rows take the design's table colours; a hairline table's cells are transparent, so its text takes a colour that reads on the ground behind it.
+- **Overflow is reported, not hidden.**
+  If the table is still too tall at 8pt, the plan says so (`overflows`) and the renderer logs `table_exceeds_its_frame`.
+  Rows are not shortened on paper: a native row grows to its text regardless, so shortening it only hid an overflow the rendered table still had.
   Section 7's floor exists so that a layout never asks for this.
 
 ## 12. Repair: fixing a composed page in code
@@ -290,7 +304,9 @@ The loop runs at most 3 rounds (`MAX_ROUNDS`).
 A round is **kept only if it lowers the page's score by at least 0.01** (`MIN_IMPROVEMENT`), and the loop stops at the first round that does not, so it can make a page better or leave it alone and has no path to making it worse.
 
 The most common patch is `set_type_role`: copy that overruns its frame is set one rung smaller on the pack's ramp.
-Because repair works page by page, a headline stepped down on one page and not another made one deck's headlines differ between pages; every content page's headline is therefore set, after repair, on the smallest rung any of them needed (#357).
+Because repair works page by page, a headline stepped down on one page and not another made one deck's headlines differ between pages (#357).
+So after repair, headings are grouped by the rung their arrangement designed them on (recorded on the page as `Provenance.heading_rung`, with the frame they were bound to as `heading_frame`), and each group takes the smallest rung repair stepped any member down to, which every member is known to fit.
+A measured pack's deliberate differences between arrangements, an assertion in a pull quote on one page and a headline on another, are kept, and a group is never taken to body size or below: a heading that had to be set as body copy to fit is one broken page, not the deck's new voice.
 Text within 2% of its frame (`OVERFLOW_TOLERANCE`) is not a finding.
 Repair runs in code rather than as a tool because the validator it replaced was a tool the model could decline to call, and it was called zero times across every observed run.
 
@@ -331,8 +347,9 @@ Some decisions are made by telling the model a constraint, because the cheapest 
   Material that needs more is more than one slide.
   A draft with more exhibits than any arrangement holds is otherwise split onto a continuation page the plan never counted.
 - **Headline length.**
-  Each drafting turn states the longest headline any content arrangement sets at full size (`run.headline_capacity`, measured by fitting a probe heading through the selector).
-  One headline past it is stepped down the ramp by repair, and then every content headline in the deck is set at that rung to match (section 12), so one long headline shrinks all of them (#357).
+  Each drafting and revision turn states how long a headline the design sets at full size (`run.headline_capacity`): the tightest slot where the selector puts a probe heading at the pack's `headline` rung.
+  One headline past it is stepped down the ramp by repair, and then every headline designed on that rung is set smaller to match (section 12).
+  A measured pack whose headline-rung slots are label-sized (under 20 characters) states nothing, rather than a budget no claim could meet.
 - **The exhibits a revised slide already carries**, with their slot names, so a rebuild replaces the right one (#312).
 - **The plan's content type** for the slide (chart, table, dashboard, image) and the deck's format vocabulary.
 
@@ -406,6 +423,7 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #348, #312 | `technical-k8s-rollouts/20260924-203834-live` | Slide 2 shipped three stacked copies of its comparison table and text ran off the page; body copy measured 9.8 to 12.2pt on four pages. | Rebuilt exhibits replace their predecessors. |
 | #351 | `technical-k8s-rollouts/20260924-203834-live`, replayed as `20260925-091641-replay` | Two slides with a diagram and a table could not be placed in a one-exhibit-slot language; the whole deck fell back to stock. Once composed, tables were drawn as slivers against the page edge, with cells overprinting. | Splitting divides visuals (section 8); legibility floor (section 7); prose yields first (section 3); no bleed for exhibits; table face, columns and rows (section 11); the render-path check. |
 | #357 | `technical-k8s-rollouts/20260925-091641-replay` | Five of seven content headlines stepped down to 31.6pt regular by repair, two left at 45pt bold. | One headline rung per deck (section 12); headline length told to drafting (section 14). |
+| #364 | `technical-k8s-rollouts/20260925-091641-replay` | Tables were pictures that could not be edited, and a short table in a tall frame was stretched to read as a condensed face. | Tables are native on both paths (section 11). |
 | #361 | found by review of this document | Authored slot capacities are measured in Arial whatever the face. | Documented as a known gap (section 3). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | Documented as a known gap (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |
