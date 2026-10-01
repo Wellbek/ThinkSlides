@@ -18,6 +18,7 @@ from app.design.schema import (
     Figure,
     Frame,
     GridPlace,
+    GridSpec,
     Page,
     Paragraph,
     Provenance,
@@ -38,7 +39,29 @@ def _text_block(frame: Frame, pack: Pack, item: MaterialItem) -> TextBlock:
         for line in item.text.split("\n") if line.strip()
     )
     return TextBlock(type_role=_type_role(frame, pack, item),
-                     paragraphs=paragraphs)
+                     paragraphs=paragraphs, anchor=_anchor(frame))
+
+
+def _anchor(frame: Frame) -> str:
+    """Where in its frame a block sits.
+
+    An opener's title is display type in a band tall enough for the longest
+    title it is offered, and openers are built upward from a baseline, the
+    standfirst resting on it and the title on the standfirst. Hung from the
+    top of its band, a one-line title left the band's second line empty
+    between itself and its standfirst, so the shorter the title the further
+    it drifted from what it introduces. Resting on the bottom, it sits on
+    the standfirst whatever its length.
+
+    Read off the frame, not the block: a title repair steps down to a
+    smaller rung is still the title of an opener, resting on the same
+    baseline. And a title too long for its band now runs up into the empty
+    top of the page rather than down over its standfirst - selection and
+    repair exist so that neither happens.
+    """
+    if frame.role == "headline" and frame.type_role == "display":
+        return "bottom"
+    return "top"
 
 
 def _content_for(frame: Frame, pack: Pack, item: MaterialItem):
@@ -108,7 +131,8 @@ def build_page(page_id: str, shape: MaterialShape, selection: Selection,
 
     heading_frame = next((p.slot.frame_id for p in selection.placements
                           if p.item.role_hint == "heading"), "")
-    frames = _compact(_fill(archetype.frames, contents, pack), archetype.frames)
+    frames = _compact(_fill(archetype.frames, contents, pack), archetype.frames,
+                      pack, archetype.grid or pack.grid)
     heading_rung = next(
         (block.type_role for frame in _walk(frames) if frame.id == heading_frame
          for block in frame.content if isinstance(block, TextBlock)), "")
@@ -130,7 +154,9 @@ def build_page(page_id: str, shape: MaterialShape, selection: Selection,
 
 
 def _compact(frames: tuple[Frame, ...],
-             original: tuple[Frame, ...]) -> tuple[Frame, ...]:
+             original: tuple[Frame, ...],
+             pack: Optional[Pack] = None,
+             grid: Optional[GridSpec] = None) -> tuple[Frame, ...]:
     """Close the gap a dropped frame leaves behind.
 
     `_fill` drops a frame nothing was bound to, which is right - an empty
@@ -194,6 +220,14 @@ def _compact(frames: tuple[Frame, ...],
     ordered = sorted(placed, key=lambda f: _band(f)[0])
     if _stacked_over(ordered):
         return frames
+    # What the page is if compaction fails its own check below: the frames
+    # as filled, uncut, exactly as the archetype states them.
+    as_stated = frames
+    columns = _closed_up(_rows(ordered), original)
+    if pack is not None and grid is not None:
+        frames = _fitted_to_copy(frames, original, columns, pack, grid)
+        placed = [f for f in frames if f.id in {p.id for p in placed}]
+        ordered = sorted(placed, key=lambda f: _band(f)[0])
 
     # The archetype's own spacing, taken from the layout that still has every
     # frame in it. Measuring between survivors instead would preserve the gap
@@ -218,8 +252,6 @@ def _compact(frames: tuple[Frame, ...],
     spare = 1.0 - (cursor - gap)
     grown = {f.id for f in rows[-1]} if spare > 0 else set()
 
-    columns = _closed_up(rows, original)
-
     out = []
     for frame in frames:
         if frame.id not in moved:
@@ -241,9 +273,93 @@ def _compact(frames: tuple[Frame, ...],
     compacted = [f for f in out if f.id in moved]
     compacted.sort(key=lambda f: _band(f)[0])
     if _stacked_over(compacted, tolerance=1e-6):
-        return frames
+        return as_stated
     if compacted and _band(compacted[-1])[1] > 1.0 + 1e-6:
+        return as_stated
+    return tuple(out)
+
+
+def _fitted_to_copy(frames: tuple[Frame, ...], original: tuple[Frame, ...],
+                    columns: dict[str, dict], pack: Pack,
+                    grid: GridSpec) -> tuple[Frame, ...]:
+    """Text frames that lost a row-mate, cut to the height their copy needs.
+
+    A prose cell beside a figure is as tall as the figure: the row is one
+    band, and every member of it takes the band's height. When the figure is
+    dropped the prose keeps that height, so closing the stack up moved
+    nothing - the hole was inside the survivor, under its three lines of
+    copy, and whatever came next sat a figure's height further down. A page
+    of three points on an arrangement built for a chart came out as one
+    point at the top and two at the bottom.
+
+    Measured with the same typesetter as everything else, at the width the
+    frame is about to have once its row closes up (a lone survivor widens,
+    and wider copy needs fewer lines), plus one line of the block's own
+    leading. That line is the window in which PowerPoint or LibreOffice can
+    break a line a word earlier than the typesetter - a substituted face, a
+    kerning pair - and cut to the exact depth, the last line would overprint
+    the row closed up beneath it. Only ever shortened, never grown, and only
+    for frames that hold nothing but text: an exhibit fills whatever it is
+    given, so it has no height of its own to be cut to.
+
+    A frame counts as having lost a row-mate only in a true row, its members
+    side by side - the same rule `_closed_up` applies. A heading stacked over
+    prose beside a tall figure shares the figure's band without being in a
+    row with it, and is left as its archetype states.
+    """
+    from app.design.geometry import content_box
+    from app.design.setting import set_copy
+
+    spans = {f.id: (f.place.col, f.place.span) for f in original
+             if isinstance(f.place, GridPlace)}
+    kept = {frame.id for frame in frames}
+    lost_a_mate = set()
+    for row in _rows(sorted((f for f in original if _band(f) is not None),
+                            key=lambda f: _band(f)[0])):
+        if (len(row) > 1 and any(f.id not in kept for f in row)
+                and all(f.id in spans for f in row)
+                and _side_by_side([spans[f.id] for f in row])):
+            lost_a_mate.update(f.id for f in row if f.id in kept)
+    if not lost_a_mate:
         return frames
+
+    box = content_box(pack.canvas, grid)
+    column = grid.column_width_in(pack.canvas)
+    gap_in = pack.spacing.inches(1)
+    out = []
+    for frame in frames:
+        blocks = list(frame.content)
+        if (frame.id not in lost_a_mate or frame.id not in spans or not blocks
+                or frame.children
+                or not all(isinstance(b, TextBlock) for b in blocks)
+                or box.height <= 0):
+            out.append(frame)
+            continue
+        span = columns.get(frame.id, {}).get("span", spans[frame.id][1])
+        pad_in = pack.spacing.inches(frame.pad)
+        width_pt = (span * column + max(0, span - 1) * grid.gutter_in
+                    - 2 * pad_in) * 72.0
+        tallest = 0.0
+        for block in blocks:
+            role = pack.type_roles.get(block.type_role)
+            if role is None:
+                tallest = float("inf")
+                break
+            setting = set_copy(block.text, role, pack, width_pt, 0.0,
+                               columns=block.columns,
+                               column_gap=block.column_gap)
+            tallest = max(tallest, setting.height_pt + role.line_height_pt)
+        # `compile` splits a frame holding several blocks into equal bands,
+        # so the frame needs the tallest block as many times over.
+        needed_in = (len(blocks) * tallest / 72.0
+                     + (len(blocks) - 1) * gap_in + 2 * pad_in)
+        needed = needed_in / box.height
+        if needed >= frame.place.h:
+            out.append(frame)
+            continue
+        out.append(frame.model_copy(update={
+            "place": frame.place.model_copy(update={"h": round(needed, 4)}),
+        }))
     return tuple(out)
 
 

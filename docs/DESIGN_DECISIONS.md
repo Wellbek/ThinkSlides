@@ -96,10 +96,28 @@ The natural heights rarely add up to the page.
   Figures are protected only by step 1, which is why a figure can still be drawn small on an overfull arrangement (#350).
   Prose that loses room is measured and split later (section 8); an exhibit that loses room is simply drawn smaller, which is why it is protected.
 
+**The rung a slot is set in.**
+Each slot kind is set in one rung of the ramp (`ROLE_FOR_SLOT`), except an opener's heading, which is display type (`_rung_for`).
+That one answer sizes the slot's band, measures its capacity and is written on its frame for the renderer.
+The band and capacity of a cover heading used to be worked out at headline size while the frame was drawn at display size, a third larger, so a cover advertised room for an eighty-character title in a band one display line tall (#361).
+
 **Capacities.**
-Each text slot's `max_chars` is computed from its size, line height and final geometry (`_capacity`), so the selector's overflow check reads the page rather than a string length.
-**Known gap (#361):** the per-character width is measured in Arial whatever the slot's face, so a language set in a wider face gets capacities that are too generous.
-The composed openers (`vocabulary.fits_in`) already measure in the slot's own face.
+Each text slot's `max_chars` is how many characters of ordinary prose its lines hold, found by setting a sample passage in the slot (`setting.capacity`, `app/design/setting.py`):
+- in the face, weight, case and tracking the renderer draws that rung in, the same rule `compile` applies;
+- across the slot's whole lines (the frame height divided by the rung's leading, floored), so word-wrap loss is in the number;
+- set from 12 starting words of the sample (`CAPACITY_STARTS`), keeping the fewest characters any of them fits.
+The last point matters because drafting is told a capacity as a limit (section 14).
+At display sizes a line holds three or four words, so where the lines happen to break moves the count by up to a quarter, and copy written to the typical count overran by a line.
+Before #361 the capacity was characters-per-line times lines, measured in Arial whatever the face and always at regular weight.
+On a language set in Georgia and Verdana, text as long as the advertised capacity needed 3.4 times a cover heading's band and 1.5 times every content headline's; after it, every slot of the same language holds its capacity.
+Measured packs take the same measurement, in the face each role is drawn in.
+Their capacities used to be traced from each block before its frame was snapped to the grid and grown to its line box, so once a pack's frames are final - at the end of a build, and when a shipped pack is loaded - every text slot is measured again from its frame (`vocabulary.remeasured`).
+The number it replaces is kept as the slot's `typical_chars`, since for a measured pack it was also the volume the page was built for, which the density term (section 6.4) reads; selection by fullness is unchanged while the ceiling becomes true.
+
+**Measuring copy.**
+Everything that asks whether copy fits - the selector's strain and overflow (section 6), repair's overflow findings (section 12), the writer's per-field budgets (section 13) and the capacities above - sets it through `setting.set_copy`, which draws the text the way `compile` will: the pack's face for the role, bold when the role is semibold or bold, capitals when its case is upper or small, the role's tracking, the role's space before and after between paragraphs, and the column gap `compile` sets (none when the block names none).
+Each of these used to leave out weight and case, and all of them paragraph spacing, so a bold headline was measured five to ten percent narrower than it is drawn and a spaced block of several paragraphs shorter.
+Which face a role is drawn in is one rule (`pack.face_of`), read by the pack, the authored compiler and the measured-pack builder alike.
 
 **Openers.**
 A pack with no cover, section or closing page gets one composed from its own grid, ramp and colours (`app/design/vocabulary.py`, `ensure`).
@@ -272,11 +290,23 @@ A frame nothing was bound to is dropped, unless it carries a ground or scrim, an
 - **Horizontally**, a true row that lost a member (its original members side by side, no two in the same columns) shares its full width among the survivors, in proportion to the widths they had.
   Spans use the largest remainder, so they always sum to the row's width.
   Packing survivors left at their old widths only moved the hole to the end of the row (#357).
+- **A survivor is cut to its copy.**
+  A text frame that shared a row with a frame that was dropped was as tall as that row, so the hole moved inside it: one point at the top of a page and the next row a figure's height further down.
+  Before the page closes up, each such frame that holds only text is shortened to the height its copy needs at the width it is about to have (`_fitted_to_copy`), measured as in section 3, with `compile`'s equal split among several blocks and the frame's padding counted, plus one line of the block's leading.
+  That line is the window in which PowerPoint or LibreOffice can break a line a word earlier than the typesetter; cut to the exact depth, the last line would overprint the row closed up beneath it.
+  Only a true row counts, its members side by side, the same rule as the horizontal close-up: a heading stacked over prose beside a tall figure shares the figure's band without being in a row with it.
+  A frame is only ever shortened, and an exhibit is never cut, since it fills whatever it is given.
+  If the compaction is then discarded, the page gets its frames back uncut.
 - Two frames overlap only if they share columns as well as height.
   Reading side-by-side frames as an overlap made compaction skip every page with a row (#357).
 - Only pages whose frames are all grid-placed are compacted.
   A measured pack mixes grid and fractional placement, whose vertical fractions are not of the same box, so its pages are left exactly as the archetype states.
 - A compaction that does not come out as a clean stack is discarded, and the page renders as its archetype states.
+
+**Where a block sits in its frame.**
+Text is anchored to the top of its frame, except in a headline frame set in the display rung, which is anchored to the bottom (`_anchor`).
+The rule reads the frame, not the block, so a title repair steps down to a smaller rung still rests on the same baseline; a title too long for its band would run up into the empty top of the page rather than down over its standfirst.
+Openers are built upward from a baseline, and a title's band is tall enough for the longest title it is offered; hung from the top, a one-line title left an empty line between itself and its standfirst, so the shorter the title, the further it drifted from what it introduces.
 
 ## 11. Laying out a table
 
@@ -416,6 +446,7 @@ The ones that report on the decisions above:
 | `PROSE_SHRINK_FLOOR` | 0.35 | `design/authored.py` |
 | `DENSITY_SCALE` | airy 0.7, balanced 1.0, dense 1.45 | `design/authored.py` |
 | `PLAIN_COLUMN_SHARE` | 0.34 | `design/vocabulary.py` |
+| `CAPACITY_STARTS` | 12 starting words, fewest kept | `design/setting.py` |
 | `COVER_BASELINE`, `SECTION_BASELINE` | 0.93, 0.62 | `design/vocabulary.py` |
 | repair `MAX_ROUNDS` | 3 | `design/repair.py` |
 | `OVERFLOW_TOLERANCE` | 0.02 | `design/repair.py` |
@@ -447,6 +478,6 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #351 | `technical-k8s-rollouts/20260924-203834-live`, replayed as `20260925-091641-replay` | Two slides with a diagram and a table could not be placed in a one-exhibit-slot language; the whole deck fell back to stock. Once composed, tables were drawn as slivers against the page edge, with cells overprinting. | Splitting divides visuals (section 8); legibility floor (section 7); prose yields first (section 3); no bleed for exhibits; table face, columns and rows (section 11); the render-path check. |
 | #357 | `technical-k8s-rollouts/20260925-091641-replay` | Five of seven content headlines stepped down to 31.6pt regular by repair, two left at 45pt bold. | One headline rung per deck (section 12); headline length told to drafting (section 14). |
 | #364 | `technical-k8s-rollouts/20260925-091641-replay` | Tables were pictures that could not be edited, and a short table in a tall frame was stretched to read as a condensed face. | Tables are native on both paths (section 11). |
-| #361 | found by review of this document | Authored slot capacities are measured in Arial whatever the face. | Documented as a known gap (section 3). |
+| #361 | found by review of this document; reproduced on the 17 languages in `benchmark/evidence/` and `technical-k8s-rollouts/20260924-203834-live` | Capacities were measured in Arial at regular weight as characters-per-line times lines, and an opener's heading was sized as a headline but drawn as display type: text of the advertised length needed up to 3.4 times its frame. Once the heading band was right, a one-line title hung from its top; and a prose cell that lost its row's figure kept the figure's height. | Capacities set as drawn and the rung a slot is set in (section 3); a survivor is cut to its copy and display titles rest on the bottom of their band (section 10). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | Documented as a known gap (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

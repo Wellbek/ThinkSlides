@@ -33,6 +33,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.design.schema import Canvas, Frame, GridSpec
 
+# The mono face a pack draws code in when it names none.
+DEFAULT_MONO_FACE = "Consolas"
+
 
 class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -273,7 +276,7 @@ class Pack(_Model):
     policy: LegibilityPolicy = LegibilityPolicy()
     body_face: str = "Arial"
     display_face: str = "Arial"
-    mono_face: str = "Consolas"
+    mono_face: str = DEFAULT_MONO_FACE
 
     def role(self, name: str) -> TypeRole:
         try:
@@ -294,8 +297,12 @@ class Pack(_Model):
         )
 
     def face_for(self, role: TypeRole) -> str:
-        return {
-            "display": self.display_face,
-            "body": self.body_face,
-            "mono": self.mono_face,
-        }.get(role.face, self.body_face)
+        return face_of(role, display=self.display_face, body=self.body_face,
+                       mono=self.mono_face)
+
+
+def face_of(role: TypeRole, *, display: str, body: str,
+            mono: str = DEFAULT_MONO_FACE) -> str:
+    """The face a role is drawn in - stated once, for packs and for the
+    builders that measure slots before a pack exists."""
+    return {"display": display, "body": body, "mono": mono}.get(role.face, body)
