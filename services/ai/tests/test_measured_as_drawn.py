@@ -14,7 +14,8 @@ from app.design.authored import Language, PageKind, Slot, to_pack
 from app.design.pack import TypeRole
 from app.design.schema import Canvas, TextBlock
 from app.design.select import _slot_rect
-from app.design.setting import SAMPLE_PROSE, as_drawn, capacity, set_copy
+from app.design.setting import (SAMPLE_PROSE, as_drawn, capacity, set_copy,
+                                 set_in_face)
 from app.design.vocabulary import ensure
 from app.renderer.typeset.shape import wrap
 
@@ -99,10 +100,37 @@ class TestCapacityIsSetNotEstimated:
         renderer to discover."""
         upper_bold = self.BODY.model_copy(update={"weight": "bold", "case": "upper"})
         text = "Measured as drawn, not as written"
-        plain = set_copy(text, self.BODY, "Arial", 2000.0, 100.0)
-        drawn = set_copy(text, upper_bold, "Arial", 2000.0, 100.0)
+        plain = set_in_face(text, self.BODY, "Arial", 2000.0, 100.0)
+        drawn = set_in_face(text, upper_bold, "Arial", 2000.0, 100.0)
         assert drawn.lines[0].width_pt > plain.lines[0].width_pt
         assert drawn.lines[0].text == text.upper()
+
+
+    def test_paragraph_spacing_is_part_of_the_depth(self):
+        """`compile` spaces every paragraph by its role's space before and
+        after; a measurement without it reports a block that fits and draws
+        one that overruns."""
+        spaced = self.BODY.model_copy(update={"space_before": 2, "space_after": 2})
+        one = set_in_face("A paragraph.", spaced, "Arial", 400.0, 0.0,
+                          paragraph_gap_pt=12.0)
+        three = set_in_face("A paragraph.\nAnother.\nA third.", spaced, "Arial",
+                            400.0, 0.0, paragraph_gap_pt=12.0)
+        assert three.height_pt == pytest.approx(
+            one.height_pt + 2 * self.BODY.line_height_pt + 2 * 12.0)
+
+    def test_a_long_slot_is_measured_quickly(self):
+        """Setting stops once the slot's lines are full: a pack build asks
+        this of every traced block at widths that rarely repeat."""
+        import time
+
+        from app.design.setting import _capacity
+
+        caption = TypeRole(size_pt=9.0, line_height_pt=11.0)
+        capacity(caption, "Arial", 100.0, 1)    # load the font first
+        _capacity.cache_clear()
+        started = time.perf_counter()
+        capacity(caption, "Arial", 911.0, 60)
+        assert time.perf_counter() - started < 0.4
 
 
 class TestAnAuthoredSlotHoldsWhatItAdvertises:
@@ -116,8 +144,8 @@ class TestAnAuthoredSlotHoldsWhatItAdvertises:
             role = pack.type_roles[frame.type_role]
             width_in, height_in = _slot_rect(archetype, slot, pack, pack.grid)
             text = OTHER_PROSE[:slot.max_chars].rsplit(" ", 1)[0]
-            setting = set_copy(text, role, pack.face_for(role),
-                               width_in * 72.0, height_in * 72.0)
+            setting = set_copy(text, role, pack, width_in * 72.0,
+                               height_in * 72.0)
             # One line of slack for prose that is not the sample: a capacity
             # is a measure of typical copy, not a guarantee for every string.
             assert setting.height_pt <= height_in * 72.0 + role.line_height_pt, (
@@ -236,3 +264,114 @@ class TestAMeasuredPacksSlotIsMeasuredInItsOwnFace:
         wide_display = held(Faces(body="Arial Narrow", display="Verdana"))
         narrow_display = held(Faces(body="Verdana", display="Arial Narrow"))
         assert wide_display < narrow_display
+
+
+class TestAShippedPackIsMeasuredFromItsFrames:
+    @pytest.fixture(params=design_run.available())
+    def shipped(self, request):
+        import json
+        import os
+
+        with open(os.path.join(design_run.PACK_DIR, f"{request.param}.json")) as f:
+            raw = json.load(f)
+        return raw, design_run.load(request.param)
+
+    def test_copy_of_max_chars_fits_every_traced_slot(self, shipped):
+        """Its capacities were traced before its frames were snapped, as
+        characters-per-line times lines; loaded, they describe the frames."""
+        _, pack = shipped
+        for archetype, slot, frame in _text_slots(pack):
+            from app.design.roles import type_role_for
+
+            role = pack.type_roles.get(type_role_for(frame.role, "text", pack,
+                                                     frame.type_role))
+            size = _slot_rect(archetype, slot, pack, archetype.grid or pack.grid)
+            if role is None or size is None:
+                continue
+            width_in, height_in = size
+            text = OTHER_PROSE[:slot.max_chars].rsplit(" ", 1)[0] or "x"
+            setting = set_copy(text, role, pack, width_in * 72.0, height_in * 72.0)
+            assert setting.height_pt <= height_in * 72.0 + role.line_height_pt, (
+                f"{pack.id}/{archetype.id}/{frame.id}")
+
+    def test_the_traced_volume_is_kept_as_the_habit(self, shipped):
+        """The old number was also what the page carried, which is what the
+        density term reads; it moves to `typical_chars` unchanged."""
+        raw, pack = shipped
+        for entry in raw["archetypes"]:
+            loaded = pack.archetype(entry["id"])
+            by_frame = {s.frame_id: s for s in loaded.slots}
+            for slot in entry["slots"]:
+                if slot.get("max_chars") and slot["frame_id"] in by_frame:
+                    assert by_frame[slot["frame_id"]].expected_chars == slot["max_chars"]
+
+
+class TestCuttingASurvivorIsSafe:
+    @staticmethod
+    def _pack():
+        return TestASurvivorIsCutToItsCopy._pack()
+
+    def test_a_cut_frame_keeps_a_line_of_slack(self):
+        """A renderer that breaks one word earlier must not spill the last
+        line onto the row closed up beneath it."""
+        pack = self._pack()
+        page = TestASurvivorIsCutToItsCopy()._page(pack)
+        first = min((f for f in page.frames if f.role == "column"),
+                    key=lambda f: f.place.y)
+        block = first.content[0]
+        role = pack.type_roles[block.type_role]
+        from app.design.geometry import content_box
+
+        box = content_box(pack.canvas, pack.grid)
+        column = pack.grid.column_width_in(pack.canvas)
+        width = (first.place.span * column
+                 + (first.place.span - 1) * pack.grid.gutter_in) * 72.0
+        copy = set_copy(block.text, role, pack, width, 0.0).height_pt
+        assert first.place.h * box.height * 72.0 >= copy + role.line_height_pt - 0.5
+
+    def test_a_frame_stacked_beside_a_dropped_figure_is_not_cut(self):
+        """A heading over prose beside a tall figure shares its band without
+        being in a row with it - `_closed_up`'s rule, and now this one's."""
+        from app.design.bind import _compact
+        from app.design.schema import Frame, GridPlace, Paragraph, Run
+
+        pack = self._pack()
+
+        def text(value):
+            return (TextBlock(type_role="body", paragraphs=(
+                Paragraph(runs=(Run(text=value),)),)),)
+
+        heading = Frame(id="h", role="column", z=1, content=text("A short line."),
+                        place=GridPlace(col=0, span=3, y=0.0, h=0.4))
+        prose = Frame(id="p", role="column", z=1, content=text("Another line."),
+                      place=GridPlace(col=0, span=3, y=0.45, h=0.4))
+        figure = Frame(id="f", role="figure", z=1,
+                       place=GridPlace(col=3, span=3, y=0.0, h=0.85))
+        below = Frame(id="b", role="column", z=1, content=text("Below."),
+                      place=GridPlace(col=0, span=6, y=0.9, h=0.1))
+        out = _compact((heading, prose, below), (heading, prose, figure, below),
+                       pack, pack.grid)
+        heights = {f.id: f.place.h for f in out}
+        assert heights["h"] == pytest.approx(0.4)
+        assert heights["p"] == pytest.approx(0.4)
+
+    def test_a_discarded_compaction_returns_the_frames_uncut(self, monkeypatch):
+        """'The page renders as its archetype states' - not shortened and
+        left where it was."""
+        from app.design import bind
+
+        pack = self._pack()
+        archetype = pack.archetype("flow")
+        calls = {"n": 0}
+        real = bind._stacked_over
+
+        def failing_second_check(frames, tolerance=0.0):
+            calls["n"] += 1
+            return real(frames, tolerance) if calls["n"] == 1 else True
+
+        monkeypatch.setattr(bind, "_stacked_over", failing_second_check)
+        page = TestASurvivorIsCutToItsCopy()._page(pack)
+        stated = {f.id: f.place.h for f in archetype.frames}
+        for frame in page.frames:
+            if frame.id in stated:
+                assert frame.place.h == pytest.approx(stated[frame.id])

@@ -110,11 +110,14 @@ The last point matters because drafting is told a capacity as a limit (section 1
 At display sizes a line holds three or four words, so where the lines happen to break moves the count by up to a quarter, and copy written to the typical count overran by a line.
 Before #361 the capacity was characters-per-line times lines, measured in Arial whatever the face and always at regular weight.
 On a language set in Georgia and Verdana, text as long as the advertised capacity needed 3.4 times a cover heading's band and 1.5 times every content headline's; after it, every slot of the same language holds its capacity.
-Measured packs (`pack_build._capacity_chars`) take the same measurement, in the face each role is drawn in; their shipped JSON keeps the capacities it was built with until it is rebuilt.
+Measured packs take the same measurement, in the face each role is drawn in.
+Their capacities used to be traced from each block before its frame was snapped to the grid and grown to its line box, so once a pack's frames are final - at the end of a build, and when a shipped pack is loaded - every text slot is measured again from its frame (`vocabulary.remeasured`).
+The number it replaces is kept as the slot's `typical_chars`, since for a measured pack it was also the volume the page was built for, which the density term (section 6.4) reads; selection by fullness is unchanged while the ceiling becomes true.
 
 **Measuring copy.**
-Everything that asks whether copy fits - the selector's strain and overflow (section 6), repair's overflow findings (section 12), the writer's per-field budgets (section 13) and the capacities above - sets it through `setting.set_copy`, which draws the text the way `compile` will: the pack's face for the role, bold when the role is semibold or bold, capitals when its case is upper or small, and the role's tracking.
-Each of these used to leave out weight and case, so a bold headline was measured five to ten percent narrower than it is drawn.
+Everything that asks whether copy fits - the selector's strain and overflow (section 6), repair's overflow findings (section 12), the writer's per-field budgets (section 13) and the capacities above - sets it through `setting.set_copy`, which draws the text the way `compile` will: the pack's face for the role, bold when the role is semibold or bold, capitals when its case is upper or small, the role's tracking, the role's space before and after between paragraphs, and the column gap `compile` sets (none when the block names none).
+Each of these used to leave out weight and case, and all of them paragraph spacing, so a bold headline was measured five to ten percent narrower than it is drawn and a spaced block of several paragraphs shorter.
+Which face a role is drawn in is one rule (`pack.face_of`), read by the pack, the authored compiler and the measured-pack builder alike.
 
 **Openers.**
 A pack with no cover, section or closing page gets one composed from its own grid, ramp and colours (`app/design/vocabulary.py`, `ensure`).
@@ -289,8 +292,11 @@ A frame nothing was bound to is dropped, unless it carries a ground or scrim, an
   Packing survivors left at their old widths only moved the hole to the end of the row (#357).
 - **A survivor is cut to its copy.**
   A text frame that shared a row with a frame that was dropped was as tall as that row, so the hole moved inside it: one point at the top of a page and the next row a figure's height further down.
-  Before the page closes up, each such frame that holds only text is shortened to the height its copy needs at the width it is about to have (`_fitted_to_copy`), measured as in section 3, with `compile`'s equal split among several blocks and the frame's padding counted.
-  It is only ever shortened, and an exhibit is never cut, since it fills whatever it is given.
+  Before the page closes up, each such frame that holds only text is shortened to the height its copy needs at the width it is about to have (`_fitted_to_copy`), measured as in section 3, with `compile`'s equal split among several blocks and the frame's padding counted, plus one line of the block's leading.
+  That line is the window in which PowerPoint or LibreOffice can break a line a word earlier than the typesetter; cut to the exact depth, the last line would overprint the row closed up beneath it.
+  Only a true row counts, its members side by side, the same rule as the horizontal close-up: a heading stacked over prose beside a tall figure shares the figure's band without being in a row with it.
+  A frame is only ever shortened, and an exhibit is never cut, since it fills whatever it is given.
+  If the compaction is then discarded, the page gets its frames back uncut.
 - Two frames overlap only if they share columns as well as height.
   Reading side-by-side frames as an overlap made compaction skip every page with a row (#357).
 - Only pages whose frames are all grid-placed are compacted.
@@ -298,7 +304,8 @@ A frame nothing was bound to is dropped, unless it carries a ground or scrim, an
 - A compaction that does not come out as a clean stack is discarded, and the page renders as its archetype states.
 
 **Where a block sits in its frame.**
-Text is anchored to the top of its frame, except a headline set in the display rung, which is anchored to the bottom (`_anchor`).
+Text is anchored to the top of its frame, except in a headline frame set in the display rung, which is anchored to the bottom (`_anchor`).
+The rule reads the frame, not the block, so a title repair steps down to a smaller rung still rests on the same baseline; a title too long for its band would run up into the empty top of the page rather than down over its standfirst.
 Openers are built upward from a baseline, and a title's band is tall enough for the longest title it is offered; hung from the top, a one-line title left an empty line between itself and its standfirst, so the shorter the title, the further it drifted from what it introduces.
 
 ## 11. Laying out a table
