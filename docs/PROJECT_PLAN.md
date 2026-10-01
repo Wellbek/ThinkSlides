@@ -44,42 +44,50 @@ Appendices: A. Iteration review; B. Version control plan; C. Engineering style r
 ## Status and priorities
 
 Living section, updated whenever the order of work changes.
-Last updated: 2026-09-25, during the third implementation session.
+Last updated: 2026-10-01, at the start of the fourth implementation session.
 Every open item is a GitHub issue labelled `roadmap` and its area; nothing planned lives only in this document.
 
 ### Where the project stands
 
 The mission is a demonstrated quality/cost frontier: cheap models with strong orchestration matching frontier workflows on a benchmark.
-Measured against that, the project is about **23% done**.
+Measured against that, the project is about **26% done**.
 Shares are of the total remaining effort as estimated now; they will move as work reveals its size.
 
 | Area | Share of total | Done within it | Contribution | What is done | What is not |
 | --- | --- | --- | --- | --- | --- |
-| Research and planning | 5% | 90% | 4.5% | audit, source registry, Claude workflow study, plan, decisions D-1 to D-14 | reference pages of the Slides type, chart fidelity, benchmark licences |
-| Measurement and evaluation | 15% | 65% | 9.8% | run traces, headless runner with claude-code / replay / live, spend ledger, 10 tasks, first baseline, automated checks (#314), checklist grading (#315), rejections kept apart from failures (#345), a render-path check (#351) | results store and graphs (#316), category references and judges (#331), OTel (#317) |
-| Bugs in the existing pipeline | 10% | 70% | 7.0% | #306, #307, #301, #299, #300, #312, #344, #351 fixed, and #348's overflow; readable exhibits (#354, #355) | #302, #347, #348's caption-sized body, #350, #357, and the older open bug backlog |
-| Defect prevention (iteration 2) | 12% | 0% | 0% | - | #318 to #322 |
+| Research and planning | 5% | 90% | 4.5% | audit, source registry, Claude workflow study, plan, decisions D-1 to D-14, the design decision record | reference pages of the Slides type, chart fidelity, benchmark licences |
+| Measurement and evaluation | 15% | 65% | 9.8% | run traces, headless runner with claude-code / replay / live, spend ledger, 10 tasks, first baseline, automated checks (#314), checklist grading (#315), rejections kept apart from failures (#345), a render-path check (#351), the gate audit | results store and graphs (#316), category references and judges (#331), OTel (#317) |
+| Bugs in the existing pipeline | 10% | 80% | 8.0% | #306, #307, #301, #299, #300, #312, #344, #351, #357 and #348 fixed; readable exhibits (#354, #355); native tables at a legible size (#364, #366) | #359, #361, #363, #350, #347, #302, and the older open bug backlog |
+| Defect prevention (iteration 2) | 12% | 20% | 2.4% | #322: a language is gated on compiling every page kind, with a per-page fallback | #318 to #321 |
 | New architecture (iterations 3-4) | 33% | 3% | 1.0% | provider injection, the runner's seams | #323 to #328 |
-| Visual quality and categories (iteration 5) | 12% | 0% | 0% | - | #303, #329 to #331 |
+| Visual quality and categories (iteration 5) | 12% | 0% | 0% | - | #303, #368, #329 to #331 |
 | Frontier comparison and routing (iteration 6) | 5% | 0% | 0% | - | #332, #333 |
 | UX and cleanup | 5% | 15% | 0.8% | minimal versions of the dead controls | #334 to #337 |
 | Production hardening | 3% | 0% | 0% | - | #338 |
-| **Total** | **100%** | | **about 23%** | | |
+| **Total** | **100%** | | **about 26%** | | |
 
 ### Priority order, and why
 
-Done: #314, #315, #301, #299, #300 (PRs #340 to #343, #346); #312, #344, #345, #351 and #348's overflow (PRs #349, #352 to #356).
+Done: #314, #315, #301, #299, #300 (PRs #340 to #343, #346); #312, #344, #345, #351 (PRs #349, #352 to #356); #322, #357 and #348 (PRs #360, #362, #364 to #367).
 
-1. **#322 and #357**, the composed path's remaining weak points.
-   #351 showed that one page an authored language cannot place took the whole deck to the stock renderer; #322 gates a language on compiling every page kind and falls back per page, not per deck.
-   #357 is the polish the Kubernetes replay still shows: a hole where a row lost a member, headline weight changing between arrangements, 8pt tables.
-2. **#350**, a re-placement onto an arrangement much worse for its exhibit than the one it avoids, and **#347** when short decks matter.
+1. **#361, then #363, #359 and #350**: the composed path's last known ways to ship a defect or waste a round.
+   #361 is first because every fit decision reads slot capacities, and they are measured in the wrong face; #368 builds on them.
+   #363 draws broken words in diagrams, a defect a reader sees at once.
+   #359 spends a page's revision and a deck's validation round on a re-render that cannot change anything.
+   #350 lets a re-placement land on an arrangement worse for its exhibit than the one it avoids.
+2. **#368, the type-size policy** the product owner set: about 12pt as a floor, more pages before smaller type, smaller only under a page limit, and the user told why.
+   It changes what the benchmark's `body_legible` check measures, so it lands before the baseline.
 3. **The ten-task baseline** in claude-code mode and on gpt-5.6-luna, scored by #314 and #315.
+   Every run so far is one of two technical tasks; the baseline is the first look at the other categories.
    It is also the first live test of the exhibit-capacity directive from #356, which replay cannot exercise.
 4. **#323 storyline plus parallel compile, with #325 prompt shrinking**: the largest runtime and cost lever, and the core bet of the plan.
    The six-slide run took 75 calls and 847k input tokens ($0.159); this is where that is won back.
 5. Iteration 2 prevention (#318 to #321), then evidence (#327, #328), then visual quality, then the frontier report.
-   #302 is low priority: only the prompt misreports the headline size.
+   #347 matters once short decks do; #302 is low priority, since only the prompt misreports the headline size.
+
+The integration branch has not reached `main` since August.
+PR #277 carries it, and PRs #255 to #261 target `main` with work that is already on the integration branch.
+Their issues (#251, #252, #253, #258, #262, #278) are fixed on the integration branch and stay open until those PRs merge.
 
 Spend so far: about $0.27 of the $3 budget, all on luna.
 
