@@ -760,7 +760,9 @@ def _rung_for(slot: Slot, kind: PageKind) -> str:
 
 def _face_for(language: Language, role: TypeRole) -> str:
     """The face this role is drawn in - `Pack.face_for`, before a pack exists."""
-    return language.display_face if role.face == "display" else language.body_face
+    from app.design.pack import face_of
+
+    return face_of(role, display=language.display_face, body=language.body_face)
 
 
 def _capacity(role: TypeRole, face: str, span: int, grid: GridSpec,

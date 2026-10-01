@@ -83,10 +83,9 @@ def overflow_findings(doc: DesignDoc, page: Page, pack: Pack) -> list[Finding]:
             if role is None:
                 continue
             result = set_copy(
-                block.text, role, pack.face_for(role),
+                block.text, role, pack,
                 resolved.rect.width * 72.0, resolved.rect.height * 72.0,
-                columns=block.columns,
-                column_gap_pt=pack.spacing.pt(block.column_gap),
+                columns=block.columns, column_gap=block.column_gap,
             )
             share = result.overflow_pt / max(1.0, resolved.rect.height * 72.0)
             if share > OVERFLOW_TOLERANCE:

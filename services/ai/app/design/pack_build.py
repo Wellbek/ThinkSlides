@@ -38,6 +38,7 @@ from app.design.pack import (
     SlotSpec,
     SpacingScale,
     TypeRole,
+    face_of,
 )
 from app.design.geometry import content_box
 from app.design.schema import Canvas, FracPlace, Frame, GridPlace, GridSpec, Insets
@@ -205,19 +206,17 @@ def _char_width_pt(role_name: str, roles: dict[str, type_model.RungEvidence],
                    face: str) -> float:
     """The average advance of this role's face at its own size, in points.
 
-    Measured from the font rather than estimated. A chars-per-line constant
-    is wrong by nearly a factor of two between narrow and wide copy, and the
-    number it produces is what decides whether a slot is a measure or a
-    label.
+    Measured from the font, as the role is drawn, rather than estimated. A
+    chars-per-line constant is wrong by nearly a factor of two between
+    narrow and wide copy, and the number it produces is what decides whether
+    a slot is a measure or a label.
     """
     rung = roles.get(role_name)
     if rung is None or rung.size_pt <= 0:
         return 0.0
-    from app.renderer.typeset.fonts import width_pt
+    from app.design.setting import average_advance_pt
 
-    sample = ("The quick brown fox jumps over the lazy dog and keeps going "
-              "until the line is comfortably longer than any measure")
-    return width_pt(sample, face, rung.size_pt) / len(sample)
+    return average_advance_pt(_role_of(role_name, rung), face)
 
 
 class Faces(NamedTuple):
@@ -251,7 +250,7 @@ def _capacity_chars(block: dict, role_name: str,
     from app.design.setting import capacity
 
     role = _role_of(role_name, rung)
-    face = faces.display if role.face == "display" else faces.body
+    face = face_of(role, display=faces.display, body=faces.body)
     width = block["w"] * width_pt_page
     height = block["h"] * height_pt_page
     # The leading that was measured on the page, which is what the pack will
@@ -1159,7 +1158,7 @@ def from_pdf(pdf_path: str, pages: Optional[Sequence[int]] = None, *,
             grid_note = "no grid recovered on any page; frames are placed by fraction"
     body = roles.get("body")
 
-    return Pack(
+    pack = Pack(
         id=pack_id,
         label=label or pack_id,
         source_note=note or f"measured from {os.path.basename(pdf_path)}, "
@@ -1195,6 +1194,12 @@ def from_pdf(pdf_path: str, pages: Optional[Sequence[int]] = None, *,
         display_face=faces.display,
         policy=_policy(body, canvas),
     )
+    # The capacities above were traced from each block before its frame was
+    # snapped and grown; they stay as what the page carried, and the ceiling
+    # is measured from the frame as it now is.
+    from app.design.vocabulary import remeasured
+
+    return remeasured(pack)
 
 
 def _modal_grid(

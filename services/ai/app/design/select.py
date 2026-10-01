@@ -271,8 +271,7 @@ def overflow_of(item: MaterialItem, pack: Pack,
         type_role_for(frame_role, item.kind, pack, type_role))
     if role is None:
         return 0.0
-    result = set_copy(item.text, role, pack.face_for(role),
-                      width_in * 72.0, height_in * 72.0)
+    result = set_copy(item.text, role, pack, width_in * 72.0, height_in * 72.0)
     return result.overflow_pt / (height_in * 72.0)
 
 
@@ -302,8 +301,7 @@ def capacity_strain(item: MaterialItem, slot: SlotSpec, pack: Pack,
         type_role_for(frame_role, item.kind, pack, type_role))
     if role is None:
         return 0.5
-    result = set_copy(item.text, role, pack.face_for(role),
-                      width_in * 72.0, height_in * 72.0)
+    result = set_copy(item.text, role, pack, width_in * 72.0, height_in * 72.0)
     if height_in <= 0:
         return 1.0
     fill = result.height_pt / (height_in * 72.0)

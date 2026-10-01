@@ -41,7 +41,7 @@ from app.design.pack import ColorRoles, Pack
 from app.design.repair import repair
 from app.design.schema import DesignDoc, Frame, Page, PackRef, TextBlock
 from app.design.select import choose, readable_somewhere
-from app.design.vocabulary import ensure
+from app.design.vocabulary import ensure, remeasured
 from app.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -107,7 +107,9 @@ def load(pack_id: str) -> Pack:
         pack = Pack.model_validate(json.load(handle))
     # Every shipped pack was recovered from sampled *design* pages, so none of
     # them has a cover, a divider or a closing page. A deck needs all three.
-    return ensure(pack)
+    # And its slot capacities were traced before its frames were final, so
+    # they are measured again from the frames it actually has.
+    return ensure(remeasured(pack))
 
 
 def available() -> tuple[str, ...]:
@@ -848,10 +850,10 @@ def copy_over_budget(doc: DesignDoc, pack: Pack) -> dict[int, list[dict]]:
                 if role is None:
                     continue
                 height_pt = resolved.rect.height * 72.0
-                result = set_copy(block.text, role, pack.face_for(role),
+                result = set_copy(block.text, role, pack,
                                   resolved.rect.width * 72.0, height_pt,
                                   columns=block.columns,
-                                  column_gap_pt=pack.spacing.pt(block.column_gap))
+                                  column_gap=block.column_gap)
                 if result.overflow_pt <= 0.02 * height_pt:
                     continue
                 share = height_pt / (height_pt + result.overflow_pt)

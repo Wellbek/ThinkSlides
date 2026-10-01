@@ -144,6 +144,55 @@ def fits_in(pack: Pack, role_name: str, width_in: float, lines: int) -> int:
     return capacity(role, pack.face_for(role), width_in * 72.0, lines)
 
 
+def remeasured(pack: Pack) -> Pack:
+    """Every text slot's capacity, measured from the frame it ended up with.
+
+    A pack recovered from a PDF traced each slot's capacity from the block it
+    was read off, before its frame was snapped to the grid and grown to its
+    line box, and by characters-per-line times lines rather than by setting
+    copy. The shipped packs still carry those numbers. So, once the frames
+    are final, each text slot's `max_chars` is measured again exactly as an
+    authored slot's is (`setting.capacity`, at the rung and face the frame
+    is drawn in, over the whole lines its height holds).
+
+    The number it replaces is not discarded. For a measured pack it was also
+    the volume the page was built for - `typical_chars` is unset, and the
+    density term reads `max_chars` instead - so it moves to `typical_chars`,
+    and choosing a page by how full it would be is unchanged while the
+    ceiling the selector and drafting read becomes true. A slot that already
+    states its habit keeps it.
+    """
+    from app.design.roles import type_role_for
+    from app.design.select import _slot_frame, _slot_rect
+    from app.design.setting import capacity
+
+    archetypes = []
+    for archetype in pack.archetypes:
+        grid = archetype.grid or pack.grid
+        slots = []
+        for slot in archetype.slots:
+            frame = _slot_frame(archetype, slot)
+            size = _slot_rect(archetype, slot, pack, grid) if frame else None
+            role = (pack.type_roles.get(type_role_for(
+                        frame.role, "text", pack, frame.type_role))
+                    if frame is not None else None)
+            if (size is None or role is None or not slot.max_chars
+                    or (slot.accepts and "text" not in slot.accepts)):
+                slots.append(slot)
+                continue
+            width_in, height_in = size
+            lines = max(1, int(height_in * 72.0 / role.line_height_pt))
+            if slot.max_lines:
+                lines = min(lines, slot.max_lines)
+            held = capacity(role, pack.face_for(role), width_in * 72.0, lines)
+            slots.append(slot.model_copy(update={
+                "max_chars": max(1, held),
+                "typical_chars": slot.typical_chars or slot.max_chars,
+            }))
+        archetypes.append(archetype.model_copy(update={"slots": tuple(slots)}))
+    return pack.model_copy(update={"archetypes": tuple(archetypes)})
+
+
 def _height_fraction(pack: Pack, role_name: str, lines: int) -> float:
     """The share of the content box `lines` lines of this role need."""
     role = pack.type_roles.get(role_name)
