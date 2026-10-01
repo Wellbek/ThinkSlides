@@ -23,7 +23,7 @@ it is required to be honest about where it is unsure.
 from __future__ import annotations
 
 import os
-from typing import Optional, Sequence
+from typing import NamedTuple, Optional, Sequence
 
 import fitz
 
@@ -220,9 +220,16 @@ def _char_width_pt(role_name: str, roles: dict[str, type_model.RungEvidence],
     return width_pt(sample, face, rung.size_pt) / len(sample)
 
 
+class Faces(NamedTuple):
+    """The pack's two faces, as `Pack.face_for` will draw them."""
+
+    body: str
+    display: str
+
+
 def _capacity_chars(block: dict, role_name: str,
                     roles: dict[str, type_model.RungEvidence],
-                    face: str, width_pt_page: float,
+                    faces: Faces, width_pt_page: float,
                     height_pt_page: float) -> int:
     """How much copy this slot actually holds, at the role it is set in.
 
@@ -232,11 +239,19 @@ def _capacity_chars(block: dict, role_name: str,
     traced from a nine-character label reported room for twenty characters
     while measuring an inch and a half wide. Every later stage reads this
     number, so it has to describe the frame.
+
+    And it is measured as the role will be drawn: in the face the pack sets
+    it in, at its weight and case. It was measured in the body face at
+    regular weight for every role, so a headline slot - drawn bold, in the
+    display face - was promised the room of a line of body-weight copy.
     """
     rung = roles.get(role_name)
-    per_char = _char_width_pt(role_name, roles, face)
-    if rung is None or per_char <= 0:
+    if rung is None or rung.size_pt <= 0:
         return max(20, int(block["chars"] * 1.4))
+    from app.design.setting import capacity
+
+    role = _role_of(role_name, rung)
+    face = faces.display if role.face == "display" else faces.body
     width = block["w"] * width_pt_page
     height = block["h"] * height_pt_page
     # The leading that was measured on the page, which is what the pack will
@@ -244,9 +259,8 @@ def _capacity_chars(block: dict, role_name: str,
     # floored, not rounded: a frame 1.6 lines tall holds one line. Rounding it
     # to two is how a slot advertised 490 characters and overflowed by 138
     # points when they were set in it.
-    line_height = rung.line_height_pt or rung.size_pt * 1.3
-    lines = max(1, int(height / line_height))
-    return max(1, int(width / per_char) * lines)
+    lines = max(1, int(height / role.line_height_pt))
+    return max(1, capacity(role, face, width, lines))
 
 
 def _is_a_measure(block: dict, roles: dict[str, type_model.RungEvidence],
@@ -315,7 +329,7 @@ def _archetype_for_page(page, page_number: int,
                         roles: dict[str, type_model.RungEvidence],
                         canvas: Canvas, baseline_pt: float,
                         house_grid: Optional[GridSpec] = None,
-                        body_face: str = "Arial") -> PageArchetype:
+                        faces: Faces = Faces("Arial", "Arial")) -> PageArchetype:
     """One page, read as a reusable pattern of frames.
 
     The structural regions come from ``grammar`` - the rails, panels and
@@ -383,7 +397,7 @@ def _archetype_for_page(page, page_number: int,
             # is one more tiny box competing for a paragraph.
             set_aside["page furniture"] += 1
             continue
-        if not _is_a_measure(block, roles, body_face, width):
+        if not _is_a_measure(block, roles, faces.body, width):
             set_aside["too narrow to set copy in"] += 1
             continue
         frame_role = _FRAME_ROLE.get(role_name, "column")
@@ -408,7 +422,7 @@ def _archetype_for_page(page, page_number: int,
                 slot.required for slot in slots
             )),
             prominence=min(1.0, block["size"] / 60.0),
-            max_chars=_capacity_chars(block, role_name, roles, body_face,
+            max_chars=_capacity_chars(block, role_name, roles, faces,
                                       width, height),
         ))
 
@@ -427,7 +441,7 @@ def _archetype_for_page(page, page_number: int,
     # span of columns, which can be narrower than the ink that was traced.
     frames, slots, dropped = _enforce_slot_floors(
         frames, slots, role_of, roles, canvas,
-        applied_grid or house_grid, body_face,
+        applied_grid or house_grid, faces.body,
     )
     set_aside["too narrow to set copy in"] += dropped
     if applied_grid is not None or house_grid is not None:
@@ -1094,6 +1108,12 @@ def from_pdf(pdf_path: str, pages: Optional[Sequence[int]] = None, *,
     roles = type_model.assign_roles(rungs)
     body_face, display_face = type_model.faces_for(roles)
     pairing = type_model.pairing_face(roles)
+    # The faces as the pack will name them, which is what the renderer draws
+    # and so what every slot is measured in. The raw PostScript names
+    # ("ABCDEF+Interstate-Light") resolve to nothing and measure the
+    # fallback face instead.
+    faces = Faces(body=type_model.clean_face(body_face) or "Arial",
+                  display=type_model.clean_face(pairing or display_face) or "Arial")
 
     evidence, _ = color_model.read_colors(ramp)
     palette = color_model.assign_roles(evidence)
@@ -1108,14 +1128,14 @@ def from_pdf(pdf_path: str, pages: Optional[Sequence[int]] = None, *,
     # grid of their own have to be expressed on it.
     archetypes = tuple(
         _archetype_for_page(page, number, roles, canvas, baseline_pt,
-                            body_face=body_face)
+                            faces=faces)
         for number, page in sample
     )
     house = _grid_spec(grid, canvas, baseline_pt) if grid else _modal_grid(archetypes)[0]
     if house is not None:
         archetypes = tuple(
             _archetype_for_page(page, number, roles, canvas, baseline_pt,
-                                house_grid=house, body_face=body_face)
+                                house_grid=house, faces=faces)
             for number, page in sample
         )
     if plan is not None:
@@ -1171,8 +1191,8 @@ def from_pdf(pdf_path: str, pages: Optional[Sequence[int]] = None, *,
         colors=_colors(palette),
         illustration=_read_illustration(sample, canvas),
         archetypes=archetypes,
-        body_face=type_model.clean_face(body_face) or "Arial",
-        display_face=type_model.clean_face(pairing or display_face) or "Arial",
+        body_face=faces.body,
+        display_face=faces.display,
         policy=_policy(body, canvas),
     )
 
@@ -1224,25 +1244,35 @@ def _grid_spec(grid, canvas: Canvas, baseline_pt: float) -> GridSpec:
     )
 
 
+def _role_of(name: str, rung: type_model.RungEvidence) -> TypeRole:
+    """The rung as a role: its size, leading, weight, face and case.
+
+    Shared by the pack's ramp and the slot capacities, so a slot is measured
+    in exactly the type the pack will draw in it.
+    """
+    return TypeRole(
+        size_pt=rung.size_pt,
+        line_height_pt=rung.line_height_pt,
+        weight="bold" if "bold" in rung.face.lower() else (
+            "light" if "light" in rung.face.lower() else "regular"
+        ),
+        face="display" if name in ("headline", "pullquote", "standfirst")
+             else "body",
+        case="upper" if rung.upper_share >= 0.7 else "none",
+        measured_min_pt=rung.size_pt,
+        measured_median_pt=rung.size_pt,
+        measured_max_pt=rung.size_pt,
+    )
+
+
 def _type_roles(roles: dict[str, type_model.RungEvidence],
                 palette: dict[str, str], base_pt: float) -> dict[str, TypeRole]:
     out: dict[str, TypeRole] = {}
     for name, rung in roles.items():
         color_role = color_model.nearest_role(rung.color, palette) or "ink"
-        out[name] = TypeRole(
-            size_pt=rung.size_pt,
-            line_height_pt=rung.line_height_pt,
-            weight="bold" if "bold" in rung.face.lower() else (
-                "light" if "light" in rung.face.lower() else "regular"
-            ),
-            face="display" if name in ("headline", "pullquote", "standfirst")
-                 else "body",
-            case="upper" if rung.upper_share >= 0.7 else "none",
-            color_role=color_role if color_role.startswith("ink") else "ink",
-            measured_min_pt=rung.size_pt,
-            measured_median_pt=rung.size_pt,
-            measured_max_pt=rung.size_pt,
-        )
+        out[name] = _role_of(name, rung).model_copy(update={
+            "color_role": color_role if color_role.startswith("ink") else "ink",
+        })
     if "body" not in out:
         out["body"] = TypeRole(size_pt=14.0, line_height_pt=18.0)
     return out

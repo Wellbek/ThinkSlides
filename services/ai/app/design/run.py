@@ -830,7 +830,7 @@ def copy_over_budget(doc: DesignDoc, pack: Pack) -> dict[int, list[dict]]:
     are set in. Measured by typesetting, like everything else here.
     """
     from app.design.geometry import resolve_page
-    from app.renderer.typeset.shape import layout
+    from app.design.setting import set_copy
 
     totals: dict[int, dict[str, dict]] = {}
     for page in doc.pages:
@@ -848,10 +848,10 @@ def copy_over_budget(doc: DesignDoc, pack: Pack) -> dict[int, list[dict]]:
                 if role is None:
                     continue
                 height_pt = resolved.rect.height * 72.0
-                result = layout(block.text, resolved.rect.width * 72.0, height_pt,
-                                pack.face_for(role), role.size_pt,
-                                line_height_pt=role.line_height_pt,
-                                columns=block.columns)
+                result = set_copy(block.text, role, pack.face_for(role),
+                                  resolved.rect.width * 72.0, height_pt,
+                                  columns=block.columns,
+                                  column_gap_pt=pack.spacing.pt(block.column_gap))
                 if result.overflow_pt <= 0.02 * height_pt:
                     continue
                 share = height_pt / (height_pt + result.overflow_pt)

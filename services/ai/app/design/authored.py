@@ -354,7 +354,7 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
     archetype_id = f"{kind.name}-{suffix}" if suffix else kind.name
 
     for index, slot in enumerate(kind.slots):
-        role_name = ROLE_FOR_SLOT[slot.kind]
+        role_name = _rung_for(slot, kind)
         role = roles.get(role_name) or roles["body"]
         # Prefixed with the arrangement, not just the page kind: two
         # arrangements of one kind are two archetypes, and a frame id repeated
@@ -368,8 +368,7 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
             # as a headline and then *rendered* at body size, because the
             # renderer reads the frame and the frame said nothing - so a
             # language's stat row came out the same size as its prose.
-            type_role=("display" if slot.kind == "heading"
-                       and kind.role in ("cover", "section") else role_name),
+            type_role=role_name,
             place=GridPlace(col=cell.col, span=cell.span,
                             y=round(cell.y, 4), h=round(cell.h, 4)),
             # A slot that sits behind goes under everything else. Overlap is
@@ -400,7 +399,8 @@ def _archetype(kind: PageKind, language: Language, canvas: Canvas,
                and not _over_panel(cell, kind, grid.columns)
                else {}),
         ))
-        capacity = _capacity(role, cell.span, grid, canvas, cell.h, box.height)
+        capacity = _capacity(role, _face_for(language, role), cell.span,
+                             grid, canvas, cell.h, box.height)
         slots.append(SlotSpec(
             frame_id=identifier,
             accepts=ACCEPTS_FOR_SLOT.get(slot.kind, ("text",)),
@@ -464,7 +464,7 @@ def _natural(kind: PageKind, roles: dict[str, TypeRole],
     """How tall each slot wants to be, from the type it is set in."""
     out: list[float] = []
     for slot in kind.slots:
-        role = roles.get(ROLE_FOR_SLOT[slot.kind]) or roles["body"]
+        role = roles.get(_rung_for(slot, kind)) or roles["body"]
         if slot.kind == "figure":
             out.append(0.34)
             continue
@@ -744,21 +744,41 @@ def _fill(natural: list[float], flexible: list[bool],
     return [height * room / total for height in heights]
 
 
-def _capacity(role: TypeRole, span: int, grid: GridSpec, canvas: Canvas,
-              height_fraction: float, box_height: float) -> int:
-    """How much copy this slot holds, measured at the face it is set in."""
-    from app.renderer.typeset.fonts import width_pt
+def _rung_for(slot: Slot, kind: PageKind) -> str:
+    """The rung this slot is set in, which everything about it is sized by.
+
+    An opener's heading is display type. That was stated on the frame, so it
+    was *drawn* at display size, while the slot's band and its capacity were
+    worked out at headline size, a third smaller: a cover advertised room
+    for an eighty-character title in a band that holds one line of display
+    type. One answer, read by the band, the capacity and the frame alike.
+    """
+    if slot.kind == "heading" and kind.role in OPENER_ROLES:
+        return "display"
+    return ROLE_FOR_SLOT[slot.kind]
+
+
+def _face_for(language: Language, role: TypeRole) -> str:
+    """The face this role is drawn in - `Pack.face_for`, before a pack exists."""
+    return language.display_face if role.face == "display" else language.body_face
+
+
+def _capacity(role: TypeRole, face: str, span: int, grid: GridSpec,
+              canvas: Canvas, height_fraction: float, box_height: float) -> int:
+    """How much copy this slot holds, set in the face and rung it is drawn in.
+
+    It was measured in Arial whatever the language's faces, so a language
+    set in a wider face was promised room it did not have (#361).
+    """
+    from app.design.setting import capacity
 
     column = grid.column_width_in(canvas)
     width_in = span * column + max(0, span - 1) * grid.gutter_in
-    sample = ("The quick brown fox jumps over the lazy dog and keeps going "
-              "until the line is comfortably longer than any measure")
-    per_char = width_pt(sample, "Arial", role.size_pt) / len(sample)
-    if per_char <= 0 or width_in <= 0:
+    if width_in <= 0:
         return 1
     lines = max(1, int((height_fraction * box_height * 72.0)
                        / max(1.0, role.line_height_pt)))
-    return max(1, int(width_in * 72.0 / per_char) * lines)
+    return max(1, capacity(role, face, width_in * 72.0, lines))
 
 
 # Where an opener's subtitle goes, when the language did not say.

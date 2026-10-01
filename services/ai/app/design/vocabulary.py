@@ -131,24 +131,17 @@ def _width_in(pack: Pack, span: int) -> float:
 def fits_in(pack: Pack, role_name: str, width_in: float, lines: int) -> int:
     """How many characters of this role fit `lines` lines at this width.
 
-    Asked of the real font rather than estimated: a chars-per-line constant is
-    wrong by nearly a factor of two between narrow and wide copy, and the cap
-    it produces is what decides whether a headline overruns its frame.
+    Asked of the real font, set as it is drawn, rather than estimated: a
+    chars-per-line constant is wrong by nearly a factor of two between
+    narrow and wide copy, and the cap it produces is what decides whether a
+    headline overruns its frame.
     """
     role = pack.type_roles.get(role_name)
     if role is None or width_in <= 0:
         return 0
-    from app.renderer.typeset.fonts import width_pt
+    from app.design.setting import capacity
 
-    # A representative mix rather than a worst case: capping at the width of a
-    # line of capital Ws would forbid every real headline.
-    sample = ("The quick brown fox jumps over the lazy dog and keeps going "
-              "until the line is comfortably longer than any measure")
-    per_char = width_pt(sample, pack.face_for(role), role.size_pt,
-                        bold=role.weight in ("semibold", "bold")) / len(sample)
-    if per_char <= 0:
-        return 0
-    return max(1, int(width_in * 72.0 / per_char) * lines)
+    return capacity(role, pack.face_for(role), width_in * 72.0, lines)
 
 
 def _height_fraction(pack: Pack, role_name: str, lines: int) -> float:

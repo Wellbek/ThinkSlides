@@ -67,7 +67,7 @@ def _text_blocks(frame: Frame):
 
 def overflow_findings(doc: DesignDoc, page: Page, pack: Pack) -> list[Finding]:
     """Every text block that does not fit the frame it is bound to."""
-    from app.renderer.typeset.shape import layout
+    from app.design.setting import set_copy
 
     findings: list[Finding] = []
     for resolved in resolve_page(doc, page):
@@ -82,11 +82,11 @@ def overflow_findings(doc: DesignDoc, page: Page, pack: Pack) -> list[Finding]:
             role = pack.type_roles.get(block.type_role)
             if role is None:
                 continue
-            result = layout(
-                block.text, resolved.rect.width * 72.0,
-                resolved.rect.height * 72.0, pack.face_for(role),
-                role.size_pt, line_height_pt=role.line_height_pt,
+            result = set_copy(
+                block.text, role, pack.face_for(role),
+                resolved.rect.width * 72.0, resolved.rect.height * 72.0,
                 columns=block.columns,
+                column_gap_pt=pack.spacing.pt(block.column_gap),
             )
             share = result.overflow_pt / max(1.0, resolved.rect.height * 72.0)
             if share > OVERFLOW_TOLERANCE:

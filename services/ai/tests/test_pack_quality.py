@@ -24,6 +24,7 @@ import pytest
 from app.design import run
 from app.design.pack_build import (
     MIN_MEASURE_CHARS,
+    Faces,
     _capacity_chars,
     _carries_copy,
     _char_width_pt,
@@ -290,10 +291,11 @@ class TestAMeasureIsWideEnoughToSetCopyIn:
         roles = self._roles(pack)
         w_pt, h_pt = pack.canvas.w_in * 72.0, pack.canvas.h_in * 72.0
         block = {"x": 0.1, "y": 0.1, "w": 0.4, "h": 0.2, "size": 16.0}
+        faces = Faces(pack.body_face, pack.display_face)
         lightly = _capacity_chars({**block, "chars": 9}, "body", roles,
-                                  pack.body_face, w_pt, h_pt)
+                                  faces, w_pt, h_pt)
         heavily = _capacity_chars({**block, "chars": 900}, "body", roles,
-                                  pack.body_face, w_pt, h_pt)
+                                  faces, w_pt, h_pt)
         assert lightly == heavily
 
 
