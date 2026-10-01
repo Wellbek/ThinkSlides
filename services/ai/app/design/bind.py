@@ -38,12 +38,11 @@ def _text_block(frame: Frame, pack: Pack, item: MaterialItem) -> TextBlock:
         Paragraph(runs=(Run(text=line.strip()),))
         for line in item.text.split("\n") if line.strip()
     )
-    type_role = _type_role(frame, pack, item)
-    return TextBlock(type_role=type_role, paragraphs=paragraphs,
-                     anchor=_anchor(frame, type_role))
+    return TextBlock(type_role=_type_role(frame, pack, item),
+                     paragraphs=paragraphs, anchor=_anchor(frame))
 
 
-def _anchor(frame: Frame, type_role: str) -> str:
+def _anchor(frame: Frame) -> str:
     """Where in its frame a block sits.
 
     An opener's title is display type in a band tall enough for the longest
@@ -53,8 +52,14 @@ def _anchor(frame: Frame, type_role: str) -> str:
     between itself and its standfirst, so the shorter the title the further
     it drifted from what it introduces. Resting on the bottom, it sits on
     the standfirst whatever its length.
+
+    Read off the frame, not the block: a title repair steps down to a
+    smaller rung is still the title of an opener, resting on the same
+    baseline. And a title too long for its band now runs up into the empty
+    top of the page rather than down over its standfirst - selection and
+    repair exist so that neither happens.
     """
-    if frame.role == "headline" and type_role == "display":
+    if frame.role == "headline" and frame.type_role == "display":
         return "bottom"
     return "top"
 
@@ -215,6 +220,9 @@ def _compact(frames: tuple[Frame, ...],
     ordered = sorted(placed, key=lambda f: _band(f)[0])
     if _stacked_over(ordered):
         return frames
+    # What the page is if compaction fails its own check below: the frames
+    # as filled, uncut, exactly as the archetype states them.
+    as_stated = frames
     columns = _closed_up(_rows(ordered), original)
     if pack is not None and grid is not None:
         frames = _fitted_to_copy(frames, original, columns, pack, grid)
@@ -265,9 +273,9 @@ def _compact(frames: tuple[Frame, ...],
     compacted = [f for f in out if f.id in moved]
     compacted.sort(key=lambda f: _band(f)[0])
     if _stacked_over(compacted, tolerance=1e-6):
-        return frames
+        return as_stated
     if compacted and _band(compacted[-1])[1] > 1.0 + 1e-6:
-        return frames
+        return as_stated
     return tuple(out)
 
 
@@ -286,9 +294,18 @@ def _fitted_to_copy(frames: tuple[Frame, ...], original: tuple[Frame, ...],
 
     Measured with the same typesetter as everything else, at the width the
     frame is about to have once its row closes up (a lone survivor widens,
-    and wider copy needs fewer lines). Only ever shortened, never grown, and
-    only for frames that hold nothing but text: an exhibit fills whatever it
-    is given, so it has no height of its own to be cut to.
+    and wider copy needs fewer lines), plus one line of the block's own
+    leading. That line is the window in which PowerPoint or LibreOffice can
+    break a line a word earlier than the typesetter - a substituted face, a
+    kerning pair - and cut to the exact depth, the last line would overprint
+    the row closed up beneath it. Only ever shortened, never grown, and only
+    for frames that hold nothing but text: an exhibit fills whatever it is
+    given, so it has no height of its own to be cut to.
+
+    A frame counts as having lost a row-mate only in a true row, its members
+    side by side - the same rule `_closed_up` applies. A heading stacked over
+    prose beside a tall figure shares the figure's band without being in a
+    row with it, and is left as its archetype states.
     """
     from app.design.geometry import content_box
     from app.design.setting import set_copy
@@ -299,7 +316,9 @@ def _fitted_to_copy(frames: tuple[Frame, ...], original: tuple[Frame, ...],
     lost_a_mate = set()
     for row in _rows(sorted((f for f in original if _band(f) is not None),
                             key=lambda f: _band(f)[0])):
-        if len(row) > 1 and any(f.id not in kept for f in row):
+        if (len(row) > 1 and any(f.id not in kept for f in row)
+                and all(f.id in spans for f in row)
+                and _side_by_side([spans[f.id] for f in row])):
             lost_a_mate.update(f.id for f in row if f.id in kept)
     if not lost_a_mate:
         return frames
@@ -326,13 +345,10 @@ def _fitted_to_copy(frames: tuple[Frame, ...], original: tuple[Frame, ...],
             if role is None:
                 tallest = float("inf")
                 break
-            setting = set_copy(block.text, role, pack.face_for(role),
-                               width_pt, 0.0, columns=block.columns,
-                               column_gap_pt=pack.spacing.pt(block.column_gap))
-            paragraphs = max(1, len(block.paragraphs))
-            spacing = (paragraphs - 1) * (pack.spacing.pt(role.space_before)
-                                          + pack.spacing.pt(role.space_after))
-            tallest = max(tallest, setting.height_pt + spacing)
+            setting = set_copy(block.text, role, pack, width_pt, 0.0,
+                               columns=block.columns,
+                               column_gap=block.column_gap)
+            tallest = max(tallest, setting.height_pt + role.line_height_pt)
         # `compile` splits a frame holding several blocks into equal bands,
         # so the frame needs the tallest block as many times over.
         needed_in = (len(blocks) * tallest / 72.0
