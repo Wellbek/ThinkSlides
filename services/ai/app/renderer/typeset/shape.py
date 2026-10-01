@@ -76,8 +76,13 @@ def _break_word(token: str, width_pt: float, measure) -> tuple[list[str], str]:
 def wrap(text: str, width_pt: float, family: str, size_pt: float, *,
          bold: bool = False, italic: bool = False,
          tracking_per_mille: int = 0,
-         metrics: Optional[FontMetrics] = None) -> list[str]:
-    """The lines this text breaks into inside a box of this width."""
+         metrics: Optional[FontMetrics] = None,
+         limit: Optional[int] = None) -> list[str]:
+    """The lines this text breaks into inside a box of this width.
+
+    ``limit`` stops setting once more than that many lines are set, for a
+    caller that only needs to know what the first few lines hold.
+    """
     if width_pt <= 0 or not text.strip():
         return [text] if text.strip() else []
     if metrics is None:
@@ -90,18 +95,29 @@ def wrap(text: str, width_pt: float, family: str, size_pt: float, *,
 
     lines: list[str] = []
     for paragraph in text.split("\n"):
+        if limit is not None and len(lines) > limit:
+            break
         if not paragraph.strip():
             lines.append("")
             continue
         current = ""
+        # The width of `current`, kept as it grows. A string's width is the
+        # sum of its characters' (advances plus tracking, no kerning), so
+        # adding each word's is exact - and re-measuring the whole line for
+        # every word made setting a long column quadratic in its width.
+        current_w = 0.0
         for token in _tokens(paragraph):
-            candidate = current + token
+            if limit is not None and len(lines) > limit:
+                break
+            word = token.rstrip()
+            word_w = measure(word)
             # Trailing space does not count against the line: a word that
             # ends exactly at the margin still fits, and counting its space
             # wraps a line early - which is how a measurement drifts one
             # line long on every paragraph.
-            if measure(candidate.rstrip()) <= width_pt:
-                current = candidate
+            if current_w + word_w <= width_pt:
+                current += token
+                current_w += word_w + measure(token[len(word):])
                 continue
             if current:
                 lines.append(current.rstrip())
@@ -110,10 +126,11 @@ def wrap(text: str, width_pt: float, family: str, size_pt: float, *,
             # which is what both renderers do. Without this, "unprecedented"
             # set at 24pt in a 115pt column is reported as one line and
             # drawn as three.
-            if measure(token.rstrip()) > width_pt:
+            if word_w > width_pt:
                 head, token = _break_word(token, width_pt, measure)
                 lines.extend(head)
             current = token
+            current_w = measure(token)
         if current.strip():
             lines.append(current.rstrip())
     return lines

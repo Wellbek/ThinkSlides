@@ -26,11 +26,12 @@ in the slot rather than by dividing its width by an average advance.
 """
 from __future__ import annotations
 
+import dataclasses
 import functools
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from app.design.pack import TypeRole
+    from app.design.pack import Pack, TypeRole
     from app.renderer.typeset.shape import TextLayout
 
 # Ordinary expository prose, the register slides are written in: mixed word
@@ -67,18 +68,57 @@ def as_drawn(text: str, role: "TypeRole") -> str:
     return text
 
 
-def set_copy(text: str, role: "TypeRole", family: str, width_pt: float,
+def set_copy(text: str, role: "TypeRole", pack: "Pack", width_pt: float,
              height_pt: float, *, columns: int = 1,
-             column_gap_pt: float = 12.0) -> "TextLayout":
-    """Set this copy in a box exactly as the renderer will draw it."""
+             column_gap: Optional[int] = None) -> "TextLayout":
+    """Set this copy in a box exactly as the renderer will draw it.
+
+    In the pack's face for the role, with the paragraph spacing `compile`
+    puts between paragraphs and the column gap it sets columns apart by.
+    """
+    return set_in_face(
+        text, role, pack.face_for(role), width_pt, height_pt,
+        paragraph_gap_pt=(pack.spacing.pt(role.space_before)
+                          + pack.spacing.pt(role.space_after)),
+        # No gap named is no gap drawn: `compile` passes the ladder's answer
+        # for None, which is nothing, and the renderer then sets no spacing.
+        columns=columns, column_gap_pt=pack.spacing.pt(column_gap),
+    )
+
+
+def set_in_face(text: str, role: "TypeRole", family: str, width_pt: float,
+                height_pt: float, *, paragraph_gap_pt: float = 0.0,
+                columns: int = 1, column_gap_pt: float = 12.0) -> "TextLayout":
+    """`set_copy` before there is a pack: the face and spacing stated."""
     from app.renderer.typeset.shape import layout
 
-    return layout(
+    result = layout(
         as_drawn(text, role), width_pt, height_pt, family, role.size_pt,
         line_height_pt=role.line_height_pt, bold=is_bold(role),
         tracking_per_mille=role.tracking_per_mille,
         columns=columns, column_gap_pt=column_gap_pt,
     )
+    # `compile` gives every paragraph its role's space before (after the
+    # first) and after; only the gaps between paragraphs add to the depth
+    # of the block, shared among its columns.
+    paragraphs = sum(1 for line in text.split("\n") if line.strip())
+    extra = max(0, paragraphs - 1) * paragraph_gap_pt / max(1, int(columns))
+    if extra <= 0 or not result.lines:
+        return result
+    used = result.height_pt + extra
+    return dataclasses.replace(
+        result, height_pt=used,
+        overflow_pt=max(0.0, used - height_pt) if height_pt > 0 else 0.0,
+    )
+
+
+def average_advance_pt(role: "TypeRole", family: str) -> float:
+    """The mean width of a character of ordinary prose set in this role."""
+    from app.renderer.typeset.fonts import width_pt
+
+    text = as_drawn(SAMPLE_PROSE, role)
+    return width_pt(text, family, role.size_pt, bold=is_bold(role),
+                    tracking_per_mille=role.tracking_per_mille) / len(text)
 
 
 def capacity(role: "TypeRole", family: str, width_pt: float,
@@ -110,22 +150,28 @@ CAPACITY_STARTS = 12
 @functools.lru_cache(maxsize=4096)
 def _capacity(family: str, size_pt: float, bold: bool, capitals: bool,
               tracking_per_mille: int, width_pt: float, lines: int) -> int:
+    from app.renderer.typeset.fonts import metrics_for
     from app.renderer.typeset.shape import wrap
 
+    metrics = metrics_for(family, bold=bold)
     words = SAMPLE_PROSE.split()
     step = max(1, len(words) // CAPACITY_STARTS)
     fewest = None
     for start in range(0, step * CAPACITY_STARTS, step):
-        sample = " ".join(words[start:] + words[:start]) + " "
+        passage = " ".join(words[start:] + words[:start]) + " "
+        sample = passage
         while True:
-            text = sample.upper() if capitals else sample
-            set_lines = wrap(text, width_pt, family, size_pt, bold=bold,
-                             tracking_per_mille=tracking_per_mille)
+            set_lines = wrap(sample.upper() if capitals else sample, width_pt,
+                             family, size_pt, bold=bold,
+                             tracking_per_mille=tracking_per_mille,
+                             metrics=metrics, limit=lines)
             # The sample's last line is short only because the sample
             # ended, so it never counts: more lines must be set than kept.
+            # Setting stops as soon as there are, so a long slot costs no
+            # more than the lines it holds.
             if len(set_lines) > lines:
                 break
-            sample += sample
+            sample += passage * max(1, len(sample) // len(passage))
         held = set_lines[:lines]
         count = sum(len(line) for line in held) + len(held) - 1
         fewest = count if fewest is None else min(fewest, count)
