@@ -219,7 +219,7 @@ Each exhibit has a minimum slot height:
 - a **table** is measured, not estimated: its uncompressed height at the slot's width, wrapped as it will be drawn, at 10pt body type (`table_layout.needed_height_in`, `LEGIBLE_CELL_PT`).
   It is measured in both the default face and the pack's body face, and the taller is kept, because the table is drawn in the design's data-visualisation face, which the pack does not carry.
   A row count alone said nothing about a six-column table whose cells each break onto three lines in a half-width column;
-- a typed **diagram** (flow, value chain, matrix, funnel, pyramid, timeline, Venn, org chart) is measured the same way: laid out at the slot's width at 10pt, the size a table's cells are held to (`diagrams.needed_height_in`, `LEGIBLE_PT`), in both faces, the taller kept, and never under 1.0in.
+- a typed **diagram** (flow, value chain, matrix, funnel, pyramid, timeline, Venn, org chart) is measured the same way: laid out at the slot's width at 10pt with its details, the size a table's cells are held to (`diagrams.needed_height_in`, `LEGIBLE_PT`), in both faces, the taller kept, and never under 1.0in.
   When a word of it cannot be set whole at that width at 10pt, its floor is infinite and the slot is refused outright (#363): a four-step flow in a half-width slot broke "ReplicaSet" and "maxUnavailable" across lines;
 - a **chart** needs 1.6in, an SVG-drawn diagram 1.0in, a **metrics** row 0.6in (`MIN_EXHIBIT_IN`).
 
@@ -246,14 +246,20 @@ A table, chart or diagram carries text that has to sit inside the margins the re
 
 **Setting a diagram in the slot it gets** (`diagrams._fitted`).
 A diagram is drawn, then read back: every word has to fit whole across its box, breaking only where the typesetter may (spaces, and after a hyphen or dash), and every label and detail has to fit inside its node.
-When it does not, what gives way, in order:
-1. the diagram's height, from the shape it is drawn at (`ASPECT`) up to the whole rect it was handed, in four steps (`HEIGHT_STEPS`), because type is what makes it readable;
-2. both sizes, together, half a point at a time (`SIZE_STEP_PT`), down to 8pt labels and 7pt details (`MIN_LABEL_PT`, `MIN_DETAIL_PT`);
-3. the detail lines, which go before a label is set below reading size.
-Every label of one diagram is set at one size and every detail at another, with the renderer's autofit off: left to it, each box was shrunk on its own and no two steps of a flow matched.
-Labels of nodes side by side start at the same height, so a row reads as a row.
-Diagram text is measured 4% narrower than its box (`TEXT_MEASURE`, the same margin as an opener's title), with the real typesetter rather than the conservative estimate, which set one-line labels as two.
-Going below 10pt is the last resort for a slot chosen anyway; the selector does not choose one on that basis.
+When it does not, what gives way, in order, and each only as far as it has to:
+1. the diagram's height, from the shape it is drawn at (`ASPECT`) up to the rect it was handed, because type is what makes it readable;
+2. both sizes, together, half a point at a time (`SIZE_STEP_PT`), down to 10pt (`LEGIBLE_PT`);
+3. the detail lines, at sizes down to 10pt again, since detail goes before a label is set below reading size;
+4. below 10pt, down to 8pt labels and 7pt details (`MIN_LABEL_PT`, `MIN_DETAIL_PT`), with details and then without: the last resort for a slot chosen anyway.
+Past all four it is drawn at the floor with the renderer's autofit left on, so its text at least stays inside its boxes.
+Both searches are bisections, for the largest size that reads at the full height and then the least height that reads at that size (to 1% of the room, `HEIGHT_PRECISION`), so a diagram costs a handful of draws, and a measuring pass that hands it a hundred inches gets back the height it needs rather than the hundred inches.
+Every label of one diagram is set at one size and every detail at another, with autofit off for node text: left to it, each box was shrunk on its own and no two steps of a flow matched.
+Labels of nodes side by side start at the same height, measured with the details only when the boxes are tall enough to show them (`DETAIL_MIN_BOX_IN`).
+Diagram text is measured with the real typesetter, 4% narrower than its box (`TEXT_MEASURE`, the same margin as an opener's title), both for line counts and for whether a word fits whole.
+
+The floor the selector reads (section 7, above) is this layout at 10pt **with** the details, in a rect up to eight times the diagram's own shape (`PROBE_HEIGHT_FACTOR`), the least height that reads; infinite when none does.
+A slot that could show only the labels is not offered, since what the diagram was drawn to say would be lost; a wider slot, the plain page at worst, shows all of it.
+The title band is measured at the size the title is drawn at, from the pack's body size.
 
 ## 8. Splitting a page
 
@@ -453,7 +459,8 @@ The ones that report on the decisions above:
 | `MIN_EXHIBIT_IN` | chart 1.6, diagram 1.0, metrics 0.6 | `design/select.py` |
 | diagram `LEGIBLE_PT` | 10.0 (= `LEGIBLE_CELL_PT`) | `renderer/diagrams.py` |
 | `MIN_LABEL_PT`, `MIN_DETAIL_PT` | 8.0, 7.0 | `renderer/diagrams.py` |
-| `SIZE_STEP_PT`, `HEIGHT_STEPS` | 0.5pt, 4 | `renderer/diagrams.py` |
+| `SIZE_STEP_PT`, `HEIGHT_PRECISION` | 0.5pt, 1% of the room | `renderer/diagrams.py` |
+| `PROBE_HEIGHT_FACTOR` | 8 times the diagram's own shape | `renderer/diagrams.py` |
 | `TEXT_MEASURE` | 0.96 | `renderer/diagrams.py` |
 | `LEGIBLE_CELL_PT` | 10.0 | `renderer/table_layout.py` |
 | table body sizes | 14 to 8pt | `renderer/table_layout.py` |

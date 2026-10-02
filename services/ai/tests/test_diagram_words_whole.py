@@ -50,23 +50,47 @@ def test_no_word_is_broken(width_in):
                 f"{word!r} at {mark.size_pt}pt in {mark.box.width:.2f}in")
 
 
-def test_every_step_is_set_at_one_size():
-    marks = _draw(4.7)
+@pytest.mark.parametrize("width_in", [4.7, 6.0])
+def test_every_step_is_set_at_one_size(width_in):
+    marks = _draw(width_in)
     assert len({m.size_pt for m in _texts(marks, "-label")}) == 1
-    assert len({m.size_pt for m in _texts(marks, "-detail")}) == 1
+    assert len({m.size_pt for m in _texts(marks, "-detail")}) <= 1
+
+
+def test_details_are_kept_where_they_read():
+    assert len(_texts(_draw(6.0), "-detail")) == 4
+
+
+def test_details_go_before_labels_go_below_legibility():
+    """The module's rule: in a slot too narrow for the details at 10pt, the
+    details give way and the labels stay readable."""
+    marks = _draw(4.7)
+    assert not _texts(marks, "-detail")
+    assert min(m.size_pt for m in _texts(marks, "-label")) >= diagrams.LEGIBLE_PT
 
 
 def test_the_renderer_does_not_resize_a_box_on_its_own():
-    assert all(not m.autofit for m in _draw(4.7) if m.kind == "text")
+    """Node text is sized once for the whole diagram. Titles and other
+    free-standing text keep autofit as their guard."""
+    marks = _draw(6.0)
+    assert all(not m.autofit for m in _texts(marks, "-label") + _texts(marks, "-detail"))
 
 
-def test_text_stays_inside_its_node():
+def test_the_floor_counts_the_details():
+    """A slot that shows the labels only is not offered: what the diagram
+    was drawn to say would be lost."""
+    assert math.isinf(diagrams.needed_height_in(FLOW, 4.7, "Arial"))
+    assert math.isfinite(diagrams.needed_height_in(FLOW, 6.0, "Arial"))
+
+
+@pytest.mark.parametrize("width_in", [4.7, 6.0, 11.7])
+def test_text_stays_inside_its_node(width_in):
     """`_reads` is the contract the fitting holds; it must hold at the end."""
-    assert diagrams._reads(_draw(4.7))
+    assert diagrams._reads(_draw(width_in))
 
 
 def test_labels_of_a_row_start_together():
-    labels = _texts(_draw(4.7), "-label")
+    labels = _texts(_draw(6.0), "-label")
     assert len({round(m.box.top, 4) for m in labels}) == 1
 
 
@@ -121,3 +145,80 @@ def test_a_typed_diagram_is_held_to_its_measured_floor_exactly():
                          payload={"diagram": {"format": "svg", "svg": "<svg/>"}})
     assert legible_tolerance(typed) == 0.0
     assert legible_tolerance(drawn) == LEGIBLE_TOLERANCE
+
+
+def _node_boxes(marks):
+    return {m.id: m.box for m in marks if m.kind == "rect"}
+
+
+class TestTheSecondPassOfTheReview:
+    def test_a_measuring_pass_gets_the_height_it_needs_not_the_box(self):
+        """`BlockCompiler.measure` draws into a hundred inches. Growing to
+        the whole rect reported a 6in funnel as 28in tall."""
+        funnel = {"diagram": {"kind": "funnel", "items": [
+            {"label": f"Stage {i}", "detail": "A detail long enough to wrap twice "
+             "at this width"} for i in range(4)]}}
+        rect = PositionConfig(left=0.0, top=0.0, width=6.0, height=100.0)
+        marks = diagrams.compile_diagram(funnel, rect, palette=PALETTE,
+                                         label_pt=12.0, detail_pt=10.0)
+        box = diagrams.primitives.bounds(marks)
+        assert box.height < 6.0 * diagrams.ASPECT["funnel"] * 2
+
+    def test_a_label_without_its_detail_is_centred_in_its_box(self):
+        flow = {"diagram": {"kind": "flow", "items": [
+            {"label": "Plan", "detail": "One line"}] * 3}}
+        rect = PositionConfig(left=0.0, top=0.0, width=6.0, height=0.5)
+        marks = diagrams.compile_diagram(flow, rect, palette=PALETTE,
+                                         label_pt=10.0, detail_pt=10.0)
+        boxes = _node_boxes(marks)
+        for label in _texts(marks, "-label"):
+            box = boxes[label.id.rpartition("-")[0]]
+            drawn = diagrams._text_h("Plan", label.size_pt, label.box.width,
+                                     bold=True, family="Arial")
+            assert (label.box.top + drawn / 2) == pytest.approx(
+                box.top + box.height / 2, abs=0.03)
+
+    def test_drawing_is_a_handful_of_draws_not_ninety(self):
+        import time
+
+        narrow = PositionConfig(left=0.0, top=0.0, width=3.0, height=3.0)
+        diagrams.compile_diagram(FLOW, narrow, palette=PALETTE, label_pt=14.0,
+                                 detail_pt=12.0)
+        started = time.perf_counter()
+        for _ in range(5):
+            diagrams.compile_diagram(FLOW, narrow, palette=PALETTE,
+                                     label_pt=14.5, detail_pt=12.5)
+        assert (time.perf_counter() - started) / 5 < 0.05
+
+    def test_the_last_resort_keeps_autofit_as_a_guard(self):
+        """Drawn at the floor because nothing reads, its text is no longer
+        sized to fit - so the renderer is left to keep it in its boxes."""
+        tiny = PositionConfig(left=0.0, top=0.0, width=1.2, height=0.4)
+        marks = diagrams.compile_diagram(FLOW, tiny, palette=PALETTE,
+                                         label_pt=14.0, detail_pt=12.0)
+        assert all(m.autofit for m in marks if m.kind == "text")
+
+    def test_a_slot_of_the_measured_floor_is_drawn_at_a_legible_size(self):
+        """The floor and the drawing agree: given exactly the height the
+        selector was told, the labels are not set below `LEGIBLE_PT`."""
+        width = 6.0
+        needed = diagrams.needed_height_in(FLOW, width, "Arial", label_pt=14.0)
+        assert math.isfinite(needed)
+        rect = PositionConfig(left=0.0, top=0.0, width=width, height=needed + 0.01)
+        marks = diagrams.compile_diagram(FLOW, rect, palette=PALETTE,
+                                         label_pt=14.0, detail_pt=12.0)
+        assert min(m.size_pt for m in _texts(marks, "-label")) >= diagrams.LEGIBLE_PT
+
+    def test_a_timeline_date_is_measured_bold_as_it_is_drawn(self):
+        timeline = {"diagram": {"kind": "timeline", "items": [
+            {"date": "2026-Q3 rollout window", "label": "Pilot"},
+            {"date": "2027", "label": "General availability"}]}}
+        rect = PositionConfig(left=0.0, top=0.0, width=2.4, height=2.0)
+        marks = diagrams.compile_diagram(timeline, rect, palette=PALETTE,
+                                         label_pt=12.0, detail_pt=11.0)
+        for date in (m for m in marks if m.kind == "text" and "-d" in m.id):
+            text = "".join(r.text for r in date.runs)
+            assert date.bold
+            assert date.box.height >= diagrams._text_h(
+                text, date.size_pt, date.box.width, bold=True,
+                family="Arial") - 1e-6
