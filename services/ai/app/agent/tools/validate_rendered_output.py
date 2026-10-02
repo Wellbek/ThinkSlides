@@ -176,7 +176,7 @@ class ValidateRenderedOutputTool:
                 )
 
             preview_gen = PreviewGenerator()
-            pdf_path = preview_gen.get_pdf_path(session_id)
+            pdf_path = preview_gen.get_pdf_path(session_id, pptx_path)
             cleanup_dir = None
             if not pdf_path:
                 cleanup_dir = tempfile.mkdtemp(prefix="thinkslides_validate_")
