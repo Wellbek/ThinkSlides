@@ -3298,6 +3298,14 @@ class AgentLoop:
                     "timestamp": _iso_now(),
                 }, step=phase.name)
 
+            if (not tool_calls and phase.on_decline is not None
+                    and (assistant_message.get("content") or "").strip()):
+                # A phase that may be declined: the model said, in words, that
+                # nothing should be done. That closes it - nudging a model to
+                # call a tool it has decided not to call only costs turns and
+                # ends the run as stalled.
+                phase.on_decline(self)
+                continue
             if not tool_calls:
                 # Nothing was called and the phase is unfinished. Say what is
                 # outstanding and give it another turn; the walker's stall
@@ -3564,6 +3572,10 @@ class AgentLoop:
             # compose, so offering either would put two systems in charge of
             # the same decision.
             withheld |= pipeline.TEMPLATE_GEOMETRY_TOOLS
+        if not self.working_state.amending:
+            # It sends a finished deck's slides back for a user's request; a
+            # run that is not amending has no finished deck to send.
+            withheld.add("revise_slides")
         if not self.code_amendment_enabled:
             # The container hardening this depends on is an operator's
             # decision, not a default - see edit_deck_with_code's own
@@ -3622,6 +3634,19 @@ class AgentLoop:
                 "rendered slide instead of a full redraft."
                 if "edit_deck_with_code" not in self._withheld_tools() else ""
             )
+            asked = [i for i in self.working_state.validation_issues
+                     if i.get("slideIndex") == index and i.get("type") == "user_request"]
+            if asked:
+                return (
+                    f"The user asked for a change to slide {index + 1}"
+                    + (f' ("{title}")' if title else "")
+                    + f": {asked[0].get('detail')!r}\n\nRedraft this slide so "
+                    "it does that and keeps everything else about it, then "
+                    "call design_slide_content for this slide."
+                    + self._attached_exhibits_directive(index)
+                    + self._exhibit_capacity_directive()
+                    + self._headline_capacity_directive()
+                )
             return (
                 f"Revise slide {index + 1}"
                 + (f' ("{title}")' if title else "")
@@ -4815,9 +4840,25 @@ class AgentLoop:
             # here rather than handed back for the model to re-state.
             self._attach_visual(fn_name, tool_result)
 
+            if fn_name == "revise_slides" and tool_result.success:
+                ws = self.working_state
+                data = tool_result.data or {}
+                total = len(ws.accumulated_slides) or int(
+                    (ws.presentation_structure or {}).get("totalSlides") or 0)
+                indices = [i for i in data.get("slideIndices", []) if i < total]
+                if indices:
+                    ws.validation_issues = [
+                        {"slideIndex": i, "type": "user_request", "fix": "redraft",
+                         "detail": data.get("instruction", "")} for i in indices]
+                    ws.revision_queue = list(indices)
+                    ws.slides_needing_revision = list(indices)
+                    ws.design_serial += 1
+                    ws.amend_done = True
             if fn_name == "edit_deck_with_code":
                 self._remember_code_attempt(fn_args, tool_result)
-                if tool_result.success:
+                # A script that only looked at the deck changed nothing: it is
+                # not an edit, does not close the phase and is not replayed.
+                if tool_result.success and (tool_result.data or {}).get("changed", True):
                     # Counted in every phase, so a mid-draft fix registers as
                     # progress even though it moves none of the other fields
                     # `_progress_marker` watches.
@@ -5582,6 +5623,7 @@ class AgentLoop:
             "suggested answers (pauses the workflow until they reply)",
             "finalize_and_render_pptx — Render the final PPTX file",
             "validate_rendered_output — Check the ACTUAL rendered output: overflow/overlap in the real geometry, plus placeholder copy, repeated points, bullets restating a chart, and package integrity (MUST be called after finalize_and_render_pptx, and is the true last step)",
+            "revise_slides — Send slides of a finished deck back to be redrafted with the user's request as the instruction (changes to what a slide says or shows)",
             "edit_deck_with_code — Write a short script that opens the already-rendered deck with python-pptx and fixes one precise thing (an overlap, a shape's position, a slide that needs moving) - only once finalize_and_render_pptx has produced a file to edit. Checked before it runs and before its edit is kept. Prefer design_slide_content for an ordinary content fix; reach for this when the fix is about WHERE something sits rather than what it says",
         ]
         # Same rule as document_tools and image_tools above, applied to the

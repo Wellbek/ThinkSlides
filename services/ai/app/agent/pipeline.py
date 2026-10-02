@@ -100,6 +100,9 @@ class Phase:
     # How many model turns this phase gets before the run gives up on it.
     max_turns: int = 0
     pauses: bool = False
+    # What happens when the model answers in words and calls no tool, for a
+    # phase it may decline - one whose honest answer can be "nothing to do".
+    on_decline: Callable[["AgentLoop"], None] | None = None
 
 
 # ── Conditions, named so the table below reads as prose ──────────────────
@@ -278,7 +281,7 @@ PIPELINE: tuple[Phase, ...] = (
         name="change",
         label="content_generation",
         driver=MODEL_DRIVEN,
-        tools=frozenset({"edit_deck_with_code"}),
+        tools=frozenset({"edit_deck_with_code", "revise_slides"}),
         # A message that arrived after the deck was finished: the deck exists
         # and is kept, and this is the request to change it (#376).
         applies=lambda loop: loop.working_state.amending,
@@ -286,15 +289,21 @@ PIPELINE: tuple[Phase, ...] = (
         directive=lambda loop: (
             "The deck is finished and the user has written again. Their "
             f"request: {loop.working_state.amend_request!r}\n\n"
-            "Make exactly that change to the finished deck with "
-            "edit_deck_with_code, and nothing else: leave every slide's copy, "
-            "layout and design as they are. Place anything you add clear of "
+            "Make exactly that change and nothing else. If it is about what a "
+            "slide says or shows (copy, a chart, a figure, a visual), call "
+            "revise_slides with the slides and the user's specifics. If it is "
+            "about where something sits, something added to pages, a "
+            "deck-wide style or a link, use edit_deck_with_code and leave "
+            "every slide's copy, layout and design as they are. Place anything you add clear of "
             "the existing content (read the slide's shapes and the page size "
             "from the deck before choosing coordinates), keep it identical "
             "across the pages it applies to, and use the deck's own theme "
             "colours and fonts." + loop.asset_directive()
+            + " If the request cannot be done to the deck, reply in words "
+            "saying why, with no tool call, and the deck is left as it is."
         ),
         max_turns=4,
+        on_decline=lambda loop: setattr(loop.working_state, "amend_done", True),
     ),
     Phase(
         name="render",
@@ -323,9 +332,11 @@ PIPELINE: tuple[Phase, ...] = (
         directive=lambda loop: (
             "validate_rendered_output reported something the build_* tools "
             "cannot fix. Write one short script with edit_deck_with_code to "
-            "correct it, or say the deck is done if a script would not help."
+            "correct it, or reply in words, with no tool call, if a script "
+            "would not help."
         ),
         max_turns=4,
+        on_decline=lambda loop: setattr(loop.working_state, "code_amendment_done", True),
     ),
 )
 

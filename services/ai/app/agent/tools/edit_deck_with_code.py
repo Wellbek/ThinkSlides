@@ -100,7 +100,12 @@ class EditDeckWithCodeTool:
                         "name. Use relative paths only. You may import pptx, "
                         "math, statistics, json, csv, re, datetime, decimal, "
                         "random, textwrap, itertools, matplotlib, numpy and "
-                        "PIL. You may not import anything else, and in "
+                        "PIL; for raw XML use pptx.oxml.parse_xml, since lxml "
+                        "itself is refused. A shape meant to sit behind "
+                        "content (a watermark) must be named "
+                        "'ts-background-<what>', so the overlap check does "
+                        "not count it as damage; name anything else you add "
+                        "'ts-overlay-<what>'. You may not import anything else, and in "
                         "particular not os, sys, subprocess, socket or this "
                         "service's own modules. No eval, no exec, no "
                         "__import__. There is no network and no filesystem "
@@ -210,6 +215,19 @@ class EditDeckWithCodeTool:
                 duration_ms=int((time.time() - start) * 1000),
             )
 
+        if edited == deck:
+            # Looking is allowed: a script may read the deck, print what it
+            # found and leave it alone. That is not an edit, and the model
+            # needs to see what it printed to act on it.
+            return ToolResult(
+                success=True,
+                data={"outcome": "ran", "changed": False, "source": source,
+                      "slideIndex": slide_index, "stdout": result.stdout,
+                      "summary": ("The script ran and left the deck unchanged."
+                                  + _printed(result.stdout))},
+                duration_ms=int((time.time() - start) * 1000),
+            )
+
         _adopt_deck(edited)
         logger.info("sandbox_deck_adopted", bytes=len(edited or b""),
                     slide_index=slide_index,
@@ -227,6 +245,7 @@ class EditDeckWithCodeTool:
             success=True,
             data={
                 "outcome": "ran",
+                "changed": True,
                 "source": source,
                 "slideIndex": slide_index,
                 "stdout": result.stdout,
@@ -236,10 +255,17 @@ class EditDeckWithCodeTool:
                        else "")
                     + f": {intent.strip() or 'the deck was edited'}. "
                     "validate_rendered_output judges the result."
+                    + _printed(result.stdout)
                 ),
             },
             duration_ms=int((time.time() - start) * 1000),
         )
+
+
+def _printed(stdout: str) -> str:
+    """What the script printed, handed back so the model can act on it."""
+    text = (stdout or "").strip()
+    return f"\n\nThe script printed:\n{text[:1500]}" if text else ""
 
 
 def replay(path: str, log: list[dict]) -> list[str]:

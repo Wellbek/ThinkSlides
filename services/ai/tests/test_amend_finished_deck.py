@@ -122,7 +122,7 @@ def test_an_amendment_goes_to_the_change_phase_then_validates(deck):
     asyncio.run(loop._load_deck_snapshot("sid"))
     phase = pipeline.next_phase(loop)
     assert phase.name == "change"
-    assert phase.tools == frozenset({"edit_deck_with_code"})
+    assert phase.tools == frozenset({"edit_deck_with_code", "revise_slides"})
     assert "Add a logo" in phase.directive(loop)
     loop.working_state.amend_done = True
     assert pipeline.next_phase(loop).name == "validate"
@@ -296,3 +296,42 @@ def test_a_failed_restore_leaves_a_clean_state(deck, monkeypatch):
     monkeypatch.setattr(loop, "_apply_state_dict", lambda state, sid: False)
     assert asyncio.run(loop._load_deck_snapshot("sid")) is False
     assert loop.working_state.accumulated_slides == []
+
+
+def test_revise_slides_sends_slides_back_with_the_users_words():
+    from app.agent.tools.revise_slides import ReviseSlidesTool
+
+    result = asyncio.run(ReviseSlidesTool.run([1], "show build times as horizontal bars"))
+    assert result.success and result.data["slideIndices"] == [1]
+    assert not asyncio.run(ReviseSlidesTool.run([], "x")).success
+    assert not asyncio.run(ReviseSlidesTool.run([1], "  ")).success
+
+
+def test_revise_slides_is_offered_only_while_amending(deck):
+    loop = _loop(_Db(None, None))
+    assert "revise_slides" in loop._withheld_tools()
+    loop.working_state.amending = True
+    assert "revise_slides" not in loop._withheld_tools()
+
+
+def test_a_script_that_only_looks_is_not_an_edit(deck, monkeypatch):
+    from app.agent import run_context
+
+    token = run_context.set_rendered_path(deck)
+    try:
+        look = 'from pptx import Presentation\nprint(len(Presentation("deck.pptx").slides))\n'
+        result = asyncio.run(edit_tool.EditDeckWithCodeTool.run(look, "count", "none"))
+    finally:
+        run_context.reset_rendered_path(token)
+    assert result.success and result.data["changed"] is False
+    assert "The script printed:\n1" in result.data["summary"]
+
+
+def test_the_change_and_amend_phases_can_be_declined_in_words():
+    loop = _loop(_Db(None, None))
+    for name, flag in (("change", "amend_done"), ("amend", "code_amendment_done")):
+        phase = pipeline.PHASES_BY_NAME[name]
+        assert phase.on_decline is not None
+        assert getattr(loop.working_state, flag) is False
+        phase.on_decline(loop)
+        assert getattr(loop.working_state, flag) is True
