@@ -35,6 +35,7 @@ less.
 
 from __future__ import annotations
 
+import functools
 import math
 from typing import Optional
 
@@ -42,6 +43,7 @@ from app import colors
 from app.renderer import primitives
 from app.renderer.layout import PositionConfig
 from app.renderer.primitives import Primitive
+from app.renderer.table_layout import LEGIBLE_CELL_PT
 
 DIAGRAM_KINDS: tuple[str, ...] = (
     "flow",
@@ -120,7 +122,8 @@ def compile_diagram(
     title = str(payload.get("title") or "").strip()
     if title:
         title_pt = max(label_pt, MIN_LABEL_PT + 1.0)
-        title_h = primitives.measure_text(title, title_pt, rect.width, bold=True)
+        title_h = _text_h(title, title_pt, rect.width, bold=True,
+                          family=palette.font)
         out.append(_text(f"{prefix}-title", rect.left, rect.top, rect.width,
                          title_h, title, title_pt, palette.heading,
                          bold=True, font=palette.font))
@@ -129,10 +132,169 @@ def compile_diagram(
             width=rect.width, height=max(0.2, rect.height - title_h - GAP_IN),
         )
 
-    body = _at_aspect(kind, body)
-    drawer = _DRAWERS[kind]
-    out.extend(drawer(nodes, body, payload, palette, label_pt, detail_pt, prefix))
+    out.extend(_fitted(kind, nodes, body, payload, palette, label_pt,
+                       detail_pt, prefix).marks)
     return [p for p in out if p is not None]
+
+
+# ── Fitting ────────────────────────────────────────────────────────────
+#
+# A diagram is drawn, then read back: every word of every label has to fit
+# whole across its box, and every label has to fit inside the node it names.
+# Drawn once at the deck's body size and left to the renderer, a step in a
+# half-width slot broke "ReplicaSet" into "ReplicaSe / t", ran its detail out
+# below its border, and was then shrunk box by box by autofit, so no two
+# steps of one flow were set at the same size (#363).
+#
+# What gives way, in order: the diagram's height first, from the shape it is
+# drawn at up to the whole rect it was handed, because type is what makes it
+# readable; then both sizes, together, half a point at a time down to the
+# legibility floor; then the detail lines, which the module's own rule has
+# going before a label is set below reading size. Past all three it is drawn
+# at the floor anyway, and `needed_height_in` has already told the selector
+# that this slot cannot hold it legibly.
+
+SIZE_STEP_PT = 0.5
+# The size a diagram has to be readable at for a slot to count as holding
+# it: the size a table's cells are held to, since a step label and a table
+# cell are read the same way, from the same distance.
+LEGIBLE_PT = LEGIBLE_CELL_PT
+# The heights tried between the diagram's own aspect and the whole rect.
+HEIGHT_STEPS = 4
+
+
+class _Fit:
+    def __init__(self, marks: list, fits: bool):
+        self.marks = marks
+        self.fits = fits
+
+
+def _fitted(kind: str, nodes: list[dict], rect: PositionConfig, payload: dict,
+            palette: "DiagramPalette", label_pt: float, detail_pt: float,
+            prefix: str, *, sizes: Optional[list[tuple[float, float]]] = None,
+            ) -> _Fit:
+    drawer = _DRAWERS[kind]
+    natural = _at_aspect(kind, rect)
+    heights = [natural.height + (rect.height - natural.height) * step / HEIGHT_STEPS
+               for step in range(HEIGHT_STEPS + 1)] if rect.height > natural.height \
+        else [natural.height]
+    bare = [{k: v for k, v in node.items() if k != "detail"} for node in nodes]
+
+    last = None
+    for with_detail in (True, False):
+        for lp, dp in sizes or _size_ladder(label_pt, detail_pt):
+            for height in heights:
+                body = PositionConfig(left=rect.left, top=rect.top,
+                                      width=rect.width, height=height)
+                marks = [m for m in drawer(nodes if with_detail else bare, body,
+                                           payload, palette, lp, dp, prefix)
+                         if m is not None]
+                last = marks
+                if _reads(marks):
+                    return _Fit(marks, True)
+        if not any(_detail_of(node) for node in nodes):
+            break
+    return _Fit(last or [], False)
+
+
+def _size_ladder(label_pt: float, detail_pt: float) -> list[tuple[float, float]]:
+    """Label and detail sizes from the deck's own down to the floor, together."""
+    label_pt = max(MIN_LABEL_PT, label_pt)
+    detail_pt = max(MIN_DETAIL_PT, min(detail_pt, label_pt))
+    out = []
+    lp, dp = label_pt, detail_pt
+    while True:
+        out.append((lp, dp))
+        if lp <= MIN_LABEL_PT and dp <= MIN_DETAIL_PT:
+            return out
+        lp = max(MIN_LABEL_PT, lp - SIZE_STEP_PT)
+        dp = max(MIN_DETAIL_PT, dp - SIZE_STEP_PT)
+
+
+def _measured(mark: Primitive) -> tuple[str, float, bool]:
+    from app.renderer import text_fit
+
+    text = "".join(run.text for run in mark.runs)
+    family = mark.font or text_fit.DEFAULT_MEASURE_FAMILY
+    return text, family, bool(mark.bold)
+
+
+def _reads(marks: list) -> bool:
+    """Every word whole across its box, and every node's text inside it."""
+    from app.renderer import text_fit
+    from app.renderer.typeset.fonts import width_pt
+    from app.renderer.typeset.shape import _tokens, wrap
+
+    nodes = {m.id: m.box for m in marks if m.kind in ("rect", "ellipse")}
+    for mark in marks:
+        if mark.kind != "text" or not mark.runs or not mark.size_pt:
+            continue
+        text, family, bold = _measured(mark)
+        width = mark.box.width * 72.0
+        # The pieces the renderers may break between: words, and the parts
+        # of a hyphenated compound. "stale-while-revalidate" breaking after
+        # a hyphen is ordinary setting; "ReplicaSe / t" is not.
+        if any(width_pt(piece.strip(), family, mark.size_pt, bold=bold) > width
+               for piece in _tokens(text)):
+            return False
+        node_id, _, part = mark.id.rpartition("-")
+        node = nodes.get(node_id)
+        if node is None or part not in ("label", "detail"):
+            continue
+        lines = len(wrap(text, width * TEXT_MEASURE, family, mark.size_pt,
+                         bold=bold))
+        bottom = mark.box.top + lines * mark.size_pt * text_fit.LINE_HEIGHT_RATIO / 72.0
+        if bottom > node.top + node.height + 1e-3:
+            return False
+    return True
+
+
+def needed_height_in(item: dict, width_in: float, family: str = "") -> float:
+    """How tall a slot this wide must be to show this diagram legibly.
+
+    Laid out at `LEGIBLE_PT` in a rect as tall as it could want, and
+    measured; infinite when even then a word of it cannot be set whole at
+    this width - which is the selector's cue to send it somewhere wider.
+    Drawing can still go below it, down to `MIN_LABEL_PT`, as the last
+    resort for a slot that was chosen anyway; choosing one is not done on
+    that basis.
+    """
+    payload = item.get("diagram") if isinstance(item.get("diagram"), dict) else item
+    if width_in <= 0 or not isinstance(payload, dict):
+        return 0.0
+    import json
+
+    try:
+        key = json.dumps(payload, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return 0.0
+    return _needed_height_in(key, round(width_in, 3), family)
+
+
+@functools.lru_cache(maxsize=512)
+def _needed_height_in(key: str, width_in: float, family: str) -> float:
+    """`needed_height_in`, cached: the selector asks it of every slot."""
+    import json
+
+    payload = json.loads(key)
+    kind = str(payload.get("kind") or "").strip()
+    nodes = [n for n in (payload.get("items") or []) if isinstance(n, dict)]
+    if kind not in DIAGRAM_KINDS or not nodes:
+        return 0.0
+    palette = DiagramPalette(ground="#FFFFFF", ink="#000000", heading="#000000",
+                             accent="#000000", rule="#808080",
+                             sequence=["#000000"], font=family or None)
+    rect = PositionConfig(left=0.0, top=0.0, width=width_in,
+                          height=width_in * ASPECT.get(kind, 0.5) * 3)
+    fit = _fitted(kind, nodes, rect, payload, palette, LEGIBLE_PT, LEGIBLE_PT,
+                  "probe", sizes=[(LEGIBLE_PT, LEGIBLE_PT)])
+    if not fit.fits:
+        return math.inf
+    title = str(payload.get("title") or "").strip()
+    extra = (_text_h(title, LEGIBLE_PT + 1.0, width_in, bold=True,
+                     family=family or None) + GAP_IN) if title else 0.0
+    box = primitives.bounds(fit.marks)
+    return (box.height if box else 0.0) + extra
 
 
 def _at_aspect(kind: str, rect: PositionConfig) -> PositionConfig:
@@ -212,6 +374,9 @@ def _text(primitive_id: str, left: float, top: float, width: float,
         runs=(TextRunSpec(text=str(text), bold=bold),),
         size_pt=size_pt, color=color, bold=bold, align=align, anchor=anchor,
         font=font,
+        # Sized by `_fitted`, once for the whole diagram. Left to autofit,
+        # each box was shrunk on its own and no two steps matched.
+        autofit=False,
     )
 
 
@@ -246,25 +411,69 @@ def _arrow(prefix: str, x1: float, y: float, x2: float, color: str,
     ]
 
 
+# How much narrower than its box a diagram's text is measured. PowerPoint and
+# LibreOffice can break a line a word earlier than the typesetter; measured
+# a little narrow, a label that only just fits is given its second line
+# rather than drawn over the border beneath it. The same margin as an
+# opener's title (`bind.RESTING_MEASURE`).
+TEXT_MEASURE = 0.96
+
+
+def _text_h(text: str, size_pt: float, width_in: float, *, bold: bool = False,
+            family: Optional[str] = None) -> float:
+    """The height this text is set in, wrapped by the real typesetter.
+
+    Not `primitives.measure_text`, whose slack is for an estimate: it set a
+    one-line label as two, and the box centred the phantom line, so one step
+    of a flow sat lower than its neighbours.
+    """
+    if not str(text or "").strip() or width_in <= 0:
+        return 0.0
+    from app.renderer import text_fit
+    from app.renderer.typeset.shape import wrap
+
+    lines = wrap(str(text), width_in * 72.0 * TEXT_MEASURE,
+                 family or text_fit.DEFAULT_MEASURE_FAMILY, size_pt, bold=bold)
+    return max(1, len(lines)) * size_pt * text_fit.LINE_HEIGHT_RATIO / 72.0
+
+
+def _block_h(label: str, detail: str, inner_w: float, label_pt: float,
+             detail_pt: float, family: Optional[str]) -> float:
+    """A node's label and detail, stacked."""
+    height = _text_h(label, label_pt, inner_w, bold=True, family=family)
+    if detail:
+        height += _text_h(detail, detail_pt, inner_w, family=family) + 0.03
+    return height
+
+
 def _node_text(prefix: str, box: PositionConfig, label: str, detail: str,
                palette: DiagramPalette, label_pt: float, detail_pt: float,
-               fill: str, align: str = "center") -> list[Primitive]:
-    """A label, and a detail line under it where there is room for one."""
+               fill: str, align: str = "center",
+               row_h: Optional[float] = None) -> list[Primitive]:
+    """A label, and a detail line under it where there is room for one.
+
+    ``row_h`` is the tallest block among nodes drawn side by side. Each block
+    then starts where that one does, so the labels of a row line up rather
+    than each being centred on its own amount of text.
+    """
     ink = palette.on(fill)
     inner_w = max(0.1, box.width - NODE_PAD_IN * 2)
     inner_l = box.left + NODE_PAD_IN
     show_detail = bool(detail) and box.height >= DETAIL_MIN_BOX_IN
 
-    label_h = primitives.measure_text(label, label_pt, inner_w, bold=True)
+    label_h = _text_h(label, label_pt, inner_w, bold=True, family=palette.font)
     if not show_detail:
         # Centred in the box when it is the only thing in it.
-        top = box.top + max(0.0, (box.height - label_h) / 2)
+        own = label_h if row_h is None else min(box.height, row_h)
+        top = box.top + max(0.0, (box.height - own) / 2)
         return [_text(f"{prefix}-label", inner_l, top, inner_w, label_h,
                       label, label_pt, ink, bold=True, align=align,
                       font=palette.font)]
 
-    detail_h = primitives.measure_text(detail, detail_pt, inner_w)
+    detail_h = _text_h(detail, detail_pt, inner_w, family=palette.font)
     total = label_h + detail_h + 0.03
+    if row_h is not None:
+        total = max(total, min(box.height, row_h))
     top = box.top + max(NODE_PAD_IN * 0.6, (box.height - total) / 2)
     return [
         _text(f"{prefix}-label", inner_l, top, inner_w, label_h, label,
@@ -275,23 +484,26 @@ def _node_text(prefix: str, box: PositionConfig, label: str, detail: str,
 
 
 def _box_height(nodes: list[dict], box_w: float, available: float,
-                label_pt: float, detail_pt: float) -> float:
+                label_pt: float, detail_pt: float,
+                family: Optional[str] = None) -> float:
     """How tall a row of nodes needs to be to hold its own text.
 
     Sized to the content rather than to the space, because a flow handed a
     third of a page should be a band across it, not four-inch boxes with a line
     of text floating in the middle of each. Capped by what is available, so a
-    diagram in a small region still fits it.
+    diagram in a small region still fits it - and `_fitted` gives it more
+    room, or smaller type, when that cap is what cut its text off.
     """
-    inner = max(0.1, box_w - NODE_PAD_IN * 2)
-    tallest = 0.0
-    for node in nodes:
-        needed = primitives.measure_text(_label_of(node), label_pt, inner, bold=True)
-        detail = _detail_of(node)
-        if detail:
-            needed += primitives.measure_text(detail, detail_pt, inner) + 0.03
-        tallest = max(tallest, needed)
+    tallest = _row_text_h(nodes, box_w, label_pt, detail_pt, family)
     return max(0.36, min(available, tallest + NODE_PAD_IN * 2.6))
+
+
+def _row_text_h(nodes: list[dict], box_w: float, label_pt: float,
+                detail_pt: float, family: Optional[str]) -> float:
+    """The tallest label-and-detail block among nodes drawn this wide."""
+    inner = max(0.1, box_w - NODE_PAD_IN * 2)
+    return max((_block_h(_label_of(n), _detail_of(n), inner, label_pt,
+                         detail_pt, family) for n in nodes), default=0.0)
 
 
 def _label_of(node: dict) -> str:
@@ -310,7 +522,9 @@ def _draw_flow(nodes, rect, payload, palette, label_pt, detail_pt, prefix):
     count = len(nodes)
     arrow_w = min(0.34, rect.width * 0.06)
     box_w = max(0.4, (rect.width - arrow_w * (count - 1)) / count)
-    height = _box_height(nodes, box_w, rect.height, label_pt, detail_pt)
+    height = _box_height(nodes, box_w, rect.height, label_pt, detail_pt,
+                         palette.font)
+    row_h = _row_text_h(nodes, box_w, label_pt, detail_pt, palette.font)
     top = rect.top + (rect.height - height) / 2
 
     out: list[Primitive] = []
@@ -322,7 +536,7 @@ def _draw_flow(nodes, rect, payload, palette, label_pt, detail_pt, prefix):
                          stroke=palette.step(index), stroke_pt=HAIRLINE_PT))
         out.extend(_node_text(f"{prefix}-n{index}", box, _label_of(node),
                               _detail_of(node), palette, label_pt, detail_pt,
-                              fill))
+                              fill, row_h=row_h))
         if index < count - 1:
             out.extend(_arrow(
                 f"{prefix}-a{index}",
@@ -344,7 +558,9 @@ def _draw_value_chain(nodes, rect, payload, palette, label_pt, detail_pt, prefix
     """
     count = len(nodes)
     box_w = rect.width / count
-    height = _box_height(nodes, box_w, rect.height, label_pt, detail_pt)
+    height = _box_height(nodes, box_w, rect.height, label_pt, detail_pt,
+                         palette.font)
+    row_h = _row_text_h(nodes, box_w, label_pt, detail_pt, palette.font)
     top = rect.top + (rect.height - height) / 2
 
     out: list[Primitive] = []
@@ -355,7 +571,7 @@ def _draw_value_chain(nodes, rect, payload, palette, label_pt, detail_pt, prefix
         out.append(_rect(f"{prefix}-s{index}", box, fill=fill))
         out.extend(_node_text(f"{prefix}-s{index}", box, _label_of(node),
                               _detail_of(node), palette, label_pt, detail_pt,
-                              fill))
+                              fill, row_h=row_h))
         if index:
             out.append(_line(f"{prefix}-div{index}", left, top, left,
                              top + height, palette.ground, HAIRLINE_PT * 2))
@@ -378,8 +594,10 @@ def _draw_matrix(nodes, rect, payload, palette, label_pt, detail_pt, prefix):
     x_axis = str(payload.get("xAxis") or "").strip()
     y_axis = str(payload.get("yAxis") or "").strip()
 
-    top_strip = primitives.measure_text(y_axis, axis_pt, rect.width) + 0.04 if y_axis else 0.0
-    bottom_strip = primitives.measure_text(x_axis, axis_pt, rect.width) + 0.04 if x_axis else 0.0
+    top_strip = (_text_h(y_axis, axis_pt, rect.width, family=palette.font)
+                 + 0.04) if y_axis else 0.0
+    bottom_strip = (_text_h(x_axis, axis_pt, rect.width, family=palette.font)
+                    + 0.04) if x_axis else 0.0
     grid = PositionConfig(
         left=rect.left, top=rect.top + top_strip, width=rect.width,
         height=max(0.4, rect.height - top_strip - bottom_strip),
@@ -513,8 +731,9 @@ def _draw_timeline(nodes, rect, payload, palette, label_pt, detail_pt, prefix):
         left = min(max(rect.left, centre - column / 2),
                    rect.left + rect.width - column)
 
-        date_h = primitives.measure_text(date or "—", detail_pt, column)
-        label_h = primitives.measure_text(label, label_pt, column, bold=True)
+        date_h = _text_h(date or "-", detail_pt, column, family=palette.font)
+        label_h = _text_h(label, label_pt, column, bold=True,
+                          family=palette.font)
         block = date_h + label_h + 0.02
         top = (axis_y - marker / 2 - 0.05 - block) if above else (
             axis_y + marker / 2 + 0.05)
@@ -546,7 +765,7 @@ def _draw_venn(nodes, rect, payload, palette, label_pt, detail_pt, prefix):
     particular circle.
     """
     count = min(3, len(nodes))
-    line_h = primitives.measure_text("Ay", label_pt, rect.width, bold=True)
+    line_h = _text_h("Ay", label_pt, rect.width, bold=True, family=palette.font)
     band = line_h + 0.06
 
     if count == 2:
@@ -629,7 +848,7 @@ def _draw_org_chart(nodes, rect, payload, palette, label_pt, detail_pt, prefix):
     row_h = (rect.height - GAP_IN * (len(levels) - 1)) / len(levels)
     widest = max(len(row) for row in levels)
     box_h = min(row_h, _box_height(nodes, rect.width / widest, row_h,
-                                   label_pt, detail_pt))
+                                   label_pt, detail_pt, palette.font))
     positions: dict[str, tuple[float, float]] = {}
     out: list[Primitive] = []
 
