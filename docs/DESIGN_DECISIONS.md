@@ -410,6 +410,19 @@ This is the fit-before-render order the project plan sets out: fit in code first
 
 A validator turning a draft down (`validate_slide_json` rejecting a slide) is recorded as a verdict, `rejected`, not as a failed tool call; a call the validator could not even read stays a failure (#345).
 
+### Amending a finished deck (#376)
+
+A message sent after a deck is finished is a request to change that deck, not a request for a new one.
+- The run's state is kept in `deck_snapshots` (one row per session) when a run completes, in addition to the Redis state that is cleared.
+  A new message that is later than the snapshot restores it and sets `amending`; a snapshot whose file is gone is ignored and the message starts a deck as before.
+- The restored state keeps the brief, the design, the slides and the rendered file, so the intake, consultation, design, research, planning and drafting phases do not run again.
+  What the last run concluded about the deck (clean, attempts, findings) is dropped, since the deck is about to change.
+- The `change` phase runs next, offers only `edit_deck_with_code`, and tells the model to make exactly the requested change and leave copy, layout and design alone.
+  `validate` then judges the changed deck, and any finding walks the run back through the normal revision ladder.
+- Every script that edited the deck is kept in `code_edit_log`.
+  A render rebuilds the file from the slides, which drops all such edits, so each render replays the log through the same three gates over the fresh file (`edit_deck_with_code.replay`).
+  An edit that no longer applies is logged and skipped; the rest stand.
+
 ## 14. What drafting is told
 
 Some decisions are made by telling the model a constraint, because the cheapest fix is a draft that never needs fixing.
@@ -504,5 +517,6 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #364 | `technical-k8s-rollouts/20260925-091641-replay` | Tables were pictures that could not be edited, and a short table in a tall frame was stretched to read as a condensed face. | Tables are native on both paths (section 11). |
 | #361 | found by review of this document; reproduced on the 17 languages in `benchmark/evidence/` and `technical-k8s-rollouts/20260924-203834-live` | Capacities were measured in Arial at regular weight as characters-per-line times lines, and an opener's heading was sized as a headline but drawn as display type: text of the advertised length needed up to 3.4 times its frame. Once the heading band was right, a one-line title hung from its top; and a prose cell that lost its row's figure kept the figure's height. | Capacities set as drawn and the rung a slot is set in (section 3); a survivor is cut to its copy and display titles rest on the bottom of their band (section 10). |
 | #363 | `technical-k8s-rollouts/20260924-203834-live`, replayed | A four-step flow in a half-width slot broke words mid-word, ran a detail out below its box, and was shrunk box by box by autofit. | Diagram floor measured at 10pt with zero tolerance (section 7); diagrams set whole, at one size, inside their nodes (section 7). |
+| #376 | `probe-overlay-picture/20261002-182649-claude-code` | A message after a finished deck restarted the pipeline from intake, so no edit tool was ever offered. | A later message amends the finished deck (section 13). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

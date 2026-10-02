@@ -90,6 +90,11 @@ _avoid_arrangements: ContextVar[dict | None] = ContextVar(
 _rendered_path: ContextVar[str | None] = ContextVar(
     "thinkslides_rendered_path", default=None)
 
+# Pictures the user supplied this session, by the name a script finds them
+# under. Carried here, not as a tool parameter: the model names an asset, it
+# never supplies the bytes or a path.
+_assets: ContextVar[dict | None] = ContextVar("thinkslides_assets", default=None)
+
 
 def set_include_sources(enabled: bool) -> Token:
     """Install whether this run cites its sources in the document."""
@@ -177,6 +182,14 @@ def get_rendered_path() -> str | None:
 
 def reset_rendered_path(token: Token) -> None:
     _rendered_path.reset(token)
+
+
+def set_assets(assets: dict | None) -> Token:
+    return _assets.set(assets or {})
+
+
+def get_assets() -> dict:
+    return _assets.get() or {}
 
 
 def set_slide_material(material: dict | None) -> Token:

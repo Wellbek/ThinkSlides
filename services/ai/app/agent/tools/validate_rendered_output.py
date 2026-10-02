@@ -100,7 +100,8 @@ def _aesthetic_prompt() -> str:
     "box, a tall one stretched flat); something sitting oddly high or low with "
     "a conspicuous gap beside or beneath it.\n\n"
     "Do NOT flag the colours, the typeface, the wording, or whether the page "
-    "is interesting. Those are choices, not defects.\n\n"
+    "is interesting. Those are choices, not defects. A faint watermark set "
+    "behind the copy is something the user asked for, not damage.\n\n"
     '"fix" is the SMALLEST change that would fix it:\n'
     '- "nudge": the page is right, one thing is in the wrong place or the '
     "wrong size.\n"
@@ -110,6 +111,32 @@ def _aesthetic_prompt() -> str:
     "or the wrong thing.\n"
     "Prefer the smallest that would work."
     )
+
+
+BACKGROUND_PREFIX = "ts-background"
+
+
+def background_texts(pptx_path: str) -> frozenset[str]:
+    """Text of shapes the deck marks as meant to sit behind content.
+
+    A watermark overlaps the copy on purpose. The geometry check reads text
+    boxes out of the rendered PDF, where nothing says which were intended, so
+    a script names such a shape `ts-background-<what>` and its text is not
+    counted as an overlap or an overflow.
+    """
+    try:
+        from pptx import Presentation
+
+        found = set()
+        for slide in Presentation(pptx_path).slides:
+            for shape in slide.shapes:
+                if shape.name.startswith(BACKGROUND_PREFIX) and shape.has_text_frame:
+                    text = shape.text_frame.text.strip()
+                    if text:
+                        found.add(text)
+        return frozenset(found)
+    except Exception:  # noqa: BLE001 - an unreadable deck is reported elsewhere
+        return frozenset()
 
 
 class ValidateRenderedOutputTool:
@@ -176,7 +203,7 @@ class ValidateRenderedOutputTool:
                 )
 
             preview_gen = PreviewGenerator()
-            pdf_path = preview_gen.get_pdf_path(session_id)
+            pdf_path = preview_gen.get_pdf_path(session_id, pptx_path)
             cleanup_dir = None
             if not pdf_path:
                 cleanup_dir = tempfile.mkdtemp(prefix="thinkslides_validate_")
@@ -193,7 +220,7 @@ class ValidateRenderedOutputTool:
 
             advisories: list[dict] = []
             try:
-                issues = cls._check_geometry(pdf_path)
+                issues = cls._check_geometry(pdf_path, ignore_text=background_texts(pptx_path))
                 issues.extend(output_qa.check_package(pptx_path))
                 slides = coerce_json_arg(slides_json, []) or []
                 if isinstance(slides, list):
@@ -247,7 +274,7 @@ class ValidateRenderedOutputTool:
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
 
     @staticmethod
-    def _check_geometry(pdf_path: str) -> list[dict]:
+    def _check_geometry(pdf_path: str, ignore_text: frozenset[str] = frozenset()) -> list[dict]:
         """
         The ground-truth check: read every text span's actual bounding box
         as LibreOffice laid it out (PyMuPDF's structured text extraction),
@@ -282,7 +309,7 @@ class ValidateRenderedOutputTool:
                     for line in block.get("lines", []):
                         for span in line.get("spans", []):
                             text = (span.get("text") or "").strip()
-                            if not text:
+                            if not text or text in ignore_text:
                                 continue
                             spans.append((tuple(span["bbox"]), text))
 

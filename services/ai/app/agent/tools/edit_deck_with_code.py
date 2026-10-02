@@ -100,11 +100,19 @@ class EditDeckWithCodeTool:
                         "name. Use relative paths only. You may import pptx, "
                         "math, statistics, json, csv, re, datetime, decimal, "
                         "random, textwrap, itertools, matplotlib, numpy and "
-                        "PIL. You may not import anything else, and in "
+                        "PIL; for raw XML use pptx.oxml.parse_xml, since lxml "
+                        "itself is refused. A shape meant to sit behind "
+                        "content (a watermark) must be named "
+                        "'ts-background-<what>', so the overlap check does "
+                        "not count it as damage; name anything else you add "
+                        "'ts-overlay-<what>'. You may not import anything else, and in "
                         "particular not os, sys, subprocess, socket or this "
                         "service's own modules. No eval, no exec, no "
                         "__import__. There is no network and no filesystem "
-                        "outside your own directory."
+                        "outside your own directory. Pictures the user supplied are "
+                        "listed in the instructions you were given and sit "
+                        "beside the deck under those names; open them with "
+                        "PIL or add them with python-pptx's add_picture."
                     ),
                 ),
                 ToolParameter(
@@ -180,7 +188,7 @@ class EditDeckWithCodeTool:
             )
 
         # Gate two: what the process can reach.
-        result = runner.run(source, deck=deck)
+        result = runner.run(source, deck=deck, assets=_assets())
         if not result.ok:
             logger.info("sandbox_code_failed")
             return ToolResult(
@@ -207,6 +215,19 @@ class EditDeckWithCodeTool:
                 duration_ms=int((time.time() - start) * 1000),
             )
 
+        if edited == deck:
+            # Looking is allowed: a script may read the deck, print what it
+            # found and leave it alone. That is not an edit, and the model
+            # needs to see what it printed to act on it.
+            return ToolResult(
+                success=True,
+                data={"outcome": "ran", "changed": False, "source": source,
+                      "slideIndex": slide_index, "stdout": result.stdout,
+                      "summary": ("The script ran and left the deck unchanged."
+                                  + _printed(result.stdout))},
+                duration_ms=int((time.time() - start) * 1000),
+            )
+
         _adopt_deck(edited)
         logger.info("sandbox_deck_adopted", bytes=len(edited or b""),
                     slide_index=slide_index,
@@ -224,6 +245,7 @@ class EditDeckWithCodeTool:
             success=True,
             data={
                 "outcome": "ran",
+                "changed": True,
                 "source": source,
                 "slideIndex": slide_index,
                 "stdout": result.stdout,
@@ -233,10 +255,67 @@ class EditDeckWithCodeTool:
                        else "")
                     + f": {intent.strip() or 'the deck was edited'}. "
                     "validate_rendered_output judges the result."
+                    + _printed(result.stdout)
                 ),
             },
             duration_ms=int((time.time() - start) * 1000),
         )
+
+
+def _printed(stdout: str) -> str:
+    """What the script printed, handed back so the model can act on it."""
+    text = (stdout or "").strip()
+    return f"\n\nThe script printed:\n{text[:1500]}" if text else ""
+
+
+def replay(path: str, log: list[dict]) -> list[str]:
+    """Apply recorded edits again to a freshly rendered deck.
+
+    A render rebuilds the file from the slides, which drops every script's
+    edit. Replaying them through the same three gates keeps a requested change
+    (a logo on every page, a watermark) across revision rounds. Returns the
+    problems met, one per edit that could not be reapplied; the rest stand.
+    """
+    problems: list[str] = []
+    for entry in log:
+        source = str(entry.get("source") or "")
+        if gate.check(source):
+            problems.append(f"{entry.get('intent') or 'an edit'}: refused by the gate")
+            continue
+        with open(path, "rb") as handle:
+            current = handle.read()
+        result = runner.run(source, deck=current, assets=_assets())
+        if not result.ok:
+            problems.append(f"{entry.get('intent') or 'an edit'}: {result.failure}")
+            continue
+        edited = result.outputs.get(DECK_NAME) or b""
+        rejected = adopt.problem(edited, max_slides=_slide_cap_for(current))
+        if rejected:
+            problems.append(f"{entry.get('intent') or 'an edit'}: {rejected}")
+            continue
+        temporary = f"{path}.editing"
+        with open(temporary, "wb") as handle:
+            handle.write(edited)
+        os.replace(temporary, path)
+    return problems
+
+
+def _assets() -> dict[str, bytes]:
+    """The pictures the user supplied, as the script finds them."""
+    from app.agent import run_context
+
+    return dict(run_context.get_assets())
+
+
+def _slide_cap_for(deck: bytes) -> int:
+    import io
+
+    from pptx import Presentation
+
+    try:
+        return len(Presentation(io.BytesIO(deck)).slides) + 10
+    except Exception:   # pragma: no cover
+        return 200
 
 
 def _deck_path() -> Optional[str]:

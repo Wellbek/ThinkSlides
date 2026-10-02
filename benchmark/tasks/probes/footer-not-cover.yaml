@@ -1,0 +1,20 @@
+id: probe-footer-not-cover
+category: probes
+prompt: |
+  Three slides for a product team on why we moved our build cache from
+  a shared disk to an object store. Cover the old failure mode, what we
+  changed, and what it did to build times. No web research needed.
+slides: 3
+mode: simple
+detail: concise
+answers:
+  - first
+  - Go ahead as planned
+followups:
+  - Add a footer with the text 'Acme Platform' and the page number on every page except the cover.
+checklist:
+  - The three pages' own content is otherwise unchanged by the request
+  - The cover has no footer
+  - Every other page has the footer text Acme Platform
+  - Every other page shows its own page number
+  - The footer does not overlap any content

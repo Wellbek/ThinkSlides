@@ -1,0 +1,20 @@
+id: probe-overlay-picture
+category: probes
+prompt: |
+  Three slides for a product team on why we moved our build cache from
+  a shared disk to an object store. Cover the old failure mode, what we
+  changed, and what it did to build times. No web research needed.
+slides: 3
+mode: simple
+detail: concise
+answers:
+  - first
+  - Go ahead as planned
+followups:
+  - Add a small picture of a coffee cup in the top left corner of every page.
+checklist:
+  - The deck has exactly 3 slides
+  - Every page has a small picture in its top left corner
+  - The picture does not overlap any title or other content
+  - The picture is the same size and position on every page
+  - The three pages' own content is unchanged by the request

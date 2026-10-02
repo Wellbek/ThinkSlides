@@ -201,6 +201,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     from app.agent.tools.build_mermaid import BuildMermaidTool
     from app.agent.tools.draw_svg import DrawSvgTool
     from app.agent.tools.edit_deck_with_code import EditDeckWithCodeTool
+    from app.agent.tools.revise_slides import ReviseSlidesTool
     from app.agent.tools.compute_visual_with_code import ComputeVisualWithCodeTool
     from app.agent.tools.compose_regions import ComposeSlideRegionsTool
     from app.agent.tools.select_source_image import SelectSourceImageTool
@@ -212,6 +213,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     )
 
     AnalyzeDocumentTool.register(registry)
+    ReviseSlidesTool.register(registry)
     ExtractKeyDataTool.register(registry)
     ExtractTemplateDesignSystemTool.register(registry)
     WebSearchTool.register(registry)

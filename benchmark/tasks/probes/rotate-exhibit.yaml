@@ -1,0 +1,20 @@
+id: probe-rotate-exhibit
+category: probes
+prompt: |
+  Three slides for a product team on why we moved our build cache from
+  a shared disk to an object store. Cover the old failure mode, what we
+  changed, and what it did to build times. No web research needed.
+slides: 3
+mode: simple
+detail: concise
+answers:
+  - first
+  - Go ahead as planned
+followups:
+  - Flip the chart on the build-times page so the bars run horizontally.
+checklist:
+  - The three pages' own content is otherwise unchanged by the request
+  - The build-times page has a chart with horizontal bars
+  - The values are unchanged
+  - The labels are still legible at the type-size floor
+  - No other page changes

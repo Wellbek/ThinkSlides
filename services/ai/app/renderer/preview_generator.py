@@ -131,12 +131,23 @@ class PreviewGenerator:
 
         return pdf_path
 
-    def get_pdf_path(self, session_id: str) -> Optional[str]:
+    def get_pdf_path(self, session_id: str, pptx_path: Optional[str] = None) -> Optional[str]:
         """The intermediate PDF generate_previews already produced for this
         session, if any - lets validate_rendered_output reuse the exact same
-        LibreOffice-rendered geometry instead of converting a second time."""
+        LibreOffice-rendered geometry instead of converting a second time.
+
+        Given the deck it is meant to describe, a PDF older than that deck is
+        not returned: a script that edited the file after the render left the
+        PDF showing the deck as it was, and validation judged a page the user
+        would never see (#376).
+        """
         pdf_path = os.path.join(self.output_dir, session_id, "deck.pdf")
-        return pdf_path if os.path.exists(pdf_path) else None
+        if not os.path.exists(pdf_path):
+            return None
+        if pptx_path and os.path.exists(pptx_path) \
+                and os.path.getmtime(pdf_path) < os.path.getmtime(pptx_path):
+            return None
+        return pdf_path
 
     @staticmethod
     def _render_pdf_to_pngs(

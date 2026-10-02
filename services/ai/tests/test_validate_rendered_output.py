@@ -272,3 +272,21 @@ class TestImageAndChartGeometry:
             tmp_path, fitz.Rect(60, 60, PAGE_WIDTH_PT + 1.5, 300)
         )
         assert ValidateRenderedOutputTool._check_geometry(pdf) == []
+
+
+def test_a_shape_named_as_a_background_is_not_counted_as_an_overlap(tmp_path):
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from app.agent.tools.validate_rendered_output import background_texts
+
+    deck = Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    mark = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    mark.text_frame.text = "DRAFT"
+    mark.name = "ts-background-watermark"
+    other = slide.shapes.add_textbox(Inches(1), Inches(3), Inches(4), Inches(1))
+    other.text_frame.text = "Body"
+    path = str(tmp_path / "d.pptx")
+    deck.save(path)
+    assert background_texts(path) == frozenset({"DRAFT"})
