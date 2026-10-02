@@ -193,7 +193,7 @@ Otherwise its cost is the sum of:
 | legibility | 12.0 | How far short of readable the slot leaves an exhibit (section 7). Weighted like overflow, doubled because pair costs are averaged over a page. |
 | prominence | 0.4 | Mismatch between the item's importance and the slot's prominence. |
 | frame hint | -2.0 | A bonus when the material is the kind the frame is for (a heading in a headline frame). A heading set as a body paragraph is penalised. |
-| sequence | 2.2 | Preference for the k-th paragraph to land in the k-th text slot in reading order, so a page reads as a page rather than three fragments. |
+| sequence | 2.2 | Preference for the k-th paragraph to land in the k-th text slot in reading order, so a page reads as a page rather than three fragments. Only the slots a paragraph sits in are ordered: not a headline, pull-quote, eyebrow or the apparatus. Counting an eyebrow as the first place to read sent a cover's lone subtitle into it, in small capitals above the title, instead of to the standfirst below. |
 | over the slot's `max_chars` | up to 2.0 | `min(2, (chars - max_chars) / max_chars)`: a fast character-count check alongside the typeset one. |
 | under the slot's `min_chars` | 0.3 | A slot built for more copy than it is given. |
 
