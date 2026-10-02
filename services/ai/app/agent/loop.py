@@ -752,8 +752,8 @@ class WorkingState:
     FULL_REWRITE_ISSUE_RATIO = 0.6
 
     # How many times one page may be revised for its layout before the run
-    # stops trying. Two, because the ladder's first two rungs - nudge a frame,
-    # place the page again - are the cheap ones, and a page that both have
+    # stops trying. Two, because the ladder's first two rungs - nudge and
+    # replace, both answered by placing the page again - are the cheap ones, and a page that both have
     # failed on has a copy problem rather than a layout one.
     LAYOUT_REVISION_CAP = 2
 

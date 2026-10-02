@@ -67,7 +67,7 @@ def _fix_tier(raw) -> str:
     """The rung this verdict asks for, defaulting to the cheapest.
 
     Defaulting down rather than up on purpose: an unparseable verdict should
-    cost a nudge that the ratchet will discard if it does not help, not a
+    cost a nudge (answered by placing the page again) rather than a
     redraft that throws away copy nobody complained about.
     """
     value = str(raw or "").strip().lower()
