@@ -131,8 +131,10 @@ def build_page(page_id: str, shape: MaterialShape, selection: Selection,
 
     heading_frame = next((p.slot.frame_id for p in selection.placements
                           if p.item.role_hint == "heading"), "")
+    grid = archetype.grid or pack.grid
     frames = _compact(_fill(archetype.frames, contents, pack), archetype.frames,
-                      pack, archetype.grid or pack.grid)
+                      pack, grid)
+    frames = _rested(frames, pack, grid)
     heading_rung = next(
         (block.type_role for frame in _walk(frames) if frame.id == heading_frame
          for block in frame.content if isinstance(block, TextBlock)), "")
@@ -314,8 +316,11 @@ def _fitted_to_copy(frames: tuple[Frame, ...], original: tuple[Frame, ...],
              if isinstance(f.place, GridPlace)}
     kept = {frame.id for frame in frames}
     lost_a_mate = set()
-    for row in _rows(sorted((f for f in original if _band(f) is not None),
-                            key=lambda f: _band(f)[0])):
+    # Grounds and scrims are backgrounds, not members of any row: one with a
+    # band of its own would merge every band it spans into one "row".
+    banded = [f for f in original
+              if _band(f) is not None and not (f.ground or f.scrim)]
+    for row in _rows(sorted(banded, key=lambda f: _band(f)[0])):
         if (len(row) > 1 and any(f.id not in kept for f in row)
                 and all(f.id in spans for f in row)
                 and _side_by_side([spans[f.id] for f in row])):
@@ -360,6 +365,71 @@ def _fitted_to_copy(frames: tuple[Frame, ...], original: tuple[Frame, ...],
         out.append(frame.model_copy(update={
             "place": frame.place.model_copy(update={"h": round(needed, 4)}),
         }))
+    return tuple(out)
+
+
+# How much narrower than its frame a title is measured when its band is cut
+# to its lines. PowerPoint and LibreOffice can break a line a word earlier
+# than the typesetter; a title that only just fits on one line is measured as
+# two, rather than cut to one and drawn as two over whatever sits above it.
+RESTING_MEASURE = 0.96
+
+
+def _rested(frames: tuple[Frame, ...], pack: Pack,
+            grid: GridSpec) -> tuple[Frame, ...]:
+    """An opener's title cut to its lines, with what sits above it lowered.
+
+    An opener is built upward from a baseline: the standfirst rests on it,
+    the title on the standfirst, an eyebrow on the title. The title's band
+    is sized for the longest title it is offered - three display lines on a
+    composed cover - so a one-line title resting on the standfirst
+    (`_anchor`) left two empty display lines between itself and its
+    eyebrow. Cutting the band to the lines the title needs, from the top,
+    and lowering everything above it by the same amount keeps the whole
+    group resting on the baseline, whatever the title's length.
+    """
+    from app.design.geometry import content_box
+    from app.design.setting import set_copy
+
+    title = next((f for f in frames if _anchor(f) == "bottom"
+                  and isinstance(f.place, GridPlace) and _band(f) is not None
+                  and len(f.content) == 1
+                  and isinstance(f.content[0], TextBlock)), None)
+    if title is None:
+        return frames
+    role = pack.type_roles.get(title.content[0].type_role)
+    box = content_box(pack.canvas, grid)
+    if role is None or box.height <= 0:
+        return frames
+    column = grid.column_width_in(pack.canvas)
+    pad_in = pack.spacing.inches(title.pad)
+    width_pt = ((title.place.span * column
+                 + max(0, title.place.span - 1) * grid.gutter_in - 2 * pad_in)
+                * 72.0 * RESTING_MEASURE)
+    needed = (set_copy(title.content[0].text, role, pack, width_pt, 0.0).height_pt
+              / 72.0 + 2 * pad_in) / box.height
+    top, bottom = _band(title)
+    freed = (bottom - top) - needed
+    if freed <= 1e-4:
+        return frames
+
+    span = (title.place.col, title.place.col + title.place.span)
+    out = []
+    for frame in frames:
+        if frame.id == title.id:
+            out.append(frame.model_copy(update={"place": frame.place.model_copy(
+                update={"y": round(top + freed, 4), "h": round(needed, 4)})}))
+            continue
+        band = _band(frame)
+        above = (band is not None and isinstance(frame.place, GridPlace)
+                 and not (frame.ground or frame.scrim)
+                 and band[1] <= top + 1e-6
+                 and frame.place.col < span[1]
+                 and frame.place.col + frame.place.span > span[0])
+        if above:
+            frame = frame.model_copy(update={"place": frame.place.model_copy(
+                update={"y": round(band[0] + freed, 4)})})
+        out.append(frame)
     return tuple(out)
 
 
