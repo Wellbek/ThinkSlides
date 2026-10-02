@@ -172,7 +172,11 @@ def _capacity(family: str, size_pt: float, bold: bool, capitals: bool,
             if len(set_lines) > lines:
                 break
             sample += passage * max(1, len(sample) // len(passage))
-        held = set_lines[:lines]
-        count = sum(len(line) for line in held) + len(held) - 1
-        fewest = count if fewest is None else min(fewest, count)
+        # Where the last kept line ends in the sample, so a break that fell
+        # at a space counts that space and one inside a word counts nothing.
+        text = sample.upper() if capitals else sample
+        end = 0
+        for line in set_lines[:lines]:
+            end = text.find(line, end) + len(line)
+        fewest = end if fewest is None else min(fewest, end)
     return max(1, fewest or 1)
