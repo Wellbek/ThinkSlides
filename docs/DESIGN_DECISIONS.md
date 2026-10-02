@@ -200,8 +200,8 @@ Otherwise its cost is the sum of:
 
 A required slot pulls material into itself with a bonus of 5.0, because the assignment has no concept of "this column must be used".
 The bonus applies only when the item suits the slot (no more than 1.5 times its `max_chars`); applied flatly it outweighed every other term, and a three-hundred-character paragraph won the headline slot.
-On the last resort (section 8: material that cannot be divided further, placed below legible size rather than dropped) the bonus applies whether or not the item suits the slot.
-Without it, a heading longer than its headline slot was cheaper in a body slot, the required headline stood empty, and every arrangement refused the page; once capacities were measured as drawn, that took a specimen page off `bxsl-investor`, whose headline slot holds 18 characters (#370).
+A heading the headline slot cannot hold is therefore refused by every arrangement whose only headline slot is too small; a real deck then gets the plain page (section 9), which ranks above setting an exhibit cramped, and a preview skips the page and logs it.
+On `bxsl-investor`, whose headline slot holds 18 characters measured as drawn, that is what happens to a specimen page with a 51-character heading (#370).
 
 ### 6.4 The cost of an archetype
 

@@ -472,17 +472,3 @@ class TestABackgroundIsNotARowMember:
         assert out["p"].place.h < 0.3
         assert out["g"].place == ground.place
 
-
-class TestTheLastResortPlacesAnOverlongHeading:
-    def test_a_required_headline_takes_a_heading_it_cannot_hold(self):
-        """BXSL's headline slot holds 18 characters measured as drawn. A
-        51-character heading was cheaper in a body slot, the required slot
-        stood empty and the last resort refused the page outright."""
-        from app.design.run import material_from
-        from app.design.select import fit
-        from app.renderer.specimen import language_specimen_slides
-
-        pack = design_run.load("bxsl-investor")
-        shape = material_from(language_specimen_slides()[2], index=2, total=3)
-        archetype = pack.archetype("text-page")
-        assert fit(shape, archetype, pack, legible=False) is not None
