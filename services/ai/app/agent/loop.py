@@ -772,10 +772,12 @@ class WorkingState:
                 continue
             if self.layout_revisions.get(index, 0) >= self.LAYOUT_REVISION_CAP:
                 continue
-            # The larger rung wins when one page draws both verdicts: placing
-            # it again subsumes moving a frame within the page it replaces.
-            if wanted.get(index) != "replace":
-                wanted[index] = fix
+            # A nudge is answered as a replace. Nothing in composition reads a
+            # finding, so re-rendering "the same page, moved" reproduced the
+            # identical page and spent a revision on it (#359). Placing the
+            # page on another arrangement at least changes it; the ratchet
+            # and the next validation round judge whether it is better.
+            wanted[index] = "replace"
         return wanted
 
     def record_layout_revision(self, index: int, archetype: str = "") -> None:
@@ -4486,12 +4488,8 @@ class AgentLoop:
                 # validation after it.
                 relayout = {} if at_cap else self.working_state.layout_revision_for(issues)
                 placed = self.working_state.placed_arrangements
-                for index, rung in relayout.items():
-                    # Only a "replace" rules an arrangement out. A nudge keeps
-                    # the page it has and moves something within it, so
-                    # forbidding that arrangement would answer a verdict
-                    # nobody gave.
-                    used = placed.get(index) or [] if rung == "replace" else []
+                for index in relayout:
+                    used = placed.get(index) or []
                     self.working_state.record_layout_revision(
                         index, used[0] if used else "")
                 if relayout:

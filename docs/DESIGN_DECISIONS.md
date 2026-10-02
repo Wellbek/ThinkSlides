@@ -383,13 +383,13 @@ Each finding carries the **smallest fix** that would work, and the fix decides t
 
 | Rung | Meaning | What the loop does |
 | --- | --- | --- |
-| `nudge` | The page is right; one thing is in the wrong place or size. | Re-render with the same arrangement. **Known gap (#359):** nothing in composition reads the finding and composition is deterministic, so the re-render currently reproduces the identical page. |
+| `nudge` | The page is right; one thing is in the wrong place or size. | Answered as a `replace`. Nothing in composition reads a finding and composition is deterministic, so re-rendering the same arrangement reproduced the identical page and spent a revision on it (#359). Acting on the finding itself (handing it to repair as a patch) is the better long-term rung and is not built. |
 | `replace` | The page needs a different arrangement of the same material. | Record the archetype the page was placed on and re-compose the page with that archetype ruled out. The copy is untouched. |
 | `redraft` | The copy itself is the problem. | Send the slide back to drafting, with the findings and the exhibits it already carries. |
 
 Rules of the ladder:
 - A page draws at most **2 layout revisions** (`LAYOUT_REVISION_CAP`), per page rather than per run, so one stubborn page cannot spend the budget of every other flagged page.
-- When one page draws both verdicts, `replace` wins over `nudge`.
+- Both layout verdicts are answered the same way, so one page drawing both is one revision.
 - An avoid set that would leave no archetype is ignored rather than obeyed: placing a page the way it was placed before beats refusing to place it.
 - The placements a `replace` rules out come from the render result, not from shared state.
   The loop runs each tool as its own task, in a copy of the context, so a value the renderer set in a context variable never reached the loop and every `replace` ruled out nothing (#344).
@@ -504,5 +504,5 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #364 | `technical-k8s-rollouts/20260925-091641-replay` | Tables were pictures that could not be edited, and a short table in a tall frame was stretched to read as a condensed face. | Tables are native on both paths (section 11). |
 | #361 | found by review of this document; reproduced on the 17 languages in `benchmark/evidence/` and `technical-k8s-rollouts/20260924-203834-live` | Capacities were measured in Arial at regular weight as characters-per-line times lines, and an opener's heading was sized as a headline but drawn as display type: text of the advertised length needed up to 3.4 times its frame. Once the heading band was right, a one-line title hung from its top; and a prose cell that lost its row's figure kept the figure's height. | Capacities set as drawn and the rung a slot is set in (section 3); a survivor is cut to its copy and display titles rest on the bottom of their band (section 10). |
 | #363 | `technical-k8s-rollouts/20260924-203834-live`, replayed | A four-step flow in a half-width slot broke words mid-word, ran a detail out below its box, and was shrunk box by box by autofit. | Diagram floor measured at 10pt with zero tolerance (section 7); diagrams set whole, at one size, inside their nodes (section 7). |
-| #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | Documented as a known gap (section 13). |
+| #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |
