@@ -4566,6 +4566,8 @@ class AgentLoop:
             # attempt, so the fresh set must be publishable again.
             self.working_state.previews_published = False
             self.working_state.pending_render_result = dict(tool_result.data or {})
+            if self.working_state.code_edit_log:
+                await self._refresh_previews(session_id)
 
             # Working state is now cleared once validate_rendered_output
             # has actually run (or hit its retry cap) below, not here -
@@ -4823,6 +4825,7 @@ class AgentLoop:
                         "intent": str(fn_args.get("intent") or ""),
                         "slide_index": fn_args.get("slide_index"),
                     })
+                    await self._refresh_previews(session_id)
                     if step == "change":
                         self.working_state.amend_done = True
                     if step == "amend":
@@ -5746,6 +5749,31 @@ class AgentLoop:
         if len(issues) > limit:
             lines.append(f"  - ...and {len(issues) - limit} more")
         return "\n".join(lines)
+
+    async def _refresh_previews(self, session_id: uuid.UUID) -> None:
+        """Draw the staged previews again from the file as it now is.
+
+        A script edits the rendered file after the previews were drawn from
+        it, so without this the page the user is shown lacks the very change
+        they asked for (#376).
+        """
+        from app.renderer.preview_generator import PreviewGenerator
+
+        path = self.working_state.last_rendered_path
+        staged = self.working_state.pending_slide_previews
+        if not path or not os.path.exists(path) or not staged:
+            return
+        try:
+            urls = await asyncio.to_thread(
+                PreviewGenerator().generate_previews, path, str(session_id))
+        except Exception as e:  # noqa: BLE001 - stale previews beat a failed run
+            logger.error("preview_refresh_failed", error=str(e))
+            return
+        for preview, url in zip(staged, urls):
+            preview["previewUrl"] = url
+        result = self.working_state.pending_render_result
+        if result is not None:
+            result["previewUrls"] = list(urls)
 
     def _flush_slide_previews(self) -> list[dict]:
         """

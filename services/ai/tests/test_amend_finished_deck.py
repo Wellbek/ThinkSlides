@@ -179,3 +179,23 @@ def test_a_replayed_edit_that_fails_is_reported_and_the_rest_stand(deck):
     problems = edit_tool.replay(deck, log)
     assert len(problems) == 1 and problems[0].startswith("bad")
     assert _texts(deck) == ["LOGO"]
+
+
+def test_previews_are_drawn_again_from_the_edited_file(deck, monkeypatch):
+    from app.renderer import preview_generator
+
+    seen = []
+
+    def fake(self, path, session_id):
+        seen.append((path, session_id))
+        return ["/fresh/1.png"]
+
+    monkeypatch.setattr(preview_generator.PreviewGenerator, "generate_previews", fake)
+    loop = _loop(_Db(None, None))
+    loop.working_state.last_rendered_path = deck
+    loop.working_state.pending_slide_previews = [{"slideIndex": 0, "previewUrl": "/old/1.png"}]
+    loop.working_state.pending_render_result = {"previewUrls": ["/old/1.png"]}
+    asyncio.run(loop._refresh_previews("sid"))
+    assert seen == [(deck, "sid")]
+    assert loop.working_state.pending_slide_previews[0]["previewUrl"] == "/fresh/1.png"
+    assert loop.working_state.pending_render_result["previewUrls"] == ["/fresh/1.png"]
