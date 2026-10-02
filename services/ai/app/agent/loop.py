@@ -607,6 +607,15 @@ class WorkingState:
         # detector in `_progress_marker` cannot tell a successful edit apart
         # from a turn that changed nothing.
         self.code_edits_applied: int = 0
+        # The scripts that edited this deck, in order. A render rebuilds the
+        # file from the slides and would silently drop every one of them, so
+        # each render replays this log over the fresh file (#376).
+        self.code_edit_log: list[dict] = []
+        # A message arrived on a session whose deck is finished: the run
+        # amends that deck rather than building a new one.
+        self.amending: bool = False
+        self.amend_request: str = ""
+        self.amend_done: bool = False
         # The last script that failed, and why, so the next attempt renders as
         # a diff against it rather than as a second wall of code.
         self.last_code_attempt: dict | None = None
@@ -1195,6 +1204,10 @@ class WorkingState:
         self.has_called_finalize = False
         self.has_called_validate = False
         self.validation_clean = False
+        self.code_edit_log = []
+        self.amending = False
+        self.amend_request = ""
+        self.amend_done = False
         self.validation_issues = []
         self.slides_needing_revision = []
         self.revision_queue = []
@@ -1705,8 +1718,8 @@ class AgentLoop:
             self.redis_client = redis.from_url(redis_url, decode_responses=False)
         return self.redis_client
 
-    async def _save_working_state(self, session_id: uuid.UUID) -> None:
-        """Save working state to Redis for resume after user input."""
+    def _state_dict(self) -> dict:
+        """Everything a later run needs to carry on from this one."""
         state_dict = {
             "accumulated_slides": self.working_state.accumulated_slides,
             "presentation_structure": self.working_state.presentation_structure,
@@ -1722,6 +1735,10 @@ class AgentLoop:
             "validation_clean": self.working_state.validation_clean,
             "code_amendment_done": self.working_state.code_amendment_done,
             "code_edits_applied": self.working_state.code_edits_applied,
+            "code_edit_log": self.working_state.code_edit_log,
+            "amending": self.working_state.amending,
+            "amend_request": self.working_state.amend_request,
+            "amend_done": self.working_state.amend_done,
             "validation_issues": self.working_state.validation_issues,
             "slides_needing_revision": self.working_state.slides_needing_revision,
             "revision_queue": self.working_state.revision_queue,
@@ -1781,6 +1798,11 @@ class AgentLoop:
             "image_catalog": self.context.get("imageCatalog"),
             "detail_level": self.detail_level,
         }
+        return state_dict
+
+    async def _save_working_state(self, session_id: uuid.UUID) -> None:
+        """Save working state to Redis for resume after user input."""
+        state_dict = self._state_dict()
         redis_client = await self._get_redis_client()
         await redis_client.set(
             f"working_state:{session_id}",
@@ -1798,6 +1820,14 @@ class AgentLoop:
 
         try:
             state_dict = json.loads(state_json)
+        except Exception as e:
+            logger.error("failed_to_load_working_state", session_id=str(session_id), error=str(e))
+            return False
+        return self._apply_state_dict(state_dict, session_id)
+
+    def _apply_state_dict(self, state_dict: dict, session_id: uuid.UUID) -> bool:
+        """Restore a saved state. Returns True if it was restored."""
+        try:
             self.working_state.accumulated_slides = state_dict.get("accumulated_slides", [])
             self.working_state.presentation_structure = state_dict.get("presentation_structure")
             # A resumed run composes in the language it started in. Re-choosing
@@ -1822,6 +1852,10 @@ class AgentLoop:
                 "code_amendment_done", False)
             self.working_state.code_edits_applied = state_dict.get(
                 "code_edits_applied", 0)
+            self.working_state.code_edit_log = list(state_dict.get("code_edit_log") or [])
+            self.working_state.amending = bool(state_dict.get("amending", False))
+            self.working_state.amend_request = state_dict.get("amend_request") or ""
+            self.working_state.amend_done = bool(state_dict.get("amend_done", False))
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
             if "revision_queue" in state_dict:
@@ -1912,6 +1946,74 @@ class AgentLoop:
         except Exception as e:
             logger.error("failed_to_load_working_state", session_id=str(session_id), error=str(e))
             return False
+
+    async def _save_deck_snapshot(self, session_id: uuid.UUID) -> None:
+        """Keep the finished deck's state, so a later message can amend it."""
+        from app.db.models import DeckSnapshot
+
+        if self.db is None:
+            return
+        try:
+            state = json.loads(json.dumps(self._state_dict(), default=str))
+            row = await self.db.get(DeckSnapshot, session_id)
+            if row is None:
+                self.db.add(DeckSnapshot(session_id=session_id, state=state))
+            else:
+                row.state = state
+            await self.db.commit()
+            logger.info("saved_deck_snapshot", session_id=str(session_id))
+        except Exception as e:  # noqa: BLE001 - a failed snapshot must not fail the run
+            await self.db.rollback()
+            logger.error("failed_to_save_deck_snapshot", session_id=str(session_id), error=str(e))
+
+    async def _load_deck_snapshot(self, session_id: uuid.UUID) -> bool:
+        """Start from the session's finished deck, if it has one and the user
+        has written since. Returns True when the run is now an amendment."""
+        from sqlalchemy import select
+        from app.db.models import ChatMessage, DeckSnapshot
+
+        if self.db is None:
+            return False
+        try:
+            row = await self.db.get(DeckSnapshot, session_id)
+            if row is None or not row.state:
+                return False
+            latest = await self.db.execute(
+                select(ChatMessage)
+                .where(ChatMessage.session_id == session_id, ChatMessage.role == "user")
+                .order_by(ChatMessage.created_at.desc()).limit(1))
+            message = latest.scalar_one_or_none()
+            if message is None or not (message.content or "").strip():
+                return False
+            if message.created_at <= row.updated_at:
+                return False
+            if not self._apply_state_dict(dict(row.state), session_id):
+                return False
+        except Exception as e:  # noqa: BLE001
+            logger.error("failed_to_load_deck_snapshot", session_id=str(session_id), error=str(e))
+            return False
+        ws = self.working_state
+        if not (ws.has_called_finalize and ws.last_rendered_path
+                and os.path.exists(ws.last_rendered_path)):
+            # The deck's file is gone, so there is nothing to amend.
+            self.working_state.reset()
+            return False
+        ws.amending = True
+        ws.amend_request = message.content.strip()
+        ws.amend_done = False
+        # What the last run concluded about the deck does not apply to the
+        # changed one: it is judged afresh.
+        ws.validation_clean = False
+        ws.validation_issues = []
+        ws.slides_needing_revision = []
+        ws.revision_queue = []
+        ws.validation_attempts = 0
+        ws.validation_failures = 0
+        ws.validated_serial = -1
+        ws.code_amendment_done = False
+        ws.previews_published = False
+        logger.info("amending_finished_deck", session_id=str(session_id))
+        return True
 
     async def _clear_working_state(self, session_id: uuid.UUID) -> None:
         """Clear saved working state from Redis."""
@@ -2026,6 +2128,9 @@ class AgentLoop:
         # Only reset if no previous state was found
         if not state_loaded:
             self.working_state.reset()
+            # A message after a finished deck amends it, rather than starting
+            # a new deck from nothing (#376).
+            await self._load_deck_snapshot(session_id)
 
         # Resolve models, search backend, and the effective mode. Must run
         # after the working state load, which can supply the mode on a resume.
@@ -4411,6 +4516,17 @@ class AgentLoop:
             # check read rather than a copy of it.
             self._rendered_path_token = run_context.set_rendered_path(
                 self.working_state.last_rendered_path)
+            if self.working_state.code_edit_log and self.working_state.last_rendered_path:
+                # The render rebuilt the file from the slides, so every edit a
+                # script made earlier is gone from it. Put them back.
+                from app.agent.tools import edit_deck_with_code as _edits
+
+                problems = await asyncio.to_thread(
+                    _edits.replay, self.working_state.last_rendered_path,
+                    self.working_state.code_edit_log)
+                logger.info("code_edits_replayed",
+                            edits=len(self.working_state.code_edit_log),
+                            problems=problems)
             preview_urls = tool_result.data.get("previewUrls", [])
 
             # Preview page N is the Nth slide of the RENDERED deck, so
@@ -4522,6 +4638,7 @@ class AgentLoop:
                 # slides are genuinely final - publish their previews.
                 for preview_event in self._flush_slide_previews():
                     yield "event", preview_event
+                await self._save_deck_snapshot(session_id)
                 await self._clear_working_state(session_id)
 
 
@@ -4701,6 +4818,13 @@ class AgentLoop:
                     # label ("content_generation", "validation"), which
                     # `validate` and `amend` share - not unique enough to
                     # tell them apart.
+                    self.working_state.code_edit_log.append({
+                        "source": str((tool_result.data or {}).get("source") or ""),
+                        "intent": str(fn_args.get("intent") or ""),
+                        "slide_index": fn_args.get("slide_index"),
+                    })
+                    if step == "change":
+                        self.working_state.amend_done = True
                     if step == "amend":
                         # One pass. A script that did not fix the deck is
                         # unlikely to be fixed by another script, and the run

@@ -239,6 +239,49 @@ class EditDeckWithCodeTool:
         )
 
 
+def replay(path: str, log: list[dict]) -> list[str]:
+    """Apply recorded edits again to a freshly rendered deck.
+
+    A render rebuilds the file from the slides, which drops every script's
+    edit. Replaying them through the same three gates keeps a requested change
+    (a logo on every page, a watermark) across revision rounds. Returns the
+    problems met, one per edit that could not be reapplied; the rest stand.
+    """
+    problems: list[str] = []
+    for entry in log:
+        source = str(entry.get("source") or "")
+        if gate.check(source):
+            problems.append(f"{entry.get('intent') or 'an edit'}: refused by the gate")
+            continue
+        with open(path, "rb") as handle:
+            current = handle.read()
+        result = runner.run(source, deck=current)
+        if not result.ok:
+            problems.append(f"{entry.get('intent') or 'an edit'}: {result.failure}")
+            continue
+        edited = result.outputs.get(DECK_NAME) or b""
+        rejected = adopt.problem(edited, max_slides=_slide_cap_for(current))
+        if rejected:
+            problems.append(f"{entry.get('intent') or 'an edit'}: {rejected}")
+            continue
+        temporary = f"{path}.editing"
+        with open(temporary, "wb") as handle:
+            handle.write(edited)
+        os.replace(temporary, path)
+    return problems
+
+
+def _slide_cap_for(deck: bytes) -> int:
+    import io
+
+    from pptx import Presentation
+
+    try:
+        return len(Presentation(io.BytesIO(deck)).slides) + 10
+    except Exception:   # pragma: no cover
+        return 200
+
+
 def _deck_path() -> Optional[str]:
     """Where this run's rendered deck is, or None before there is one.
 

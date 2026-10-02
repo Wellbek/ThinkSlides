@@ -229,7 +229,7 @@ PIPELINE: tuple[Phase, ...] = (
         # The substantial round, now that the audience, angle and depth are
         # settled. Searching before that spends the budget on facets the user
         # was about to rule out.
-        applies=_wants_research,
+        applies=lambda loop: _wants_research(loop) and not loop.working_state.amending,
         # Enough sources, the search budget spent, or the model has stopped
         # asking - a topic with little written about it must not strand a run.
         done=lambda loop: (
@@ -273,6 +273,28 @@ PIPELINE: tuple[Phase, ...] = (
         # Per slide, not for the whole phase: the loop re-enters this phase
         # once per outstanding slide.
         max_turns=6,
+    ),
+    Phase(
+        name="change",
+        label="content_generation",
+        driver=MODEL_DRIVEN,
+        tools=frozenset({"edit_deck_with_code"}),
+        # A message that arrived after the deck was finished: the deck exists
+        # and is kept, and this is the request to change it (#376).
+        applies=lambda loop: loop.working_state.amending,
+        done=lambda loop: loop.working_state.amend_done,
+        directive=lambda loop: (
+            "The deck is finished and the user has written again. Their "
+            f"request: {loop.working_state.amend_request!r}\n\n"
+            "Make exactly that change to the finished deck with "
+            "edit_deck_with_code, and nothing else: leave every slide's copy, "
+            "layout and design as they are. Place anything you add clear of "
+            "the existing content (read the slide's shapes and the page size "
+            "from the deck before choosing coordinates), keep it identical "
+            "across the pages it applies to, and use the deck's own theme "
+            "colours and fonts."
+        ),
+        max_turns=4,
     ),
     Phase(
         name="render",

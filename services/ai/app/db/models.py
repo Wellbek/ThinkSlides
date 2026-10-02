@@ -284,6 +284,21 @@ class AgentEvent(Base):
     session = relationship("ChatSession", back_populates="events")
 
 
+class DeckSnapshot(Base):
+    """A finished deck's state, kept so a later message can amend it.
+
+    The working state used to be deleted from Redis when a run completed, so a
+    message sent after a deck existed started a new deck from nothing. One row
+    per session: the latest finished deck is the one a follow-up amends.
+    """
+
+    __tablename__ = "deck_snapshots"
+
+    session_id = Column(UUID(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE"), primary_key=True)
+    state = Column(JSONB, nullable=False, default=dict)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
 class RunSpan(Base):
     """One span of an agent run's trace (app/observability/trace.py).
 
