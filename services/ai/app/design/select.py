@@ -444,7 +444,13 @@ def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,
         cost += 0.3
     if item_order is not None and slot_order is not None:
         cost += W_SEQUENCE * abs(item_order - slot_order)
-    if slot.required and _suits(slot, item):
+    # On the last resort (`legible=False`, material that cannot be divided
+    # any further) a required slot pulls in what it is offered even when it
+    # overflows: that path exists to place a page cramped rather than drop
+    # it, and without the bonus a heading longer than its headline slot was
+    # cheaper in a body slot, the headline stood empty, and every
+    # arrangement refused the page.
+    if slot.required and (_suits(slot, item) or not legible):
         cost -= REQUIRED_BONUS
     return cost
 
