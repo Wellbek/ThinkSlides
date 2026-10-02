@@ -105,7 +105,8 @@ The band and capacity of a cover heading used to be worked out at headline size 
 Each text slot's `max_chars` is how many characters of ordinary prose its lines hold, found by setting a sample passage in the slot (`setting.capacity`, `app/design/setting.py`):
 - in the face, weight, case and tracking the renderer draws that rung in, the same rule `compile` applies;
 - across the slot's whole lines (the frame height divided by the rung's leading, floored), so word-wrap loss is in the number;
-- set from 12 starting words of the sample (`CAPACITY_STARTS`), keeping the fewest characters any of them fits.
+- set from 12 starting words of the sample (`CAPACITY_STARTS`), keeping the fewest characters any of them fits;
+- counted as the characters the kept lines cover in the sample, so a break inside a word adds no space.
 The last point matters because drafting is told a capacity as a limit (section 14).
 At display sizes a line holds three or four words, so where the lines happen to break moves the count by up to a quarter, and copy written to the typical count overran by a line.
 Before #361 the capacity was characters-per-line times lines, measured in Arial whatever the face and always at regular weight.
@@ -199,6 +200,8 @@ Otherwise its cost is the sum of:
 
 A required slot pulls material into itself with a bonus of 5.0, because the assignment has no concept of "this column must be used".
 The bonus applies only when the item suits the slot (no more than 1.5 times its `max_chars`); applied flatly it outweighed every other term, and a three-hundred-character paragraph won the headline slot.
+On the last resort (section 8: material that cannot be divided further, placed below legible size rather than dropped) the bonus applies whether or not the item suits the slot.
+Without it, a heading longer than its headline slot was cheaper in a body slot, the required headline stood empty, and every arrangement refused the page; once capacities were measured as drawn, that took a specimen page off `bxsl-investor`, whose headline slot holds 18 characters (#370).
 
 ### 6.4 The cost of an archetype
 
@@ -297,6 +300,7 @@ A frame nothing was bound to is dropped, unless it carries a ground or scrim, an
   Only a true row counts, its members side by side, the same rule as the horizontal close-up: a heading stacked over prose beside a tall figure shares the figure's band without being in a row with it.
   A frame is only ever shortened, and an exhibit is never cut, since it fills whatever it is given.
   If the compaction is then discarded, the page gets its frames back uncut.
+  Grounds and scrims are backgrounds and belong to no row.
 - Two frames overlap only if they share columns as well as height.
   Reading side-by-side frames as an overlap made compaction skip every page with a row (#357).
 - Only pages whose frames are all grid-placed are compacted.
@@ -306,6 +310,11 @@ A frame nothing was bound to is dropped, unless it carries a ground or scrim, an
 **Where a block sits in its frame.**
 Text is anchored to the top of its frame, except in a headline frame set in the display rung, which is anchored to the bottom (`_anchor`).
 The rule reads the frame, not the block, so a title repair steps down to a smaller rung still rests on the same baseline; a title too long for its band would run up into the empty top of the page rather than down over its standfirst.
+
+**An opener's group rests on its baseline.**
+A title's band holds the longest title it is offered (three display lines on a composed cover), so resting a one-line title on its standfirst moved the empty lines up, between the title and an eyebrow above it.
+After binding, the title's band is cut from the top to the lines its copy needs, and every frame above it in the same columns is lowered by the space freed (`_rested`), so eyebrow, title and standfirst stay one group on the baseline.
+The title is measured 4% narrower than its frame (`RESTING_MEASURE = 0.96`), so a title that only just fits on one line is kept at two rather than cut to one and drawn as two over the eyebrow.
 Openers are built upward from a baseline, and a title's band is tall enough for the longest title it is offered; hung from the top, a one-line title left an empty line between itself and its standfirst, so the shorter the title, the further it drifted from what it introduces.
 
 ## 11. Laying out a table
@@ -447,6 +456,7 @@ The ones that report on the decisions above:
 | `DENSITY_SCALE` | airy 0.7, balanced 1.0, dense 1.45 | `design/authored.py` |
 | `PLAIN_COLUMN_SHARE` | 0.34 | `design/vocabulary.py` |
 | `CAPACITY_STARTS` | 12 starting words, fewest kept | `design/setting.py` |
+| `RESTING_MEASURE` | 0.96 of the title's width | `design/bind.py` |
 | `COVER_BASELINE`, `SECTION_BASELINE` | 0.93, 0.62 | `design/vocabulary.py` |
 | repair `MAX_ROUNDS` | 3 | `design/repair.py` |
 | `OVERFLOW_TOLERANCE` | 0.02 | `design/repair.py` |

@@ -375,3 +375,114 @@ class TestCuttingASurvivorIsSafe:
         for frame in page.frames:
             if frame.id in stated:
                 assert frame.place.h == pytest.approx(stated[frame.id])
+
+
+class TestAnOpenersGroupRestsOnItsBaseline:
+    """Second review of #370: a one-line title resting on its standfirst left
+    the two unused lines of a three-line band between itself and the eyebrow
+    above it."""
+
+    @staticmethod
+    def _frames():
+        from app.design.schema import Frame, GridPlace, Paragraph, Run
+
+        def text(role, value):
+            return (TextBlock(type_role=role, paragraphs=(
+                Paragraph(runs=(Run(text=value),)),)),)
+
+        eyebrow = Frame(id="eyebrow", role="eyebrow", z=1,
+                        content=text("body", "Annual review"),
+                        place=GridPlace(col=0, span=4, y=0.30, h=0.05))
+        title = Frame(id="title", role="headline", type_role="display", z=1,
+                      content=text("display", "The year ahead"),
+                      place=GridPlace(col=0, span=5, y=0.37, h=0.36))
+        standfirst = Frame(id="standfirst", role="standfirst", z=1,
+                           content=text("body", "Where growth comes from"),
+                           place=GridPlace(col=0, span=4, y=0.75, h=0.1))
+        return eyebrow, title, standfirst
+
+    def test_the_title_band_is_cut_from_the_top_and_the_eyebrow_follows(self):
+        from app.design.bind import _rested
+
+        pack = ensure(to_pack(_language("Georgia", "Arial"), CANVAS))
+        eyebrow, title, standfirst = self._frames()
+        out = {f.id: f for f in _rested((eyebrow, title, standfirst), pack, pack.grid)}
+        moved = out["title"].place
+        # The title still rests where it did, on the standfirst.
+        assert moved.y + moved.h == pytest.approx(title.place.y + title.place.h, abs=1e-3)
+        # Its band now holds the one line it needs, not three.
+        assert moved.h < title.place.h / 2
+        # The eyebrow sits as far above the title as it did before.
+        gap_before = title.place.y - (eyebrow.place.y + eyebrow.place.h)
+        gap_after = moved.y - (out["eyebrow"].place.y + out["eyebrow"].place.h)
+        assert gap_after == pytest.approx(gap_before, abs=1e-3)
+        assert out["standfirst"].place == standfirst.place
+
+    def test_a_title_that_fills_its_band_is_left_alone(self):
+        from app.design.bind import _rested
+        from app.design.schema import Paragraph, Run
+
+        pack = ensure(to_pack(_language("Georgia", "Arial"), CANVAS))
+        eyebrow, title, standfirst = self._frames()
+        long = title.model_copy(update={"content": (TextBlock(
+            type_role="display", paragraphs=(Paragraph(runs=(Run(
+                text="A title long enough to need every line of a band "
+                     "built for the longest title it is offered, and more"),)),)),)})
+        out = {f.id: f for f in _rested((eyebrow, long, standfirst), pack, pack.grid)}
+        assert out["title"].place == long.place
+        assert out["eyebrow"].place == eyebrow.place
+
+
+class TestCapacityCountsOnlyTheCharactersSet:
+    def test_a_break_inside_a_word_adds_no_space(self):
+        """Lines that break inside a word were each counted a space too many,
+        promising more than the lines hold."""
+        role = TypeRole(size_pt=40.0, line_height_pt=44.0, weight="bold")
+        for lines in (3, 6):
+            held = capacity(role, "Arial", 70.0, lines)
+            # The sample's own first `held` characters, uncut at any word.
+            set_lines = wrap(SAMPLE_PROSE[:held], 70.0, "Arial", 40.0, bold=True)
+            assert len(set_lines) <= lines
+
+
+class TestABackgroundIsNotARowMember:
+    def test_a_ground_with_a_band_does_not_stop_the_cut(self):
+        """A ground spanning the page's bands would merge them all into one
+        "row" that is never side by side, and no survivor would be cut."""
+        from app.design.bind import _compact
+        from app.design.schema import Frame, GridPlace, Paragraph, Run
+
+        pack = TestASurvivorIsCutToItsCopy._pack()
+
+        def text(value):
+            return (TextBlock(type_role="body", paragraphs=(
+                Paragraph(runs=(Run(text=value),)),)),)
+
+        ground = Frame(id="g", role="panel", z=0, ground="accent",
+                       place=GridPlace(col=0, span=6, y=0.0, h=1.0))
+        prose = Frame(id="p", role="column", z=1, content=text("A short point."),
+                      place=GridPlace(col=0, span=2, y=0.0, h=0.6))
+        figure = Frame(id="f", role="figure", z=1,
+                       place=GridPlace(col=2, span=4, y=0.0, h=0.6))
+        below = Frame(id="b", role="column", z=1, content=text("Below."),
+                      place=GridPlace(col=0, span=6, y=0.65, h=0.1))
+        out = {f.id: f for f in _compact((ground, prose, below),
+                                         (ground, prose, figure, below),
+                                         pack, pack.grid)}
+        assert out["p"].place.h < 0.3
+        assert out["g"].place == ground.place
+
+
+class TestTheLastResortPlacesAnOverlongHeading:
+    def test_a_required_headline_takes_a_heading_it_cannot_hold(self):
+        """BXSL's headline slot holds 18 characters measured as drawn. A
+        51-character heading was cheaper in a body slot, the required slot
+        stood empty and the last resort refused the page outright."""
+        from app.design.run import material_from
+        from app.design.select import fit
+        from app.renderer.specimen import language_specimen_slides
+
+        pack = design_run.load("bxsl-investor")
+        shape = material_from(language_specimen_slides()[2], index=2, total=3)
+        archetype = pack.archetype("text-page")
+        assert fit(shape, archetype, pack, legible=False) is not None
