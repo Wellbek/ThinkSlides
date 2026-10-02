@@ -71,6 +71,17 @@ class Outcome:
     deck: Path | None = None
     pages: int = 0
     errors: list[str] = field(default_factory=list)
+    stages: list[Path] = field(default_factory=list)
+
+
+def _snapshot(loop, run_dir: Path, part: int) -> Path | None:
+    """The deck as it stands after this part, kept under its own name."""
+    rendered = loop.working_state.last_rendered_path
+    if not rendered or not os.path.exists(rendered):
+        return None
+    target = run_dir / f"stage-{part}.pptx"
+    shutil.copy(rendered, target)
+    return target
 
 
 def describe(event: dict) -> str:
@@ -270,7 +281,8 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
             session_id = await _seed(db, task.prompt)
             manifest["sessionId"] = str(session_id)
             with open(run_dir / "events.log", "w") as log:
-                for part in range(task.max_pauses + 1):
+                followups = list(task.followups)
+                for part in range(task.max_pauses + len(followups) + 1):
                     loop = AgentLoop(
                         db=db,
                         mode=task.mode if part == 0 else None,
@@ -296,7 +308,19 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
                     outcome.parts = part + 1
                     outcome.termination = loop.termination
                     if not paused or question is None:
-                        break
+                        # A finished deck is kept, then the next message from
+                        # the user goes into the same session: this is how a
+                        # request to change an existing deck is exercised.
+                        stage = _snapshot(loop, run_dir, outcome.parts)
+                        if stage:
+                            outcome.stages.append(stage)
+                        if not followups:
+                            break
+                        text = followups.pop(0)
+                        log.write(f"[followup] {text}\n")
+                        db.add(ChatMessage(session_id=session_id, role="user", content=text))
+                        await db.commit()
+                        continue
                     reply = task.answer(part, question)
                     log.write(f"[answer] {reply}\n")
                     await _record_answer(session_id, question, reply)
@@ -325,6 +349,7 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
             "termination": outcome.termination,
             "deck": outcome.deck.name if outcome.deck else None,
             "pages": outcome.pages,
+            "stages": [p.name for p in outcome.stages],
             "errors": outcome.errors,
         })
         (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))

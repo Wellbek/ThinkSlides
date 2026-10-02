@@ -1,0 +1,20 @@
+id: probe-watermark
+category: probes
+prompt: |
+  Three slides for a product team on why we moved our build cache from
+  a shared disk to an object store. Cover the old failure mode, what we
+  changed, and what it did to build times. No web research needed.
+slides: 3
+mode: simple
+detail: concise
+answers:
+  - first
+  - Go ahead as planned
+followups:
+  - Put a DRAFT watermark across every page.
+checklist:
+  - The three pages' own content is otherwise unchanged by the request
+  - Every page carries a DRAFT watermark
+  - The watermark does not hide or reduce the legibility of any text
+  - The watermark is the same on every page
+  - The watermark is behind or lightly set against the content, not opaque over it

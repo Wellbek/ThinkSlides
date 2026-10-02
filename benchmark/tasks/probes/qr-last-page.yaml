@@ -1,0 +1,20 @@
+id: probe-qr-last-page
+category: probes
+prompt: |
+  Three slides for a product team on why we moved our build cache from
+  a shared disk to an object store. Cover the old failure mode, what we
+  changed, and what it did to build times. No web research needed.
+slides: 3
+mode: simple
+detail: concise
+answers:
+  - first
+  - Go ahead as planned
+followups:
+  - Add a QR code linking to https://example.com/build-cache to the last page.
+checklist:
+  - The three pages' own content is otherwise unchanged by the request
+  - The last page has a QR code
+  - The QR code decodes to https://example.com/build-cache
+  - The QR code is large enough to scan and has a quiet zone
+  - No other page gains a QR code

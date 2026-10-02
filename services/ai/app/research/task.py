@@ -13,6 +13,8 @@ Tasks live as YAML under ``benchmark/tasks/<category>/<id>.yaml``:
     answers:                # replies to the run's pauses, in order
       - first               # "first" takes each question's first option
       - Go ahead as planned
+    followups:              # messages sent into the same session once a deck exists
+      - Put a small logo in the top left corner of every page
     checklist:              # binary checks the finished deck is held to
       - The deck has exactly 3 slides
 """
@@ -36,6 +38,7 @@ class Task:
     mode: str = "simple"
     detail: str = "detailed"
     answers: list[str] = field(default_factory=list)
+    followups: list[str] = field(default_factory=list)
     checklist: list[str] = field(default_factory=list)
     max_pauses: int = 6
     source: Path | None = None

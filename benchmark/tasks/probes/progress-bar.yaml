@@ -1,0 +1,20 @@
+id: probe-progress-bar
+category: probes
+prompt: |
+  Three slides for a product team on why we moved our build cache from
+  a shared disk to an object store. Cover the old failure mode, what we
+  changed, and what it did to build times. No web research needed.
+slides: 3
+mode: simple
+detail: concise
+answers:
+  - first
+  - Go ahead as planned
+followups:
+  - Add a thin progress bar along the bottom edge of every page that fills as the deck advances.
+checklist:
+  - The three pages' own content is otherwise unchanged by the request
+  - Every page has a progress bar along the bottom edge
+  - The fill grows from the first page to the last
+  - The bar does not overlap content or the footer area
+  - The bar is the same height on every page
