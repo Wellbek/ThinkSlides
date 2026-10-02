@@ -1988,6 +1988,7 @@ class AgentLoop:
             if message.created_at <= row.updated_at:
                 return False
             if not self._apply_state_dict(dict(row.state), session_id):
+                self.working_state.reset()
                 return False
         except Exception as e:  # noqa: BLE001
             logger.error("failed_to_load_deck_snapshot", session_id=str(session_id), error=str(e))
@@ -2403,13 +2404,18 @@ class AgentLoop:
                     # never converged. Twelve slides of real work is not
                     # nothing, and the file the first render produced still
                     # opens.
-                    if self.working_state.pending_render_result:
+                    if (self.working_state.pending_render_result
+                            or self.working_state.amending):
                         logger.warning(
                             "phase_stalled_with_render_to_fall_back_on",
                             phase=phase.name, session_id=str(session_id),
                         )
                         yield _event("thought", phase.label, {
                             "content": (
+                                "I could not make that change to the finished "
+                                "deck, so it is as it was."
+                                if self.working_state.amending and phase.name == "change"
+                                else
                                 "The revision after validation is not "
                                 "converging, so I'm stopping here and handing "
                                 "over the deck as it last rendered rather "
@@ -2423,6 +2429,7 @@ class AgentLoop:
                         # redraft - so nothing else will clear it, and a
                         # resume would otherwise pick the stalled state back
                         # up and try the same unconverging fix again.
+                        await self._save_deck_snapshot(session_id)
                         await self._clear_working_state(session_id)
                         self.termination = trace.STALLED_WITH_DECK
                         break
@@ -4828,11 +4835,16 @@ class AgentLoop:
                     # label ("content_generation", "validation"), which
                     # `validate` and `amend` share - not unique enough to
                     # tell them apart.
-                    self.working_state.code_edit_log.append({
-                        "source": str((tool_result.data or {}).get("source") or ""),
-                        "intent": str(fn_args.get("intent") or ""),
-                        "slide_index": fn_args.get("slide_index"),
-                    })
+                    # Only the user's requested change is replayed after a
+                    # render. A repair a script made to a flagged slide
+                    # belongs to the slide as it then was, and would be run
+                    # again on one that has since been rewritten.
+                    if step == "change":
+                        self.working_state.code_edit_log.append({
+                            "source": str((tool_result.data or {}).get("source") or ""),
+                            "intent": str(fn_args.get("intent") or ""),
+                            "slide_index": fn_args.get("slide_index"),
+                        })
                     await self._refresh_previews(session_id)
                     if step == "change":
                         self.working_state.amend_done = True
@@ -5778,12 +5790,19 @@ class AgentLoop:
         """
         import base64
 
+        from app.agent.sandbox import runner
+
         assets: dict[str, bytes] = {}
         self.asset_notes: dict[str, str] = {}
         for entry in catalog:
             try:
-                data = base64.b64decode(entry.get("data") or "", validate=False)
+                encoded = str(entry.get("data") or "")
+                # Catalog entries are data URIs: the prefix is not payload.
+                encoded = encoded.split("base64,", 1)[-1]
+                data = base64.b64decode(encoded)
             except Exception:  # noqa: BLE001
+                continue
+            if len(assets) >= runner.MAX_ASSETS or len(data) > runner.ASSET_BYTES:
                 continue
             if data[:8].startswith(b"\x89PNG"):
                 ext = "png"
@@ -5809,7 +5828,7 @@ class AgentLoop:
 
         path = self.working_state.last_rendered_path
         staged = self.working_state.pending_slide_previews
-        if not path or not os.path.exists(path) or not staged:
+        if not path or not os.path.exists(path):
             return
         try:
             urls = await asyncio.to_thread(
@@ -5817,6 +5836,14 @@ class AgentLoop:
         except Exception as e:  # noqa: BLE001 - stale previews beat a failed run
             logger.error("preview_refresh_failed", error=str(e))
             return
+        if not staged:
+            # An amendment never renders, so nothing was staged for it: the
+            # pages of the edited file are the previews to publish.
+            self.working_state.pending_slide_previews = [
+                {"slideIndex": i, "slideData": None, "slideTitle": None,
+                 "injected": False, "previewUrl": url}
+                for i, url in enumerate(urls)]
+            self.working_state.previews_published = False
         for preview, url in zip(staged, urls):
             preview["previewUrl"] = url
         result = self.working_state.pending_render_result

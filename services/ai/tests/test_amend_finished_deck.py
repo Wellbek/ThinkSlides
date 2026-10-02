@@ -230,7 +230,7 @@ def test_a_script_can_place_a_picture_the_user_supplied(deck):
     from app.agent import run_context
 
     loop = _loop(_Db(None, None))
-    loop._install_assets([{"data": base64.b64encode(_png()).decode(),
+    loop._install_assets([{"data": "data:image/png;base64," + base64.b64encode(_png()).decode(),
                            "context": "the client's logo"}])
     assert list(run_context.get_assets()) == ["picture_1.png"]
     assert "picture_1.png (the client's logo)" in loop.asset_directive()
@@ -261,3 +261,38 @@ def test_an_amendment_sets_the_deck_path_for_the_tools(deck):
         assert run_context.get_rendered_path() == deck
     finally:
         run_context.reset_rendered_path(token)
+
+
+def test_more_pictures_than_the_sandbox_takes_are_not_offered():
+    import base64
+
+    from app.agent.sandbox import runner
+
+    loop = _loop(_Db(None, None))
+    entry = {"data": "data:image/png;base64," + base64.b64encode(_png()).decode()}
+    loop._install_assets([dict(entry) for _ in range(runner.MAX_ASSETS + 5)])
+    assert len(loop.asset_notes) == runner.MAX_ASSETS
+
+
+def test_an_amendment_with_nothing_staged_publishes_the_edited_pages(deck, monkeypatch):
+    from app.renderer import preview_generator
+
+    monkeypatch.setattr(preview_generator.PreviewGenerator, "generate_previews",
+                        lambda self, path, session_id: ["/a/1.png", "/a/2.png"])
+    loop = _loop(_Db(None, None))
+    loop.working_state.last_rendered_path = deck
+    loop.working_state.previews_published = True
+    asyncio.run(loop._refresh_previews("sid"))
+    staged = loop.working_state.pending_slide_previews
+    assert [p["previewUrl"] for p in staged] == ["/a/1.png", "/a/2.png"]
+    assert not loop.working_state.previews_published
+
+
+def test_a_failed_restore_leaves_a_clean_state(deck, monkeypatch):
+    db = _Db(_Row(_finished_state(deck), NOW),
+             _Message("change it", NOW + datetime.timedelta(minutes=1)))
+    loop = _loop(db)
+    loop.working_state.accumulated_slides = [{"half": "restored"}]
+    monkeypatch.setattr(loop, "_apply_state_dict", lambda state, sid: False)
+    assert asyncio.run(loop._load_deck_snapshot("sid")) is False
+    assert loop.working_state.accumulated_slides == []
