@@ -154,6 +154,18 @@ APPARATUS_FRAME_ROLES = frozenset({"footnotes", "sourceLine", "folio"})
 
 RESTRICTED_FRAME_ROLES = DISPLAY_ONLY_FRAME_ROLES | APPARATUS_FRAME_ROLES
 
+# Frames that take text but are not somewhere a paragraph sits: the display
+# frames, the apparatus, and an eyebrow - a one-line label over a heading.
+NOT_PROSE_FRAME_ROLES = RESTRICTED_FRAME_ROLES | frozenset({"eyebrow"})
+
+
+def _carries_prose(archetype: PageArchetype, slot: SlotSpec) -> bool:
+    """Whether a paragraph of the page's copy could sit in this slot."""
+    if slot.accepts and "text" not in slot.accepts:
+        return False
+    frame = _slot_frame(archetype, slot)
+    return frame is None or frame.role not in NOT_PROSE_FRAME_ROLES
+
 _HINT_FOR_FRAME = {"headline": "heading", "pullquote": "quote",
                    "standfirst": "body"}
 
@@ -231,14 +243,20 @@ def _slot_origin(archetype: PageArchetype, slot: SlotSpec, pack: Pack,
 
 def reading_order(archetype: PageArchetype, pack: Pack,
                   grid: GridSpec) -> dict[str, float]:
-    """Each text slot's place in the page's reading order, normalised to 0..1.
+    """Each prose slot's place in the page's reading order, normalised to 0..1.
 
     Down and then across, which is how a column grid is read. A slot whose
     frame cannot be located is left out rather than guessed at.
+
+    Only the slots a paragraph sits in are ordered, since it is the page's
+    paragraphs that are sequenced through them. Counting an eyebrow above a
+    cover's title as the first place to read sent a lone subtitle into it,
+    in small capitals over the headline, rather than to the standfirst made
+    for it below.
     """
     located = []
     for slot in archetype.slots:
-        if slot.accepts and "text" not in slot.accepts:
+        if not _carries_prose(archetype, slot):
             continue
         origin = _slot_origin(archetype, slot, pack, grid)
         if origin is None:
@@ -471,16 +489,7 @@ def _body_slots(slots: Sequence[SlotSpec], archetype: PageArchetype,
     A display-only frame - a headline, an eyebrow - is not one of them, even
     though it accepts text: it exists for the one line that names the page.
     """
-    usable = []
-    for slot in slots:
-        if slot.accepts and "text" not in slot.accepts:
-            continue
-        frame = _slot_frame(archetype, slot)
-        if frame is not None and frame.role in DISPLAY_ONLY_FRAME_ROLES:
-            continue
-        if frame is not None and frame.role in APPARATUS_FRAME_ROLES:
-            continue
-        usable.append(slot)
+    usable = [slot for slot in slots if _carries_prose(archetype, slot)]
     return sorted(usable, key=lambda s: slot_order.get(s.frame_id, 0.0))
 
 
