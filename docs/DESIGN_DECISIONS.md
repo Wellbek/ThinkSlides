@@ -219,14 +219,16 @@ Each exhibit has a minimum slot height:
 - a **table** is measured, not estimated: its uncompressed height at the slot's width, wrapped as it will be drawn, at 10pt body type (`table_layout.needed_height_in`, `LEGIBLE_CELL_PT`).
   It is measured in both the default face and the pack's body face, and the taller is kept, because the table is drawn in the design's data-visualisation face, which the pack does not carry.
   A row count alone said nothing about a six-column table whose cells each break onto three lines in a half-width column;
-- a **chart** needs 1.6in, a **diagram** 1.0in, a **metrics** row 0.6in (`MIN_EXHIBIT_IN`).
+- a typed **diagram** (flow, value chain, matrix, funnel, pyramid, timeline, Venn, org chart) is measured the same way: laid out at the slot's width at 10pt with its details, the size a table's cells are held to (`diagrams.needed_height_in`, `LEGIBLE_PT`), in both faces, the taller kept, and never under 1.0in.
+  When a word of it cannot be set whole at that width at 10pt, its floor is infinite and the slot is refused outright (#363): a four-step flow in a half-width slot broke "ReplicaSet" and "maxUnavailable" across lines;
+- a **chart** needs 1.6in, an SVG-drawn diagram 1.0in, a **metrics** row 0.6in (`MIN_EXHIBIT_IN`).
 
 **The shortfall** is `max(0, floor - height) / floor`, from 0 (fits) to 1.
 
 **The decision.**
-- For a **table**, any shortfall makes the slot infeasible: its floor is an exact measurement of the table itself, so falling short means setting it below 10pt.
+- For a **table** or a typed **diagram**, any shortfall makes the slot infeasible: its floor is an exact measurement of the exhibit itself, so falling short means setting it below 10pt.
   With the tolerance the estimated floors get, tables in half-width slots came out at 8 and 9pt (#357).
-- For a chart, diagram or metrics row, whose floors are estimates, a shortfall above 0.25 (`LEGIBLE_TOLERANCE`) makes the slot **infeasible**.
+- For a chart, an SVG-drawn diagram or a metrics row, whose floors are estimates, a shortfall above 0.25 (`LEGIBLE_TOLERANCE`) makes the slot **infeasible**.
   As a cost, it was outbid by the text overflow of every other arrangement, and a five-row table was set in a slot 0.2in tall with its rows printed over each other (#351).
 - A shortfall within tolerance is charged at weight 12.0, so a slot that fits wins over one that nearly does.
 - If no content arrangement in the pack has a slot the exhibit could be read in (`readable_somewhere` is false), splitting the prose around it cannot help, because legibility depends on the slot and not on the prose.
@@ -241,6 +243,23 @@ Each exhibit has a minimum slot height:
 **Margins.**
 A slot that bleeds off the page keeps its bleed for a photograph and loses it for an exhibit (`bind._fill`).
 A table, chart or diagram carries text that has to sit inside the margins the rest of the page keeps; a language whose figure slot bled set every exhibit hard against the page edge.
+
+**Setting a diagram in the slot it gets** (`diagrams._fitted`).
+A diagram is drawn, then read back: every word has to fit whole across its box, breaking only where the typesetter may (spaces, and after a hyphen or dash), and every label and detail has to fit inside its node.
+When it does not, what gives way, in order, and each only as far as it has to:
+1. the diagram's height, from the shape it is drawn at (`ASPECT`) up to the rect it was handed, because type is what makes it readable;
+2. both sizes, together, half a point at a time (`SIZE_STEP_PT`), down to 10pt (`LEGIBLE_PT`);
+3. the detail lines, at sizes down to 10pt again, since detail goes before a label is set below reading size;
+4. below 10pt, down to 8pt labels and 7pt details (`MIN_LABEL_PT`, `MIN_DETAIL_PT`), with details and then without: the last resort for a slot chosen anyway.
+Past all four it is drawn at the floor with the renderer's autofit left on, so its text at least stays inside its boxes.
+Both searches are bisections, for the largest size that reads at the full height and then the least height that reads at that size (to 1% of the room, `HEIGHT_PRECISION`), so a diagram costs a handful of draws, and a measuring pass that hands it a hundred inches gets back the height it needs rather than the hundred inches.
+Every label of one diagram is set at one size and every detail at another, with autofit off for node text: left to it, each box was shrunk on its own and no two steps of a flow matched.
+Labels of nodes side by side start at the same height, measured with the details only when the boxes are tall enough to show them (`DETAIL_MIN_BOX_IN`).
+Diagram text is measured with the real typesetter, 4% narrower than its box (`TEXT_MEASURE`, the same margin as an opener's title), both for line counts and for whether a word fits whole.
+
+The floor the selector reads (section 7, above) is this layout at 10pt **with** the details, in a rect up to eight times the diagram's own shape (`PROBE_HEIGHT_FACTOR`), the least height that reads; infinite when none does.
+A slot that could show only the labels is not offered, since what the diagram was drawn to say would be lost; a wider slot, the plain page at worst, shows all of it.
+The title band is measured at the size the title is drawn at, from the pack's body size.
 
 ## 8. Splitting a page
 
@@ -438,6 +457,11 @@ The ones that report on the decisions above:
 | `ASPECT_SATURATION` | 4.0 | `design/select.py` |
 | `LEGIBLE_TOLERANCE` | 0.25 (charts, diagrams, metrics); 0 for tables | `design/select.py` |
 | `MIN_EXHIBIT_IN` | chart 1.6, diagram 1.0, metrics 0.6 | `design/select.py` |
+| diagram `LEGIBLE_PT` | 10.0 (= `LEGIBLE_CELL_PT`) | `renderer/diagrams.py` |
+| `MIN_LABEL_PT`, `MIN_DETAIL_PT` | 8.0, 7.0 | `renderer/diagrams.py` |
+| `SIZE_STEP_PT`, `HEIGHT_PRECISION` | 0.5pt, 1% of the room | `renderer/diagrams.py` |
+| `PROBE_HEIGHT_FACTOR` | 8 times the diagram's own shape | `renderer/diagrams.py` |
+| `TEXT_MEASURE` | 0.96 | `renderer/diagrams.py` |
 | `LEGIBLE_CELL_PT` | 10.0 | `renderer/table_layout.py` |
 | table body sizes | 14 to 8pt | `renderer/table_layout.py` |
 | `_MIN_COL_FRACTION` | 0.08 | `renderer/table_layout.py` |
@@ -479,5 +503,6 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #357 | `technical-k8s-rollouts/20260925-091641-replay` | Five of seven content headlines stepped down to 31.6pt regular by repair, two left at 45pt bold. | One headline rung per deck (section 12); headline length told to drafting (section 14). |
 | #364 | `technical-k8s-rollouts/20260925-091641-replay` | Tables were pictures that could not be edited, and a short table in a tall frame was stretched to read as a condensed face. | Tables are native on both paths (section 11). |
 | #361 | found by review of this document; reproduced on the 17 languages in `benchmark/evidence/` and `technical-k8s-rollouts/20260924-203834-live` | Capacities were measured in Arial at regular weight as characters-per-line times lines, and an opener's heading was sized as a headline but drawn as display type: text of the advertised length needed up to 3.4 times its frame. Once the heading band was right, a one-line title hung from its top; and a prose cell that lost its row's figure kept the figure's height. | Capacities set as drawn and the rung a slot is set in (section 3); a survivor is cut to its copy and display titles rest on the bottom of their band (section 10). |
+| #363 | `technical-k8s-rollouts/20260924-203834-live`, replayed | A four-step flow in a half-width slot broke words mid-word, ran a detail out below its box, and was shrunk box by box by autofit. | Diagram floor measured at 10pt with zero tolerance (section 7); diagrams set whole, at one size, inside their nodes (section 7). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | Documented as a known gap (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

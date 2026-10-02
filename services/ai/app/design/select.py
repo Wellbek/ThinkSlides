@@ -89,8 +89,23 @@ def legible_tolerance(item: MaterialItem) -> float:
     wrapped at the slot's width, at the smallest size it is read at - so any
     shortfall means the table is set smaller than that. With the 25% allowed
     to the estimated floors, half-width tables came out at 8 and 9pt (#357).
+
+    Zero for a typed diagram too, for the same reason: its floor is the
+    diagram laid out at the size it is read at (#363). A drawn SVG figure
+    has no such measurement and keeps the estimate's tolerance.
     """
-    return 0.0 if item.kind == "table" else LEGIBLE_TOLERANCE
+    if item.kind == "table" or _typed_diagram(item):
+        return 0.0
+    return LEGIBLE_TOLERANCE
+
+
+def _typed_diagram(item: MaterialItem) -> bool:
+    """Whether this is one of the drawn diagram kinds, measured as laid out."""
+    if item.kind != "diagram":
+        return False
+    from app.renderer.diagrams import DIAGRAM_KINDS, payload_of
+
+    return str(payload_of(item.payload or {}).get("kind") or "") in DIAGRAM_KINDS
 # How strongly a required slot pulls material into itself. The assignment
 # minimises total cost and has no concept of "this column must be used", so
 # without a bias the cheapest solution routinely leaves the headline slot
@@ -384,6 +399,20 @@ def exhibit_floor_in(item: MaterialItem, pack: Pack,
         body = pack.type_roles.get("body")
         size_pt = body.size_pt if body else 12.0
         return max(1, len(rows)) * size_pt * TABLE_ROW_LEADING / 72.0
+    if item.kind == "diagram" and width_in:
+        # Laid out at the legibility floor, the way it will be drawn: a flow
+        # whose steps cannot hold their longest word whole at this width is
+        # not readable in this slot at any height (#363). Measured in both
+        # faces it may be drawn in, like a table, keeping the taller.
+        from app.renderer import diagrams, text_fit
+
+        faces = {text_fit.DEFAULT_MEASURE_FAMILY, pack.body_face or ""} - {""}
+        body = pack.type_roles.get("body")
+        needed = max(diagrams.needed_height_in(
+                         item.payload or {}, width_in, family=face,
+                         label_pt=body.size_pt if body else diagrams.LEGIBLE_PT)
+                     for face in faces)
+        return max(MIN_EXHIBIT_IN["diagram"], needed)
     return MIN_EXHIBIT_IN.get(item.kind, 0.0)
 
 
@@ -395,6 +424,10 @@ def legibility_shortfall(item: MaterialItem, pack: Pack,
     floor = exhibit_floor_in(item, pack, size[0])
     if floor <= 0:
         return 0.0
+    if math.isinf(floor):
+        # Not readable at this width at any height. Without this the ratio is
+        # inf / inf, NaN, and `max(0.0, nan)` reports a perfect fit.
+        return 1.0
     return min(1.0, max(0.0, floor - size[1]) / floor)
 
 
