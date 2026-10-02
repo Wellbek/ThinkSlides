@@ -229,7 +229,8 @@ class TestThePageIsRevisedAtMostTwice:
         state = self._state()
         wanted = state.layout_revision_for([
             {"slideIndex": 2, "type": "aesthetic", "fix": "nudge"}])
-        assert wanted == {2: "nudge"}
+        # Answered as a replace: a nudge re-rendered the identical page (#359).
+        assert wanted == {2: "replace"}
 
     def test_a_page_stops_being_offered_at_the_cap(self):
         state = self._state()
@@ -254,7 +255,7 @@ class TestThePageIsRevisedAtMostTwice:
         wanted = state.layout_revision_for([
             {"slideIndex": 1, "fix": "nudge"},
             {"slideIndex": 2, "fix": "nudge"}])
-        assert wanted == {2: "nudge"}
+        assert wanted == {2: "replace"}
 
     def test_the_larger_rung_wins_when_a_page_draws_both(self):
         state = self._state()
@@ -406,15 +407,17 @@ class TestTheLadderClosesTheLoop:
         assert placed[1] == [p.archetype for p in first.pages
                              if p.provenance.source_slide == 1]
 
-    def test_a_nudge_verdict_keeps_the_arrangement(self):
-        """A nudge moves something *within* the page it has, so forbidding
-        that arrangement would answer a verdict nobody gave."""
+    def test_a_nudge_verdict_rules_the_arrangement_out(self):
+        """Nothing in composition reads a nudge, so keeping the arrangement
+        re-rendered the identical page (#359). It is answered as a replace."""
         from tests.test_agent_loop_workflow import _loop
 
         loop = _loop()
-        loop.working_state.record_layout_revision(1, "")
-        assert loop.working_state.layout_revisions == {1: 1}
-        assert loop.working_state.arrangements_to_avoid() == {}
+        wanted = loop.working_state.layout_revision_for(
+            [{"slideIndex": 1, "fix": "nudge"}])
+        assert wanted == {1: "replace"}
+        loop.working_state.record_layout_revision(1, "page")
+        assert loop.working_state.arrangements_to_avoid() == {1: {"page"}}
 
     def test_a_layout_verdict_does_not_redraft_the_slide(self, monkeypatch):
         """Redrafting a slide to move a frame down throws away copy nobody
