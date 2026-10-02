@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import functools
 import math
+from dataclasses import replace
 from typing import Optional
 
 from app import colors
@@ -110,7 +111,7 @@ def compile_diagram(
     prefix: str = "d",
 ) -> list[Primitive]:
     """The marks that draw one diagram inside ``rect``."""
-    payload = item.get("diagram") if isinstance(item.get("diagram"), dict) else item
+    payload = payload_of(item)
     kind = str(payload.get("kind") or "").strip()
     nodes = [n for n in (payload.get("items") or []) if isinstance(n, dict)]
     if kind not in DIAGRAM_KINDS or not nodes or rect.width <= 0 or rect.height <= 0:
@@ -146,21 +147,32 @@ def compile_diagram(
 # below its border, and was then shrunk box by box by autofit, so no two
 # steps of one flow were set at the same size (#363).
 #
-# What gives way, in order: the diagram's height first, from the shape it is
-# drawn at up to the whole rect it was handed, because type is what makes it
-# readable; then both sizes, together, half a point at a time down to the
-# legibility floor; then the detail lines, which the module's own rule has
-# going before a label is set below reading size. Past all three it is drawn
-# at the floor anyway, and `needed_height_in` has already told the selector
-# that this slot cannot hold it legibly.
+# What gives way, in order, and each step only as far as it has to:
+#   1. the diagram's height, from the shape it is drawn at up to the rect it
+#      was handed, because type is what makes it readable;
+#   2. both sizes, together, half a point at a time, down to `LEGIBLE_PT`;
+#   3. the detail lines, at sizes down to `LEGIBLE_PT` again - the module's
+#      own rule is that detail goes before a label is set below reading size;
+#   4. both sizes below that, down to `MIN_LABEL_PT`, with details, then
+#      without them. This is the last resort, for a slot chosen anyway: the
+#      selector only offers a slot the diagram reads in at `LEGIBLE_PT`
+#      (`needed_height_in`).
+# Past all four it is drawn at the floor with the renderer's autofit left on,
+# so its text at least stays inside its boxes.
+#
+# Both searches are bisections - for the largest size that reads at the full
+# height, then the least height that reads at that size - so a diagram costs
+# a handful of draws, and a measuring pass that hands it a hundred inches
+# gets back the height it needs, not the hundred inches.
 
 SIZE_STEP_PT = 0.5
 # The size a diagram has to be readable at for a slot to count as holding
 # it: the size a table's cells are held to, since a step label and a table
 # cell are read the same way, from the same distance.
 LEGIBLE_PT = LEGIBLE_CELL_PT
-# The heights tried between the diagram's own aspect and the whole rect.
-HEIGHT_STEPS = 4
+# How finely the least height that reads is found, as a share of the room
+# between the diagram's own shape and the rect it was handed.
+HEIGHT_PRECISION = 0.01
 
 
 class _Fit:
@@ -171,47 +183,83 @@ class _Fit:
 
 def _fitted(kind: str, nodes: list[dict], rect: PositionConfig, payload: dict,
             palette: "DiagramPalette", label_pt: float, detail_pt: float,
-            prefix: str, *, sizes: Optional[list[tuple[float, float]]] = None,
-            ) -> _Fit:
+            prefix: str, *, last_resort: bool = True,
+            drop_detail: bool = True) -> _Fit:
     drawer = _DRAWERS[kind]
-    natural = _at_aspect(kind, rect)
-    heights = [natural.height + (rect.height - natural.height) * step / HEIGHT_STEPS
-               for step in range(HEIGHT_STEPS + 1)] if rect.height > natural.height \
-        else [natural.height]
+    natural = _at_aspect(kind, rect).height
     bare = [{k: v for k, v in node.items() if k != "detail"} for node in nodes]
+    has_detail = any(_detail_of(node) for node in nodes)
 
-    last = None
-    for with_detail in (True, False):
-        for lp, dp in sizes or _size_ladder(label_pt, detail_pt):
-            for height in heights:
-                body = PositionConfig(left=rect.left, top=rect.top,
-                                      width=rect.width, height=height)
-                marks = [m for m in drawer(nodes if with_detail else bare, body,
-                                           payload, palette, lp, dp, prefix)
-                         if m is not None]
-                last = marks
-                if _reads(marks):
-                    return _Fit(marks, True)
-        if not any(_detail_of(node) for node in nodes):
-            break
-    return _Fit(last or [], False)
+    def draw(variant: list[dict], sizes: tuple[float, float], height: float):
+        body = PositionConfig(left=rect.left, top=rect.top, width=rect.width,
+                              height=height)
+        marks = [m for m in drawer(variant, body, payload, palette, *sizes, prefix)
+                 if m is not None]
+        return marks, _reads(marks)
+
+    legible = _size_ladder(label_pt, detail_pt, LEGIBLE_PT, LEGIBLE_PT)
+    phases = [(nodes, legible)] + (
+        [(bare, legible)] if has_detail and drop_detail else [])
+    if last_resort:
+        floor = _size_ladder(label_pt, detail_pt, MIN_LABEL_PT, MIN_DETAIL_PT)
+        phases += [(nodes, floor)] + ([(bare, floor)] if has_detail else [])
+
+    last: list = []
+    for variant, ladder in phases:
+        # The common case first: the deck's own size, at the shape it wants.
+        marks, reads = draw(variant, ladder[0], natural)
+        last = marks
+        if reads:
+            return _Fit(marks, True)
+        # The largest size that reads at the full height.
+        low, high, found = 0, len(ladder) - 1, None
+        while low <= high:
+            middle = (low + high) // 2
+            marks, reads = draw(variant, ladder[middle], rect.height)
+            last = marks
+            if reads:
+                found, high = middle, middle - 1
+            else:
+                low = middle + 1
+        if found is None:
+            continue
+        sizes = ladder[found]
+        # The least height that reads at that size.
+        best, reads = draw(variant, sizes, natural)
+        if reads:
+            return _Fit(best, True)
+        short, tall = natural, rect.height
+        best, _ = draw(variant, sizes, tall)
+        while tall - short > HEIGHT_PRECISION * max(1e-3, rect.height - natural):
+            middle = (short + tall) / 2
+            marks, reads = draw(variant, sizes, middle)
+            if reads:
+                best, tall = marks, middle
+            else:
+                short = middle
+        return _Fit(best, True)
+    # Nothing reads: drawn at the floor, with autofit as the guard that keeps
+    # the text inside its boxes.
+    return _Fit([replace(m, autofit=True) if m.kind == "text" else m
+                 for m in last], False)
 
 
-def _size_ladder(label_pt: float, detail_pt: float) -> list[tuple[float, float]]:
-    """Label and detail sizes from the deck's own down to the floor, together."""
-    label_pt = max(MIN_LABEL_PT, label_pt)
-    detail_pt = max(MIN_DETAIL_PT, min(detail_pt, label_pt))
+def _size_ladder(label_pt: float, detail_pt: float, label_floor: float,
+                 detail_floor: float) -> list[tuple[float, float]]:
+    """Label and detail sizes from the deck's own down to a floor, together."""
+    label_pt = max(label_floor, label_pt)
+    detail_pt = max(detail_floor, min(detail_pt, label_pt))
     out = []
     lp, dp = label_pt, detail_pt
     while True:
         out.append((lp, dp))
-        if lp <= MIN_LABEL_PT and dp <= MIN_DETAIL_PT:
+        if lp <= label_floor and dp <= detail_floor:
             return out
-        lp = max(MIN_LABEL_PT, lp - SIZE_STEP_PT)
-        dp = max(MIN_DETAIL_PT, dp - SIZE_STEP_PT)
+        lp = max(label_floor, lp - SIZE_STEP_PT)
+        dp = max(detail_floor, dp - SIZE_STEP_PT)
 
 
-def _measured(mark: Primitive) -> tuple[str, float, bool]:
+def _measured(mark: Primitive) -> tuple[str, str, bool]:
     from app.renderer import text_fit
 
     text = "".join(run.text for run in mark.runs)
@@ -221,46 +269,61 @@ def _measured(mark: Primitive) -> tuple[str, float, bool]:
 
 def _reads(marks: list) -> bool:
     """Every word whole across its box, and every node's text inside it."""
-    from app.renderer import text_fit
-    from app.renderer.typeset.fonts import width_pt
-    from app.renderer.typeset.shape import _tokens, wrap
-
     nodes = {m.id: m.box for m in marks if m.kind in ("rect", "ellipse")}
     for mark in marks:
         if mark.kind != "text" or not mark.runs or not mark.size_pt:
             continue
         text, family, bold = _measured(mark)
-        width = mark.box.width * 72.0
-        # The pieces the renderers may break between: words, and the parts
-        # of a hyphenated compound. "stale-while-revalidate" breaking after
-        # a hyphen is ordinary setting; "ReplicaSe / t" is not.
-        if any(width_pt(piece.strip(), family, mark.size_pt, bold=bold) > width
-               for piece in _tokens(text)):
+        if not _whole(text, family, mark.size_pt, bold,
+                      round(mark.box.width * 72.0 * TEXT_MEASURE, 3)):
             return False
         node_id, _, part = mark.id.rpartition("-")
         node = nodes.get(node_id)
         if node is None or part not in ("label", "detail"):
             continue
-        lines = len(wrap(text, width * TEXT_MEASURE, family, mark.size_pt,
-                         bold=bold))
-        bottom = mark.box.top + lines * mark.size_pt * text_fit.LINE_HEIGHT_RATIO / 72.0
+        bottom = mark.box.top + _text_h(text, mark.size_pt, mark.box.width,
+                                        bold=bold, family=family)
         if bottom > node.top + node.height + 1e-3:
             return False
     return True
 
 
-def needed_height_in(item: dict, width_in: float, family: str = "") -> float:
+@functools.lru_cache(maxsize=8192)
+def _whole(text: str, family: str, size_pt: float, bold: bool,
+           width_pt_: float) -> bool:
+    """Whether every piece of this text can be set whole at this width.
+
+    The pieces are where the renderers may break: between words, and after a
+    hyphen. "stale-while-revalidate" breaking after a hyphen is ordinary
+    setting; "ReplicaSe / t" is not.
+    """
+    from app.renderer.typeset.fonts import width_pt
+    from app.renderer.typeset.shape import _tokens
+
+    return all(width_pt(piece.strip(), family, size_pt, bold=bold) <= width_pt_
+               for piece in _tokens(text))
+
+
+def needed_height_in(item: dict, width_in: float, family: str = "",
+                     label_pt: float = LEGIBLE_PT) -> float:
     """How tall a slot this wide must be to show this diagram legibly.
 
-    Laid out at `LEGIBLE_PT` in a rect as tall as it could want, and
-    measured; infinite when even then a word of it cannot be set whole at
-    this width - which is the selector's cue to send it somewhere wider.
-    Drawing can still go below it, down to `MIN_LABEL_PT`, as the last
-    resort for a slot that was chosen anyway; choosing one is not done on
-    that basis.
+    Laid out at `LEGIBLE_PT` with its details, and the least height that
+    reads measured. Infinite when no height reads at `LEGIBLE_PT` at this
+    width: a word that cannot be set whole, or more text than a diagram this
+    wide can hold. That is the selector's cue to send it somewhere wider.
+    The details are part of what has to be read: a slot that could show the
+    labels only would lose what the diagram was drawn to say, and a wider
+    slot - the plain page at worst - shows all of it. Drawing can still go below it, down to
+    `MIN_LABEL_PT`, as the last resort for a slot chosen anyway; choosing
+    one is not done on that basis.
+
+    ``label_pt`` is the size the deck sets diagram labels at, which the
+    title is drawn from (`compile_diagram`), so its band is measured as it
+    will be drawn.
     """
-    payload = item.get("diagram") if isinstance(item.get("diagram"), dict) else item
-    if width_in <= 0 or not isinstance(payload, dict):
+    payload = payload_of(item)
+    if width_in <= 0 or not payload:
         return 0.0
     import json
 
@@ -268,11 +331,19 @@ def needed_height_in(item: dict, width_in: float, family: str = "") -> float:
         key = json.dumps(payload, sort_keys=True, default=str)
     except (TypeError, ValueError):
         return 0.0
-    return _needed_height_in(key, round(width_in, 3), family)
+    return _needed_height_in(key, round(width_in, 3), family, float(label_pt))
+
+
+# How tall a rect the floor is measured in, as a multiple of the diagram's
+# own shape. Bisection finds the least height that reads inside it, so this
+# only bounds the search: a diagram that needs more than this many times its
+# natural height is not one a slot of this width can show.
+PROBE_HEIGHT_FACTOR = 8.0
 
 
 @functools.lru_cache(maxsize=512)
-def _needed_height_in(key: str, width_in: float, family: str) -> float:
+def _needed_height_in(key: str, width_in: float, family: str,
+                      label_pt: float) -> float:
     """`needed_height_in`, cached: the selector asks it of every slot."""
     import json
 
@@ -285,16 +356,25 @@ def _needed_height_in(key: str, width_in: float, family: str) -> float:
                              accent="#000000", rule="#808080",
                              sequence=["#000000"], font=family or None)
     rect = PositionConfig(left=0.0, top=0.0, width=width_in,
-                          height=width_in * ASPECT.get(kind, 0.5) * 3)
+                          height=width_in * ASPECT.get(kind, 0.5) * PROBE_HEIGHT_FACTOR)
     fit = _fitted(kind, nodes, rect, payload, palette, LEGIBLE_PT, LEGIBLE_PT,
-                  "probe", sizes=[(LEGIBLE_PT, LEGIBLE_PT)])
+                  "probe", last_resort=False, drop_detail=False)
     if not fit.fits:
         return math.inf
     title = str(payload.get("title") or "").strip()
-    extra = (_text_h(title, LEGIBLE_PT + 1.0, width_in, bold=True,
+    title_pt = max(label_pt, MIN_LABEL_PT + 1.0)
+    extra = (_text_h(title, title_pt, width_in, bold=True,
                      family=family or None) + GAP_IN) if title else 0.0
     box = primitives.bounds(fit.marks)
     return (box.height if box else 0.0) + extra
+
+
+def payload_of(item: dict) -> dict:
+    """The diagram itself, whether handed bare or inside its block."""
+    if not isinstance(item, dict):
+        return {}
+    inner = item.get("diagram")
+    return inner if isinstance(inner, dict) else item
 
 
 def _at_aspect(kind: str, rect: PositionConfig) -> PositionConfig:
@@ -362,7 +442,8 @@ class DiagramPalette:
 def _text(primitive_id: str, left: float, top: float, width: float,
           height: float, text: str, size_pt: float, color: str,
           bold: bool = False, align: str = "left",
-          font: Optional[str] = None, anchor: str = "top") -> Optional[Primitive]:
+          font: Optional[str] = None, anchor: str = "top",
+          autofit: bool = True) -> Optional[Primitive]:
     if not str(text or "").strip():
         return None
     from app.renderer.primitives import TextRunSpec
@@ -373,10 +454,7 @@ def _text(primitive_id: str, left: float, top: float, width: float,
                            height=max(0.06, height)),
         runs=(TextRunSpec(text=str(text), bold=bold),),
         size_pt=size_pt, color=color, bold=bold, align=align, anchor=anchor,
-        font=font,
-        # Sized by `_fitted`, once for the whole diagram. Left to autofit,
-        # each box was shrunk on its own and no two steps matched.
-        autofit=False,
+        font=font, autofit=autofit,
     )
 
 
@@ -421,6 +499,13 @@ TEXT_MEASURE = 0.96
 
 def _text_h(text: str, size_pt: float, width_in: float, *, bold: bool = False,
             family: Optional[str] = None) -> float:
+    return _text_h_cached(str(text or ""), float(size_pt), round(width_in, 4),
+                          bool(bold), family or "")
+
+
+@functools.lru_cache(maxsize=8192)
+def _text_h_cached(text: str, size_pt: float, width_in: float, bold: bool,
+                   family: str) -> float:
     """The height this text is set in, wrapped by the real typesetter.
 
     Not `primitives.measure_text`, whose slack is for an estimate: it set a
@@ -468,7 +553,7 @@ def _node_text(prefix: str, box: PositionConfig, label: str, detail: str,
         top = box.top + max(0.0, (box.height - own) / 2)
         return [_text(f"{prefix}-label", inner_l, top, inner_w, label_h,
                       label, label_pt, ink, bold=True, align=align,
-                      font=palette.font)]
+                      font=palette.font, autofit=False)]
 
     detail_h = _text_h(detail, detail_pt, inner_w, family=palette.font)
     total = label_h + detail_h + 0.03
@@ -476,16 +561,18 @@ def _node_text(prefix: str, box: PositionConfig, label: str, detail: str,
         total = max(total, min(box.height, row_h))
     top = box.top + max(NODE_PAD_IN * 0.6, (box.height - total) / 2)
     return [
+        # Sized by `_fitted`, once for the whole diagram, so autofit is off:
+        # left to it, each box was shrunk on its own and no two steps matched.
         _text(f"{prefix}-label", inner_l, top, inner_w, label_h, label,
-              label_pt, ink, bold=True, align=align, font=palette.font),
+              label_pt, ink, bold=True, align=align, font=palette.font,
+              autofit=False),
         _text(f"{prefix}-detail", inner_l, top + label_h + 0.03, inner_w,
-              detail_h, detail, detail_pt, ink, align=align, font=palette.font),
+              detail_h, detail, detail_pt, ink, align=align, font=palette.font,
+              autofit=False),
     ]
 
 
-def _box_height(nodes: list[dict], box_w: float, available: float,
-                label_pt: float, detail_pt: float,
-                family: Optional[str] = None) -> float:
+def _box_height(row_text_h: float, available: float) -> float:
     """How tall a row of nodes needs to be to hold its own text.
 
     Sized to the content rather than to the space, because a flow handed a
@@ -494,8 +581,23 @@ def _box_height(nodes: list[dict], box_w: float, available: float,
     diagram in a small region still fits it - and `_fitted` gives it more
     room, or smaller type, when that cap is what cut its text off.
     """
-    tallest = _row_text_h(nodes, box_w, label_pt, detail_pt, family)
-    return max(0.36, min(available, tallest + NODE_PAD_IN * 2.6))
+    return max(0.36, min(available, row_text_h + NODE_PAD_IN * 2.6))
+
+
+def _row(nodes: list[dict], box_w: float, available: float, label_pt: float,
+         detail_pt: float, family: Optional[str]) -> tuple[float, float]:
+    """A row's box height, and the text block its labels line up on.
+
+    The block is measured with the details only when the boxes are tall
+    enough to show them (`DETAIL_MIN_BOX_IN`); counted while hidden, they
+    lifted every label above the middle of a box with nothing under it.
+    """
+    full = _row_text_h(nodes, box_w, label_pt, detail_pt, family)
+    height = _box_height(full, available)
+    if height >= DETAIL_MIN_BOX_IN:
+        return height, full
+    bare = [{k: v for k, v in n.items() if k != "detail"} for n in nodes]
+    return height, _row_text_h(bare, box_w, label_pt, detail_pt, family)
 
 
 def _row_text_h(nodes: list[dict], box_w: float, label_pt: float,
@@ -522,9 +624,8 @@ def _draw_flow(nodes, rect, payload, palette, label_pt, detail_pt, prefix):
     count = len(nodes)
     arrow_w = min(0.34, rect.width * 0.06)
     box_w = max(0.4, (rect.width - arrow_w * (count - 1)) / count)
-    height = _box_height(nodes, box_w, rect.height, label_pt, detail_pt,
+    height, row_h = _row(nodes, box_w, rect.height, label_pt, detail_pt,
                          palette.font)
-    row_h = _row_text_h(nodes, box_w, label_pt, detail_pt, palette.font)
     top = rect.top + (rect.height - height) / 2
 
     out: list[Primitive] = []
@@ -558,9 +659,8 @@ def _draw_value_chain(nodes, rect, payload, palette, label_pt, detail_pt, prefix
     """
     count = len(nodes)
     box_w = rect.width / count
-    height = _box_height(nodes, box_w, rect.height, label_pt, detail_pt,
+    height, row_h = _row(nodes, box_w, rect.height, label_pt, detail_pt,
                          palette.font)
-    row_h = _row_text_h(nodes, box_w, label_pt, detail_pt, palette.font)
     top = rect.top + (rect.height - height) / 2
 
     out: list[Primitive] = []
@@ -731,9 +831,10 @@ def _draw_timeline(nodes, rect, payload, palette, label_pt, detail_pt, prefix):
         left = min(max(rect.left, centre - column / 2),
                    rect.left + rect.width - column)
 
-        date_h = _text_h(date or "-", detail_pt, column, family=palette.font)
-        label_h = _text_h(label, label_pt, column, bold=True,
-                          family=palette.font)
+        # Measured as drawn: the date bold, the label regular.
+        date_h = _text_h(date or "-", detail_pt, column, bold=True,
+                         family=palette.font)
+        label_h = _text_h(label, label_pt, column, family=palette.font)
         block = date_h + label_h + 0.02
         top = (axis_y - marker / 2 - 0.05 - block) if above else (
             axis_y + marker / 2 + 0.05)
@@ -847,8 +948,9 @@ def _draw_org_chart(nodes, rect, payload, palette, label_pt, detail_pt, prefix):
 
     row_h = (rect.height - GAP_IN * (len(levels) - 1)) / len(levels)
     widest = max(len(row) for row in levels)
-    box_h = min(row_h, _box_height(nodes, rect.width / widest, row_h,
-                                   label_pt, detail_pt, palette.font))
+    box_h = min(row_h, _box_height(
+        _row_text_h(nodes, rect.width / widest, label_pt, detail_pt, palette.font),
+        row_h))
     positions: dict[str, tuple[float, float]] = {}
     out: list[Primitive] = []
 

@@ -103,11 +103,9 @@ def _typed_diagram(item: MaterialItem) -> bool:
     """Whether this is one of the drawn diagram kinds, measured as laid out."""
     if item.kind != "diagram":
         return False
-    from app.renderer.diagrams import DIAGRAM_KINDS
+    from app.renderer.diagrams import DIAGRAM_KINDS, payload_of
 
-    payload = item.payload or {}
-    drawn = payload.get("diagram") if isinstance(payload.get("diagram"), dict) else payload
-    return str(drawn.get("kind") or "") in DIAGRAM_KINDS
+    return str(payload_of(item.payload or {}).get("kind") or "") in DIAGRAM_KINDS
 # How strongly a required slot pulls material into itself. The assignment
 # minimises total cost and has no concept of "this column must be used", so
 # without a bias the cheapest solution routinely leaves the headline slot
@@ -391,8 +389,10 @@ def exhibit_floor_in(item: MaterialItem, pack: Pack,
         from app.renderer import diagrams, text_fit
 
         faces = {text_fit.DEFAULT_MEASURE_FAMILY, pack.body_face or ""} - {""}
-        needed = max(diagrams.needed_height_in(item.payload or {}, width_in,
-                                               family=face)
+        body = pack.type_roles.get("body")
+        needed = max(diagrams.needed_height_in(
+                         item.payload or {}, width_in, family=face,
+                         label_pt=body.size_pt if body else diagrams.LEGIBLE_PT)
                      for face in faces)
         return max(MIN_EXHIBIT_IN["diagram"], needed)
     return MIN_EXHIBIT_IN.get(item.kind, 0.0)
