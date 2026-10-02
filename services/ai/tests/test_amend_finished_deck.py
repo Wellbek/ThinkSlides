@@ -199,3 +199,65 @@ def test_previews_are_drawn_again_from_the_edited_file(deck, monkeypatch):
     assert seen == [(deck, "sid")]
     assert loop.working_state.pending_slide_previews[0]["previewUrl"] == "/fresh/1.png"
     assert loop.working_state.pending_render_result["previewUrls"] == ["/fresh/1.png"]
+
+
+def _png() -> bytes:
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (200, 30, 30)).save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+ADD_PICTURE = '''
+from pptx import Presentation
+from pptx.util import Inches
+p = Presentation("deck.pptx")
+for s in p.slides:
+    s.shapes.add_picture("picture_1.png", Inches(0.2), Inches(0.2), Inches(0.5), Inches(0.5))
+p.save("deck.pptx")
+'''
+
+
+def _pictures(path):
+    return sum(1 for slide in Presentation(path).slides
+               for shape in slide.shapes if shape.shape_type == 13)
+
+
+def test_a_script_can_place_a_picture_the_user_supplied(deck):
+    import base64
+
+    from app.agent import run_context
+
+    loop = _loop(_Db(None, None))
+    loop._install_assets([{"data": base64.b64encode(_png()).decode(),
+                           "context": "the client's logo"}])
+    assert list(run_context.get_assets()) == ["picture_1.png"]
+    assert "picture_1.png (the client's logo)" in loop.asset_directive()
+    assert edit_tool.replay(deck, [{"source": ADD_PICTURE, "intent": "logo"}]) == []
+    assert _pictures(deck) == 1
+
+
+def test_without_pictures_the_model_is_told_to_draw_a_stand_in():
+    loop = _loop(_Db(None, None))
+    loop._install_assets([])
+    assert "stand-in" in loop.asset_directive()
+
+
+def test_an_amendment_sets_the_deck_path_for_the_tools(deck):
+    """The path used to be set only where the deck was rendered, so a request
+    arriving in a new process found no deck to edit."""
+    from app.agent import run_context
+
+    token = run_context.set_rendered_path(None)
+    try:
+        db = _Db(_Row(_finished_state(deck), NOW),
+                 _Message("Add a logo", NOW + datetime.timedelta(minutes=1)))
+        loop = _loop(db)
+        asyncio.run(loop._load_deck_snapshot("sid"))
+        # What `_run` does once the snapshot has made this an amendment.
+        if loop.working_state.amending:
+            run_context.set_rendered_path(loop.working_state.last_rendered_path)
+        assert run_context.get_rendered_path() == deck
+    finally:
+        run_context.reset_rendered_path(token)

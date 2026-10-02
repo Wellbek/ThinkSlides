@@ -39,6 +39,7 @@ exit code trusted.
 from __future__ import annotations
 
 import os
+import re
 import resource
 import shutil
 import subprocess
@@ -114,9 +115,19 @@ class Result:
         return "\n".join(part for part in parts if part)
 
 
+MAX_ASSETS = 8
+ASSET_BYTES = 10 * 1024 * 1024
+_ASSET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}\.(png|jpg|jpeg|gif)$")
+
+
 def run(source: str, *, deck: Optional[bytes] = None,
-        wants: tuple[str, ...] = ()) -> Result:
+        wants: tuple[str, ...] = (),
+        assets: Optional[dict[str, bytes]] = None) -> Result:
     """Run ``source`` on a copy of ``deck``, and return what it produced.
+
+    ``assets`` are pictures placed beside the script under the given names -
+    a plain name with an image extension, a few of them, size-capped. The
+    script reads them; nothing here lets it fetch one.
 
     ``wants`` names the files to read back out of the work dir. The deck is
     always read back when one was supplied, because editing it is the point.
@@ -135,6 +146,12 @@ def run(source: str, *, deck: Optional[bytes] = None,
         if deck is not None:
             with open(os.path.join(work_dir, DECK_NAME), "wb") as handle:
                 handle.write(deck)
+
+        for name, data in list((assets or {}).items())[:MAX_ASSETS]:
+            if not _ASSET_NAME.match(name) or len(data) > ASSET_BYTES:
+                continue
+            with open(os.path.join(work_dir, name), "wb") as handle:
+                handle.write(data)
 
         argv, networked = _argv(script_path, work_dir)
         try:

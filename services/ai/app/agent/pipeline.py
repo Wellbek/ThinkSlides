@@ -292,7 +292,7 @@ PIPELINE: tuple[Phase, ...] = (
             "the existing content (read the slide's shapes and the page size "
             "from the deck before choosing coordinates), keep it identical "
             "across the pages it applies to, and use the deck's own theme "
-            "colours and fonts."
+            "colours and fonts." + loop.asset_directive()
         ),
         max_turns=4,
     ),

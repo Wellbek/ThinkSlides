@@ -104,7 +104,10 @@ class EditDeckWithCodeTool:
                         "particular not os, sys, subprocess, socket or this "
                         "service's own modules. No eval, no exec, no "
                         "__import__. There is no network and no filesystem "
-                        "outside your own directory."
+                        "outside your own directory. Pictures the user supplied are "
+                        "listed in the instructions you were given and sit "
+                        "beside the deck under those names; open them with "
+                        "PIL or add them with python-pptx's add_picture."
                     ),
                 ),
                 ToolParameter(
@@ -180,7 +183,7 @@ class EditDeckWithCodeTool:
             )
 
         # Gate two: what the process can reach.
-        result = runner.run(source, deck=deck)
+        result = runner.run(source, deck=deck, assets=_assets())
         if not result.ok:
             logger.info("sandbox_code_failed")
             return ToolResult(
@@ -255,7 +258,7 @@ def replay(path: str, log: list[dict]) -> list[str]:
             continue
         with open(path, "rb") as handle:
             current = handle.read()
-        result = runner.run(source, deck=current)
+        result = runner.run(source, deck=current, assets=_assets())
         if not result.ok:
             problems.append(f"{entry.get('intent') or 'an edit'}: {result.failure}")
             continue
@@ -269,6 +272,13 @@ def replay(path: str, log: list[dict]) -> list[str]:
             handle.write(edited)
         os.replace(temporary, path)
     return problems
+
+
+def _assets() -> dict[str, bytes]:
+    """The pictures the user supplied, as the script finds them."""
+    from app.agent import run_context
+
+    return dict(run_context.get_assets())
 
 
 def _slide_cap_for(deck: bytes) -> int:

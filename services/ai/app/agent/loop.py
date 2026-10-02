@@ -2165,7 +2165,7 @@ class AgentLoop:
         # or lose grounding for facts it already looked up. A template's design
         # system (just loaded above) always wins, since it reflects the current
         # session rather than a potentially-stale resume snapshot.
-        if state_loaded:
+        if state_loaded or self.working_state.amending:
             if "design_system" not in context and self._resumed_design_system:
                 context["design_system"] = self._resumed_design_system
             if self._resumed_research:
@@ -2174,6 +2174,14 @@ class AgentLoop:
                 context["imageCatalog"] = self._resumed_image_catalog
 
         self.context = context
+
+        # An amendment edits the deck the last run rendered, so the tools must
+        # find it - the path is otherwise only set at render time, in the
+        # process that rendered it - and the pictures the user supplied.
+        if self.working_state.amending:
+            self._rendered_path_token = run_context.set_rendered_path(
+                self.working_state.last_rendered_path)
+        self._install_assets(context.get("imageCatalog") or [])
 
         # ── Phase 2: Build messages ──────────────────
         chat_messages = await self._build_chat_messages(session_id)
@@ -5749,6 +5757,46 @@ class AgentLoop:
         if len(issues) > limit:
             lines.append(f"  - ...and {len(issues) - limit} more")
         return "\n".join(lines)
+
+    def asset_directive(self) -> str:
+        """What the model is told about the pictures a script can open."""
+        notes = getattr(self, "asset_notes", {})
+        if not notes:
+            return (" The user has supplied no pictures, and a script has no "
+                    "network: if the request needs a picture you do not have, "
+                    "draw a plain stand-in from shapes and say in your reply "
+                    "that it is a stand-in they can replace with their own.")
+        listing = "; ".join(f"{name} ({note})" if note else name
+                            for name, note in notes.items())
+        return (" Pictures the user supplied sit beside the deck: " + listing + ".")
+
+    def _install_assets(self, catalog: list) -> None:
+        """Make the user's pictures readable to a script, under plain names.
+
+        The model is told the names and what each shows; the bytes never pass
+        through it.
+        """
+        import base64
+
+        assets: dict[str, bytes] = {}
+        self.asset_notes: dict[str, str] = {}
+        for entry in catalog:
+            try:
+                data = base64.b64decode(entry.get("data") or "", validate=False)
+            except Exception:  # noqa: BLE001
+                continue
+            if data[:8].startswith(b"\x89PNG"):
+                ext = "png"
+            elif data[:3] == b"\xff\xd8\xff":
+                ext = "jpg"
+            elif data[:4] == b"GIF8":
+                ext = "gif"
+            else:
+                continue
+            name = f"picture_{len(assets) + 1}.{ext}"
+            assets[name] = data
+            self.asset_notes[name] = str(entry.get("context") or "")[:160]
+        run_context.set_assets(assets)
 
     async def _refresh_previews(self, session_id: uuid.UUID) -> None:
         """Draw the staged previews again from the file as it now is.
