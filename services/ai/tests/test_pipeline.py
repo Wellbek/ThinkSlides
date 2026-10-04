@@ -17,7 +17,7 @@ import uuid
 import pytest
 
 from app.agent import pipeline
-from app.agent.loop import AgentLoop
+from app.agent.loop import AgentLoop, WorkingState
 from app.agent.registry import ToolResult
 
 INTAKE = json.dumps({
@@ -1055,6 +1055,43 @@ class TestEditDeckWithCodeDuringARevision:
         _ = [e async for e in loop.run(session_id)]
 
         assert loop.working_state.code_edits_applied == 1
+
+    @pytest.mark.asyncio
+    async def test_the_backstop_edit_is_validated_before_the_deck_is_handed_over(
+            self, monkeypatch):
+        """The `amend` backstop runs once validation has spent its budget, so
+        nothing walked back to `validate` after it: the edit shipped
+        unchecked and the closing note listed the findings it had just
+        fixed (probe-watermark, #376)."""
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 2,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the flow up under its copy",
+            "inputs": "none",
+        }))]
+        loop, session_id, seen = _loop(
+            script, state=self._flagged_slide_one(
+                validation_attempts=WorkingState().MAX_VALIDATION_ATTEMPTS,
+                slides_needing_revision=[],
+                revision_queue=[],
+                validation_issues=[{"slideIndex": 2, "type": "aesthetic",
+                                    "detail": "the diagram floats low"}]),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        assert "draft" not in loop._phase_visits
+        edited = seen.index("edit_deck_with_code")
+        assert "validate_rendered_output" in seen[edited:]
+        assert loop.working_state.code_amendment_done is True
+        assert loop.working_state.edited_since_validation is False
+        finalized = [e for e in events if e["type"] == "deck_finalized"]
+        assert finalized and finalized[0]["validationClean"] is True
 
     @pytest.mark.asyncio
     async def test_a_script_that_misses_gets_re_flagged_not_stuck(

@@ -607,6 +607,11 @@ class WorkingState:
         # detector in `_progress_marker` cannot tell a successful edit apart
         # from a turn that changed nothing.
         self.code_edits_applied: int = 0
+        # A script changed the file after the last validation looked at it.
+        # The `amend` backstop runs after validation has settled, so without
+        # this its edit shipped unchecked, and the closing note told the user
+        # about the findings it had just fixed as if they were still there.
+        self.edited_since_validation: bool = False
         # The scripts that edited this deck, in order. A render rebuilds the
         # file from the slides and would silently drop every one of them, so
         # each render replays this log over the fresh file (#376).
@@ -1214,6 +1219,7 @@ class WorkingState:
         self.has_called_validate = False
         self.validation_clean = False
         self.code_edit_log = []
+        self.edited_since_validation = False
         self.amending = False
         self.amend_request = ""
         self.amend_done = False
@@ -1745,6 +1751,7 @@ class AgentLoop:
             "validation_clean": self.working_state.validation_clean,
             "code_amendment_done": self.working_state.code_amendment_done,
             "code_edits_applied": self.working_state.code_edits_applied,
+            "edited_since_validation": self.working_state.edited_since_validation,
             "code_edit_log": self.working_state.code_edit_log,
             "amending": self.working_state.amending,
             "amend_request": self.working_state.amend_request,
@@ -1863,6 +1870,8 @@ class AgentLoop:
                 "code_amendment_done", False)
             self.working_state.code_edits_applied = state_dict.get(
                 "code_edits_applied", 0)
+            self.working_state.edited_since_validation = bool(state_dict.get(
+                "edited_since_validation", False))
             self.working_state.code_edit_log = list(state_dict.get("code_edit_log") or [])
             self.working_state.amending = bool(state_dict.get("amending", False))
             self.working_state.amend_request = state_dict.get("amend_request") or ""
@@ -4140,6 +4149,10 @@ class AgentLoop:
                     "validate_rendered_output checks the actual rendered .pptx file, which "
                     "does not exist yet. Call finalize_and_render_pptx first."
                 )
+            # A script changed the file since the last check: one more look,
+            # whatever the budget, so what is handed over has been seen.
+            if ws.edited_since_validation:
+                return None
             if ws.validation_attempts >= ws.MAX_VALIDATION_ATTEMPTS:
                 return (
                     f"Validation retry limit reached ({ws.MAX_VALIDATION_ATTEMPTS} attempts). "
@@ -4635,6 +4648,7 @@ class AgentLoop:
             # or blocked by the retry cap below, must not count as an
             # attempt or be mistaken for "validation done".
             self.working_state.has_called_validate = True
+            self.working_state.edited_since_validation = False
 
             if tool_result.success:
                 # Only a completed check spends the revision budget. A
@@ -4879,6 +4893,7 @@ class AgentLoop:
                     # progress even though it moves none of the other fields
                     # `_progress_marker` watches.
                     self.working_state.code_edits_applied += 1
+                    self.working_state.edited_since_validation = True
                     # The file changed without a render, in whichever phase,
                     # so every copy budget measured before it is stale; the
                     # next render measures afresh.

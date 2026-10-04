@@ -178,8 +178,15 @@ def _wants_code_amendment(loop: "AgentLoop") -> bool:
 
 
 def _validation_settled(loop: "AgentLoop") -> bool:
+    """Clean or out of budget, and nothing has changed the file since.
+
+    A script edit reopens it for one more look, even at the cap: the check
+    schedules no revision there, but it is what the closing message reports,
+    and the `amend` backstop's edit otherwise shipped unchecked.
+    """
     ws = loop.working_state
-    return ws.validation_clean or ws.at_validation_cap
+    return ((ws.validation_clean or ws.at_validation_cap)
+            and not ws.edited_since_validation)
 
 
 PIPELINE: tuple[Phase, ...] = (

@@ -425,6 +425,9 @@ A message sent after a deck is finished is a request to change that deck, not a 
 - Every script that edited the deck is kept in `code_edit_log`.
   A render rebuilds the file from the slides, which drops all such edits, so each render replays the log through the same three gates over the fresh file (`edit_deck_with_code.replay`).
   An edit that no longer applies is logged and skipped; the rest stand.
+- A script edit is looked at before the deck is handed over, whatever phase made it.
+  Any edit that changes the file reopens `validate` for one more check, past the revision budget if need be; at the cap that check schedules no revision, but it is what the closing message reports.
+  The `amend` backstop runs only once validation has spent its budget, so before this its edit shipped unchecked and the closing message listed the findings it had just fixed as still there (`probe-watermark`, 2026-10-04).
 
 ## 14. What drafting is told
 
@@ -521,6 +524,7 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #361 | found by review of this document; reproduced on the 17 languages in `benchmark/evidence/` and `technical-k8s-rollouts/20260924-203834-live` | Capacities were measured in Arial at regular weight as characters-per-line times lines, and an opener's heading was sized as a headline but drawn as display type: text of the advertised length needed up to 3.4 times its frame. Once the heading band was right, a one-line title hung from its top; and a prose cell that lost its row's figure kept the figure's height. | Capacities set as drawn and the rung a slot is set in (section 3); a survivor is cut to its copy and display titles rest on the bottom of their band (section 10). |
 | #363 | `technical-k8s-rollouts/20260924-203834-live`, replayed | A four-step flow in a half-width slot broke words mid-word, ran a detail out below its box, and was shrunk box by box by autofit. | Diagram floor measured at 10pt with zero tolerance (section 7); diagrams set whole, at one size, inside their nodes (section 7). |
 | #376 | `probe-watermark`, `probe-recolour-accent`, `probe-progress-bar` (2026-10-02) | A `replace` handed back byte-identical pages across rounds once a page had no arrangement left, and swapped two pages' arrangements when only two existed. | Composition reports the slides no other arrangement carries, and their findings go to a redraft (section 13). |
+| #376 | `probe-watermark/20261004-151346-claude-code` | The `amend` backstop's script moved a diagram the last validation had flagged, and the deck was handed over without being checked again, its closing message still naming the finding. | A script edit reopens validation for one more check (section 13). |
 | #376 | `probe-overlay-picture/20261002-182649-claude-code` | A message after a finished deck restarted the pipeline from intake, so no edit tool was ever offered. | A later message amends the finished deck (section 13). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |
