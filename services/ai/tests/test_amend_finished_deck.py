@@ -367,14 +367,24 @@ def test_what_the_deck_was_handed_over_with_is_not_reopened(deck):
         ws.new_since_handover(ws.validation_issues)) == []
 
 
-def test_what_the_change_brought_is_still_answered(deck):
+def test_what_the_change_brought_goes_back_to_the_change_not_the_ladder(deck):
+    """probe-hyperlink-terms (2026-10-04): a script made a link pure blue on
+    the dark cover, and the ladder re-placed the cover and then redrafted
+    its copy - neither of which can recolour a link."""
     loop = _handed_over_with_a_finding(deck)
     ws = loop.working_state
-    ws.amend_done = True
-    ws.validation_issues = [
-        {"slideIndex": 0, "type": "overlap", "detail": "the mark covers the title"}]
-    assert ws.new_since_handover(ws.validation_issues) == ws.validation_issues
-    assert pipeline.next_phase(loop).name == "validate"
+    blue = {"slideIndex": 0, "type": "overlap", "detail": "the link is blue on blue"}
+    assert ws.caused_by_change([blue]) == [blue]
+    assert ws.actionable([blue]) == []
+
+
+def test_a_slide_the_change_redrafted_goes_through_the_ladder(deck):
+    loop = _handed_over_with_a_finding(deck)
+    ws = loop.working_state
+    ws.amend_redrafted = {0}
+    crowded = {"slideIndex": 0, "type": "overflow", "detail": "too long"}
+    assert ws.caused_by_change([crowded]) == []
+    assert ws.actionable([crowded]) == [crowded]
 
 
 def test_the_baseline_survives_a_pause(deck):

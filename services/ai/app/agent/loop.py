@@ -627,6 +627,19 @@ class WorkingState:
         # slides they were on, and treating them as new sent every amendment
         # back through drafting (#376).
         self.handover_issues: list[dict] = []
+        # Whether this amendment's change step edited the deck, and which
+        # slides it sent back to drafting with revise_slides. A new finding
+        # on any other slide is the script's doing, and goes back to the
+        # change step to correct rather than to the layout ladder: re-placing
+        # a page cannot recolour a link a script made blue, and the cover it
+        # re-placed and then redrafted was one the user never asked to
+        # change (probe-hyperlink-terms, #376).
+        self.amend_edited: bool = False
+        self.amend_redrafted: set[int] = set()
+        # What validation found that the change caused, for the change step
+        # to correct; and how many times it has been sent back for that.
+        self.change_findings: list[dict] = []
+        self.change_fix_rounds: int = 0
         # The last script that failed, and why, so the next attempt renders as
         # a diff against it rather than as a second wall of code.
         self.last_code_attempt: dict | None = None
@@ -847,6 +860,25 @@ class WorkingState:
             return list(issues)
         return [i for i in issues
                 if (i.get("slideIndex"), i.get("type")) not in self.handover_findings]
+
+    # How many times the change step is sent back to correct what its own
+    # edit left on the deck. One: a second script that misses is unlikely to
+    # be followed by a third that does not.
+    CHANGE_FIX_ROUNDS = 1
+
+    def caused_by_change(self, issues: list[dict]) -> list[dict]:
+        """New findings on slides the change did not send back to drafting:
+        the change's script put them there."""
+        if not self.amending:
+            return []
+        return [i for i in self.new_since_handover(issues)
+                if i.get("slideIndex") not in self.amend_redrafted]
+
+    def actionable(self, issues: list[dict]) -> list[dict]:
+        """The findings the revision ladder answers: during an amendment,
+        only new ones on slides the change redrafted."""
+        caused = self.caused_by_change(issues)
+        return [i for i in self.new_since_handover(issues) if i not in caused]
 
     @property
     def handover_findings(self) -> set[tuple]:
@@ -1251,6 +1283,10 @@ class WorkingState:
         self.amend_request = ""
         self.amend_done = False
         self.handover_issues = []
+        self.amend_edited = False
+        self.amend_redrafted = set()
+        self.change_findings = []
+        self.change_fix_rounds = 0
         self.validation_issues = []
         self.slides_needing_revision = []
         self.revision_queue = []
@@ -1784,6 +1820,10 @@ class AgentLoop:
             "amending": self.working_state.amending,
             "amend_request": self.working_state.amend_request,
             "handover_issues": self.working_state.handover_issues,
+            "amend_edited": self.working_state.amend_edited,
+            "amend_redrafted": sorted(self.working_state.amend_redrafted),
+            "change_findings": self.working_state.change_findings,
+            "change_fix_rounds": self.working_state.change_fix_rounds,
             "amend_done": self.working_state.amend_done,
             "validation_issues": self.working_state.validation_issues,
             "slides_needing_revision": self.working_state.slides_needing_revision,
@@ -1907,6 +1947,13 @@ class AgentLoop:
             self.working_state.amend_done = bool(state_dict.get("amend_done", False))
             self.working_state.handover_issues = list(
                 state_dict.get("handover_issues") or [])
+            self.working_state.amend_edited = bool(state_dict.get("amend_edited", False))
+            self.working_state.amend_redrafted = {
+                int(i) for i in state_dict.get("amend_redrafted") or []}
+            self.working_state.change_findings = list(
+                state_dict.get("change_findings") or [])
+            self.working_state.change_fix_rounds = int(
+                state_dict.get("change_fix_rounds") or 0)
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
             if "revision_queue" in state_dict:
@@ -2059,6 +2106,10 @@ class AgentLoop:
         # changed one: it is judged afresh. What it found is kept as the
         # baseline the change is judged against.
         ws.handover_issues = [dict(issue) for issue in ws.validation_issues or []]
+        ws.amend_edited = False
+        ws.amend_redrafted = set()
+        ws.change_findings = []
+        ws.change_fix_rounds = 0
         ws.validation_clean = False
         ws.validation_issues = []
         ws.slides_needing_revision = []
@@ -2469,6 +2520,12 @@ class AgentLoop:
                             "content": (
                                 "I could not make that change to the finished "
                                 "deck, so it is as it was."
+                                if (self.working_state.amending and phase.name == "change"
+                                    and not self.working_state.amend_edited)
+                                else
+                                "I made the change, but could not correct what "
+                                "the check found after it, so I'm handing the "
+                                "deck over with that noted."
                                 if self.working_state.amending and phase.name == "change"
                                 else
                                 "The revision after validation is not "
@@ -3460,7 +3517,7 @@ class AgentLoop:
                     "latest request, and the change did not add to them; say that, so "
                     "the user does not read them as something the change broke."
                 )
-        if ws.amending and not ws.amend_done:
+        if ws.amending and not ws.amend_done and not ws.amend_edited:
             # The change step ran out of turns. Its directive is still the
             # last thing the prompt says, and without this the summary read
             # as though the change had been made (probe-progress-bar, #376).
@@ -4716,13 +4773,24 @@ class AgentLoop:
                 issues.extend(self.working_state.copy_findings())
                 self.working_state.validation_issues = issues
                 self.working_state.validation_clean = not issues
-                # Only what the deck did not already carry is acted on. The
-                # rest is still reported in the closing message.
-                issues = self.working_state.new_since_handover(issues)
                 at_cap = (
                     self.working_state.validation_attempts
                     >= self.working_state.MAX_VALIDATION_ATTEMPTS
                 )
+                # During an amendment, what the change's script left goes
+                # back to the change step, once; the ladder would re-place
+                # or redraft pages the user never asked to change.
+                state = self.working_state
+                caused = state.caused_by_change(issues)
+                if (caused and not at_cap
+                        and state.change_fix_rounds < state.CHANGE_FIX_ROUNDS):
+                    state.change_findings = caused
+                    state.change_fix_rounds += 1
+                    state.amend_done = False
+                # Only what the deck did not already carry, and the change
+                # did not cause, is acted on here. The rest is still
+                # reported in the closing message.
+                issues = self.working_state.actionable(issues)
                 # A layout verdict is answered by placing the page again, not
                 # by rewriting it. Redrafting a slide to move a frame down
                 # throws away copy nobody complained about and brings back
@@ -4752,7 +4820,9 @@ class AgentLoop:
                          if i.get("slideIndex") not in relayout])
                 )
                 self.working_state.validated_serial = self.working_state.design_serial
-                validation_done = not issues or at_cap
+                # A change sent back to correct its edit is not done either.
+                validation_done = ((not issues or at_cap)
+                                   and not (state.amending and not state.amend_done))
                 self.working_state.revision_queue = (
                     [] if validation_done
                     else self.working_state.revision_round(issues, exclude=relayout))
@@ -4939,6 +5009,7 @@ class AgentLoop:
                          "detail": data.get("instruction", "")} for i in indices]
                     ws.revision_queue = list(indices)
                     ws.slides_needing_revision = list(indices)
+                    ws.amend_redrafted |= set(indices)
                     ws.design_serial += 1
                     ws.amend_done = True
             if fn_name == "edit_deck_with_code":
@@ -4977,6 +5048,8 @@ class AgentLoop:
                     await self._refresh_previews(session_id)
                     if step == "change":
                         self.working_state.amend_done = True
+                        self.working_state.amend_edited = True
+                        self.working_state.change_findings = []
                     if step == "amend":
                         # One pass. A script that did not fix the deck is
                         # unlikely to be fixed by another script, and the run

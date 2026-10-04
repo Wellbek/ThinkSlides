@@ -1191,3 +1191,50 @@ class TestAnAmendmentAnswersOnlyForWhatItChanged:
         assert "draft" not in loop._phase_visits
         assert "amend" not in loop._phase_visits
         assert not [e for e in events if e["type"] == "error"]
+
+
+    @pytest.mark.asyncio
+    async def test_what_a_change_broke_is_corrected_by_the_change(
+            self, monkeypatch):
+        """probe-hyperlink-terms (2026-10-04): a script's blue link on a dark
+        cover was answered by re-placing the cover and redrafting its copy.
+        It goes back to the change step, once, for a second script."""
+        state = TestEditDeckWithCodeDuringARevision._flagged_slide_one(
+            amending=True, amend_request="Link every mention of object store",
+            amend_done=False, validation_attempts=0, validated_serial=-1,
+            validation_issues=[], slides_needing_revision=[], revision_queue=[],
+            handover_issues=[],
+        )
+        edit = ("edit_deck_with_code", {
+            "code": "from pptx import Presentation\n",
+            "intent": "link the term", "inputs": "none"})
+        loop, session_id, seen = _loop(
+            [_calls(edit), _calls(edit)], state=state,
+            messages=[{"role": "user", "content": "go"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+        checks = iter([
+            [{"slideIndex": 0, "type": "aesthetic", "fix": "nudge",
+              "detail": "the link is blue on the dark ground"}],
+            [],
+        ])
+
+        async def _execute(name, args):
+            seen.append(name)
+            if name == "validate_rendered_output":
+                return ToolResult(success=True, data={"issues": next(checks)})
+            return ToolResult(success=True, data=dict(TOOL_RESULTS.get(name) or {}))
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute)
+
+        events = [e async for e in loop.run(session_id)]
+
+        tools = [s for s in seen if s != "model"]
+        assert tools == ["edit_deck_with_code", "validate_rendered_output",
+                         "edit_deck_with_code", "validate_rendered_output"]
+        assert "draft" not in loop._phase_visits
+        finalized = [e for e in events if e["type"] == "deck_finalized"]
+        assert finalized and finalized[0]["validationClean"] is True

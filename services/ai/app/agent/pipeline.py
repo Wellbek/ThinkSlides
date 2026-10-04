@@ -181,17 +181,39 @@ def _wants_code_amendment(loop: "AgentLoop") -> bool:
 
 
 def _only_handover_findings(ws) -> bool:
-    """Whether every finding left is one the deck was handed over with."""
-    return bool(ws.validation_issues) and not ws.new_since_handover(
-        ws.validation_issues)
+    """Whether every finding left is one this run does not act on: one the
+    deck was handed over with, or one the change step has had its turn to
+    correct."""
+    return bool(ws.validation_issues) and not ws.actionable(ws.validation_issues)
+
+
+def _change_findings_directive(loop: "AgentLoop") -> str:
+    """What the change's own edit left on the deck, for it to correct."""
+    findings = loop.working_state.change_findings
+    if not findings:
+        return ""
+    lines = "\n".join(
+        f"  - {'Slide ' + str(f['slideIndex'] + 1) if isinstance(f.get('slideIndex'), int) else 'Deck'}: "
+        f"{f.get('detail') or f.get('type') or 'a problem'}" for f in findings)
+    return (
+        "\n\nThat change is on the deck, and checking it found this, which was "
+        f"not there before it:\n{lines}\nCorrect it with one more script. The "
+        "first stays and is replayed after any render, so correct what it did "
+        "rather than undoing the change. If it cannot be corrected, reply in "
+        "words saying so."
+    )
 
 
 def _change_declined(loop: "AgentLoop") -> None:
     """A change answered in words leaves the deck as it was handed over, and
     what validation said of it then still stands: checking it again spent a
     vision call per page on a deck nobody touched (probe-rotate-exhibit)."""
-    loop.working_state.amend_done = True
-    loop.working_state.restore_handover()
+    ws = loop.working_state
+    ws.amend_done = True
+    if not ws.amend_edited:
+        # Nothing was changed. Declined while correcting its own edit, the
+        # deck carries that edit, and what validation found after it stands.
+        ws.restore_handover()
 
 
 def _validation_settled(loop: "AgentLoop") -> bool:
@@ -328,6 +350,7 @@ PIPELINE: tuple[Phase, ...] = (
             "colours and fonts." + loop.asset_directive()
             + " If the request cannot be done to the deck, reply in words "
             "saying why, with no tool call, and the deck is left as it is."
+            + _change_findings_directive(loop)
         ),
         max_turns=4,
         on_decline=_change_declined,
