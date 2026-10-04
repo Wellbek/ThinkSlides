@@ -4397,6 +4397,11 @@ class AgentLoop:
             ):
                 if kind == "result" and tool_span is not None:
                     tool_span.set(success=bool(payload.success))
+                    if isinstance(payload.data, dict) and "changed" in payload.data:
+                        # A script that only read the deck left the file as
+                        # validation saw it; a check of what shipped needs
+                        # to tell the two apart.
+                        tool_span.set(changed=bool(payload.data["changed"]))
                     if isinstance(payload.data, dict) and payload.data.get("renderPath"):
                         tool_span.set(renderPath=payload.data["renderPath"],
                                       plainPages=payload.data.get("plainPages") or [])

@@ -53,6 +53,28 @@ class TestWhatTheRunSaysAboutItself:
         assert checks["validation_converged"]["passed"] is False
         assert "1 round(s), 2 issue(s) left" in checks["validation_converged"]["detail"]
 
+    def test_a_script_that_only_read_the_deck_changed_nothing(self, tmp_path):
+        """probe-rotate-exhibit (2026-10-04): a read-only script after the
+        last validation was counted as a change to what shipped."""
+        spans = [
+            _span("phase", "validate", started="2026-09-24T10:00:02",
+                  attrs={"clean": False, "issues": 2}),
+            _span("tool", "edit_deck_with_code", started="2026-09-24T10:00:03",
+                  attrs={"changed": False}),
+        ]
+        checks = _by_name(check_run(_run(tmp_path, spans=spans), TASK))
+        assert checks["shipped_what_was_validated"]["passed"] is True
+
+    def test_a_script_that_edited_the_deck_after_it_is_caught(self, tmp_path):
+        spans = [
+            _span("phase", "validate", started="2026-09-24T10:00:02",
+                  attrs={"clean": True, "issues": 0}),
+            _span("tool", "edit_deck_with_code", started="2026-09-24T10:00:03",
+                  attrs={"changed": True}),
+        ]
+        checks = _by_name(check_run(_run(tmp_path, spans=spans), TASK))
+        assert checks["shipped_what_was_validated"]["passed"] is False
+
     def test_failed_tool_calls_are_named_and_counted(self, tmp_path):
         spans = [_span("tool", "build_table", status="failed")] * 2 + [_span("tool", "build_chart")]
         detail = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["no_failed_tool_calls"]["detail"]

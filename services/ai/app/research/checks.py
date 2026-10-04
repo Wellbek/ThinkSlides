@@ -135,7 +135,9 @@ def _checks(run_dir: Path, task: Task, manifest: dict, spans: list[dict], pdf: P
             s["name"] for s in spans
             if s["startedAt"] > validated_at and s["status"] == "ok" and (
                 (s["kind"] == "phase" and s["name"] == "render")
-                or (s["kind"] == "tool" and s["name"] == "edit_deck_with_code"))
+                or (s["kind"] == "tool" and s["name"] == "edit_deck_with_code"
+                    # A script that only read the deck changed nothing.
+                    and (s.get("attrs") or {}).get("changed") is not False))
         ]
         checks.append(Check(
             "shipped_what_was_validated", not changed_after,
