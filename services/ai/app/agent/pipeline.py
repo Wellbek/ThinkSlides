@@ -186,6 +186,14 @@ def _only_handover_findings(ws) -> bool:
         ws.validation_issues)
 
 
+def _change_declined(loop: "AgentLoop") -> None:
+    """A change answered in words leaves the deck as it was handed over, and
+    what validation said of it then still stands: checking it again spent a
+    vision call per page on a deck nobody touched (probe-rotate-exhibit)."""
+    loop.working_state.amend_done = True
+    loop.working_state.restore_handover()
+
+
 def _validation_settled(loop: "AgentLoop") -> bool:
     """Clean or out of budget, and nothing has changed the file since.
 
@@ -322,7 +330,7 @@ PIPELINE: tuple[Phase, ...] = (
             "saying why, with no tool call, and the deck is left as it is."
         ),
         max_turns=4,
-        on_decline=lambda loop: setattr(loop.working_state, "amend_done", True),
+        on_decline=_change_declined,
     ),
     Phase(
         name="render",

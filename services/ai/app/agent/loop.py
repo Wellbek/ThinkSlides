@@ -621,12 +621,12 @@ class WorkingState:
         self.amending: bool = False
         self.amend_request: str = ""
         self.amend_done: bool = False
-        # What validation found on the deck when it was handed over, as
-        # (slide, type) pairs, kept when a later message amends it. The user
-        # took the deck with those findings; a request for a watermark is not
-        # a request to rewrite the slides they were on, and treating them as
-        # new sent every amendment back through drafting (#376).
-        self.handover_findings: set[tuple] = set()
+        # What validation found on the deck when it was handed over, kept
+        # when a later message amends it. The user took the deck with those
+        # findings; a request for a watermark is not a request to rewrite the
+        # slides they were on, and treating them as new sent every amendment
+        # back through drafting (#376).
+        self.handover_issues: list[dict] = []
         # The last script that failed, and why, so the next attempt renders as
         # a diff against it rather than as a second wall of code.
         self.last_code_attempt: dict | None = None
@@ -847,6 +847,19 @@ class WorkingState:
             return list(issues)
         return [i for i in issues
                 if (i.get("slideIndex"), i.get("type")) not in self.handover_findings]
+
+    @property
+    def handover_findings(self) -> set[tuple]:
+        """The handover's findings as (slide, type): what a later one is
+        matched on, since a vision verdict words the same defect differently
+        each time."""
+        return {(i.get("slideIndex"), i.get("type")) for i in self.handover_issues}
+
+    def restore_handover(self) -> None:
+        """The deck is as it was handed over: so is what validation said."""
+        self.validation_issues = [dict(i) for i in self.handover_issues]
+        self.validation_clean = not self.handover_issues
+        self.has_called_validate = True
 
     def arrangements_to_avoid(self) -> dict[int, frozenset[str]]:
         """What `compose` should not offer each slide again."""
@@ -1237,7 +1250,7 @@ class WorkingState:
         self.amending = False
         self.amend_request = ""
         self.amend_done = False
-        self.handover_findings = set()
+        self.handover_issues = []
         self.validation_issues = []
         self.slides_needing_revision = []
         self.revision_queue = []
@@ -1770,9 +1783,7 @@ class AgentLoop:
             "code_edit_log": self.working_state.code_edit_log,
             "amending": self.working_state.amending,
             "amend_request": self.working_state.amend_request,
-            "handover_findings": sorted(
-                [list(key) for key in self.working_state.handover_findings],
-                key=str),
+            "handover_issues": self.working_state.handover_issues,
             "amend_done": self.working_state.amend_done,
             "validation_issues": self.working_state.validation_issues,
             "slides_needing_revision": self.working_state.slides_needing_revision,
@@ -1894,8 +1905,8 @@ class AgentLoop:
             self.working_state.amending = bool(state_dict.get("amending", False))
             self.working_state.amend_request = state_dict.get("amend_request") or ""
             self.working_state.amend_done = bool(state_dict.get("amend_done", False))
-            self.working_state.handover_findings = {
-                tuple(key) for key in state_dict.get("handover_findings") or []}
+            self.working_state.handover_issues = list(
+                state_dict.get("handover_issues") or [])
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
             if "revision_queue" in state_dict:
@@ -2047,9 +2058,7 @@ class AgentLoop:
         # What the last run concluded about the deck does not apply to the
         # changed one: it is judged afresh. What it found is kept as the
         # baseline the change is judged against.
-        ws.handover_findings = {
-            (issue.get("slideIndex"), issue.get("type"))
-            for issue in ws.validation_issues or []}
+        ws.handover_issues = [dict(issue) for issue in ws.validation_issues or []]
         ws.validation_clean = False
         ws.validation_issues = []
         ws.slides_needing_revision = []
@@ -3434,9 +3443,10 @@ class AgentLoop:
             issue_count = len(ws.validation_issues)
             prompt += (
                 "\n\n## Closing note - unresolved validation issue\n"
-                f"After {ws.validation_attempts} attempt"
-                + ("" if ws.validation_attempts == 1 else "s")
-                + f", validation still found {issue_count} layout issue"
+                + (f"After {ws.validation_attempts} attempt"
+                   + ("" if ws.validation_attempts == 1 else "s") + ", validation"
+                   if ws.validation_attempts else "Validation")
+                + f" still found {issue_count} layout issue"
                 + ("" if issue_count == 1 else "s")
                 + " that could not be automatically fixed:\n"
                 + self._describe_validation_issues()
@@ -3450,6 +3460,20 @@ class AgentLoop:
                     "latest request, and the change did not add to them; say that, so "
                     "the user does not read them as something the change broke."
                 )
+        if ws.amending and not ws.amend_done:
+            # The change step ran out of turns. Its directive is still the
+            # last thing the prompt says, and without this the summary read
+            # as though the change had been made (probe-progress-bar, #376).
+            refused = (ws.last_code_attempt or {}).get("reason", "").strip()
+            prompt += (
+                "\n\n## Closing note - the change was not made\n"
+                f"The user's request ({ws.amend_request!r}) could not be made, and "
+                "the deck is exactly as it was. The step above has ended and there "
+                "is nothing left to call."
+                + (f" The last attempt was refused: {refused[:400]}" if refused else "")
+                + "\nSay plainly that the change was not made and why, without "
+                "describing it as done."
+            )
         async for kind, payload in self._ask_model(
             prompt, chat_messages, phase_label="complete"
         ):

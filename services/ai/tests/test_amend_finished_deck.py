@@ -383,3 +383,56 @@ def test_the_baseline_survives_a_pause(deck):
     other = _loop(None)
     assert other._apply_state_dict(saved, "sid")
     assert other.working_state.handover_findings == {(0, "aesthetic")}
+
+
+def _closing_prompt(loop, monkeypatch):
+    seen = {}
+
+    async def _ask(prompt, messages, phase_label=""):
+        seen["prompt"] = prompt
+        if False:
+            yield None
+
+    monkeypatch.setattr(loop, "_build_system_prompt", lambda *a, **k: "BASE")
+    monkeypatch.setattr(loop, "_ask_model", _ask)
+
+    async def drain():
+        return [e async for e in loop._closing_message({}, [])]
+
+    asyncio.run(drain())
+    return seen["prompt"]
+
+
+def test_a_change_that_was_not_made_is_said_to_be_not_made(deck, monkeypatch):
+    """probe-progress-bar (2026-10-04): every script was refused, the change
+    step ran out of turns, and the closing prompt still ended on 'make
+    exactly that change' with nothing saying it had not been made."""
+    loop = _handed_over_with_a_finding(deck)
+    loop.working_state.last_code_attempt = {
+        "source": "x", "reason": "This script draws a figure"}
+    prompt = _closing_prompt(loop, monkeypatch)
+    assert "the change was not made" in prompt
+    assert "Put a DRAFT watermark across every page" in prompt
+    assert "This script draws a figure" in prompt
+
+
+def test_a_change_that_was_made_has_no_such_note(deck, monkeypatch):
+    loop = _handed_over_with_a_finding(deck)
+    loop.working_state.amend_done = True
+    assert "the change was not made" not in _closing_prompt(loop, monkeypatch)
+
+
+def test_a_change_declined_in_words_is_not_checked_again(deck, monkeypatch):
+    """probe-rotate-exhibit (2026-10-04): the request named a chart the deck
+    does not have, the change was declined in words, and the untouched deck
+    was validated again - a vision call per page for nothing."""
+    loop = _handed_over_with_a_finding(deck)
+    pipeline.PHASES_BY_NAME["change"].on_decline(loop)
+    ws = loop.working_state
+    assert ws.amend_done
+    assert ws.validation_issues == [
+        {"slideIndex": 0, "type": "aesthetic", "detail": "the lower third is empty"}]
+    assert pipeline.next_phase(loop) is None
+    prompt = _closing_prompt(loop, monkeypatch)
+    assert "Validation still found 1 layout issue" in prompt
+    assert "already on the deck before" in prompt

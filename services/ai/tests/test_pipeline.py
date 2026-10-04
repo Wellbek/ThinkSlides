@@ -1166,7 +1166,8 @@ class TestAnAmendmentAnswersOnlyForWhatItChanged:
             amending=True, amend_request="Put a DRAFT watermark on every page",
             amend_done=True, validation_attempts=0, validated_serial=-1,
             validation_issues=[], slides_needing_revision=[], revision_queue=[],
-            handover_findings=[[1, "aesthetic"]],
+            handover_issues=[{"slideIndex": 1, "type": "aesthetic",
+                              "detail": "the lower third is empty"}],
         )
         loop, session_id, seen = _loop(
             [], state=state, messages=[{"role": "user", "content": "go"}],
