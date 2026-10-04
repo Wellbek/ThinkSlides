@@ -573,3 +573,58 @@ class TestARowClosesUpWhenItLosesAMember:
         doc = design_run.compose(self._text_only(), self._pack(),
                                  skip_unplaceable=True)
         assert check_doc(doc) == []
+
+
+class TestAPageThatCannotBeMoved:
+    """Probes (#376) saw `replace` hand back the page it was asked to move:
+    composition ignores an avoid set that would leave no arrangement, so the
+    verdict spent a revision on an identical page."""
+
+    def test_an_exhausted_page_is_not_offered_a_replace_again(self):
+        from tests.test_agent_loop_workflow import _loop
+
+        state = _loop().working_state
+        issues = [{"slideIndex": 2, "type": "aesthetic", "fix": "replace"}]
+        assert state.layout_revision_for(issues) == {2: "replace"}
+        state.layout_exhausted.add(2)
+        # Left out, so the finding goes on to the redraft rung.
+        assert state.layout_revision_for(issues) == {}
+        assert state.compute_slides_needing_revision(issues) == [2]
+
+    def test_exhaustion_survives_a_pause(self):
+        from tests.test_agent_loop_workflow import _loop
+
+        loop = _loop()
+        loop.working_state.layout_exhausted = {1, 3}
+        saved = loop._state_dict()
+        assert saved["layout_exhausted"] == [1, 3]
+        other = _loop()
+        assert other._apply_state_dict(saved, "sid")
+        assert other.working_state.layout_exhausted == {1, 3}
+
+
+class TestNoticingAPageThatDidNotMove:
+    def _state(self):
+        from tests.test_agent_loop_workflow import _loop
+
+        return _loop().working_state
+
+    def test_the_same_arrangement_after_a_replace_marks_the_page_exhausted(self):
+        state = self._state()
+        state.note_placement({1: ["evidence"], 2: ["evidence"]})
+        state.record_layout_revision(1, "evidence")
+        state.note_placement({1: ["evidence"], 2: ["evidence"]})
+        assert state.layout_exhausted == {1}
+
+    def test_a_page_that_moved_is_not_exhausted(self):
+        state = self._state()
+        state.note_placement({1: ["evidence"]})
+        state.record_layout_revision(1, "evidence")
+        state.note_placement({1: ["evidence-paired"]})
+        assert state.layout_exhausted == set()
+
+    def test_a_first_render_marks_nothing(self):
+        state = self._state()
+        state.note_placement({1: ["evidence"]})
+        state.note_placement({1: ["evidence"]})
+        assert state.layout_exhausted == set()
