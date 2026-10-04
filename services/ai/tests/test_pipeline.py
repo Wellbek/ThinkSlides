@@ -1238,3 +1238,38 @@ class TestAnAmendmentAnswersOnlyForWhatItChanged:
         assert "draft" not in loop._phase_visits
         finalized = [e for e in events if e["type"] == "deck_finalized"]
         assert finalized and finalized[0]["validationClean"] is True
+
+
+    @pytest.mark.asyncio
+    async def test_a_run_ending_on_a_declined_change_keeps_its_snapshot(
+            self, monkeypatch):
+        """Review of #376's fixes: a run that ended on a change declined in
+        words never reached the point where validation settles, so no
+        snapshot was written and the next message amended the deck as it was
+        before this run."""
+        state = TestEditDeckWithCodeDuringARevision._flagged_slide_one(
+            amending=True, amend_request="Flip the chart",
+            amend_done=False, validation_attempts=0, validated_serial=-1,
+            validation_issues=[], slides_needing_revision=[], revision_queue=[],
+            handover_issues=[{"slideIndex": 1, "type": "aesthetic",
+                              "detail": "the lower third is empty"}],
+        )
+        loop, session_id, seen = _loop(
+            [_text("There is no chart to flip.")], state=state,
+            messages=[{"role": "user", "content": "go"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+        saved = []
+
+        async def _save(sid):
+            saved.append(sid)
+
+        monkeypatch.setattr(loop, "_save_deck_snapshot", _save)
+
+        _ = [e async for e in loop.run(session_id)]
+
+        assert "validate_rendered_output" not in seen
+        assert saved == [session_id]

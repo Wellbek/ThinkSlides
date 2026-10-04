@@ -425,7 +425,7 @@ A message sent after a deck is finished is a request to change that deck, not a 
 - The `change` phase runs next, offers only `edit_deck_with_code`, and tells the model to make exactly the requested change and leave copy, layout and design alone.
   `validate` then judges the changed deck.
   A new finding on a slide the change sent back to drafting (`revise_slides`) walks the run back through the normal revision ladder.
-- A new finding on any other slide is the change's script's doing, and goes back to the `change` step, once (`CHANGE_FIX_ROUNDS`), with the finding in its directive, for one more script that corrects the first without undoing it.
+- After a script edited the deck, a new finding on any other slide is that script's doing, and goes back to the `change` step, once (`CHANGE_FIX_ROUNDS`), with the finding in its directive, for one more script that corrects the first without undoing it.
   It never goes to the ladder: re-placing a page cannot recolour a link a script made blue, and the ladder re-placed and then redrafted a cover the user never asked to change, while the re-render dropped an earlier repair on another page (`probe-hyperlink-terms`, 2026-10-04).
   If that script misses too, the finding is reported in the closing message and nothing else is tried.
 - A finding the deck was handed over with is not the change's to answer.
@@ -435,7 +435,7 @@ A message sent after a deck is finished is a request to change that deck, not a 
 - Every script that edited the deck is kept in `code_edit_log`.
   A render rebuilds the file from the slides, which drops all such edits, so each render replays the log through the same three gates over the fresh file (`edit_deck_with_code.replay`).
   An edit that no longer applies is logged and skipped; the rest stand.
-- A change declined in words leaves the deck as it was handed over, so the handover's findings are restored as its validation and it is not checked again.
+- A change declined in words, with no script run and no slide redrafted, leaves the deck as it was handed over, so the handover's findings are restored as its validation and it is not checked again.
   Checking it again spent a vision call per page on a deck nobody touched (`probe-rotate-exhibit`, 2026-10-04).
 - A change step that runs out of turns without an edit hands the deck back unchanged, and the closing message is told so, with the last refusal: the step's own directive was otherwise the last thing it read, and the summary could describe the change as made (`probe-progress-bar`, 2026-10-04).
 - A script that draws a figure must say where its numbers came from (`inputs`).

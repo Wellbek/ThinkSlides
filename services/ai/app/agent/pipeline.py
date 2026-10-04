@@ -210,9 +210,10 @@ def _change_declined(loop: "AgentLoop") -> None:
     vision call per page on a deck nobody touched (probe-rotate-exhibit)."""
     ws = loop.working_state
     ws.amend_done = True
-    if not ws.amend_edited:
-        # Nothing was changed. Declined while correcting its own edit, the
-        # deck carries that edit, and what validation found after it stands.
+    if not ws.amend_edited and not ws.amend_redrafted:
+        # Nothing was changed. Declined after a script edited the deck or
+        # revise_slides redrafted some of it, the deck carries that change,
+        # and what validation found after it stands.
         ws.restore_handover()
 
 

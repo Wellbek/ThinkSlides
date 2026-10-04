@@ -868,8 +868,10 @@ class WorkingState:
 
     def caused_by_change(self, issues: list[dict]) -> list[dict]:
         """New findings on slides the change did not send back to drafting:
-        the change's script put them there."""
-        if not self.amending:
+        the change's script put them there. None without a script - a change
+        made only with revise_slides re-rendered the deck, and what that
+        brought is the ladder's to answer."""
+        if not self.amending or not self.amend_edited:
             return []
         return [i for i in self.new_since_handover(issues)
                 if i.get("slideIndex") not in self.amend_redrafted]
@@ -2557,9 +2559,15 @@ class AgentLoop:
                     }, step=phase.name)
                     return
 
-        # Every phase is finished, so the deck is rendered and checked. The
-        # closing word is the model's - it is the only part of the ending that
-        # is not mechanical.
+        # Every phase is finished, so the deck is rendered and checked, and
+        # this is where the snapshot a later message amends is written - not
+        # where validation settles, which a run ending on a change declined
+        # in words never reaches; the next message then amended the deck as
+        # it was before this run.
+        await self._save_deck_snapshot(session_id)
+        await self._clear_working_state(session_id)
+        # The closing word is the model's - it is the only part of the ending
+        # that is not mechanical.
         for preview_event in self._flush_slide_previews():
             yield preview_event
         async for event in self._closing_message(context, chat_messages):
@@ -4842,8 +4850,9 @@ class AgentLoop:
                 # slides are genuinely final - publish their previews.
                 for preview_event in self._flush_slide_previews():
                     yield "event", preview_event
-                await self._save_deck_snapshot(session_id)
-                await self._clear_working_state(session_id)
+                # The snapshot is written, and the working state cleared,
+                # once the run ends (see `run`): the amend backstop may still
+                # edit the deck after this.
 
 
         # Record completed tool for context preservation

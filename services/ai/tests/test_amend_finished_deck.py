@@ -373,6 +373,7 @@ def test_what_the_change_brought_goes_back_to_the_change_not_the_ladder(deck):
     its copy - neither of which can recolour a link."""
     loop = _handed_over_with_a_finding(deck)
     ws = loop.working_state
+    ws.amend_edited = True
     blue = {"slideIndex": 0, "type": "overlap", "detail": "the link is blue on blue"}
     assert ws.caused_by_change([blue]) == [blue]
     assert ws.actionable([blue]) == []
@@ -446,3 +447,25 @@ def test_a_change_declined_in_words_is_not_checked_again(deck, monkeypatch):
     prompt = _closing_prompt(loop, monkeypatch)
     assert "Validation still found 1 layout issue" in prompt
     assert "already on the deck before" in prompt
+
+
+def test_without_a_script_nothing_is_blamed_on_one(deck):
+    """Review of #376's fixes: a change made only with revise_slides
+    re-renders the deck, and a new finding on another slide came back to the
+    change step as 'correct your script' when no script had run."""
+    loop = _handed_over_with_a_finding(deck)
+    ws = loop.working_state
+    ws.amend_redrafted = {0}
+    moved = {"slideIndex": 2, "type": "aesthetic", "detail": "placed differently"}
+    assert ws.caused_by_change([moved]) == []
+    assert ws.actionable([moved]) == [moved]
+
+
+def test_a_decline_after_a_redraft_keeps_what_validation_found(deck):
+    loop = _handed_over_with_a_finding(deck)
+    ws = loop.working_state
+    ws.amend_redrafted = {0}
+    found = [{"slideIndex": 0, "type": "overflow", "detail": "too long"}]
+    ws.validation_issues = list(found)
+    pipeline.PHASES_BY_NAME["change"].on_decline(loop)
+    assert ws.validation_issues == found
