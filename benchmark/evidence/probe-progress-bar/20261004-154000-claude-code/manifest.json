@@ -1,0 +1,12 @@
+{
+  "search": "tavily",
+  "task": "probe-progress-bar",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/progress-bar.yaml",
+  "commit": "cb66032",
+  "startedAt": "2026-10-04T15:40:00.204514",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null
+}

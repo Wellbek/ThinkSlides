@@ -1,0 +1,23 @@
+{
+  "search": "tavily",
+  "task": "probe-qr-last-page",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/qr-last-page.yaml",
+  "commit": "cb66032",
+  "startedAt": "2026-10-04T15:40:02.261449",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null,
+  "sessionId": "ea9a3e9c-60a8-4409-9fc3-f83e40301a7d",
+  "finishedAt": "2026-10-04T15:55:00.651198",
+  "parts": 5,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "stages": [
+    "stage-4.pptx",
+    "stage-5.pptx"
+  ],
+  "errors": []
+}

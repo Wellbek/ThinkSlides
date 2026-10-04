@@ -1,0 +1,23 @@
+{
+  "search": "tavily",
+  "task": "probe-progress-bar",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/progress-bar.yaml",
+  "commit": "38fa9f0",
+  "startedAt": "2026-10-04T16:01:19.287573",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null,
+  "sessionId": "6c861a26-095f-4e18-99ba-81fc1f83369c",
+  "finishedAt": "2026-10-04T16:03:43.118831",
+  "parts": 5,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "stages": [
+    "stage-4.pptx",
+    "stage-5.pptx"
+  ],
+  "errors": []
+}

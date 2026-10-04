@@ -1,0 +1,23 @@
+{
+  "search": "tavily",
+  "task": "probe-watermark",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/watermark-every-page.yaml",
+  "commit": "97ccd9a",
+  "startedAt": "2026-10-04T15:34:55.851308",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null,
+  "sessionId": "b6fbef6a-9986-468e-923d-f6b859f0fbcb",
+  "finishedAt": "2026-10-04T15:35:58.165322",
+  "parts": 5,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "stages": [
+    "stage-4.pptx",
+    "stage-5.pptx"
+  ],
+  "errors": []
+}

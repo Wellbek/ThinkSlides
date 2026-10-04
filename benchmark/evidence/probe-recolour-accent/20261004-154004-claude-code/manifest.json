@@ -1,0 +1,23 @@
+{
+  "search": "tavily",
+  "task": "probe-recolour-accent",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/recolour-accent.yaml",
+  "commit": "cb66032",
+  "startedAt": "2026-10-04T15:40:04.240933",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null,
+  "sessionId": "e9d11e37-f708-4235-8020-c1e9965c8d2e",
+  "finishedAt": "2026-10-04T15:55:00.694795",
+  "parts": 5,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "stages": [
+    "stage-4.pptx",
+    "stage-5.pptx"
+  ],
+  "errors": []
+}

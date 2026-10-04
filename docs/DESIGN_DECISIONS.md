@@ -75,6 +75,8 @@ It never states geometry.
 **Arrangements.**
 Each page kind becomes up to three archetypes: the kind as declared, a *stacked* variant (every slot full width) and a *paired* variant (the flowing slots, figures and prose, at half width, side by side).
 Identical variants are deduplicated.
+A derived variant whose bare frames fail the geometry check is dropped, and the kind as declared is kept: four slots stacked full width can run a caption off the bottom of the page, and the compile gate (section 4) used to refuse the whole language for it, naming a frame the model never wrote.
+Five of the nine languages authored in the #376 probe runs were refused that way.
 Offering several arrangements of one kind is what lets the selector respond to the material: a portrait chart and a letterbox chart can get different pages.
 
 **Rows.**
@@ -144,7 +146,7 @@ Each refusal names what to change, and that sentence is put into the retry promp
 5. **A deck of every page kind composes on the language's own pages.**
    A probe deck (cover, section, prose page, table page, chart page, closing) must compose and pass the geometry check without any page needing the plain fallback of section 9.
 
-Against the 17 distinct languages authored in the evidence runs, the gate refuses 5, all for check 4: their tallest figure slots are 1.0 to 1.7in tall, and the median table needs about 1.71in at 10pt.
+Against the 26 distinct languages authored in the evidence runs, the gate refuses 5, all for check 4: their tallest figure slots are 1.0 to 1.7in tall, and the median table needs about 1.71in at 10pt.
 Refusing them costs a retry, whose prompt states the height needed; accepting them would set every typical table in the deck below 10pt, which is the defect section 7 exists to prevent.
 `python -m app.research.gate_audit ../../benchmark/evidence` reproduces this, and `tests/test_gate_audit.py` pins it, so a change to the gate fails until this sentence is updated.
 
@@ -543,6 +545,7 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #376 | `probe-rotate-exhibit/20261004-154006-claude-code` | A request declined in words was followed by a full validation of the untouched deck. | A decline restores the handover's findings (section 13). |
 | #376 | `probe-watermark/20261004-152315-claude-code` | Asked for a watermark, the run redrafted a slide's copy, because the amended deck was validated afresh and the empty lower third it had been handed over with read as a new finding. | Findings the deck was handed over with are reported, not reopened (section 13). |
 | #376 | `probe-watermark/20261004-151346-claude-code` | The `amend` backstop's script moved a diagram the last validation had flagged, and the deck was handed over without being checked again, its closing message still naming the finding. | A script edit reopens validation for one more check (section 13). |
+| #376 | the nine languages authored in the `probe-*` evidence runs | Five were refused for a derived stacked page that ran a frame off the canvas, though each page as authored fitted; the refusal named a frame the model never wrote. | Unsound derived arrangements are dropped (section 3). |
 | #376 | `probe-overlay-picture/20261002-182649-claude-code` | A message after a finished deck restarted the pipeline from intake, so no edit tool was ever offered. | A later message amends the finished deck (section 13). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

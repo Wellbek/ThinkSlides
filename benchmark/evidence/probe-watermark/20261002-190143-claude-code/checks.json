@@ -1,0 +1,96 @@
+{
+  "task": "probe-watermark",
+  "run": "20261002-190143-claude-code",
+  "mode": "claude-code",
+  "model": null,
+  "commit": "3f9bba2",
+  "passed": 6,
+  "decided": 10,
+  "blockingFailures": [
+    "text_within_the_page"
+  ],
+  "checks": [
+    {
+      "name": "delivered",
+      "passed": true,
+      "detail": "deck: deck.pptx",
+      "blocking": true
+    },
+    {
+      "name": "terminated_cleanly",
+      "passed": false,
+      "detail": "termination: stalled_with_deck",
+      "blocking": false
+    },
+    {
+      "name": "slide_count",
+      "passed": true,
+      "detail": "3 pages, task asks for 3",
+      "blocking": true
+    },
+    {
+      "name": "text_within_the_page",
+      "passed": false,
+      "detail": "slide 1: Overlapping content: 'DRAFT' overlaps 'Why the build cache left'; slide 1: Overlapping content: 'DRAFT' overlaps 'the shared disk'; slide 1: Overlapping content: 'DRAFT' overlaps 'From a shared disk to an object store.'; slide 2: Overlapping content: 'DRAFT' overlaps 'that shared it'; slide 2: Overlapping content: 'DRAFT' overlaps 'Every runner read and wrote the same sha'",
+      "blocking": true
+    },
+    {
+      "name": "headlines_within_the_ramp",
+      "passed": true,
+      "detail": "every content headline at or below 48pt",
+      "blocking": false
+    },
+    {
+      "name": "body_legible",
+      "passed": true,
+      "detail": "all body copy at 14pt or larger",
+      "blocking": false
+    },
+    {
+      "name": "rendered_in_its_design",
+      "passed": true,
+      "detail": "last render: composed",
+      "blocking": false
+    },
+    {
+      "name": "validation_converged",
+      "passed": false,
+      "detail": "6 round(s), 13 issue(s) left",
+      "blocking": false
+    },
+    {
+      "name": "shipped_what_was_validated",
+      "passed": true,
+      "detail": "the delivered file is the one validation saw",
+      "blocking": false
+    },
+    {
+      "name": "no_failed_tool_calls",
+      "passed": false,
+      "detail": "edit_deck_with_code x1",
+      "blocking": false
+    }
+  ],
+  "metrics": {
+    "modelCalls": 53,
+    "inputTokens": 339770,
+    "cachedInputTokens": 0,
+    "outputTokens": 7723,
+    "tokensEstimated": true,
+    "costUsd": null,
+    "runSeconds": 505.7,
+    "draftsRejected": 0,
+    "validationRounds": 6,
+    "pages": 3,
+    "wordsPerPage": [
+      17,
+      41,
+      41
+    ],
+    "inkCoverage": [
+      0.581,
+      0.644,
+      0.638
+    ]
+  }
+}
