@@ -640,9 +640,10 @@ class WorkingState:
         # a third arrangement - `LAYOUT_REVISION_CAP` is two because the ladder
         # has three rungs and the first two are the cheap ones.
         self.layout_revisions: dict[int, int] = {}
-        # Pages a `replace` could not move: composition was told to avoid the
-        # arrangement the page had and handed it back anyway, because nothing
-        # else fits. Asking again only spends a revision on the same page.
+        # Slides a `replace` could not move, as the last render found them: no
+        # arrangement but the ones already tried carries the material, so
+        # composition would ignore the avoid set and hand the page back as it
+        # is. Asking anyway only spends a revision on the same page.
         self.layout_exhausted: set[int] = set()
         self.arrangements_tried: dict[int, set[str]] = {}
         # What the last render placed each slide on, from its result - what a
@@ -786,8 +787,8 @@ class WorkingState:
             if self.layout_revisions.get(index, 0) >= self.LAYOUT_REVISION_CAP:
                 continue
             if index in self.layout_exhausted:
-                # Placing it again gave the same page. The finding falls
-                # through to the next rung, a redraft of the slide.
+                # Placing it again would give the same page. The finding
+                # falls through to the next rung, a redraft of the slide.
                 continue
             # A nudge is answered as a replace. Nothing in composition reads a
             # finding, so re-rendering "the same page, moved" reproduced the
@@ -796,16 +797,6 @@ class WorkingState:
             # and the next validation round judge whether it is better.
             wanted[index] = "replace"
         return wanted
-
-    def note_placement(self, placed: dict[int, list[str]]) -> None:
-        """Take the arrangements a render placed, and notice a page that a
-        `replace` could not move: it came back on the arrangement it had."""
-        before = self.placed_arrangements
-        self.placed_arrangements = placed
-        for index, tried in self.arrangements_tried.items():
-            now = placed.get(index) or []
-            if tried and now and before.get(index) == now and now[0] in tried:
-                self.layout_exhausted.add(index)
 
     def record_layout_revision(self, index: int, archetype: str = "") -> None:
         """Count one revision of this page, and remember what it was placed on."""
@@ -4567,9 +4558,12 @@ class AgentLoop:
         if fn_name == "finalize_and_render_pptx" and tool_result.success:
             self.working_state.has_called_finalize = True
             self.working_state.last_rendered_path = tool_result.data.get("filePath")
-            self.working_state.note_placement({
+            self.working_state.placed_arrangements = {
                 int(index): list(archetypes) for index, archetypes in
-                (tool_result.data.get("placedArrangements") or {}).items()})
+                (tool_result.data.get("placedArrangements") or {}).items()}
+            self.working_state.layout_exhausted = {
+                int(index) for index in
+                tool_result.data.get("unmovableSlides") or []}
             self.working_state.copy_over_budget = {
                 int(index): [dict(field) for field in fields] for index, fields in
                 (tool_result.data.get("copyOverBudget") or {}).items()}
