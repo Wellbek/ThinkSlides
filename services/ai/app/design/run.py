@@ -40,7 +40,7 @@ from app.design.material import MaterialShape, shape_from
 from app.design.pack import ColorRoles, Pack
 from app.design.repair import repair
 from app.design.schema import DesignDoc, Frame, Page, PackRef, TextBlock
-from app.design.select import choose, readable_somewhere
+from app.design.select import choose, fit, readable_somewhere
 from app.design.vocabulary import ensure, remeasured
 from app.observability.logging import get_logger
 
@@ -532,6 +532,19 @@ def _place_plainly(shape: MaterialShape, pack: Pack, previous: Optional[str],
     return placed
 
 
+def _alternatives(shape: MaterialShape, pack: Pack, previous: Optional[str],
+                  ruled_out: frozenset[str]) -> tuple[str, ...]:
+    """The other arrangements that could carry this material legibly.
+
+    What a `replace` verdict would have to choose from. Without it the loop
+    learns that a page cannot move only by spending a render on it: probes
+    for #376 saw a second `replace` swap two pages between the only two
+    arrangements that held them, and a third hand back both unchanged.
+    """
+    return tuple(a.id for a in pack.archetypes if a.id not in ruled_out
+                 and fit(shape, a, pack, previous_archetype=previous) is not None)
+
+
 def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
             skip_unplaceable: bool = False,
             avoid: Optional[dict[int, frozenset[str]]] = None) -> DesignDoc:
@@ -598,6 +611,10 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
             page = build_page(f"p{len(pages) + 1}", part, selection, pack,
                               considered=tuple(a.id for a in pack.archetypes),
                               source_slide=index)
+            others = _alternatives(part, pack, previous,
+                                   frozenset(avoided) | {selection.archetype.id})
+            page = page.model_copy(update={"provenance": page.provenance.model_copy(
+                update={"alternatives": others})})
             previous = selection.archetype.id
             pages.append(page)
 

@@ -1,0 +1,23 @@
+{
+  "search": "tavily",
+  "task": "probe-hyperlink-terms",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/hyperlink-terms.yaml",
+  "commit": "38fa9f0",
+  "startedAt": "2026-10-04T16:01:17.230643",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null,
+  "sessionId": "2cc31203-9926-40a9-9b0e-06f8b01bd4b3",
+  "finishedAt": "2026-10-04T16:03:42.541647",
+  "parts": 5,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "stages": [
+    "stage-4.pptx",
+    "stage-5.pptx"
+  ],
+  "errors": []
+}

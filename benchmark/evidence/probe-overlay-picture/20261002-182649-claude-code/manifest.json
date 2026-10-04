@@ -1,0 +1,12 @@
+{
+  "search": "tavily",
+  "task": "probe-overlay-picture",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/overlay-picture-every-page.yaml",
+  "commit": "b18e83d-dirty",
+  "startedAt": "2026-10-02T18:26:49.925427",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null
+}

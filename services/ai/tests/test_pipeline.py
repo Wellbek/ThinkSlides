@@ -17,7 +17,7 @@ import uuid
 import pytest
 
 from app.agent import pipeline
-from app.agent.loop import AgentLoop
+from app.agent.loop import AgentLoop, WorkingState
 from app.agent.registry import ToolResult
 
 INTAKE = json.dumps({
@@ -1057,6 +1057,43 @@ class TestEditDeckWithCodeDuringARevision:
         assert loop.working_state.code_edits_applied == 1
 
     @pytest.mark.asyncio
+    async def test_the_backstop_edit_is_validated_before_the_deck_is_handed_over(
+            self, monkeypatch):
+        """The `amend` backstop runs once validation has spent its budget, so
+        nothing walked back to `validate` after it: the edit shipped
+        unchecked and the closing note listed the findings it had just
+        fixed (probe-watermark, #376)."""
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 2,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the flow up under its copy",
+            "inputs": "none",
+        }))]
+        loop, session_id, seen = _loop(
+            script, state=self._flagged_slide_one(
+                validation_attempts=WorkingState().MAX_VALIDATION_ATTEMPTS,
+                slides_needing_revision=[],
+                revision_queue=[],
+                validation_issues=[{"slideIndex": 2, "type": "aesthetic",
+                                    "detail": "the diagram floats low"}]),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        assert "draft" not in loop._phase_visits
+        edited = seen.index("edit_deck_with_code")
+        assert "validate_rendered_output" in seen[edited:]
+        assert loop.working_state.code_amendment_done is True
+        assert loop.working_state.edited_since_validation is False
+        finalized = [e for e in events if e["type"] == "deck_finalized"]
+        assert finalized and finalized[0]["validationClean"] is True
+
+    @pytest.mark.asyncio
     async def test_a_script_that_misses_gets_re_flagged_not_stuck(
             self, monkeypatch):
         """The edited file still fails validation - a real re-check, not a
@@ -1113,3 +1150,126 @@ class TestEditDeckWithCodeDuringARevision:
         assert seen.count("validate_rendered_output") >= 2
         assert "design_slide_content" in seen
         assert not [e for e in events if e["type"] == "error"]
+
+
+class TestAnAmendmentAnswersOnlyForWhatItChanged:
+    """probe-watermark (2026-10-04): asked for a watermark, the run redrafted
+    a slide's copy because validation found the empty lower third the deck
+    had been handed over with."""
+
+    @pytest.mark.asyncio
+    async def test_a_finding_the_deck_already_had_redrafts_nothing(
+            self, monkeypatch):
+        finding = {"slideIndex": 1, "type": "aesthetic", "fix": "redraft",
+                   "detail": "the lower third is empty"}
+        state = TestEditDeckWithCodeDuringARevision._flagged_slide_one(
+            amending=True, amend_request="Put a DRAFT watermark on every page",
+            amend_done=True, validation_attempts=0, validated_serial=-1,
+            validation_issues=[], slides_needing_revision=[], revision_queue=[],
+            handover_issues=[{"slideIndex": 1, "type": "aesthetic",
+                              "detail": "the lower third is empty"}],
+        )
+        loop, session_id, seen = _loop(
+            [], state=state, messages=[{"role": "user", "content": "go"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        async def _execute(name, args):
+            seen.append(name)
+            if name == "validate_rendered_output":
+                return ToolResult(success=True, data={"issues": [dict(finding)]})
+            return ToolResult(success=True, data=dict(TOOL_RESULTS.get(name) or {}))
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute)
+
+        events = [e async for e in loop.run(session_id)]
+
+        assert seen.count("validate_rendered_output") == 1
+        assert "draft" not in loop._phase_visits
+        assert "amend" not in loop._phase_visits
+        assert not [e for e in events if e["type"] == "error"]
+
+
+    @pytest.mark.asyncio
+    async def test_what_a_change_broke_is_corrected_by_the_change(
+            self, monkeypatch):
+        """probe-hyperlink-terms (2026-10-04): a script's blue link on a dark
+        cover was answered by re-placing the cover and redrafting its copy.
+        It goes back to the change step, once, for a second script."""
+        state = TestEditDeckWithCodeDuringARevision._flagged_slide_one(
+            amending=True, amend_request="Link every mention of object store",
+            amend_done=False, validation_attempts=0, validated_serial=-1,
+            validation_issues=[], slides_needing_revision=[], revision_queue=[],
+            handover_issues=[],
+        )
+        edit = ("edit_deck_with_code", {
+            "code": "from pptx import Presentation\n",
+            "intent": "link the term", "inputs": "none"})
+        loop, session_id, seen = _loop(
+            [_calls(edit), _calls(edit)], state=state,
+            messages=[{"role": "user", "content": "go"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+        checks = iter([
+            [{"slideIndex": 0, "type": "aesthetic", "fix": "nudge",
+              "detail": "the link is blue on the dark ground"}],
+            [],
+        ])
+
+        async def _execute(name, args):
+            seen.append(name)
+            if name == "validate_rendered_output":
+                return ToolResult(success=True, data={"issues": next(checks)})
+            return ToolResult(success=True, data=dict(TOOL_RESULTS.get(name) or {}))
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute)
+
+        events = [e async for e in loop.run(session_id)]
+
+        tools = [s for s in seen if s != "model"]
+        assert tools == ["edit_deck_with_code", "validate_rendered_output",
+                         "edit_deck_with_code", "validate_rendered_output"]
+        assert "draft" not in loop._phase_visits
+        finalized = [e for e in events if e["type"] == "deck_finalized"]
+        assert finalized and finalized[0]["validationClean"] is True
+
+
+    @pytest.mark.asyncio
+    async def test_a_run_ending_on_a_declined_change_keeps_its_snapshot(
+            self, monkeypatch):
+        """Review of #376's fixes: a run that ended on a change declined in
+        words never reached the point where validation settles, so no
+        snapshot was written and the next message amended the deck as it was
+        before this run."""
+        state = TestEditDeckWithCodeDuringARevision._flagged_slide_one(
+            amending=True, amend_request="Flip the chart",
+            amend_done=False, validation_attempts=0, validated_serial=-1,
+            validation_issues=[], slides_needing_revision=[], revision_queue=[],
+            handover_issues=[{"slideIndex": 1, "type": "aesthetic",
+                              "detail": "the lower third is empty"}],
+        )
+        loop, session_id, seen = _loop(
+            [_text("There is no chart to flip.")], state=state,
+            messages=[{"role": "user", "content": "go"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+        saved = []
+
+        async def _save(sid):
+            saved.append(sid)
+
+        monkeypatch.setattr(loop, "_save_deck_snapshot", _save)
+
+        _ = [e async for e in loop.run(session_id)]
+
+        assert "validate_rendered_output" not in seen
+        assert saved == [session_id]

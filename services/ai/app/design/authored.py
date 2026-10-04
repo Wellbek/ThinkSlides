@@ -919,7 +919,7 @@ def to_pack(language: Language, canvas: Canvas, *,
     archetypes: list[PageArchetype] = []
     for kind in language.pages:
         for suffix, variant in _arrangements(kind, pack.grid.columns):
-            archetypes.append(_archetype(
+            archetype = _archetype(
                 variant, language, canvas, pack.grid, roles, suffix=suffix,
                 # Frequency only ever breaks a tie (`select.choose`), so
                 # halving it for the arrangements the language did not write
@@ -927,8 +927,29 @@ def to_pack(language: Language, canvas: Canvas, *,
                 # the one it actually authored wins.
                 frequency=(kind.frequency if not suffix
                            else kind.frequency * 0.5),
-            ))
+            )
+            if suffix and _unsound(archetype, pack):
+                # An arrangement this derivation added, not one the language
+                # wrote, that does not fit the page: four slots stacked full
+                # width run a caption off the bottom. Dropped, rather than
+                # refusing the language for a page it never authored and
+                # naming a frame the model cannot see (#376 probes).
+                continue
+            archetypes.append(archetype)
     return pack.model_copy(update={"archetypes": tuple(archetypes)})
+
+
+def _unsound(archetype: PageArchetype, pack: Pack) -> bool:
+    """Whether this arrangement's bare frames fail the renderer's geometry
+    check - the same test the compile gate applies to every arrangement."""
+    from app.design.geometry import check_page
+    from app.design.schema import DesignDoc, PackRef, Page
+
+    shell = DesignDoc(pack=PackRef(id=pack.id, version=pack.version),
+                      canvas=pack.canvas, grid=pack.grid, pages=())
+    bare = Page(id="probe", archetype=archetype.id, role=archetype.role,
+                frames=archetype.frames)
+    return bool(check_page(shell, bare))
 
 
 def _slug(name: str) -> str:

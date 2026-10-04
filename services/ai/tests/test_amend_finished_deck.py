@@ -335,3 +335,137 @@ def test_the_change_and_amend_phases_can_be_declined_in_words():
         assert getattr(loop.working_state, flag) is False
         phase.on_decline(loop)
         assert getattr(loop.working_state, flag) is True
+
+
+def _handed_over_with_a_finding(deck):
+    state = _finished_state(deck)
+    state.update(validation_clean=False, validation_attempts=3, validation_issues=[
+        {"slideIndex": 0, "type": "aesthetic", "detail": "the lower third is empty"}])
+    db = _Db(_Row(state, NOW),
+             _Message("Put a DRAFT watermark across every page",
+                      NOW + datetime.timedelta(minutes=1)))
+    loop = _loop(db)
+    asyncio.run(loop._load_deck_snapshot("sid"))
+    return loop
+
+
+def test_what_the_deck_was_handed_over_with_is_not_reopened(deck):
+    """probe-watermark (2026-10-04): a watermark request redrafted slide 2's
+    copy over an empty lower third the deck already had when it was handed
+    over. The user asked for a mark, not new slides."""
+    loop = _handed_over_with_a_finding(deck)
+    ws = loop.working_state
+    assert ws.handover_findings == {(0, "aesthetic")}
+    ws.amend_done = True
+    ws.has_called_validate = True
+    ws.validation_issues = [
+        {"slideIndex": 0, "type": "aesthetic", "detail": "the lower third is empty"}]
+    assert ws.new_since_handover(ws.validation_issues) == []
+    # Settled: the walker does not go back to drafting, nor to the backstop.
+    assert pipeline.next_phase(loop) is None
+    assert ws.compute_slides_needing_revision(
+        ws.new_since_handover(ws.validation_issues)) == []
+
+
+def test_what_the_change_brought_goes_back_to_the_change_not_the_ladder(deck):
+    """probe-hyperlink-terms (2026-10-04): a script made a link pure blue on
+    the dark cover, and the ladder re-placed the cover and then redrafted
+    its copy - neither of which can recolour a link."""
+    loop = _handed_over_with_a_finding(deck)
+    ws = loop.working_state
+    ws.amend_edited = True
+    blue = {"slideIndex": 0, "type": "overlap", "detail": "the link is blue on blue"}
+    assert ws.caused_by_change([blue]) == [blue]
+    assert ws.actionable([blue]) == []
+
+
+def test_a_slide_the_change_redrafted_goes_through_the_ladder(deck):
+    loop = _handed_over_with_a_finding(deck)
+    ws = loop.working_state
+    ws.amend_redrafted = {0}
+    crowded = {"slideIndex": 0, "type": "overflow", "detail": "too long"}
+    assert ws.caused_by_change([crowded]) == []
+    assert ws.actionable([crowded]) == [crowded]
+
+
+def test_the_baseline_survives_a_pause(deck):
+    loop = _handed_over_with_a_finding(deck)
+    saved = loop._state_dict()
+    other = _loop(None)
+    assert other._apply_state_dict(saved, "sid")
+    assert other.working_state.handover_findings == {(0, "aesthetic")}
+
+
+def _closing_prompt(loop, monkeypatch):
+    seen = {}
+
+    async def _ask(prompt, messages, phase_label=""):
+        seen["prompt"] = prompt
+        if False:
+            yield None
+
+    monkeypatch.setattr(loop, "_build_system_prompt", lambda *a, **k: "BASE")
+    monkeypatch.setattr(loop, "_ask_model", _ask)
+
+    async def drain():
+        return [e async for e in loop._closing_message({}, [])]
+
+    asyncio.run(drain())
+    return seen["prompt"]
+
+
+def test_a_change_that_was_not_made_is_said_to_be_not_made(deck, monkeypatch):
+    """probe-progress-bar (2026-10-04): every script was refused, the change
+    step ran out of turns, and the closing prompt still ended on 'make
+    exactly that change' with nothing saying it had not been made."""
+    loop = _handed_over_with_a_finding(deck)
+    loop.working_state.last_code_attempt = {
+        "source": "x", "reason": "This script draws a figure"}
+    prompt = _closing_prompt(loop, monkeypatch)
+    assert "the change was not made" in prompt
+    assert "Put a DRAFT watermark across every page" in prompt
+    assert "This script draws a figure" in prompt
+
+
+def test_a_change_that_was_made_has_no_such_note(deck, monkeypatch):
+    loop = _handed_over_with_a_finding(deck)
+    loop.working_state.amend_done = True
+    assert "the change was not made" not in _closing_prompt(loop, monkeypatch)
+
+
+def test_a_change_declined_in_words_is_not_checked_again(deck, monkeypatch):
+    """probe-rotate-exhibit (2026-10-04): the request named a chart the deck
+    does not have, the change was declined in words, and the untouched deck
+    was validated again - a vision call per page for nothing."""
+    loop = _handed_over_with_a_finding(deck)
+    pipeline.PHASES_BY_NAME["change"].on_decline(loop)
+    ws = loop.working_state
+    assert ws.amend_done
+    assert ws.validation_issues == [
+        {"slideIndex": 0, "type": "aesthetic", "detail": "the lower third is empty"}]
+    assert pipeline.next_phase(loop) is None
+    prompt = _closing_prompt(loop, monkeypatch)
+    assert "Validation still found 1 layout issue" in prompt
+    assert "already on the deck before" in prompt
+
+
+def test_without_a_script_nothing_is_blamed_on_one(deck):
+    """Review of #376's fixes: a change made only with revise_slides
+    re-renders the deck, and a new finding on another slide came back to the
+    change step as 'correct your script' when no script had run."""
+    loop = _handed_over_with_a_finding(deck)
+    ws = loop.working_state
+    ws.amend_redrafted = {0}
+    moved = {"slideIndex": 2, "type": "aesthetic", "detail": "placed differently"}
+    assert ws.caused_by_change([moved]) == []
+    assert ws.actionable([moved]) == [moved]
+
+
+def test_a_decline_after_a_redraft_keeps_what_validation_found(deck):
+    loop = _handed_over_with_a_finding(deck)
+    ws = loop.working_state
+    ws.amend_redrafted = {0}
+    found = [{"slideIndex": 0, "type": "overflow", "detail": "too long"}]
+    ws.validation_issues = list(found)
+    pipeline.PHASES_BY_NAME["change"].on_decline(loop)
+    assert ws.validation_issues == found

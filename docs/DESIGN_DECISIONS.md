@@ -75,6 +75,8 @@ It never states geometry.
 **Arrangements.**
 Each page kind becomes up to three archetypes: the kind as declared, a *stacked* variant (every slot full width) and a *paired* variant (the flowing slots, figures and prose, at half width, side by side).
 Identical variants are deduplicated.
+A derived variant whose bare frames fail the geometry check is dropped, and the kind as declared is kept: four slots stacked full width can run a caption off the bottom of the page, and the compile gate (section 4) used to refuse the whole language for it, naming a frame the model never wrote.
+Five of the nine languages authored in the #376 probe runs were refused that way.
 Offering several arrangements of one kind is what lets the selector respond to the material: a portrait chart and a letterbox chart can get different pages.
 
 **Rows.**
@@ -144,7 +146,7 @@ Each refusal names what to change, and that sentence is put into the retry promp
 5. **A deck of every page kind composes on the language's own pages.**
    A probe deck (cover, section, prose page, table page, chart page, closing) must compose and pass the geometry check without any page needing the plain fallback of section 9.
 
-Against the 17 distinct languages authored in the evidence runs, the gate refuses 5, all for check 4: their tallest figure slots are 1.0 to 1.7in tall, and the median table needs about 1.71in at 10pt.
+Against the 26 distinct languages authored in the evidence runs, the gate refuses 5, all for check 4: their tallest figure slots are 1.0 to 1.7in tall, and the median table needs about 1.71in at 10pt.
 Refusing them costs a retry, whose prompt states the height needed; accepting them would set every typical table in the deck below 10pt, which is the defect section 7 exists to prevent.
 `python -m app.research.gate_audit ../../benchmark/evidence` reproduces this, and `tests/test_gate_audit.py` pins it, so a change to the gate fails until this sentence is updated.
 
@@ -391,6 +393,9 @@ Rules of the ladder:
 - A page draws at most **2 layout revisions** (`LAYOUT_REVISION_CAP`), per page rather than per run, so one stubborn page cannot spend the budget of every other flagged page.
 - Both layout verdicts are answered the same way, so one page drawing both is one revision.
 - An avoid set that would leave no archetype is ignored rather than obeyed: placing a page the way it was placed before beats refusing to place it.
+- Every composed page records its **alternatives**: the pack's other arrangements that could carry the same material legibly, leaving out the one it is on and the ones it was asked to avoid.
+  A slide none of whose pages has an alternative is reported as unmovable by the render, and the loop does not offer it a `replace`: its finding goes on to the redraft rung instead.
+  Before this, the loop learnt that a page could not move only by spending a render on it - probes for #376 saw a second `replace` swap two pages between the only two arrangements that held them, and a third hand both back unchanged.
 - The placements a `replace` rules out come from the render result, not from shared state.
   The loop runs each tool as its own task, in a copy of the context, so a value the renderer set in a context variable never reached the loop and every `replace` ruled out nothing (#344).
 - **Rebuilt exhibits replace their predecessors.**
@@ -418,10 +423,27 @@ A message sent after a deck is finished is a request to change that deck, not a 
 - The restored state keeps the brief, the design, the slides and the rendered file, so the intake, consultation, design, research, planning and drafting phases do not run again.
   What the last run concluded about the deck (clean, attempts, findings) is dropped, since the deck is about to change.
 - The `change` phase runs next, offers only `edit_deck_with_code`, and tells the model to make exactly the requested change and leave copy, layout and design alone.
-  `validate` then judges the changed deck, and any finding walks the run back through the normal revision ladder.
+  `validate` then judges the changed deck.
+  A new finding on a slide the change sent back to drafting (`revise_slides`) walks the run back through the normal revision ladder.
+- After a script edited the deck, a new finding on any other slide is that script's doing, and goes back to the `change` step, once (`CHANGE_FIX_ROUNDS`), with the finding in its directive, for one more script that corrects the first without undoing it.
+  It never goes to the ladder: re-placing a page cannot recolour a link a script made blue, and the ladder re-placed and then redrafted a cover the user never asked to change, while the re-render dropped an earlier repair on another page (`probe-hyperlink-terms`, 2026-10-04).
+  If that script misses too, the finding is reported in the closing message and nothing else is tried.
+- A finding the deck was handed over with is not the change's to answer.
+  When an amendment starts, the last validation's findings are kept as (slide, finding type) pairs; after the change, a finding matching one of them is reported in the closing message, marked as already there, and schedules no redraft, no re-placement and no backstop script.
+  A deck left with only such findings counts as settled.
+  The cost is that new damage of the same type on a slide that already had a finding is not told apart from the old one; the alternative, re-judging the whole deck, redrafted slide 2's copy in answer to a request for a watermark (`probe-watermark`, 2026-10-04).
 - Every script that edited the deck is kept in `code_edit_log`.
   A render rebuilds the file from the slides, which drops all such edits, so each render replays the log through the same three gates over the fresh file (`edit_deck_with_code.replay`).
   An edit that no longer applies is logged and skipped; the rest stand.
+- A change declined in words, with no script run and no slide redrafted, leaves the deck as it was handed over, so the handover's findings are restored as its validation and it is not checked again.
+  Checking it again spent a vision call per page on a deck nobody touched (`probe-rotate-exhibit`, 2026-10-04).
+- A change step that runs out of turns without an edit hands the deck back unchanged, and the closing message is told so, with the last refusal: the step's own directive was otherwise the last thing it read, and the summary could describe the change as made (`probe-progress-bar`, 2026-10-04).
+- A script that draws a figure must say where its numbers came from (`inputs`).
+  Whether it draws one is read off its syntax: a name from the deck's chart or table API anywhere, or a plotting verb (`plot`, `bar`, `barh`, `pie`, `scatter`, `hist`) called as a method or imported from a library.
+  A text match on `bar(` refused a progress bar drawn by the script's own helper `bar`, and then by `draw_bar` (`probe-progress-bar`, 2026-10-04); a script that does not parse is still matched on its text.
+- A script edit is looked at before the deck is handed over, whatever phase made it.
+  Any edit that changes the file reopens `validate` for one more check, past the revision budget if need be; at the cap that check schedules no revision, but it is what the closing message reports.
+  The `amend` backstop runs only once validation has spent its budget, so before this its edit shipped unchecked and the closing message listed the findings it had just fixed as still there (`probe-watermark`, 2026-10-04).
 
 ## 14. What drafting is told
 
@@ -517,6 +539,13 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #364 | `technical-k8s-rollouts/20260925-091641-replay` | Tables were pictures that could not be edited, and a short table in a tall frame was stretched to read as a condensed face. | Tables are native on both paths (section 11). |
 | #361 | found by review of this document; reproduced on the 17 languages in `benchmark/evidence/` and `technical-k8s-rollouts/20260924-203834-live` | Capacities were measured in Arial at regular weight as characters-per-line times lines, and an opener's heading was sized as a headline but drawn as display type: text of the advertised length needed up to 3.4 times its frame. Once the heading band was right, a one-line title hung from its top; and a prose cell that lost its row's figure kept the figure's height. | Capacities set as drawn and the rung a slot is set in (section 3); a survivor is cut to its copy and display titles rest on the bottom of their band (section 10). |
 | #363 | `technical-k8s-rollouts/20260924-203834-live`, replayed | A four-step flow in a half-width slot broke words mid-word, ran a detail out below its box, and was shrunk box by box by autofit. | Diagram floor measured at 10pt with zero tolerance (section 7); diagrams set whole, at one size, inside their nodes (section 7). |
+| #376 | `probe-watermark`, `probe-recolour-accent`, `probe-progress-bar` (2026-10-02) | A `replace` handed back byte-identical pages across rounds once a page had no arrangement left, and swapped two pages' arrangements when only two existed. | Composition reports the slides no other arrangement carries, and their findings go to a redraft (section 13). |
+| #376 | `probe-hyperlink-terms/20261004-153956-claude-code` | A script made the linked words pure blue on the dark cover; the ladder re-placed the cover, re-rendered (dropping an earlier repair to slide 3) and then redrafted the cover's copy. | A finding the change's script caused goes back to the change step (section 13). |
+| #376 | `probe-progress-bar/20261004-154000-claude-code` | A progress bar was refused twice as an ungrounded chart, because the script's helper was called `bar` and then `draw_bar`; the change step ran out of turns and the closing prompt still asked for the change. | Figures read off the script's syntax; an unmade change is said to be unmade (section 13). |
+| #376 | `probe-rotate-exhibit/20261004-154006-claude-code` | A request declined in words was followed by a full validation of the untouched deck. | A decline restores the handover's findings (section 13). |
+| #376 | `probe-watermark/20261004-152315-claude-code` | Asked for a watermark, the run redrafted a slide's copy, because the amended deck was validated afresh and the empty lower third it had been handed over with read as a new finding. | Findings the deck was handed over with are reported, not reopened (section 13). |
+| #376 | `probe-watermark/20261004-151346-claude-code` | The `amend` backstop's script moved a diagram the last validation had flagged, and the deck was handed over without being checked again, its closing message still naming the finding. | A script edit reopens validation for one more check (section 13). |
+| #376 | the nine languages authored in the `probe-*` evidence runs | Five were refused for a derived stacked page that ran a frame off the canvas, though each page as authored fitted; the refusal named a frame the model never wrote. | Unsound derived arrangements are dropped (section 3). |
 | #376 | `probe-overlay-picture/20261002-182649-claude-code` | A message after a finished deck restarted the pipeline from intake, so no edit tool was ever offered. | A later message amends the finished deck (section 13). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

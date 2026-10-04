@@ -573,3 +573,81 @@ class TestARowClosesUpWhenItLosesAMember:
         doc = design_run.compose(self._text_only(), self._pack(),
                                  skip_unplaceable=True)
         assert check_doc(doc) == []
+
+
+class TestAPageThatCannotBeMoved:
+    """Probes (#376) saw `replace` hand back the page it was asked to move:
+    composition ignores an avoid set that would leave no arrangement, so the
+    verdict spent a revision on an identical page."""
+
+    def test_an_exhausted_page_is_not_offered_a_replace_again(self):
+        from tests.test_agent_loop_workflow import _loop
+
+        state = _loop().working_state
+        issues = [{"slideIndex": 2, "type": "aesthetic", "fix": "replace"}]
+        assert state.layout_revision_for(issues) == {2: "replace"}
+        state.layout_exhausted.add(2)
+        # Left out, so the finding goes on to the redraft rung.
+        assert state.layout_revision_for(issues) == {}
+        assert state.compute_slides_needing_revision(issues) == [2]
+
+    def test_exhaustion_survives_a_pause(self):
+        from tests.test_agent_loop_workflow import _loop
+
+        loop = _loop()
+        loop.working_state.layout_exhausted = {1, 3}
+        saved = loop._state_dict()
+        assert saved["layout_exhausted"] == [1, 3]
+        other = _loop()
+        assert other._apply_state_dict(saved, "sid")
+        assert other.working_state.layout_exhausted == {1, 3}
+
+
+class TestARenderSaysWhichPagesCannotMove:
+    """Probes (#376) saw a second `replace` swap two pages between the only
+    two arrangements that held them, and a third hand both back unchanged.
+    Composition knows what else could carry a page, so the loop need not
+    spend a render to find out."""
+
+    def test_a_page_names_the_other_arrangements_that_could_carry_it(
+            self, pack):
+        doc = design_run.compose(language_specimen_slides(), pack)
+        page = doc.pages[1]
+        assert page.provenance.alternatives
+        assert page.archetype not in page.provenance.alternatives
+        again = design_run.compose(
+            language_specimen_slides(), pack,
+            avoid={1: frozenset({page.provenance.alternatives[0]})})
+        assert (page.provenance.alternatives[0]
+                not in again.pages[1].provenance.alternatives)
+
+    def test_a_page_with_every_other_arrangement_tried_has_none_left(
+            self, pack):
+        first = design_run.compose(language_specimen_slides(), pack)
+        others = frozenset(a.id for a in pack.archetypes) - {
+            first.pages[1].archetype}
+        again = design_run.compose(language_specimen_slides(), pack,
+                                   avoid={1: others})
+        assert again.pages[1].archetype == first.pages[1].archetype
+        assert again.pages[1].provenance.alternatives == ()
+
+    def test_the_render_reports_the_slides_it_cannot_move(self, pack, tmp_path):
+        from app.agent import run_context
+        from app.agent.tools.finalize_and_render_pptx import (
+            FinalizeAndRenderPptxTool,
+        )
+
+        avoid = {1: frozenset(a.id for a in pack.archetypes)}
+        token = run_context.set_arrangements_to_avoid(avoid)
+        try:
+            _, _, _, unmovable = FinalizeAndRenderPptxTool._render_composed(
+                language_specimen_slides(), pack, {"title": "Deck"},
+                str(tmp_path / "deck.pptx"), {})
+        finally:
+            run_context.reset_arrangements_to_avoid(token)
+        doc = design_run.compose(language_specimen_slides(), pack, avoid=avoid)
+        movable = {p.provenance.source_slide for p in doc.pages
+                   if p.provenance.alternatives}
+        assert 1 in unmovable
+        assert unmovable == sorted(
+            {p.provenance.source_slide for p in doc.pages} - movable)

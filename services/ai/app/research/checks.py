@@ -65,9 +65,17 @@ def _checks(run_dir: Path, task: Task, manifest: dict, spans: list[dict], pdf: P
     if pdf is None:
         checks.append(Check("text_within_the_page", None, "no rendered PDF"))
     else:
-        from app.agent.tools.validate_rendered_output import ValidateRenderedOutputTool
+        from app.agent.tools.validate_rendered_output import (
+            ValidateRenderedOutputTool,
+            background_texts,
+        )
 
-        issues = ValidateRenderedOutputTool._check_geometry(str(pdf))
+        # The same exemption the run's own validation makes: a shape a script
+        # set behind the copy on purpose - a watermark - overlaps it on
+        # purpose. Counting it failed every watermarked deck (#376).
+        deck = run_dir / str(manifest.get("deck") or "")
+        behind = background_texts(str(deck)) if manifest.get("deck") else frozenset()
+        issues = ValidateRenderedOutputTool._check_geometry(str(pdf), ignore_text=behind)
         checks.append(Check(
             "text_within_the_page", not issues,
             "; ".join(f"slide {i.get('slideIndex', 0) + 1}: {i.get('detail')}" for i in issues[:5])
@@ -127,7 +135,9 @@ def _checks(run_dir: Path, task: Task, manifest: dict, spans: list[dict], pdf: P
             s["name"] for s in spans
             if s["startedAt"] > validated_at and s["status"] == "ok" and (
                 (s["kind"] == "phase" and s["name"] == "render")
-                or (s["kind"] == "tool" and s["name"] == "edit_deck_with_code"))
+                or (s["kind"] == "tool" and s["name"] == "edit_deck_with_code"
+                    # A script that only read the deck changed nothing.
+                    and (s.get("attrs") or {}).get("changed") is not False))
         ]
         checks.append(Check(
             "shipped_what_was_validated", not changed_after,

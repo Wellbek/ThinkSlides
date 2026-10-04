@@ -207,3 +207,23 @@ class TestAFigureDeclaresWhereItsNumbersCameFrom:
 
         assert grounding.problem(f"x = 1\n{marker}\n", "") is not None
         assert grounding.problem(f"x = 1\n{marker}\n", "the 10-K") is None
+
+    @pytest.mark.parametrize("source", [
+        "import matplotlib.pyplot as plt\nplt.bar([1], [2])\n",
+        "from matplotlib.pyplot import bar\nbar([1], [2])\n",
+        "slide.shapes.add_chart(1, 0, 0, 1, 1, data)\n",
+        "data = CategoryChartData()\n",
+    ])
+    def test_a_figure_is_read_off_the_script_not_its_text(self, source):
+        from app.agent.sandbox import grounding
+
+        assert grounding.problem(source, "") is not None
+
+    def test_a_helper_named_like_a_plot_is_not_a_figure(self):
+        """probe-progress-bar (#376): a progress bar drawn by a helper called
+        `bar` was refused as an ungrounded chart."""
+        from app.agent.sandbox import grounding
+
+        source = ("def bar(slide, width):\n    return width\n"
+                  "bar(None, 10)\nplot = 3\n")
+        assert grounding.problem(source, "none") is None

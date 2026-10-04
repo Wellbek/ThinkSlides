@@ -1,0 +1,12 @@
+{
+  "search": "tavily",
+  "task": "probe-watermark",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/watermark-every-page.yaml",
+  "commit": "9da8518",
+  "startedAt": "2026-10-04T15:13:46.264925",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null
+}

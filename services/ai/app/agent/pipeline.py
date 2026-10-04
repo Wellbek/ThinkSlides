@@ -174,12 +174,62 @@ def _wants_code_amendment(loop: "AgentLoop") -> bool:
         # budget should use the typed tools, which is what those passes are.
         and ws.at_validation_cap
         and not ws.validation_clean
+        # During an amendment, not for findings the deck was handed over
+        # with: the change is not the user asking for those to be fixed.
+        and not _only_handover_findings(ws)
     )
 
 
-def _validation_settled(loop: "AgentLoop") -> bool:
+def _only_handover_findings(ws) -> bool:
+    """Whether every finding left is one this run does not act on: one the
+    deck was handed over with, or one the change step has had its turn to
+    correct."""
+    return bool(ws.validation_issues) and not ws.actionable(ws.validation_issues)
+
+
+def _change_findings_directive(loop: "AgentLoop") -> str:
+    """What the change's own edit left on the deck, for it to correct."""
+    findings = loop.working_state.change_findings
+    if not findings:
+        return ""
+    lines = "\n".join(
+        f"  - {'Slide ' + str(f['slideIndex'] + 1) if isinstance(f.get('slideIndex'), int) else 'Deck'}: "
+        f"{f.get('detail') or f.get('type') or 'a problem'}" for f in findings)
+    return (
+        "\n\nThat change is on the deck, and checking it found this, which was "
+        f"not there before it:\n{lines}\nCorrect it with one more script. The "
+        "first stays and is replayed after any render, so correct what it did "
+        "rather than undoing the change. If it cannot be corrected, reply in "
+        "words saying so."
+    )
+
+
+def _change_declined(loop: "AgentLoop") -> None:
+    """A change answered in words leaves the deck as it was handed over, and
+    what validation said of it then still stands: checking it again spent a
+    vision call per page on a deck nobody touched (probe-rotate-exhibit)."""
     ws = loop.working_state
-    return ws.validation_clean or ws.at_validation_cap
+    ws.amend_done = True
+    if not ws.amend_edited and not ws.amend_redrafted:
+        # Nothing was changed. Declined after a script edited the deck or
+        # revise_slides redrafted some of it, the deck carries that change,
+        # and what validation found after it stands.
+        ws.restore_handover()
+
+
+def _validation_settled(loop: "AgentLoop") -> bool:
+    """Clean or out of budget, and nothing has changed the file since.
+
+    A script edit reopens it for one more look, even at the cap: the check
+    schedules no revision there, but it is what the closing message reports,
+    and the `amend` backstop's edit otherwise shipped unchecked.
+    """
+    ws = loop.working_state
+    # During an amendment a deck that carries only what it was handed over
+    # with is as settled as it is going to be: the change broke nothing.
+    return ((ws.validation_clean or ws.at_validation_cap
+             or _only_handover_findings(ws))
+            and not ws.edited_since_validation)
 
 
 PIPELINE: tuple[Phase, ...] = (
@@ -301,9 +351,10 @@ PIPELINE: tuple[Phase, ...] = (
             "colours and fonts." + loop.asset_directive()
             + " If the request cannot be done to the deck, reply in words "
             "saying why, with no tool call, and the deck is left as it is."
+            + _change_findings_directive(loop)
         ),
         max_turns=4,
-        on_decline=lambda loop: setattr(loop.working_state, "amend_done", True),
+        on_decline=_change_declined,
     ),
     Phase(
         name="render",

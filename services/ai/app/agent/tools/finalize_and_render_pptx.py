@@ -185,6 +185,7 @@ class FinalizeAndRenderPptxTool:
             # Copy still too long for its frames after repair, per slide, with
             # how much fits - the writer's budget (#348).
             over_budget: dict[int, dict] = {}
+            unmovable: list[int] = []
             # Which renderer the deck actually went through, so a run can be
             # checked for it rather than only logged: "composed" in its design
             # language, "template" on an uploaded template, "fallback" when
@@ -195,7 +196,7 @@ class FinalizeAndRenderPptxTool:
                 try:
                     if pack is not None:
                         try:
-                            result_path, placed, over_budget = cls._render_composed(
+                            result_path, placed, over_budget, unmovable = cls._render_composed(
                                 slides, pack, metadata, output_path,
                                 design_system,
                             )
@@ -321,6 +322,9 @@ class FinalizeAndRenderPptxTool:
                     "placedArrangements": placed,
                     "renderPath": render_path,
                     "copyOverBudget": over_budget,
+                    # Slides a `replace` verdict could only hand back as they
+                    # are: no other arrangement carries them (#376).
+                    "unmovableSlides": unmovable,
                     # Slides set on the pack's plain page because none of its
                     # own arrangements could carry them (#322).
                     "plainPages": sorted(
@@ -442,11 +446,12 @@ class FinalizeAndRenderPptxTool:
     @classmethod
     def _render_composed(cls, slides: list, pack, metadata: dict,
                          output_path: str, design_system: dict
-                         ) -> tuple[str, dict[int, list[str]], dict[int, dict]]:
+                         ) -> tuple[str, dict[int, list[str]], dict[int, dict], list[int]]:
         """Lay the deck out in its pack and render it.
 
-        Returns the written path and, per source slide, the archetypes its
-        pages were placed on.
+        Returns the written path; per source slide, the archetypes its pages
+        were placed on and the copy over its budget; and the slides no other
+        arrangement could carry, which a `replace` verdict cannot move.
 
         Composition, repair and validation all run here, in code. The
         validator this replaces was a tool the model could decline to call,
@@ -473,12 +478,16 @@ class FinalizeAndRenderPptxTool:
         # What each slide actually landed on, so a layout verdict can say
         # "not that one again" without the loop having to re-derive it.
         placed: dict[int, list[str]] = {}
+        movable: set[int] = set()
         for page in doc.pages:
             source = page.provenance.source_slide
             if source is not None:
                 placed.setdefault(source, []).append(page.archetype)
+                if page.provenance.alternatives:
+                    movable.add(source)
         return (render_doc(doc, pack, output_path, design_system=design_system),
-                placed, copy_over_budget(doc, pack))
+                placed, copy_over_budget(doc, pack),
+                sorted(set(placed) - movable))
 
     @classmethod
     def _generate_markdown_fallback(cls, slides: list[dict], metadata: dict) -> str:

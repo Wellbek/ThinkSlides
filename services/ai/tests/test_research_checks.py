@@ -53,6 +53,28 @@ class TestWhatTheRunSaysAboutItself:
         assert checks["validation_converged"]["passed"] is False
         assert "1 round(s), 2 issue(s) left" in checks["validation_converged"]["detail"]
 
+    def test_a_script_that_only_read_the_deck_changed_nothing(self, tmp_path):
+        """probe-rotate-exhibit (2026-10-04): a read-only script after the
+        last validation was counted as a change to what shipped."""
+        spans = [
+            _span("phase", "validate", started="2026-09-24T10:00:02",
+                  attrs={"clean": False, "issues": 2}),
+            _span("tool", "edit_deck_with_code", started="2026-09-24T10:00:03",
+                  attrs={"changed": False}),
+        ]
+        checks = _by_name(check_run(_run(tmp_path, spans=spans), TASK))
+        assert checks["shipped_what_was_validated"]["passed"] is True
+
+    def test_a_script_that_edited_the_deck_after_it_is_caught(self, tmp_path):
+        spans = [
+            _span("phase", "validate", started="2026-09-24T10:00:02",
+                  attrs={"clean": True, "issues": 0}),
+            _span("tool", "edit_deck_with_code", started="2026-09-24T10:00:03",
+                  attrs={"changed": True}),
+        ]
+        checks = _by_name(check_run(_run(tmp_path, spans=spans), TASK))
+        assert checks["shipped_what_was_validated"]["passed"] is False
+
     def test_failed_tool_calls_are_named_and_counted(self, tmp_path):
         spans = [_span("tool", "build_table", status="failed")] * 2 + [_span("tool", "build_chart")]
         detail = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["no_failed_tool_calls"]["detail"]
@@ -153,3 +175,37 @@ class TestReviewedGaps:
     def test_a_run_without_its_task_file_says_so(self, tmp_path):
         with pytest.raises(ValueError, match="pass the task explicitly"):
             check_run(_run(tmp_path, manifest={"taskFile": None}))
+
+
+class TestAWatermarkIsNotDamage:
+    """The run's own validation ignores a shape a script set behind the copy
+    and named `ts-background-*`; the benchmark check counted it as overlap
+    and failed every watermarked deck (#376, probe-watermark)."""
+
+    def _run_with_mark(self, tmp_path, name):
+        import fitz
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        doc = fitz.open()
+        page = doc.new_page(width=960, height=540)
+        page.insert_text((60, 200), "A headline that states the finding", fontsize=36)
+        page.insert_text((120, 210), "DRAFT", fontsize=120)
+        (tmp_path / "png" / "pages").mkdir(parents=True)
+        doc.save(str(tmp_path / "png" / "pages" / "deck.pdf"))
+
+        deck = Presentation()
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        mark = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(2))
+        mark.name = name
+        mark.text_frame.text = "DRAFT"
+        deck.save(str(tmp_path / "deck.pptx"))
+        return _run(tmp_path, manifest={"pages": 1})
+
+    def test_a_mark_named_as_background_is_not_counted(self, tmp_path):
+        run = self._run_with_mark(tmp_path, "ts-background-draft-watermark")
+        assert _by_name(check_run(run, TASK))["text_within_the_page"]["passed"] is True
+
+    def test_an_unnamed_mark_still_is(self, tmp_path):
+        run = self._run_with_mark(tmp_path, "TextBox 1")
+        assert _by_name(check_run(run, TASK))["text_within_the_page"]["passed"] is False

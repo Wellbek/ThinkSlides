@@ -1,0 +1,23 @@
+{
+  "search": "tavily",
+  "task": "probe-footer-not-cover",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/footer-not-cover.yaml",
+  "commit": "cb66032",
+  "startedAt": "2026-10-04T15:39:54.207120",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null,
+  "sessionId": "c14916fe-53c4-4196-87d9-11e1c84bfa4d",
+  "finishedAt": "2026-10-04T15:55:00.239634",
+  "parts": 5,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "stages": [
+    "stage-4.pptx",
+    "stage-5.pptx"
+  ],
+  "errors": []
+}

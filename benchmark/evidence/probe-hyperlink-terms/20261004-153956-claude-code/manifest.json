@@ -1,0 +1,12 @@
+{
+  "search": "tavily",
+  "task": "probe-hyperlink-terms",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/hyperlink-terms.yaml",
+  "commit": "cb66032",
+  "startedAt": "2026-10-04T15:39:56.260310",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null
+}

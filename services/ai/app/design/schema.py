@@ -395,6 +395,10 @@ class Provenance(_Model):
     heading_frame: str = ""
     # The rung the heading was designed to be set on, before repair fitted it.
     heading_rung: str = ""
+    # The pack's other arrangements that could also carry this material,
+    # leaving out the ones it was asked to avoid. Empty means a `replace`
+    # verdict has nowhere to put the page but where it already is.
+    alternatives: tuple[str, ...] = ()
 
 
 class Page(_Model):
