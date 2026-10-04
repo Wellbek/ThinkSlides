@@ -335,3 +335,51 @@ def test_the_change_and_amend_phases_can_be_declined_in_words():
         assert getattr(loop.working_state, flag) is False
         phase.on_decline(loop)
         assert getattr(loop.working_state, flag) is True
+
+
+def _handed_over_with_a_finding(deck):
+    state = _finished_state(deck)
+    state.update(validation_clean=False, validation_attempts=3, validation_issues=[
+        {"slideIndex": 0, "type": "aesthetic", "detail": "the lower third is empty"}])
+    db = _Db(_Row(state, NOW),
+             _Message("Put a DRAFT watermark across every page",
+                      NOW + datetime.timedelta(minutes=1)))
+    loop = _loop(db)
+    asyncio.run(loop._load_deck_snapshot("sid"))
+    return loop
+
+
+def test_what_the_deck_was_handed_over_with_is_not_reopened(deck):
+    """probe-watermark (2026-10-04): a watermark request redrafted slide 2's
+    copy over an empty lower third the deck already had when it was handed
+    over. The user asked for a mark, not new slides."""
+    loop = _handed_over_with_a_finding(deck)
+    ws = loop.working_state
+    assert ws.handover_findings == {(0, "aesthetic")}
+    ws.amend_done = True
+    ws.has_called_validate = True
+    ws.validation_issues = [
+        {"slideIndex": 0, "type": "aesthetic", "detail": "the lower third is empty"}]
+    assert ws.new_since_handover(ws.validation_issues) == []
+    # Settled: the walker does not go back to drafting, nor to the backstop.
+    assert pipeline.next_phase(loop) is None
+    assert ws.compute_slides_needing_revision(
+        ws.new_since_handover(ws.validation_issues)) == []
+
+
+def test_what_the_change_brought_is_still_answered(deck):
+    loop = _handed_over_with_a_finding(deck)
+    ws = loop.working_state
+    ws.amend_done = True
+    ws.validation_issues = [
+        {"slideIndex": 0, "type": "overlap", "detail": "the mark covers the title"}]
+    assert ws.new_since_handover(ws.validation_issues) == ws.validation_issues
+    assert pipeline.next_phase(loop).name == "validate"
+
+
+def test_the_baseline_survives_a_pause(deck):
+    loop = _handed_over_with_a_finding(deck)
+    saved = loop._state_dict()
+    other = _loop(None)
+    assert other._apply_state_dict(saved, "sid")
+    assert other.working_state.handover_findings == {(0, "aesthetic")}

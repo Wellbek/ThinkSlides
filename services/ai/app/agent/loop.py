@@ -621,6 +621,12 @@ class WorkingState:
         self.amending: bool = False
         self.amend_request: str = ""
         self.amend_done: bool = False
+        # What validation found on the deck when it was handed over, as
+        # (slide, type) pairs, kept when a later message amends it. The user
+        # took the deck with those findings; a request for a watermark is not
+        # a request to rewrite the slides they were on, and treating them as
+        # new sent every amendment back through drafting (#376).
+        self.handover_findings: set[tuple] = set()
         # The last script that failed, and why, so the next attempt renders as
         # a diff against it rather than as a second wall of code.
         self.last_code_attempt: dict | None = None
@@ -833,6 +839,14 @@ class WorkingState:
                            "that, rather than cutting fields that fit"),
             })
         return findings
+
+    def new_since_handover(self, issues: list[dict]) -> list[dict]:
+        """The findings an amendment has to answer for: those the deck did
+        not already carry when it was handed over. All of them otherwise."""
+        if not self.amending:
+            return list(issues)
+        return [i for i in issues
+                if (i.get("slideIndex"), i.get("type")) not in self.handover_findings]
 
     def arrangements_to_avoid(self) -> dict[int, frozenset[str]]:
         """What `compose` should not offer each slide again."""
@@ -1223,6 +1237,7 @@ class WorkingState:
         self.amending = False
         self.amend_request = ""
         self.amend_done = False
+        self.handover_findings = set()
         self.validation_issues = []
         self.slides_needing_revision = []
         self.revision_queue = []
@@ -1755,6 +1770,9 @@ class AgentLoop:
             "code_edit_log": self.working_state.code_edit_log,
             "amending": self.working_state.amending,
             "amend_request": self.working_state.amend_request,
+            "handover_findings": sorted(
+                [list(key) for key in self.working_state.handover_findings],
+                key=str),
             "amend_done": self.working_state.amend_done,
             "validation_issues": self.working_state.validation_issues,
             "slides_needing_revision": self.working_state.slides_needing_revision,
@@ -1876,6 +1894,8 @@ class AgentLoop:
             self.working_state.amending = bool(state_dict.get("amending", False))
             self.working_state.amend_request = state_dict.get("amend_request") or ""
             self.working_state.amend_done = bool(state_dict.get("amend_done", False))
+            self.working_state.handover_findings = {
+                tuple(key) for key in state_dict.get("handover_findings") or []}
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
             if "revision_queue" in state_dict:
@@ -2025,7 +2045,11 @@ class AgentLoop:
         ws.amend_request = message.content.strip()
         ws.amend_done = False
         # What the last run concluded about the deck does not apply to the
-        # changed one: it is judged afresh.
+        # changed one: it is judged afresh. What it found is kept as the
+        # baseline the change is judged against.
+        ws.handover_findings = {
+            (issue.get("slideIndex"), issue.get("type"))
+            for issue in ws.validation_issues or []}
         ws.validation_clean = False
         ws.validation_issues = []
         ws.slides_needing_revision = []
@@ -3420,6 +3444,12 @@ class AgentLoop:
                 "say so plainly - name the affected slide(s) and suggest reviewing them "
                 "manually - rather than describing the deck as simply finished or ready."
             )
+            if ws.amending and not ws.new_since_handover(ws.validation_issues):
+                prompt += (
+                    "\nEvery one of these was already on the deck before the user's "
+                    "latest request, and the change did not add to them; say that, so "
+                    "the user does not read them as something the change broke."
+                )
         async for kind, payload in self._ask_model(
             prompt, chat_messages, phase_label="complete"
         ):
@@ -4662,6 +4692,9 @@ class AgentLoop:
                 issues.extend(self.working_state.copy_findings())
                 self.working_state.validation_issues = issues
                 self.working_state.validation_clean = not issues
+                # Only what the deck did not already carry is acted on. The
+                # rest is still reported in the closing message.
+                issues = self.working_state.new_since_handover(issues)
                 at_cap = (
                     self.working_state.validation_attempts
                     >= self.working_state.MAX_VALIDATION_ATTEMPTS

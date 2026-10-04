@@ -174,7 +174,16 @@ def _wants_code_amendment(loop: "AgentLoop") -> bool:
         # budget should use the typed tools, which is what those passes are.
         and ws.at_validation_cap
         and not ws.validation_clean
+        # During an amendment, not for findings the deck was handed over
+        # with: the change is not the user asking for those to be fixed.
+        and not _only_handover_findings(ws)
     )
+
+
+def _only_handover_findings(ws) -> bool:
+    """Whether every finding left is one the deck was handed over with."""
+    return bool(ws.validation_issues) and not ws.new_since_handover(
+        ws.validation_issues)
 
 
 def _validation_settled(loop: "AgentLoop") -> bool:
@@ -185,7 +194,10 @@ def _validation_settled(loop: "AgentLoop") -> bool:
     and the `amend` backstop's edit otherwise shipped unchecked.
     """
     ws = loop.working_state
-    return ((ws.validation_clean or ws.at_validation_cap)
+    # During an amendment a deck that carries only what it was handed over
+    # with is as settled as it is going to be: the change broke nothing.
+    return ((ws.validation_clean or ws.at_validation_cap
+             or _only_handover_findings(ws))
             and not ws.edited_since_validation)
 
 

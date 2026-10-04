@@ -1150,3 +1150,43 @@ class TestEditDeckWithCodeDuringARevision:
         assert seen.count("validate_rendered_output") >= 2
         assert "design_slide_content" in seen
         assert not [e for e in events if e["type"] == "error"]
+
+
+class TestAnAmendmentAnswersOnlyForWhatItChanged:
+    """probe-watermark (2026-10-04): asked for a watermark, the run redrafted
+    a slide's copy because validation found the empty lower third the deck
+    had been handed over with."""
+
+    @pytest.mark.asyncio
+    async def test_a_finding_the_deck_already_had_redrafts_nothing(
+            self, monkeypatch):
+        finding = {"slideIndex": 1, "type": "aesthetic", "fix": "redraft",
+                   "detail": "the lower third is empty"}
+        state = TestEditDeckWithCodeDuringARevision._flagged_slide_one(
+            amending=True, amend_request="Put a DRAFT watermark on every page",
+            amend_done=True, validation_attempts=0, validated_serial=-1,
+            validation_issues=[], slides_needing_revision=[], revision_queue=[],
+            handover_findings=[[1, "aesthetic"]],
+        )
+        loop, session_id, seen = _loop(
+            [], state=state, messages=[{"role": "user", "content": "go"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        async def _execute(name, args):
+            seen.append(name)
+            if name == "validate_rendered_output":
+                return ToolResult(success=True, data={"issues": [dict(finding)]})
+            return ToolResult(success=True, data=dict(TOOL_RESULTS.get(name) or {}))
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute)
+
+        events = [e async for e in loop.run(session_id)]
+
+        assert seen.count("validate_rendered_output") == 1
+        assert "draft" not in loop._phase_visits
+        assert "amend" not in loop._phase_visits
+        assert not [e for e in events if e["type"] == "error"]
