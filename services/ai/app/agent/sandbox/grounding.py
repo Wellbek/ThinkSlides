@@ -24,6 +24,7 @@ rather than a lie nobody could have caught.
 
 from __future__ import annotations
 
+import ast
 from typing import Optional
 
 # What a number leaves as marks, not the word "chart": a script that writes
@@ -34,6 +35,34 @@ FIGURE_MARKERS = (
     "add_table", "plot(", "bar(", "barh(", "pie(", "scatter(", "hist(",
 )
 
+# The same marks, read off the script's syntax rather than its text. A name
+# from the deck's chart and table API is a figure wherever it appears; a
+# plotting verb is one only as a method (`ax.bar`) or imported from a
+# plotting library, because a script's own helper called `bar` - a progress
+# bar, probe-progress-bar (#376) - asserts nothing.
+_FIGURE_NAMES = frozenset({
+    "add_chart", "chart_data", "CategoryChartData", "XyChartData", "add_table"})
+_PLOT_VERBS = frozenset({"plot", "bar", "barh", "pie", "scatter", "hist"})
+
+
+def _draws_a_figure(source: str) -> bool:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        # Not ours to parse; the gate refuses it anyway. Err towards asking.
+        return any(marker in source for marker in FIGURE_MARKERS)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in _FIGURE_NAMES:
+            return True
+        if isinstance(node, ast.Attribute) and (
+                node.attr in _FIGURE_NAMES or node.attr in _PLOT_VERBS):
+            return True
+        if isinstance(node, ast.ImportFrom) and any(
+                alias.name in _PLOT_VERBS | _FIGURE_NAMES for alias in node.names):
+            return True
+    return False
+
+
 _UNGROUNDED = ("none", "n/a", "-", "na")
 
 
@@ -42,7 +71,7 @@ def problem(source: str, inputs: str) -> Optional[str]:
     declared = str(inputs or "").strip()
     if declared and declared.lower() not in _UNGROUNDED:
         return None
-    if not any(marker in source for marker in FIGURE_MARKERS):
+    if not _draws_a_figure(source):
         return None
     return (
         "This script draws a figure and `inputs` does not say where its "
