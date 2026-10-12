@@ -246,7 +246,28 @@ def _drafting_loop(pack_id: str | None) -> AgentLoop:
     loop.working_state.presentation_structure = {
         "totalSlides": 1, "slides": [{"title": "One"}]
     }
+    # On a design language compile asks for the slide first (#323); a slide it
+    # could not produce is what reaches the drafting conversation.
+    loop.working_state.compile_tried = {0}
     return loop
+
+
+@pytest.mark.parametrize("pack_id", [None, "authored-abc"])
+def test_compile_names_no_tool_the_run_withholds(pack_id):
+    """The same invariant for compile's own request (#323): the prompt every
+    slide shares, the slide's request, and the tools it is offered."""
+    from app.agent import compile as slide_compile
+
+    loop = _drafting_loop(pack_id)
+    loop.context = {}
+    request = (slide_compile.system_prompt(loop, {})
+               + slide_compile.slide_request(loop, 0, {}))
+    offered = {t["function"]["name"] for t in slide_compile.offered_tools(loop)}
+
+    assert "write_slide" in request
+    for name in loop._withheld_tools():
+        assert name not in request, f"{name} is described but withheld"
+        assert name not in offered
 
 
 @pytest.mark.parametrize("pack_id", [None, "authored-abc"])

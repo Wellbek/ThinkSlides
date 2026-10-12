@@ -151,6 +151,18 @@ def _slides_outstanding(loop: "AgentLoop") -> list[int]:
     return list(ws.revision_queue)
 
 
+def _compiles(loop: "AgentLoop") -> bool:
+    from app.agent import compile as slide_compile
+
+    return slide_compile.applies(loop)
+
+
+def _compile_outstanding(loop: "AgentLoop") -> list[int]:
+    from app.agent import compile as slide_compile
+
+    return slide_compile.outstanding(loop)
+
+
 def _wants_code_amendment(loop: "AgentLoop") -> bool:
     """Whether this run has a defect only a script could fix, with no slide
     left in `slides_needing_revision` for it to attach to.
@@ -315,6 +327,16 @@ PIPELINE: tuple[Phase, ...] = (
         done=lambda loop: loop.working_state.reviewed_outline_with_user,
         pauses=True,
         directive=lambda loop: "Show the user the outline and ask whether to build it.",
+    ),
+    Phase(
+        name="compile",
+        label="content_generation",
+        driver=LOOP_DRIVEN,
+        # Every outstanding slide in one answer each, all at once (#323). A
+        # slide it could not produce falls through to drafting below.
+        applies=lambda loop: _compiles(loop),
+        done=lambda loop: not _compile_outstanding(loop),
+        directive=lambda loop: "Write every outstanding slide, one answer each.",
     ),
     Phase(
         name="draft",

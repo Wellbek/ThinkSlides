@@ -58,7 +58,9 @@ def _where() -> str:
     by_id = {s.span_id: s for s in t.spans}
     names = []
     while current is not None and current is not t.root:
-        if current.kind in ("phase", "tool"):
+        # A step names which of a phase's concurrent calls this is, such as
+        # the slide a compile request is for (#323).
+        if current.kind in ("phase", "step", "tool"):
             names.append(f"{current.kind}:{current.name}")
         current = by_id.get(current.parent_id)
     return " > ".join(reversed(names))
@@ -90,8 +92,13 @@ class Cassette:
         if path.exists():
             self.entries = [json.loads(line) for line in path.read_text().splitlines() if line]
 
-    def append(self, kind: str, sha: str, response) -> None:
+    def append(self, kind: str, sha: str, response, where: str = "") -> None:
         entry = {"seq": len(self.entries) + 1, "kind": kind, "sha": sha, "response": response}
+        if where:
+            # Where in the run the call came from, which names the slide a
+            # compile request is for, so replay can tell concurrent calls
+            # apart when the prompt itself has drifted (a new day's date).
+            entry["where"] = where
         self.entries.append(entry)
         with open(self.path, "a") as f:
             f.write(json.dumps(entry, default=str) + "\n")
@@ -133,7 +140,8 @@ class ClaudeCodeExchange:
                 raise TimeoutError(f"no answer to request {stem} after {self.timeout_s:.0f}s")
             await asyncio.sleep(POLL_SECONDS)
         (self.directory / f"{stem}.pending").unlink(missing_ok=True)
-        self.cassette.append(kind, request_sha(request.get("messages") or request.get("prompt")), answer)
+        self.cassette.append(kind, request_sha(request.get("messages") or request.get("prompt")),
+                             answer, where=request.get("where") or "")
         return answer
 
 
@@ -247,7 +255,7 @@ class RecordingProvider(LLMProvider):
                 for c in result.get("tool_calls") or []
             ],
         }
-        self.cassette.append("chat", request_sha(messages), answer)
+        self.cassette.append("chat", request_sha(messages), answer, where=_where())
         return result
 
 
@@ -259,26 +267,41 @@ class RecordingVisionProvider(VisionLLMProvider):
 
     async def chat_with_images(self, prompt, images, *args, **kwargs) -> str:
         text = await self.inner.chat_with_images(prompt, images, *args, **kwargs)
-        self.cassette.append("vision", request_sha(prompt), {"content": text})
+        self.cassette.append("vision", request_sha(prompt), {"content": text}, where=_where())
         return text
 
 
 class _Tape:
-    """A cassette's answers of one kind, handed out in order."""
+    """A cassette's answers of one kind, handed to the requests that asked them.
+
+    An answer goes to the request it was recorded for: the earliest unused
+    entry whose request hash matches. When none matches - the prompt drifted
+    since recording, which every prompt does on another day, since each
+    carries the date - the earliest unused entry recorded from the same place
+    in the run stands in, and only then the earliest unused entry of all,
+    the order a sequential run asked in. Order alone is not enough once
+    calls run concurrently: slides compiled in parallel are recorded in the
+    order their answers arrived, not the order they were asked (#323).
+    """
 
     def __init__(self, cassette: Cassette, kind: str) -> None:
         self.entries = [e for e in cassette.entries if e["kind"] == kind]
         self.kind = kind
-        self.position = 0
+        self.used: set[int] = set()
 
-    def next(self, sha: str) -> dict:
-        if self.position >= len(self.entries):
+    def next(self, sha: str, where: str = "") -> dict:
+        unused = [i for i in range(len(self.entries)) if i not in self.used]
+        if not unused:
             raise LookupError(
-                f"the cassette has no {self.kind} answer #{self.position + 1}: "
+                f"the cassette has no {self.kind} answer #{len(self.used) + 1}: "
                 "the run asked for more than was recorded"
             )
-        entry = self.entries[self.position]
-        self.position += 1
+        position = next(
+            (i for i in unused if self.entries[i]["sha"] == sha),
+            next((i for i in unused if where and self.entries[i].get("where") == where),
+                 unused[0]))
+        self.used.add(position)
+        entry = self.entries[position]
         span = trace.current_span()
         if span is not None:
             span.set(replayed=entry["seq"], replayDrift=entry["sha"] != sha)
@@ -292,7 +315,7 @@ class ReplayProvider(LLMProvider):
         self.tape = _Tape(cassette, "chat")
 
     async def chat(self, messages, tools=None, temperature=0.7, max_tokens=4096) -> dict:
-        return to_loop_response(self.tape.next(request_sha(messages)))
+        return to_loop_response(self.tape.next(request_sha(messages), _where()))
 
 
 class ReplayVisionProvider(VisionLLMProvider):
@@ -302,7 +325,7 @@ class ReplayVisionProvider(VisionLLMProvider):
         self.tape = _Tape(cassette, "vision")
 
     async def chat_with_images(self, prompt, images, *args, **kwargs) -> str:
-        return self.tape.next(request_sha(prompt)).get("content") or ""
+        return self.tape.next(request_sha(prompt), _where()).get("content") or ""
 
 
 class RecordedSearchError(RuntimeError):

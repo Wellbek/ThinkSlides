@@ -146,7 +146,7 @@ Each refusal names what to change, and that sentence is put into the retry promp
 5. **A deck of every page kind composes on the language's own pages.**
    A probe deck (cover, section, prose page, table page, chart page, closing) must compose and pass the geometry check without any page needing the plain fallback of section 9.
 
-Against the 26 distinct languages authored in the evidence runs, the gate refuses 5, all for check 4: their tallest figure slots are 1.0 to 1.7in tall, and the median table needs about 1.71in at 10pt.
+Against the 28 distinct languages authored in the evidence runs, the gate refuses 5, all for check 4: their tallest figure slots are 1.0 to 1.7in tall, and the median table needs about 1.71in at 10pt.
 Refusing them costs a retry, whose prompt states the height needed; accepting them would set every typical table in the deck below 10pt, which is the defect section 7 exists to prevent.
 `python -m app.research.gate_audit ../../benchmark/evidence` reproduces this, and `tests/test_gate_audit.py` pins it, so a change to the gate fails until this sentence is updated.
 
@@ -387,7 +387,7 @@ Each finding carries the **smallest fix** that would work, and the fix decides t
 | --- | --- | --- |
 | `nudge` | The page is right; one thing is in the wrong place or size. | Answered as a `replace`. Nothing in composition reads a finding and composition is deterministic, so re-rendering the same arrangement reproduced the identical page and spent a revision on it (#359). Acting on the finding itself (handing it to repair as a patch) is the better long-term rung and is not built. |
 | `replace` | The page needs a different arrangement of the same material. | Record the archetype the page was placed on and re-compose the page with that archetype ruled out. The copy is untouched. |
-| `redraft` | The copy itself is the problem. | Send the slide back to drafting, with the findings and the exhibits it already carries. |
+| `redraft` | The copy itself is the problem. | Send the slide back to be written again (by compile where it applies, section 14), with the findings and the exhibits it already carries. |
 
 Rules of the ladder:
 - A page draws at most **2 layout revisions** (`LAYOUT_REVISION_CAP`), per page rather than per run, so one stubborn page cannot spend the budget of every other flagged page.
@@ -460,6 +460,33 @@ Some decisions are made by telling the model a constraint, because the cheapest 
 - **The exhibits a revised slide already carries**, with their slot names, so a rebuild replaces the right one (#312).
 - **The plan's content type** for the slide (chart, table, dashboard, image) and the deck's format vocabulary.
 
+### Compile: one answer per slide, all at once (#323)
+
+On a design language, drafting is a compile step, not a conversation.
+Each outstanding slide is asked for in **one request**, and its answer carries the whole slide: the `build_*` calls its exhibits need and one `write_slide` call with its copy.
+The requests run **concurrently**, at most `compile_concurrency` (6) at once.
+- Every request shares one prompt prefix: the sourcing rules, how exhibits are built, the research findings and the deck's whole outline, then the user's own messages.
+  Only the slide's own request differs, and it comes last, so a provider can cache the prefix across the deck.
+- The answer is checked by the same code a drafted slide went through: each builder validates its own arguments, the grounding check refuses a figure nothing stands behind, `design_slide_content` finishes the copy it is handed (`written`) without a call of its own, and `validate_slide_json` checks the slide.
+- An exhibit is put on the slide the request was for, whatever slide index the answer named.
+- A slide that fails any check is asked **once more** (`MAX_ATTEMPTS` 2), in the same conversation, with each call's result and a line per failure.
+  This is the plan's escalation rule: a compile output failing a gate twice moves on.
+  The retry is a whole answer: what the first answer built is discarded before it is applied, since both answers fall in one validation round, where a rebuild under a new slot name would otherwise sit beside the first.
+- A slide compile could not finish goes to the drafting conversation.
+  One whose copy never arrived is still outstanding; one whose copy was stored but whose exhibit or slide check failed is queued for drafting, and the drafting directive names what did not go through.
+  Without that, the stored slide counted as written and shipped with copy written round an exhibit that was never built.
+- A request that fails hands its slide to drafting rather than ending the run: one slide's error must not lose the slides written beside it.
+  A provider that is really down fails drafting next, which does end the run.
+- An image selected in the same answer is placed with the copy whether or not the copy names it, and the copy's budget counts the exhibits the plan gave the slide, so the budget it is written to is the one it is checked against.
+- Compile does not run on an uploaded template, where each slide chooses a layout before it is written.
+  It also does not run where the drafting conversation would offer `edit_deck_with_code`, one slide sent back with a deck already rendered, since a position fix may be the right answer there.
+  Every first pass and every round that rewrites several slides has no such script on offer.
+- `written` is stripped from any call the model makes itself; it is compile's alone, since it skips the call that writes the copy.
+
+Before compile, drafting a slide took four or five sequential calls: choose an exhibit, call `design_slide_content` (which made a call of its own for the copy), validate, end the turn.
+On the three-slide HTTP caching task the whole run took 17 chat calls before compile and 11 after, including two retries and a revision round (`technical-http-caching/20261012-162837-claude-code`).
+Recorded concurrent answers arrive in completion order, so replay hands each request the answer recorded under its own hash; when the prompt drifted (every prompt does on another day, since each carries the date), the answer recorded from the same place in the run, which names the slide, and only then the next in order.
+
 ## 15. How a run is checked afterwards
 
 The headless runner scores every run with deterministic checks (`app/research/checks.py`).
@@ -511,6 +538,8 @@ The ones that report on the decisions above:
 | `OVERFLOW_TOLERANCE` | 0.02 | `design/repair.py` |
 | `LAYOUT_REVISION_CAP` | 2 per page | `agent/loop.py` |
 | `MAX_VALIDATION_ATTEMPTS` | 3 | `agent/loop.py` |
+| compile `MAX_ATTEMPTS` | 2 per slide per round | `agent/compile.py` |
+| `compile_concurrency` | 6 requests at once | `config.py` |
 | `FULL_REWRITE_ISSUE_RATIO` | 0.6 | `agent/loop.py` |
 | authoring `MAX_ATTEMPTS` | 2 | `design/author_run.py` |
 
@@ -547,5 +576,6 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #376 | `probe-watermark/20261004-151346-claude-code` | The `amend` backstop's script moved a diagram the last validation had flagged, and the deck was handed over without being checked again, its closing message still naming the finding. | A script edit reopens validation for one more check (section 13). |
 | #376 | the nine languages authored in the `probe-*` evidence runs | Five were refused for a derived stacked page that ran a frame off the canvas, though each page as authored fitted; the refusal named a frame the model never wrote. | Unsound derived arrangements are dropped (section 3). |
 | #376 | `probe-overlay-picture/20261002-182649-claude-code` | A message after a finished deck restarted the pipeline from intake, so no edit tool was ever offered. | A later message amends the finished deck (section 13). |
+| #323 | `technical-http-caching/20261012-162837-claude-code` | Three slides asked for at once in one answer each; two failed a check (a diagram label over 40 characters, copy under its density floor) and were fixed by their one retry; the run took 11 chat calls where the same task took 17 before. | Compile (section 14). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

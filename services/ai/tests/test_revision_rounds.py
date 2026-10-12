@@ -13,7 +13,7 @@ import json
 import pytest
 
 from app.agent.registry import ToolResult
-from tests.test_pipeline import INTAKE, _calls, _loop, _text
+from tests.test_pipeline import INTAKE, _loop, _text, _written
 
 PLAN = {"title": "Deck", "totalSlides": 2,
         "slides": [{"title": "One"}, {"title": "Two"}]}
@@ -29,8 +29,9 @@ STATE = {
 
 
 def _draft(index):
-    return _calls(("select_layout", {"slide_index": index}),
-                  ("design_slide_content", {"slide_index": index}))
+    """One slide's compile answer (#323); compile addresses it to the slide
+    it asked about, so the index is the request's, not the answer's."""
+    return _written()
 
 
 def _with_validations(loop, seen, verdicts, monkeypatch):
@@ -49,12 +50,16 @@ def _with_validations(loop, seen, verdicts, monkeypatch):
 
 
 def _prompts(loop, monkeypatch):
-    """Every system prompt the model is shown, to read the drafting directive."""
+    """Every request the model is shown, to read the drafting directive.
+
+    A compiled slide's directive is its own request, after the prompt every
+    slide shares, so the whole request is read rather than its first message.
+    """
     seen = []
     chat = loop._chat_with_retry
 
     async def _recording(messages=None, tools=None):
-        seen.append(messages[0]["content"])
+        seen.append("\n".join(str(m.get("content") or "") for m in messages))
         return await chat(messages=messages, tools=tools)
 
     monkeypatch.setattr(loop, "_chat_with_retry", _recording)

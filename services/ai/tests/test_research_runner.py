@@ -21,6 +21,7 @@ from app.research.exchange import (
     ClaudeCodeProvider,
     ReplayProvider,
     recorded_search,
+    request_sha,
     to_loop_response,
 )
 from app.research.task import Task
@@ -115,6 +116,36 @@ class TestReplay:
         second = await replay.chat([{"role": "user", "content": "y"}])
 
         assert [first["message"]["content"], second["message"]["content"]] == ["first", "second"]
+
+    @pytest.mark.asyncio
+    async def test_an_answer_goes_to_the_request_it_was_recorded_for(self, tmp_path):
+        # Two slides compiled at once are recorded in the order their answers
+        # arrived; replay asks in the order the requests were made (#323).
+        first_asked = [{"role": "user", "content": "slide 1"}]
+        second_asked = [{"role": "user", "content": "slide 2"}]
+        cassette = Cassette(tmp_path / "cassette.jsonl")
+        cassette.append("chat", request_sha(second_asked), {"content": "for slide 2"})
+        cassette.append("chat", request_sha(first_asked), {"content": "for slide 1"})
+        replay = ReplayProvider(Cassette(tmp_path / "cassette.jsonl"))
+
+        first = await replay.chat(first_asked)
+        second = await replay.chat(second_asked)
+
+        assert [first["message"]["content"], second["message"]["content"]] == [
+            "for slide 1", "for slide 2"]
+
+    @pytest.mark.asyncio
+    async def test_a_drifted_request_takes_the_earliest_answer_left(self, tmp_path):
+        asked = [{"role": "user", "content": "slide 2"}]
+        cassette = Cassette(tmp_path / "cassette.jsonl")
+        cassette.append("chat", "recorded-before-a-prompt-change", {"content": "drifted"})
+        cassette.append("chat", request_sha(asked), {"content": "exact"})
+        replay = ReplayProvider(Cassette(tmp_path / "cassette.jsonl"))
+
+        exact = await replay.chat(asked)
+        drifted = await replay.chat([{"role": "user", "content": "reworded"}])
+
+        assert [exact["message"]["content"], drifted["message"]["content"]] == ["exact", "drifted"]
 
     @pytest.mark.asyncio
     async def test_asking_for_more_than_was_recorded_is_an_error(self, tmp_path):

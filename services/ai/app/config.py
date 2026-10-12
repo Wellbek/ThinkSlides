@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     # `network_namespace` so the difference is visible rather than assumed.
     code_amendment_enabled: bool = False
 
+    # How many slides compile asks the model for at once (#323). Each is one
+    # request, so this is the run's peak concurrency against the provider's
+    # rate limit; the provider's own back-off handles a limit it still hits.
+    compile_concurrency: int = 6
+
     # `extra="ignore"` is load-bearing, not tidiness. `.env` at the repo root
     # is the single file the setup docs tell you to create, and it carries the
     # web and orchestrator settings too (PORT, AI_SERVICE_URL,

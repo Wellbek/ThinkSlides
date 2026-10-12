@@ -497,5 +497,6 @@ def _too_many(kind: str, count: int, high: int) -> str:
 
 
 def _fail(message: str, start: float) -> ToolResult:
-    return ToolResult(success=False, error=message,
+    # A refusal of the arguments: a verdict, not the tool breaking (#345).
+    return ToolResult(success=False, rejected=True, error=message,
                       duration_ms=int((time.time() - start) * 1000))

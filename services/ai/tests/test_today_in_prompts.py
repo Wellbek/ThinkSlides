@@ -49,6 +49,13 @@ def test_the_copy_writing_tools_import_it(module, attr):
 
     assert hasattr(mod, "today_line"), f"{attr}'s module must prepend today_line()"
     source = open(mod.__file__).read()
+    if attr == "DesignSlideContentTool":
+        # Its prompt is built by compose_prompt, which states the date unless
+        # compile (#323) has already stated it in the prompt every slide shares.
+        prompt, _ = mod.compose_prompt({"title": "One"}, 0, {}, {}, "concise", {}, [])
+        assert prompt.startswith(mod.today_line()), (
+            f"{attr} must put today_line at the top of its prompt")
+        return
     assert re.search(r'prompt = f"""\{today_line\(\)\}', source), (
         f"{attr} imports today_line but does not put it at the top of its prompt"
     )
