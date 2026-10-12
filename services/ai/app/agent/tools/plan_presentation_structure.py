@@ -98,8 +98,10 @@ def _format_guidance(fmt, target_slide_count: int = 0) -> str:
 # slides up: the design engine reads the first page as the cover by position
 # (#347), so a plan that opened on content would be styled as one anyway.
 MIN_SLIDES_FOR_A_CLOSING_RECAP = 8
-# Below this a body-less cover would leave the deck with almost no content.
-MIN_SLIDES_FOR_A_COVER = 3
+# Below this a body-less cover would leave the deck with too little content:
+# a three-slide deck that asked for three topics spent a third of itself on a
+# title (#347).
+MIN_SLIDES_FOR_A_COVER = 4
 
 
 def _count_rules(target_slide_count: int) -> str:
@@ -114,13 +116,14 @@ def _count_rules(target_slide_count: int) -> str:
         "give it 0-1 key points."
     )
     if 0 < target_slide_count < MIN_SLIDES_FOR_A_COVER:
-        # A title slide with no body would be half of a two-slide deck and
-        # all of a one-slide one; the first page carries content instead.
+        # A title slide with no body would be a third of a three-slide deck,
+        # half of a two-slide one and all of a one-slide one; the first page
+        # carries content instead, unless the request asked for a cover.
         cover = (
-            "- Do NOT plan a separate title slide: every slide carries "
-            'content (contentType "content", "twoColumn", "chart" or '
-            '"table") with its key points, and the first one\'s headline '
-            "names the subject."
+            "- Do NOT plan a separate title slide unless the request asks for "
+            "a cover or a title page: every slide carries content "
+            '(contentType "content", "twoColumn", "chart" or "table") with '
+            "its key points, and the first one's headline names the subject."
         )
     if target_slide_count <= 0:
         return cover + (

@@ -145,7 +145,17 @@ class TestReviewedGaps:
         assert "First slide should be a title slide" not in prompt
 
     @pytest.mark.asyncio
-    async def test_three_slides_still_open_on_a_cover(self, monkeypatch):
+    async def test_three_slides_open_on_content_unless_a_cover_is_asked_for(self, monkeypatch):
+        """A three-slide deck asked to cover three things spent a third of
+        itself on a title (#347)."""
         llm = _LLM(_plan(3))
         await _run(monkeypatch, llm, target_slide_count=3)
+        prompt = llm.calls[0][0]["content"]
+        assert "Do NOT plan a separate title slide unless the request asks" in prompt
+        assert "First slide should be a title slide" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_four_slides_still_open_on_a_cover(self, monkeypatch):
+        llm = _LLM(_plan(4))
+        await _run(monkeypatch, llm, target_slide_count=4)
         assert "First slide should be a title slide" in llm.calls[0][0]["content"]
