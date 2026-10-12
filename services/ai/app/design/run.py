@@ -412,6 +412,8 @@ def _place(shape: MaterialShape, pack: Pack,
            previous: Optional[str],
            avoid: frozenset[str] = frozenset(),
            plain: bool = True,
+           split_to_fit: bool = False,
+           index: int = 0,
            ) -> list[tuple[MaterialShape, object]]:
     """This material, bound to archetypes, split as many times as it takes.
 
@@ -445,6 +447,16 @@ def _place(shape: MaterialShape, pack: Pack,
             current = dataclasses.replace(current, role="content")
             selection = choose(current, pack, previous_archetype=last,
                                candidates=candidates)
+        if (selection is not None and split_to_fit and splits < ceiling
+                and _divisible(current)
+                and not _holds_copy(current, selection, pack, index)):
+            # The page count is free, so copy that does not fit at a readable
+            # size gains a page rather than smaller type (#368).
+            splits += 1
+            head, tail = _split(current)
+            pending.insert(0, tail)
+            pending.insert(0, head)
+            continue
         if selection is not None:
             placed.append((current, selection))
             last = selection.archetype.id
@@ -573,7 +585,8 @@ def _alternatives(shape: MaterialShape, pack: Pack, previous: Optional[str],
 
 def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
             skip_unplaceable: bool = False,
-            avoid: Optional[dict[int, frozenset[str]]] = None) -> DesignDoc:
+            avoid: Optional[dict[int, frozenset[str]]] = None,
+            pages: Optional[str] = None) -> DesignDoc:
     """Every designed slide, laid out in this pack and repaired.
 
     Repair runs here rather than being offered as a tool. The validator this
@@ -591,7 +604,29 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
     it, and finds out in the room - so the default stays strict. A specimen
     deck is the opposite case: three cards showing two pages each is a
     comparison the user can still make, and three showing nothing is not.
+    
+    ``pages`` is the type-size policy's question, whether the user fixed the
+    page count (#368). ``"free"``: copy that does not fit its frame at the
+    readable floor is split onto a continuation page. ``"fixed"``: it may be
+    set below the floor, down to ``RELAXED_FLOOR_PT``, and each such page
+    records how far (`Provenance.below_floor_pt`). ``None`` keeps neither,
+    for previews and the language gate.
     """
+    if pages == "fixed":
+        from app.design.repair import relaxed_floor
+
+        with relaxed_floor():
+            return _compose(slides, pack, title=title,
+                            skip_unplaceable=skip_unplaceable, avoid=avoid,
+                            split_to_fit=False)
+    return _compose(slides, pack, title=title, skip_unplaceable=skip_unplaceable,
+                    avoid=avoid, split_to_fit=pages == "free")
+
+
+def _compose(slides: Sequence[dict], pack: Pack, *, title: str,
+             skip_unplaceable: bool,
+             avoid: Optional[dict[int, frozenset[str]]],
+             split_to_fit: bool) -> DesignDoc:
     ordered = sorted(
         [s for s in slides if isinstance(s, dict)],
         key=lambda s: int(s.get("slideIndex") or 0),
@@ -604,7 +639,8 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
         try:
             try:
                 placed = _place(shape, pack, previous, avoided,
-                                plain=not skip_unplaceable)
+                                plain=not skip_unplaceable,
+                                split_to_fit=split_to_fit, index=index)
                 if avoided and not all(_holds_copy(part, selection, pack, index)
                                        for part, selection in placed):
                     # A re-placement must not make the page worse. One whose
@@ -616,7 +652,8 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
                                    slide_index=index,
                                    archetypes=[sel.archetype.id for _, sel in placed])
                     placed = _place(shape, pack, previous,
-                                    plain=not skip_unplaceable)
+                                    plain=not skip_unplaceable,
+                                    split_to_fit=split_to_fit, index=index)
             except Unplaceable:
                 if not avoided:
                     raise
@@ -625,7 +662,8 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
                 # the way we already did beats downgrading it to the plain
                 # page because a revision was asked for.
                 placed = _place(shape, pack, previous,
-                                plain=not skip_unplaceable)
+                                plain=not skip_unplaceable,
+                                split_to_fit=split_to_fit, index=index)
         except Unplaceable as refused:
             if not skip_unplaceable:
                 # One page the pack cannot carry is set on the pack's plainest
@@ -660,8 +698,30 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
     doc = DesignDoc(pack=PackRef(id=pack.id, version=pack.version),
                     canvas=pack.canvas, grid=pack.grid,
                     pages=tuple(pages), title=title)
-    healed = tuple(repair(doc, page, pack).page for page in doc.pages)
+    healed = tuple(_with_floor_record(repair(doc, page, pack).page, pack)
+                   for page in doc.pages)
     return doc.model_copy(update={"pages": _one_headline_rung(healed, pack)})
+
+
+def _with_floor_record(page: Page, pack: Pack) -> Page:
+    """This page, saying how far below its designed floor any copy was set.
+
+    Only a page composed with the floor relaxed can have any (#368); the
+    record is what the closing message and the run's checks report.
+    """
+    from app.design.repair import _text_blocks, unrelaxed_floor_pt
+
+    below = [
+        role.size_pt
+        for frame in page.all_frames()
+        for block in _text_blocks(frame)
+        if (role := pack.type_roles.get(block.type_role)) is not None
+        and role.size_pt < unrelaxed_floor_pt(pack, frame) - 1e-6
+    ]
+    if not below:
+        return page
+    return page.model_copy(update={"provenance": page.provenance.model_copy(
+        update={"below_floor_pt": round(min(below), 1)})})
 
 
 # The page roles whose headlines read as one series. Openers and dividers set

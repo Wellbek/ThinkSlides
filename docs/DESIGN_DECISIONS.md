@@ -278,6 +278,8 @@ The title band is measured at the size the title is drawn at, from the pack's bo
 
 ## 8. Splitting a page
 
+A page is also split, when the user left the page count free, if its copy still overflows its frames once repaired: more pages before smaller type (#368, section 12).
+
 When no archetype can carry a page's material, the page is split and each part placed in turn (`run._place`, `_split`).
 
 - **What is divided.**
@@ -397,7 +399,15 @@ A round is **kept only if it lowers the page's score by at least 0.01** (`MIN_IM
 The most common patch is `set_type_role`: copy that overruns its frame is set one rung smaller on the pack's ramp, **never below the floor of the rung its frame was designed for** (`repair.designed_floor_pt`).
 The legibility check reads that same designed floor.
 Checked against the rung in use instead, body copy stepped down to a caption was held to the caption floor, passed, and could step again: a paragraph ended on the footnote rung at 11.3pt against its pack's 12.15pt body floor (#348, reproduced in `tests/test_body_copy_floor.py`).
-The body floor itself is 75% of the 3% of page height an authored language may not invent body type below (`authored.POLICY_FLOOR_SHARE`), about 12.2pt on a 16:9 slide; the benchmark's `body_legible` check holds body to 14pt, following the PowerPoint guidance of 14 to 16pt.
+The body floor itself is 75% of the 3% of page height an authored language may not invent body type below (`authored.POLICY_FLOOR_SHARE`), about 12.2pt on a 16:9 slide, which is the product owner's policy of about 12pt (#368); the benchmark's `body_legible` check holds body to the same 12pt.
+
+**The type-size policy (#368).**
+Too much copy means more pages, not smaller type, unless the user fixed the page count:
+- with the count free, composition splits a part whose copy still overflows its frames after repair onto a continuation page, while the part can be divided (`compose(pages="free")`);
+- with it fixed (the brief states a `slideCount`), repair may set copy below the designed floor, down to `RELAXED_FLOOR_PT` (10pt, the size tables and diagrams are held to), using the pack's own smaller rungs (`compose(pages="fixed")`, `repair.relaxed_floor`);
+- every page set below its floor records the smallest size (`Provenance.below_floor_pt`); the render reports the pages and slides, the trace keeps the pages (`belowFloorPages`), and the closing message names each slide and size and says it was to keep the count the user asked for.
+A pack whose own ramp has no rung below the floor cannot go below it however the count stands, which is every authored language so far: their body is 16pt or more and their smallest rungs sit above 12pt.
+A measured pack keeps the sizes its publication set (BXSL's body is 11pt, read on screen); its floor is its own (`policy.floor_for`).
 Copy that still does not fit is left too long, measured, and handed back to the writer with a budget (section 13).
 Because repair works page by page, a headline stepped down on one page and not another made one deck's headlines differ between pages (#357).
 So after repair, headings are grouped by the rung their arrangement designed them on (recorded on the page as `Provenance.heading_rung`, with the frame they were bound to as `heading_frame`), and each group takes the smallest rung repair stepped any member down to, which every member is known to fit.
@@ -528,7 +538,7 @@ The ones that report on the decisions above:
 | --- | --- |
 | `text_within_the_page` (blocking) | The rendered geometry shows overflow past the page or overlapping text. |
 | `headlines_within_the_ramp` | A content headline is set above 48pt. |
-| `body_legible` | Body copy on a page measures below 14pt. |
+| `body_legible` | Body copy on a page measures below 12pt, unless the render reported the page as set small to keep a fixed page count (it passes, and is named). |
 | `rendered_in_its_design` | The last render went through the stock renderer or the whole-deck fallback. Slides placed on the plain page pass, and are named. |
 | `validation_converged` | Validation ended with findings still open. |
 | `shipped_what_was_validated` | The file changed after the last validation. |
@@ -574,6 +584,8 @@ The ones that report on the decisions above:
 | `OVERFLOW_TOLERANCE` | 0.02 | `design/repair.py` |
 | `LAYOUT_REVISION_CAP` | 2 per page | `agent/loop.py` |
 | `MAX_VALIDATION_ATTEMPTS` | 3 | `agent/loop.py` |
+| `RELAXED_FLOOR_PT` | 10.0 | `design/repair.py` |
+| `MIN_BODY_PT` (benchmark) | 12.0 | `research/checks.py` |
 | compile `MAX_ATTEMPTS` | 2 per slide per round | `agent/compile.py` |
 | `compile_concurrency` | 6 requests at once | `config.py` |
 | `FULL_REWRITE_ISSUE_RATIO` | 0.6 | `agent/loop.py` |

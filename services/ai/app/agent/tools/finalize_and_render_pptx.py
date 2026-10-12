@@ -186,6 +186,9 @@ class FinalizeAndRenderPptxTool:
             # how much fits - the writer's budget (#348).
             over_budget: dict[int, dict] = {}
             unmovable: list[int] = []
+            # Copy set below the readable floor because the page count was
+            # fixed (#368): which pages, and how small, per source slide.
+            below_floor: dict = {"pages": [], "slides": {}}
             # Which renderer the deck actually went through, so a run can be
             # checked for it rather than only logged: "composed" in its design
             # language, "template" on an uploaded template, "fallback" when
@@ -196,7 +199,7 @@ class FinalizeAndRenderPptxTool:
                 try:
                     if pack is not None:
                         try:
-                            result_path, placed, over_budget, unmovable = cls._render_composed(
+                            result_path, placed, over_budget, unmovable, below_floor = cls._render_composed(
                                 slides, pack, metadata, output_path,
                                 design_system,
                             )
@@ -325,6 +328,7 @@ class FinalizeAndRenderPptxTool:
                     # Slides a `replace` verdict could only hand back as they
                     # are: no other arrangement carries them (#376).
                     "unmovableSlides": unmovable,
+                    "belowFloor": below_floor,
                     # Slides set on the pack's plain page because none of its
                     # own arrangements could carry them (#322).
                     "plainPages": sorted(
@@ -446,7 +450,7 @@ class FinalizeAndRenderPptxTool:
     @classmethod
     def _render_composed(cls, slides: list, pack, metadata: dict,
                          output_path: str, design_system: dict
-                         ) -> tuple[str, dict[int, list[str]], dict[int, dict], list[int]]:
+                         ) -> tuple[str, dict[int, list[str]], dict[int, dict], list[int], dict]:
         """Lay the deck out in its pack and render it.
 
         Returns the written path; per source slide, the archetypes its pages
@@ -466,7 +470,8 @@ class FinalizeAndRenderPptxTool:
         # comes back.
         avoid = run_context.get_arrangements_to_avoid()
         doc = compose(slides, pack, title=str(metadata.get("title") or ""),
-                      avoid=avoid or None)
+                      avoid=avoid or None,
+                      pages="fixed" if run_context.get_page_count_fixed() else "free")
         logger.info(
             "designdoc_composed",
             pack=pack.id,
@@ -479,6 +484,15 @@ class FinalizeAndRenderPptxTool:
         # "not that one again" without the loop having to re-derive it.
         placed: dict[int, list[str]] = {}
         movable: set[int] = set()
+        below_floor: dict = {"pages": [], "slides": {}}
+        for number, page in enumerate(doc.pages, start=1):
+            if page.provenance.below_floor_pt is not None:
+                below_floor["pages"].append(number)
+                slide = page.provenance.source_slide
+                if slide is not None:
+                    below_floor["slides"][slide] = min(
+                        below_floor["slides"].get(slide, 99.0),
+                        page.provenance.below_floor_pt)
         for page in doc.pages:
             source = page.provenance.source_slide
             if source is not None:
@@ -487,7 +501,7 @@ class FinalizeAndRenderPptxTool:
                     movable.add(source)
         return (render_doc(doc, pack, output_path, design_system=design_system),
                 placed, copy_over_budget(doc, pack),
-                sorted(set(placed) - movable))
+                sorted(set(placed) - movable), below_floor)
 
     @classmethod
     def _generate_markdown_fallback(cls, slides: list[dict], metadata: dict) -> str:

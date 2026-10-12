@@ -399,6 +399,10 @@ class Provenance(_Model):
     # leaving out the ones it was asked to avoid. Empty means a `replace`
     # verdict has nowhere to put the page but where it already is.
     alternatives: tuple[str, ...] = ()
+    # The smallest size copy on this page was set at below its designed
+    # floor, when the page count was fixed and the material did not fit at a
+    # readable size (#368). None when every block held its floor.
+    below_floor_pt: Optional[float] = None
 
 
 class Page(_Model):

@@ -152,6 +152,22 @@ def reset_pack(token: Token) -> None:
     _pack.reset(token)
 
 
+_page_count_fixed: ContextVar[bool] = ContextVar("page_count_fixed", default=False)
+
+
+def set_page_count_fixed(fixed: bool) -> Token:
+    """Whether the user fixed the deck's page count (#368).
+
+    Free, copy that does not fit at the readable floor gains a page; fixed,
+    it may be set smaller, and the user is told which slides and why.
+    """
+    return _page_count_fixed.set(bool(fixed))
+
+
+def get_page_count_fixed() -> bool:
+    return _page_count_fixed.get()
+
+
 def set_arrangements_to_avoid(avoid: dict | None) -> Token:
     """Which arrangements each slide has already been placed on and failed.
 
