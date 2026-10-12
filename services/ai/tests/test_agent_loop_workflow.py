@@ -420,6 +420,8 @@ async def test_compile_writes_every_slide_at_once_in_one_answer_each(monkeypatch
         return _answer(index)
 
     monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+    # On a provider that caches prefixes, as OpenAI does.
+    monkeypatch.setattr("app.llm.provider.caches_prefixes", lambda provider: True)
     checks = {"n": 0}
 
     async def _execute_tool(name, args):

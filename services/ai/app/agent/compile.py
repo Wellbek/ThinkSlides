@@ -198,7 +198,8 @@ async def compile_all(loop: "AgentLoop", context: dict, chat_messages: list[dict
     tools, system prompt and conversation and differs only in its last
     message, and a provider caches that prefix as it serves a request, so
     requests sent together all pay for it in full (#325). One request's
-    latency buys every other slide the cached prefix. A slide whose request fails is left to
+    latency buys every other slide the cached prefix - on a provider that
+    caches by itself; on one that does not, all go at once. A slide whose request fails is left to
     drafting like any other slide compile could not produce: one bad request
     must not end a run whose other slides were written (#381 review). A
     provider that is really down fails drafting next, which ends the run.
@@ -213,6 +214,10 @@ async def compile_all(loop: "AgentLoop", context: dict, chat_messages: list[dict
     queue: asyncio.Queue = asyncio.Queue()
     primed = asyncio.Event()
     first = indices[0]
+    from app.llm.provider import caches_prefixes
+
+    if not caches_prefixes(loop.llm):
+        primed.set()
 
     async def one(index: int) -> None:
         if index != first:
@@ -286,6 +291,10 @@ async def compile_slide(loop: "AgentLoop", index: int, shared: str, tools: list[
                     loop._chat_with_retry(messages=messages, tools=tools), phase.label,
                 ):
                     if kind == "event":
+                        # A back-off: nothing is cached yet, and the others
+                        # should not wait out this request's retries.
+                        if answered is not None:
+                            answered.set()
                         yield "event", payload
                     else:
                         response = payload

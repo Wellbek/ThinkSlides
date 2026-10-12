@@ -5847,8 +5847,8 @@ class AgentLoop:
         """Build the system prompt with embedded design system context.
 
         Laid out for a prompt cache (#325): providers cache by prefix, so
-        everything that holds for the whole run - the rules, the tools the
-        run has, the design system - comes first, and what changes from one
+        everything that holds for the whole run once its design is chosen -
+        the rules, the tools the run has, the design system - comes first, and what changes from one
         step to the next - the step's own tools, research as it arrives, the
         work completed, the next step - comes after it. Anything that varies
         placed before the design system made every request's cacheable
@@ -6066,9 +6066,11 @@ class AgentLoop:
         ]
         # The run's tools in the head; those offered only at some steps in
         # the tail, so the head reads the same at every step.
-        step_lines = [line for line in tool_lines
-                      if line.split(" ", 1)[0] in self.STEP_SCOPED_TOOLS]
-        tool_lines = [line for line in tool_lines if line not in step_lines]
+        run_lines, step_lines = [], []
+        for line in tool_lines:
+            (step_lines if line.split(" ", 1)[0] in self.STEP_SCOPED_TOOLS
+             else run_lines).append(line)
+        tool_lines = run_lines
 
         prompt_parts.extend(self._visuals_lines(withheld))
         prompt_parts.append("## Tools")

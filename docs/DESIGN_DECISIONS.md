@@ -574,10 +574,11 @@ Each outstanding slide is asked for in **one request**, and its answer carries t
 The requests run **concurrently**, at most `compile_concurrency` (6) at once.
 - Every request shares one prompt prefix: the sourcing rules, how exhibits are built, the research findings and the deck's whole outline, then the user's own messages.
   Only the slide's own request differs, and it comes last, so a provider can cache the prefix across the deck.
-- The first slide's request goes **alone**, and the rest are sent once it is answered (#325).
+- On a provider that caches prefixes by itself (`prefix_cache`: OpenAI and Azure OpenAI; the claude-code and replay stand-ins, which take a live run's shape), the first slide's request goes **alone**, and the rest are sent once it is answered (#325).
   A provider writes its cache as it serves a request, so requests sent together each pay for the shared prefix in full; on the three-slide footer probe the prefix is 40.9K of each request's 47.5K characters.
   One request's latency buys every other slide that prefix from the cache.
-  A first request that fails releases the others at once.
+  The others are released by the first answer, by the first back-off the request meets (a rate-limited request has cached nothing, and the others must not wait out its retries), or by its failure.
+  On Zhipu, which is not known to cache automatically, and Anthropic, which caches only up to explicit breakpoints the provider does not yet set, every slide goes at once as before.
 - The answer is checked by the same code a drafted slide went through: each builder validates its own arguments, the grounding check refuses a figure nothing stands behind, `design_slide_content` finishes the copy it is handed (`written`) without a call of its own, and `validate_slide_json` checks the slide.
 - An exhibit is put on the slide the request was for, whatever slide index the answer named.
 - A slide that fails any check is asked **once more** (`MAX_ATTEMPTS` 2), in the same conversation, with each call's result and a line per failure.
@@ -601,12 +602,13 @@ Recorded concurrent answers arrive in completion order, so replay hands each req
 ### Prompt layout for a prefix cache (#325)
 
 Providers cache a request by prefix, reading tools first, then the system prompt, then the conversation (R-107), so the system prompt the loop's model-driven steps share is laid out with everything that holds for the whole run first and everything a step changes last.
-- **Head, the same at every step:** the date line, the rules, the detail level, the research rules for the run's mode, how exhibits are built, the tools the run has, and the design system.
+- **Head, the same at every step once the design is chosen** (choosing a design language withholds the template geometry tools for the rest of the run): the date line, the rules, the detail level, the research rules for the run's mode, how exhibits are built, the tools the run has, and the design system.
   The design system is written with its keys sorted: restored from saved state between parts of a run it comes back in another key order, which was the same tokens as a different prompt.
 - **Tail:** the research findings (which grow while research runs and then hold), the tools offered only at some steps (`revise_slides` while amending, `edit_deck_with_code` once a rendered file exists), the work completed so far, and the next step.
   Before this the completed work and the step-filtered tool list sat ahead of the design system, so a request's cacheable prefix ended about 12K characters in.
 - What a cache could have answered is measured on every run, in every mode, replays included (`app.research.prefix`, `prefix.jsonl` in the run directory, `python -m app.research prefix <run>`): each chat request against every request already answered when it was sent, counting a shared prefix from 1,024 tokens up.
   A replay yields once before each answer, so requests a phase sends together are measured as concurrent, as they are against a real provider.
+  A request is entered only once it is answered, so one that raised (a spent budget, a drifted tape) is not counted as input, and it is compared only with requests that carried the same tools.
 - On the replay of `probe-footer-not-cover/20261013-061639-claude-code`, the share of chat input a cache could have answered went from 4.8% to 40.9%.
   Steps whose tools differ still share nothing: tools come first, so the change step (two tools) and the closing message (none) cannot reuse each other's prefix.
   Sending every step the same tools and restricting them with OpenAI's `allowed_tools` would remove that, at the price of every request carrying every schema, and is not done here.

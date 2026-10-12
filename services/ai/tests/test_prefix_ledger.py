@@ -14,11 +14,17 @@ def _messages(system, user="hi"):
 LONG = "x" * int(prefix.MIN_CACHED_TOKENS * CHARS_PER_TOKEN * 2)
 
 
+def _send(ledger, messages, tools=None, where=""):
+    tools_text, text = prefix.serialised(messages, tools or [])
+    return tools_text, text, ledger.shared(tools_text, text)
+
+
 def test_a_request_shares_the_prefix_an_answered_one_sent(tmp_path):
     ledger = prefix.PrefixLedger(tmp_path / prefix.LEDGER_NAME)
-    first, text = ledger.record(_messages(LONG, "one"), [], "phase:a")
-    ledger.answered_request(text)
-    second, _ = ledger.record(_messages(LONG, "two"), [], "phase:a")
+    tools_text, text, shared = _send(ledger, _messages(LONG, "one"))
+    first = ledger.enter(tools_text, text, shared, "phase:a")
+    tools_text, text, shared = _send(ledger, _messages(LONG, "two"))
+    second = ledger.enter(tools_text, text, shared, "phase:a")
     assert first["sharedChars"] == 0
     assert second["sharedChars"] >= len(LONG)
     summary = prefix.summary(tmp_path)
@@ -27,25 +33,46 @@ def test_a_request_shares_the_prefix_an_answered_one_sent(tmp_path):
 
 def test_requests_in_flight_together_share_nothing(tmp_path):
     ledger = prefix.PrefixLedger(tmp_path / prefix.LEDGER_NAME)
-    ledger.record(_messages(LONG, "one"), [], "phase:compile")
-    second, _ = ledger.record(_messages(LONG, "two"), [], "phase:compile")
-    assert second["sharedChars"] == 0
+    one = _send(ledger, _messages(LONG, "one"))
+    two = _send(ledger, _messages(LONG, "two"))
+    assert one[2] == two[2] == 0
 
 
 def test_a_short_shared_prefix_is_not_cached(tmp_path):
     ledger = prefix.PrefixLedger(tmp_path / prefix.LEDGER_NAME)
-    _, text = ledger.record(_messages("short", "one"), [], "")
-    ledger.answered_request(text)
-    second, _ = ledger.record(_messages("short", "two"), [], "")
-    assert second["sharedChars"] == 0
+    tools_text, text, shared = _send(ledger, _messages("short", "one"))
+    ledger.enter(tools_text, text, shared, "")
+    assert _send(ledger, _messages("short", "two"))[2] == 0
 
 
 def test_tools_come_first_so_a_different_toolset_shares_nothing(tmp_path):
     ledger = prefix.PrefixLedger(tmp_path / prefix.LEDGER_NAME)
-    _, text = ledger.record(_messages(LONG), [{"name": "a"}], "")
-    ledger.answered_request(text)
-    second, _ = ledger.record(_messages(LONG), [{"name": "b"}], "")
-    assert second["sharedChars"] == 0
+    tools_text, text, shared = _send(ledger, _messages(LONG), [{"name": "a"}])
+    ledger.enter(tools_text, text, shared, "")
+    assert _send(ledger, _messages(LONG), [{"name": "b"}])[2] == 0
+
+
+def test_common_prefix_across_blocks():
+    a = "a" * 10000 + "XYZ"
+    assert prefix.common_prefix(a, "a" * 10000 + "XQ") == 10001
+    assert prefix.common_prefix(a, a) == len(a)
+    assert prefix.common_prefix("abc", "xbc") == 0
+
+
+def test_a_request_that_raised_is_not_counted(tmp_path):
+    class Broken:
+        model = "broken"
+
+        async def chat(self, messages, tools=None, temperature=0.7, max_tokens=4096):
+            raise RuntimeError("budget spent")
+
+    ledger = prefix.PrefixLedger(tmp_path / prefix.LEDGER_NAME)
+    provider = prefix.PrefixRecordingProvider(Broken(), ledger)
+    try:
+        asyncio.run(provider.chat(_messages(LONG)))
+    except RuntimeError:
+        pass
+    assert prefix.summary(tmp_path)["calls"] == 0
 
 
 def test_the_provider_wrapper_enters_each_call(tmp_path):
@@ -91,3 +118,16 @@ def test_the_system_prompt_keeps_its_run_stable_head_from_step_to_step():
     # A tool offered only at some steps is described after the head.
     assert "revise_slides" in late[shared:]
     assert "revise_slides" not in early
+
+
+def test_whether_a_provider_caches_is_read_through_its_wrappers():
+    from app.llm.provider import (AnthropicProvider, OpenAIProvider, ZhipuProvider,
+                                  caches_prefixes)
+    from app.llm.traced import TracedChatProvider
+
+    openai = OpenAIProvider.__new__(OpenAIProvider)
+    assert caches_prefixes(TracedChatProvider(openai))
+    assert caches_prefixes(prefix.PrefixRecordingProvider(TracedChatProvider(openai), None))
+    assert not caches_prefixes(TracedChatProvider(ZhipuProvider.__new__(ZhipuProvider)))
+    assert not caches_prefixes(AnthropicProvider.__new__(AnthropicProvider))
+    assert not caches_prefixes(None)

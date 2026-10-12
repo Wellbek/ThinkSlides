@@ -195,6 +195,9 @@ def _render_chat_request(seq: int, where: str, messages: list[dict], tools: list
 
 class ClaudeCodeProvider(LLMProvider):
     model = "claude-code"
+    # Stands in for a frontier API model, which caches prefixes; a run here
+    # takes the shape a live run would.
+    prefix_cache = True
 
     def __init__(self, exchange: ClaudeCodeExchange) -> None:
         self.exchange = exchange
@@ -324,6 +327,8 @@ class _Tape:
 
 class ReplayProvider(LLMProvider):
     model = "replay"
+    # Replays a run that took the shape a caching provider gives it.
+    prefix_cache = True
 
     def __init__(self, cassette: Cassette) -> None:
         self.tape = _Tape(cassette, "chat")

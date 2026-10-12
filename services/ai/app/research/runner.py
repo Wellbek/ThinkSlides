@@ -259,8 +259,6 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
     # What a prefix cache could have answered of each request (#325),
     # measured in every mode, so a replay shows a prompt's layout changing.
     ledger = PrefixLedger(run_dir / LEDGER_NAME)
-    if chat is not None:
-        chat = PrefixRecordingProvider(chat, ledger)
 
     search_config = _search_config(mode, cassette_from)
     manifest = {
@@ -281,10 +279,11 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
             if mode == LIVE:
                 real_chat, real_vision, provider_name = await _live_providers(db, live)
                 manifest["provider"] = provider_name
-                chat = PrefixRecordingProvider(
-                    RecordingProvider(MeteredProvider(real_chat, meter), cassette), ledger)
+                chat = RecordingProvider(MeteredProvider(real_chat, meter), cassette)
                 vision = (RecordingVisionProvider(MeteredVisionProvider(real_vision, meter), cassette)
                           if real_vision else None)
+            # Every mode's chat provider, wrapped once.
+            chat = PrefixRecordingProvider(chat, ledger)
             session_id = await _seed(db, task.prompt)
             manifest["sessionId"] = str(session_id)
             with open(run_dir / "events.log", "w") as log:

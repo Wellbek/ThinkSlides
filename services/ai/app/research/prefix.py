@@ -34,59 +34,63 @@ MIN_CACHED_TOKENS = 1024
 LEDGER_NAME = "prefix.jsonl"
 
 
-def serialised(messages: list[dict], tools: list[dict] | None) -> str:
-    """A request as a provider reads it for caching: tools, then each message
-    in order."""
-    parts = [json.dumps(tools or [], sort_keys=True, default=str)]
-    parts.extend(json.dumps(message, sort_keys=True, default=str) for message in messages)
-    return "".join(parts)
+def serialised(messages: list[dict], tools: list[dict] | None) -> tuple[str, str]:
+    """A request as a provider reads it for caching: its tools, then each
+    message in order. Returned as (tools, the whole request)."""
+    head = json.dumps(tools or [], sort_keys=True, default=str)
+    return head, head + "".join(json.dumps(message, sort_keys=True, default=str)
+                                for message in messages)
+
+
+# Prefixes are compared a block at a time, so a long shared prefix costs a
+# few comparisons of short slices rather than copies of the whole request.
+_BLOCK = 4096
 
 
 def common_prefix(a: str, b: str) -> int:
     """How many leading characters two strings share."""
     limit = min(len(a), len(b))
-    if a[:limit] == b[:limit]:
-        return limit
-    low, high = 0, limit
-    while low < high:
-        middle = (low + high + 1) // 2
-        if a[:middle] == b[:middle]:
-            low = middle
-        else:
-            high = middle - 1
-    return low
+    start = 0
+    while start < limit and a[start:start + _BLOCK] == b[start:start + _BLOCK]:
+        start += _BLOCK
+    start = min(start, limit)
+    end = min(start + _BLOCK, limit)
+    while start < end and a[start] == b[start]:
+        start += 1
+    return start
 
 
 class PrefixLedger:
     """Every chat request of one run, with the prefix it shares with an
-    earlier one."""
+    answered one."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.sent = 0
-        # Requests already answered: what a cache could hold when the next
-        # request is sent.
-        self.answered: list[str] = []
+        # Answered requests, by their tools: a request with other tools
+        # shares nothing with them, since tools come first.
+        self.answered: dict[str, list[str]] = {}
 
-    def record(self, messages: list[dict], tools: list[dict] | None, where: str) -> tuple[dict, str]:
-        """Enter a request as it is sent. Returns its entry and its text, to
-        hand to ``answered`` once the provider has replied."""
-        text = serialised(messages, tools)
-        shared = max((common_prefix(text, earlier) for earlier in self.answered), default=0)
-        if shared / CHARS_PER_TOKEN < MIN_CACHED_TOKENS:
-            shared = 0
+    def shared(self, tools_text: str, text: str) -> int:
+        """The longest prefix ``text`` shares with an answered request, or
+        0 below the size a provider caches."""
+        shared = max((common_prefix(text, earlier)
+                      for earlier in self.answered.get(tools_text, ())), default=0)
+        return shared if shared / CHARS_PER_TOKEN >= MIN_CACHED_TOKENS else 0
+
+    def enter(self, tools_text: str, text: str, shared: int, where: str) -> dict:
+        """Enter a request that was answered, with what it shared when sent."""
         self.sent += 1
+        self.answered.setdefault(tools_text, []).append(text)
         entry = {"seq": self.sent, "where": where, "chars": len(text), "sharedChars": shared}
         with open(self.path, "a") as handle:
             handle.write(json.dumps(entry) + "\n")
-        return entry, text
-
-    def answered_request(self, text: str) -> None:
-        self.answered.append(text)
+        return entry
 
 
 class PrefixRecordingProvider(LLMProvider):
-    """A chat provider whose every request is entered in the run's ledger."""
+    """A chat provider whose every answered request is entered in the run's
+    ledger."""
 
     def __init__(self, inner: LLMProvider, ledger: PrefixLedger) -> None:
         self.inner = inner
@@ -94,10 +98,15 @@ class PrefixRecordingProvider(LLMProvider):
         self.model = getattr(inner, "model", "unknown")
 
     async def chat(self, messages, tools=None, temperature=0.7, max_tokens=4096) -> dict:
-        _, text = self.ledger.record(messages, tools, _where())
+        # What it shares is read as it is sent, against what had been
+        # answered by then; it is entered once answered, so a request that
+        # raised (a spent budget, a drifted tape) is not counted as input.
+        tools_text, text = serialised(messages, tools)
+        shared = self.ledger.shared(tools_text, text)
+        where = _where()
         result = await self.inner.chat(messages, tools=tools, temperature=temperature,
                                        max_tokens=max_tokens)
-        self.ledger.answered_request(text)
+        self.ledger.enter(tools_text, text, shared, where)
         return result
 
 
