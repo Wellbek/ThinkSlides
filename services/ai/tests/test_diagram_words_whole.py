@@ -141,10 +141,14 @@ def test_a_typed_diagram_is_held_to_its_measured_floor_exactly():
     from app.design.select import LEGIBLE_TOLERANCE, legible_tolerance
 
     typed = MaterialItem(id="d", kind="diagram", payload=FLOW)
+    # An imported SVG is measured exactly too now: the height that draws its
+    # smallest label at the floor (#350).
     drawn = MaterialItem(id="s", kind="diagram",
                          payload={"diagram": {"format": "svg", "svg": "<svg/>"}})
+    chart = MaterialItem(id="c", kind="chart", payload={})
     assert legible_tolerance(typed) == 0.0
-    assert legible_tolerance(drawn) == LEGIBLE_TOLERANCE
+    assert legible_tolerance(drawn) == 0.0
+    assert legible_tolerance(chart) == LEGIBLE_TOLERANCE
 
 
 def _node_boxes(marks):

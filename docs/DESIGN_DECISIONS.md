@@ -223,14 +223,17 @@ Each exhibit has a minimum slot height:
   A row count alone said nothing about a six-column table whose cells each break onto three lines in a half-width column;
 - a typed **diagram** (flow, value chain, matrix, funnel, pyramid, timeline, Venn, org chart) is measured the same way: laid out at the slot's width at 10pt with its details, the size a table's cells are held to (`diagrams.needed_height_in`, `LEGIBLE_PT`), in both faces, the taller kept, and never under 1.0in.
   When a word of it cannot be set whole at that width at 10pt, its floor is infinite and the slot is refused outright (#363): a four-step flow in a half-width slot broke "ReplicaSet" and "maxUnavailable" across lines;
-- a **chart** needs 1.6in, an SVG-drawn diagram 1.0in, a **metrics** row 0.6in (`MIN_EXHIBIT_IN`).
+- an **imported SVG** (a Mermaid graph, or a figure drawn with `draw_svg`) is scaled to fit its slot and its text with it, so its floor is the height at which its smallest label is drawn at 10pt: the label's font size times 72, over the document's viewBox height, gives the inches per unit (`importer.legible_height_in`), never under 1.0in.
+  When the document at that height is wider than the slot, its floor is infinite.
+  A sequence diagram given the short band under a stacked page's copy came out at about a third of its height with labels too small to read (#350);
+- a **chart** needs 1.6in, a **metrics** row 0.6in (`MIN_EXHIBIT_IN`).
 
 **The shortfall** is `max(0, floor - height) / floor`, from 0 (fits) to 1.
 
 **The decision.**
-- For a **table** or a typed **diagram**, any shortfall makes the slot infeasible: its floor is an exact measurement of the exhibit itself, so falling short means setting it below 10pt.
+- For a **table**, a typed **diagram** or an imported **SVG**, any shortfall makes the slot infeasible: its floor is an exact measurement of the exhibit itself, so falling short means setting it below 10pt.
   With the tolerance the estimated floors get, tables in half-width slots came out at 8 and 9pt (#357).
-- For a chart, an SVG-drawn diagram or a metrics row, whose floors are estimates, a shortfall above 0.25 (`LEGIBLE_TOLERANCE`) makes the slot **infeasible**.
+- For a chart or a metrics row, whose floors are estimates, a shortfall above 0.25 (`LEGIBLE_TOLERANCE`) makes the slot **infeasible**.
   As a cost, it was outbid by the text overflow of every other arrangement, and a five-row table was set in a slot 0.2in tall with its rows printed over each other (#351).
 - A shortfall within tolerance is charged at weight 12.0, so a slot that fits wins over one that nearly does.
 - If no content arrangement in the pack has a slot the exhibit could be read in (`readable_somewhere` is false), splitting the prose around it cannot help, because legibility depends on the slot and not on the prose.
@@ -581,5 +584,6 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #376 | `probe-overlay-picture/20261002-182649-claude-code` | A message after a finished deck restarted the pipeline from intake, so no edit tool was ever offered. | A later message amends the finished deck (section 13). |
 | #323 | `technical-http-caching/20261012-162837-claude-code` | Three slides asked for at once in one answer each; two failed a check (a diagram label over 40 characters, copy under its density floor) and were fixed by their one retry; the run took 11 chat calls where the same task took 17 before. | Compile (section 14). |
 | #380 | `technical-http-caching/20261012-162837-claude-code` | A last-round `replace` set slide 3's five-sentence body in the `exhibit` arrangement's caption slot, 439 characters where it holds about 175, and the last line ran off the page. | A re-placement must not make the page worse; an alternative must hold the copy (section 13). |
+| #350 | `technical-http-caching/20261012-162837-claude-code` | A Mermaid sequence diagram imported with no message arrows, a black mark at its top-left and its note unboxed; on the stacked arrangement it shrank to a third of its slot. | An imported SVG's floor is its smallest label at 10pt (section 7); the import fixes themselves are in `renderer/svg/importer.py`. |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

@@ -31,6 +31,7 @@ places to run code from.
 
 from __future__ import annotations
 
+import colorsys
 import math
 import re
 from dataclasses import dataclass
@@ -48,6 +49,12 @@ SVG_NS = "http://www.w3.org/2000/svg"
 # request to a host we have not vetted made while rendering a customer's deck.
 FORBIDDEN_TAGS = frozenset({"script", "foreignObject", "iframe", "image",
                             "use", "animate", "animateTransform", "set"})
+
+# Elements that define something drawn elsewhere and are never drawn where
+# they stand. Walked into, a sequence diagram's arrowhead definitions were
+# drawn as black shapes at the diagram's top-left corner (#350).
+DEFINITION_TAGS = frozenset({"defs", "marker", "symbol", "clipPath", "mask",
+                             "pattern", "linearGradient", "radialGradient"})
 
 _LENGTH = re.compile(r"^\s*(-?\d*\.?\d+)\s*(px|pt|mm|cm|in|%)?\s*$")
 _HEX = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
@@ -209,6 +216,19 @@ def _colour(value: Optional[str]) -> Optional[str]:
                 max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
         except ValueError:
             return None
+    match = re.match(r"hsla?\(([^)]+)\)", text)
+    if match:
+        # Mermaid writes its derived colours this way - a note's border is
+        # `hsl(52.68, 60%, 73.92%)` - and an unreadable stroke is no stroke,
+        # which left a sequence diagram's notes without a box (#350).
+        parts = [p for p in re.split(r"[\s,/]+", match.group(1).strip()) if p]
+        try:
+            hue = float(parts[0].removesuffix("deg")) / 360.0 % 1.0
+            sat, light = (float(p.rstrip("%")) / 100.0 for p in parts[1:3])
+        except (ValueError, IndexError):
+            return None
+        r, g, b = colorsys.hls_to_rgb(hue, light, sat)
+        return "#{:02X}{:02X}{:02X}".format(round(r * 255), round(g * 255), round(b * 255))
     return None
 
 
@@ -291,13 +311,19 @@ def read_stylesheet(root: ElementTree.Element) -> dict[str, dict[str, str]]:
 def _style(element: ElementTree.Element,
            sheet: Optional[dict[str, dict[str, str]]] = None,
            inherited: Optional[dict[str, str]] = None) -> dict[str, str]:
-    """What paints this element: inherited, then class, then attribute, then
-    inline - which is the order CSS itself resolves them in."""
+    """What paints this element: inherited, then attribute, then class, then
+    inline - which is the order CSS itself resolves them in.
+
+    A presentation attribute is weaker than any stylesheet rule. Applied the
+    other way round, Mermaid's message lines - drawn `stroke="none"` and
+    coloured by their class - imported as invisible, and a sequence diagram
+    lost every arrow (#350).
+    """
     out = dict(inherited or {})
-    for name in (element.get("class") or "").split():
-        out.update((sheet or {}).get(name, {}))
     out.update({key: value for key, value in element.attrib.items()
                 if key in PAINT_PROPERTIES})
+    for name in (element.get("class") or "").split():
+        out.update((sheet or {}).get(name, {}))
     for declaration in (element.get("style") or "").split(";"):
         if ":" in declaration:
             key, _, value = declaration.partition(":")
@@ -468,7 +494,57 @@ def to_primitives(svg: str, box: PositionConfig, *,
             subpaths=tuple(_points_in(s, view) for s in subpaths),
             closed=tuple(s.closed for s in subpaths),
         ))
+        heads = _arrowheads(element, subpaths, _length(style.get("stroke-width"), 1.0))
+        for n, head in enumerate(heads):
+            primitives.append(Primitive(
+                id=f"{prefix}-p{index}-head{n}", kind="path", box=frame,
+                fill=stroke or fill or "#000000", stroke=None, stroke_pt=0.0,
+                subpaths=(_points_in(head, view),), closed=(True,),
+            ))
     return primitives
+
+
+# An arrowhead's length, in multiples of the line's stroke width, and never
+# less than this many document units, so a hairline still points somewhere.
+ARROWHEAD_STROKES = 5.0
+ARROWHEAD_MIN = 6.0
+
+
+def _arrowheads(element: ElementTree.Element, subpaths: list[SubPath],
+                stroke_width: float) -> list[SubPath]:
+    """A filled triangle at each end a marker is attached to.
+
+    Markers are definitions, which are not drawn where they stand (see
+    DEFINITION_TAGS); what one says is "this end is an arrow", and that is
+    drawn here, along the line's own last segment, in the line's colour.
+    """
+    ends = []
+    if element.get("marker-end") or "marker-end" in (element.get("style") or ""):
+        ends.append("end")
+    if element.get("marker-start") or "marker-start" in (element.get("style") or ""):
+        ends.append("start")
+    open_paths = [sub for sub in subpaths if len(sub.points) >= 2]
+    if not ends or not open_paths:
+        return []
+    length = max(ARROWHEAD_MIN, ARROWHEAD_STROKES * stroke_width)
+    heads = []
+    for end in ends:
+        points = open_paths[-1].points if end == "end" else open_paths[0].points[::-1]
+        tip, back = points[-1], next(
+            (p for p in reversed(points[:-1]) if p != points[-1]), None)
+        if back is None:
+            continue
+        dx, dy = tip[0] - back[0], tip[1] - back[1]
+        norm = (dx * dx + dy * dy) ** 0.5
+        ux, uy = dx / norm, dy / norm
+        base = (tip[0] - ux * length, tip[1] - uy * length)
+        half = length * 0.45
+        heads.append(SubPath(points=[
+            tip,
+            (base[0] - uy * half, base[1] + ux * half),
+            (base[0] + uy * half, base[1] - ux * half),
+        ], closed=True))
+    return heads
 
 
 # Properties a child inherits from its parent when it says nothing itself,
@@ -485,7 +561,7 @@ def _walk(element: ElementTree.Element, matrix, sheet, inherited):
     smuggled HTML, not a label.
     """
     tag = _local(element.tag)
-    if tag in FORBIDDEN_TAGS:
+    if tag in FORBIDDEN_TAGS or tag in DEFINITION_TAGS:
         return
     here = _multiply(matrix, parse_transform(element.get("transform")))
     style = _style(element, sheet, inherited)
@@ -595,3 +671,33 @@ def _text_primitive(element, text, frame, view, style, colour,
         ground=ground,
         alt_text=text,
     )
+
+
+def legible_height_in(svg: str, width_in: float, legible_pt: float) -> float:
+    """How tall a slot this wide must be for this SVG's smallest label to be
+    drawn at ``legible_pt``.
+
+    The document is scaled to fit its slot without distortion, and its text
+    scales with it: a label is drawn at its font size times the drawn height
+    over the viewBox height (see `_text_primitive`). A slot that fits the
+    document at a smaller scale sets every label smaller, and a sequence
+    diagram given a short band under the copy came out at about a third of
+    its height with labels too small to read (#350). Infinite when the
+    document at that height would be wider than the slot, since a wider
+    slot is then the only way to read it; zero when it has no text.
+    """
+    try:
+        root = ElementTree.fromstring(svg)
+        view = read_viewbox(root)
+    except (ElementTree.ParseError, UnsupportedSVG):
+        return 0.0
+    sheet = read_stylesheet(root)
+    sizes = [_length(style.get("font-size"), 12.0)
+             for element, _, style in _walk(root, IDENTITY, sheet, {})
+             if _local(element.tag) == "text" and _text_of(element)]
+    if not sizes or not view.height or min(sizes) <= 0:
+        return 0.0
+    needed = legible_pt * view.height / (min(sizes) * 72.0)
+    if needed * view.aspect > width_in + 1e-6:
+        return math.inf
+    return needed

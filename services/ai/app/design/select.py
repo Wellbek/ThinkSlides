@@ -91,10 +91,11 @@ def legible_tolerance(item: MaterialItem) -> float:
     to the estimated floors, half-width tables came out at 8 and 9pt (#357).
 
     Zero for a typed diagram too, for the same reason: its floor is the
-    diagram laid out at the size it is read at (#363). A drawn SVG figure
-    has no such measurement and keeps the estimate's tolerance.
+    diagram laid out at the size it is read at (#363). And zero for an
+    imported SVG, whose floor is the height that draws its smallest label at
+    that size (#350).
     """
-    if item.kind == "table" or _typed_diagram(item):
+    if item.kind == "table" or _typed_diagram(item) or _svg_of(item):
         return 0.0
     return LEGIBLE_TOLERANCE
 
@@ -399,6 +400,14 @@ def exhibit_floor_in(item: MaterialItem, pack: Pack,
         body = pack.type_roles.get("body")
         size_pt = body.size_pt if body else 12.0
         return max(1, len(rows)) * size_pt * TABLE_ROW_LEADING / 72.0
+    if item.kind == "diagram" and width_in and _svg_of(item):
+        # A graph laid out by Mermaid, or drawn by the model, is imported at
+        # whatever scale fits the slot, and its labels shrink with it (#350).
+        from app.renderer import diagrams
+        from app.renderer.svg.importer import legible_height_in
+
+        return max(MIN_EXHIBIT_IN["diagram"],
+                   legible_height_in(_svg_of(item), width_in, diagrams.LEGIBLE_PT))
     if item.kind == "diagram" and width_in:
         # Laid out at the legibility floor, the way it will be drawn: a flow
         # whose steps cannot hold their longest word whole at this width is
@@ -414,6 +423,14 @@ def exhibit_floor_in(item: MaterialItem, pack: Pack,
                      for face in faces)
         return max(MIN_EXHIBIT_IN["diagram"], needed)
     return MIN_EXHIBIT_IN.get(item.kind, 0.0)
+
+
+def _svg_of(item: MaterialItem) -> str:
+    """The SVG document an imported diagram is drawn from, if it is one."""
+    from app.renderer.diagrams import payload_of
+
+    payload = payload_of(item.payload or {})
+    return str(payload.get("svg") or "") if payload.get("format") == "svg" else ""
 
 
 def legibility_shortfall(item: MaterialItem, pack: Pack,
