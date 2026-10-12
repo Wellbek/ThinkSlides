@@ -471,8 +471,13 @@ The requests run **concurrently**, at most `compile_concurrency` (6) at once.
 - An exhibit is put on the slide the request was for, whatever slide index the answer named.
 - A slide that fails any check is asked **once more** (`MAX_ATTEMPTS` 2), in the same conversation, with each call's result and a line per failure.
   This is the plan's escalation rule: a compile output failing a gate twice moves on.
-- A slide compile could not produce stays outstanding, and the drafting conversation picks it up.
-  Compile is the fast path, not the only one.
+  The retry is a whole answer: what the first answer built is discarded before it is applied, since both answers fall in one validation round, where a rebuild under a new slot name would otherwise sit beside the first.
+- A slide compile could not finish goes to the drafting conversation.
+  One whose copy never arrived is still outstanding; one whose copy was stored but whose exhibit or slide check failed is queued for drafting, and the drafting directive names what did not go through.
+  Without that, the stored slide counted as written and shipped with copy written round an exhibit that was never built.
+- A request that fails hands its slide to drafting rather than ending the run: one slide's error must not lose the slides written beside it.
+  A provider that is really down fails drafting next, which does end the run.
+- An image selected in the same answer is placed with the copy whether or not the copy names it, and the copy's budget counts the exhibits the plan gave the slide, so the budget it is written to is the one it is checked against.
 - Compile does not run on an uploaded template, where each slide chooses a layout before it is written.
   It also does not run where the drafting conversation would offer `edit_deck_with_code`, one slide sent back with a deck already rendered, since a position fix may be the right answer there.
   Every first pass and every round that rewrites several slides has no such script on offer.
@@ -480,7 +485,7 @@ The requests run **concurrently**, at most `compile_concurrency` (6) at once.
 
 Before compile, drafting a slide took four or five sequential calls: choose an exhibit, call `design_slide_content` (which made a call of its own for the copy), validate, end the turn.
 On the three-slide HTTP caching task the whole run took 17 chat calls before compile and 11 after, including two retries and a revision round (`technical-http-caching/20261012-162837-claude-code`).
-Recorded concurrent answers arrive in completion order, so replay hands each request the answer recorded under its own hash, and falls back to order only when the prompt drifted.
+Recorded concurrent answers arrive in completion order, so replay hands each request the answer recorded under its own hash; when the prompt drifted (every prompt does on another day, since each carries the date), the answer recorded from the same place in the run, which names the slide, and only then the next in order.
 
 ## 15. How a run is checked afterwards
 

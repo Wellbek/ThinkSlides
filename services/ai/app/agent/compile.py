@@ -193,8 +193,10 @@ async def compile_all(loop: "AgentLoop", context: dict, chat_messages: list[dict
     """Compile every outstanding slide concurrently, streaming their events.
 
     Each slide runs as its own task; their events are merged into this one
-    stream in the order they happen. A provider that cannot be reached ends
-    the phase the way a failed model turn ends any other.
+    stream in the order they happen. A slide whose request fails is left to
+    drafting like any other slide compile could not produce: one bad request
+    must not end a run whose other slides were written (#381 review). A
+    provider that is really down fails drafting next, which ends the run.
     """
     indices = outstanding(loop)
     if not indices:
@@ -218,7 +220,6 @@ async def compile_all(loop: "AgentLoop", context: dict, chat_messages: list[dict
 
     tasks = [asyncio.create_task(one(i)) for i in indices]
     pending = set(tasks)
-    failed = False
     try:
         while pending or not queue.empty():
             if queue.empty():
@@ -233,16 +234,12 @@ async def compile_all(loop: "AgentLoop", context: dict, chat_messages: list[dict
             else:
                 item = queue.get_nowait()
             kind, payload = item
-            if kind == "provider_failed":
-                failed = True
-            elif kind == "event":
+            if kind == "event":
                 yield kind, payload
     finally:
         for task in tasks:
             if not task.done():
                 task.cancel()
-    if failed:
-        yield "provider_failed", True
 
 
 async def compile_slide(loop: "AgentLoop", index: int, shared: str, tools: list[dict],
@@ -250,10 +247,17 @@ async def compile_slide(loop: "AgentLoop", index: int, shared: str, tools: list[
                         session_id: uuid.UUID, phase: pipeline.Phase,
                         ) -> AsyncIterator[tuple[str, object]]:
     """Ask for one slide, check what came back, and ask once more if it failed."""
-    from app.agent.loop import _event, _iso_now, _provider_failure_message
+    from app.agent.loop import _event, _iso_now
 
+    ws = loop.working_state
+    offered = {t["function"]["name"] for t in tools}
     messages = [{"role": "system", "content": shared}, *chat_messages,
                 {"role": "user", "content": slide_request(loop, index, context)}]
+    # What the slide carried before this compile, so a retry replaces what
+    # the first answer built instead of stacking beside it: both answers are
+    # in one validation round, where prepare_visual keeps distinct slots.
+    carried = list(ws.prepared_visuals.get(index) or [])
+    carried_rounds = dict(ws.prepared_rounds.get(index) or {})
     with trace.span("step", f"compile slide {index + 1}",
                     reason="one structured answer per slide", slideIndex=index) as span:
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -267,22 +271,27 @@ async def compile_slide(loop: "AgentLoop", index: int, shared: str, tools: list[
                     else:
                         response = payload
             except Exception as e:
-                logger.error("llm_call_failed", error=str(e), phase=phase.name,
-                             slide_index=index)
-                yield "event", _event("error", phase.label, {
-                    "message": _provider_failure_message(e),
-                    "code": "provider_unavailable",
-                    "timestamp": _iso_now(),
-                }, step=phase.name)
-                yield "provider_failed", True
+                logger.warning("slide_compile_request_failed", error=str(e),
+                               slide_index=index, attempt=attempt)
+                _hand_to_drafting(loop, index, [f"the request failed: {e}"])
                 return
 
             assistant = (response or {}).get("message") or {}
-            calls = (response or {}).get("tool_calls") or []
+            # Every call carries an id from here on, so the transcript a retry
+            # sends pairs each call with its result.
+            calls = [{**c, "id": c.get("id") or f"call_{index}_{attempt}_{n}"}
+                     for n, c in enumerate((response or {}).get("tool_calls") or [])]
+            if (assistant.get("content") or "").strip():
+                yield "event", _event("thought", phase.label, {
+                    "content": assistant["content"], "timestamp": _iso_now(),
+                }, step=phase.name)
+            if attempt > 1:
+                ws.prepared_visuals[index] = list(carried)
+                ws.prepared_rounds[index] = dict(carried_rounds)
             failures: list[str] = []
             results: list[tuple[str, ToolResult]] = []
             async for kind, payload in _apply(loop, index, calls, context,
-                                              session_id, phase):
+                                              session_id, phase, offered):
                 if kind == "event":
                     yield "event", payload
                 else:
@@ -290,14 +299,17 @@ async def compile_slide(loop: "AgentLoop", index: int, shared: str, tools: list[
             if span is not None:
                 span.set(attempts=attempt, failures=len(failures))
             if not failures:
+                ws.compile_failures.pop(index, None)
                 return
             if attempt == MAX_ATTEMPTS:
                 logger.warning("slide_compile_gave_up", slide_index=index,
                                failures=failures[:4])
+                _hand_to_drafting(loop, index, failures)
                 return
             # The same conversation, continued: what was asked, what came back,
             # what each call returned, and what must change.
-            messages.append({**assistant, "role": "assistant", "tool_calls": calls})
+            messages.append({"role": "assistant", "content": assistant.get("content") or "",
+                             "tool_calls": calls})
             for call_id, result in results:
                 messages.append({
                     "role": "tool",
@@ -309,14 +321,31 @@ async def compile_slide(loop: "AgentLoop", index: int, shared: str, tools: list[
             messages.append({"role": "user", "content": (
                 "Not all of that went through:\n"
                 + "\n".join(f"- {f}" for f in failures)
-                + "\n\nAnswer again for this slide: rebuild any exhibit that "
-                "failed or should change, and end with write_slide carrying the "
-                "slide's whole copy, written for the exhibits it now has."
+                + "\n\nAnswer again for this slide with the whole answer: every "
+                "exhibit it should carry, rebuilt, and write_slide with the slide's "
+                "whole copy. What the first answer built is discarded."
             )})
+
+
+def _hand_to_drafting(loop: "AgentLoop", index: int, failures: list[str]) -> None:
+    """Leave a slide compile could not finish to the drafting conversation.
+
+    A slide whose copy never arrived is still outstanding, and drafting
+    writes it. One whose copy arrived but whose exhibits or check failed is
+    stored, so nothing would come back to it and it would ship with copy
+    written round a chart that does not exist (#381 review): it is queued
+    for drafting with what failed, which the drafting directive names.
+    """
+    ws = loop.working_state
+    ws.compile_failures[index] = [str(f)[:500] for f in failures[:6]]
+    stored = any(s.get("slideIndex") == index for s in ws.accumulated_slides)
+    if stored and index not in ws.revision_queue:
+        ws.revision_queue.append(index)
 
 
 async def _apply(loop: "AgentLoop", index: int, calls: list[dict], context: dict,
                  session_id: uuid.UUID, phase: pipeline.Phase,
+                 offered: set[str] | None = None,
                  ) -> AsyncIterator[tuple[str, object]]:
     """Run one answer's calls through the loop's own dispatcher.
 
@@ -325,7 +354,8 @@ async def _apply(loop: "AgentLoop", index: int, calls: list[dict], context: dict
     result by call id, for the retry's transcript, and a line per thing that
     did not go through.
     """
-    offered = {s["function"]["name"] for s in offered_tools(loop)}
+    if offered is None:
+        offered = {s["function"]["name"] for s in offered_tools(loop)}
     results: list[tuple[str, ToolResult]] = []
     failures: list[str] = []
     written = None
@@ -341,6 +371,11 @@ async def _apply(loop: "AgentLoop", index: int, calls: list[dict], context: dict
         if not isinstance(args, dict):
             result = ToolResult(success=False, error="The arguments were not a JSON object.")
         elif name == WRITE_SLIDE:
+            if written is not None:
+                # Every call gets a result, or the retry's transcript is
+                # refused; only the last copy written is used.
+                results.append((written[0], ToolResult(
+                    success=False, error="Replaced by a later write_slide in the same answer.")))
             written = (call_id, args.get("slide"))
             continue
         elif name not in offered:
@@ -374,6 +409,7 @@ async def _apply(loop: "AgentLoop", index: int, calls: list[dict], context: dict
     else:
         plan = (loop.working_state.presentation_structure or {}).get("slides") or []
         outline = dict(plan[index]) if index < len(plan) else {}
+        slide = _with_selected_image(loop, index, slide)
         result = None
         async for kind, payload in loop._dispatch_tool(
             "design_slide_content",
@@ -407,3 +443,19 @@ async def _apply(loop: "AgentLoop", index: int, calls: list[dict], context: dict
     if check is not None and not check.success:
         failures.append(f"the slide check: {check.error}")
     yield "result", (results, failures)
+
+
+def _with_selected_image(loop: "AgentLoop", index: int, slide: dict) -> dict:
+    """The copy, carrying the image this slide selected, if the copy forgot it.
+
+    The selection is made in the same answer as the copy, so the copy could
+    not see it, and a selected image reaches the page only through an image
+    item in the copy (#381 review).
+    """
+    if not loop.working_state.selected_images.get(index):
+        return slide
+    contents = list(slide.get("contents") or [])
+    if any(isinstance(c, dict) and c.get("type") == "image" for c in contents):
+        return slide
+    return {**slide, "contents": [*contents,
+                                  {"type": "image", "image": {"source": "selected"}}]}

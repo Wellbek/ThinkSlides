@@ -28,6 +28,16 @@ _DIGIT_RE = re.compile(r"\d")
 # The planned content types whose slide is built around an exhibit.
 _EXHIBIT_CONTENT_TYPES = frozenset({"chart", "table", "dashboard"})
 
+def _planned_exhibits(outline: dict) -> list[dict]:
+    """Stand-ins for the exhibits the plan gave a slide, for its budget."""
+    kind = str(outline.get("contentType") or "").strip().lower()
+    if kind == "dashboard":
+        return [{"type": "chart"} for _ in (outline.get("exhibitPlan") or [None, None])]
+    if kind in ("chart", "table"):
+        return [{"type": kind}]
+    return []
+
+
 # How many of a template's compositions to offer a slide. Enough to cover the
 # shapes a deck actually repeats, few enough that the prompt stays about this
 # slide rather than about the template's catalogue.
@@ -389,6 +399,12 @@ Design System Context:
 """
 
     image_info = (
+        # Compile writes the image's selection in the same answer as the
+        # copy, so whether one exists is not known yet (#381 review); one
+        # that is chosen is placed whether or not the copy names it.
+        "\nIf this answer selects or generates an image for this slide, it is "
+        "placed on the slide with the copy; do not write image data yourself."
+        if compiling and not selected_image.get("data") else
         "\nA pre-vetted source image IS available for this slide "
         f"(what it shows: {selected_image.get('altText', '') or 'see catalog context'!r}). "
         'If it fits the slide, include {"type": "image", "image": {"source": "selected"}} in contents.'
@@ -405,8 +421,15 @@ Design System Context:
     # the run context as it is computed, because the validator checks
     # the written slide against the same budget and must not be the
     # one deciding how thin the material was.
-    density_info = _density_guidance(ds, outline, key_points, attached,
-                                     slide_index, deck_format)
+    # While compiling, the exhibits the plan calls for are written in the
+    # same answer, so the budget the copy is written to counts them: the
+    # finishing call recomputes it from what was actually built, and a
+    # budget stated without them asked for a text page's worth of copy
+    # beside a chart (#381 review).
+    density_info = _density_guidance(
+        ds, outline, key_points,
+        attached or (_planned_exhibits(outline) if compiling else []),
+        slide_index, deck_format)
     # The compositions this template actually uses, read off its own
     # pages. Offered as region trees the slide can adopt wholesale,
     # because a rail described in prose is a rail the model has to

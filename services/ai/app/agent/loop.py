@@ -659,6 +659,9 @@ class WorkingState:
         # produce stays outstanding for drafting, and is not asked again until
         # the next round sends it back.
         self.compile_tried: set[int] = set()
+        # What compile could not finish on a slide it handed to drafting, by
+        # slide, so the drafting directive can say what to fix.
+        self.compile_failures: dict[int, list[str]] = {}
         # How many times each slide has been revised for its *layout*, and
         # which arrangements it has already been placed on.
         #
@@ -1297,6 +1300,7 @@ class WorkingState:
         self.slides_needing_revision = []
         self.revision_queue = []
         self.compile_tried = set()
+        self.compile_failures = {}
         self.layout_revisions = {}
         self.layout_exhausted = set()
         self.arrangements_tried = {}
@@ -1856,6 +1860,8 @@ class AgentLoop:
             "slides_needing_revision": self.working_state.slides_needing_revision,
             "revision_queue": self.working_state.revision_queue,
             "compile_tried": sorted(self.working_state.compile_tried),
+            "compile_failures": {str(k): v for k, v in
+                                 self.working_state.compile_failures.items()},
             # Without these a resumed run forgets what it has already tried
             # and starts the ladder again from the bottom - which is not a cap
             # of two, it is a cap of two per reload.
@@ -1985,6 +1991,9 @@ class AgentLoop:
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
             self.working_state.compile_tried = set(state_dict.get("compile_tried") or [])
+            self.working_state.compile_failures = {
+                int(k): list(v) for k, v in
+                (state_dict.get("compile_failures") or {}).items()}
             if "revision_queue" in state_dict:
                 self.working_state.revision_queue = state_dict["revision_queue"]
             elif (state_dict.get("validation_issues")
@@ -2143,6 +2152,10 @@ class AgentLoop:
         ws.validation_issues = []
         ws.slides_needing_revision = []
         ws.revision_queue = []
+        # The last run's compile bookkeeping is about slides it was writing,
+        # not the ones this amendment sends back.
+        ws.compile_tried = set()
+        ws.compile_failures = {}
         ws.validation_attempts = 0
         ws.validation_failures = 0
         ws.validated_serial = -1
@@ -3829,6 +3842,19 @@ class AgentLoop:
         title = planned.get("title") or planned.get("heading") or ""
         revising = index in self.working_state.revision_queue
 
+        unfinished = self.working_state.compile_failures.get(index)
+        if unfinished and not compiling:
+            return (
+                f"Finish slide {index + 1}"
+                + (f' ("{title}")' if title else "")
+                + ". It was written in one answer, and this did not go through:\n"
+                + "\n".join(f"  - {f}" for f in unfinished)
+                + "\nFix that - rebuild the exhibit it needs with the build_* tool, "
+                f"or write the copy without it - then {write}."
+                + self._attached_exhibits_directive(index)
+                + self._exhibit_capacity_directive()
+                + self._headline_capacity_directive()
+            )
         if revising:
             # Named only when it is actually offered - see the same rule
             # below for select_layout. A positioning complaint (an overlap,
@@ -4925,6 +4951,7 @@ class AgentLoop:
                     [] if validation_done
                     else self.working_state.revision_round(issues, exclude=relayout))
                 self.working_state.compile_tried = set()
+                self.working_state.compile_failures = {}
             else:
                 self.working_state.validation_failures += 1
                 validation_done = (
@@ -4990,6 +5017,10 @@ class AgentLoop:
                     redrafted = tool_result.data.get("slideIndex")
                     if redrafted in self.working_state.revision_queue:
                         self.working_state.revision_queue.remove(redrafted)
+                    if fn_args.get("written") is None:
+                        # The drafting conversation rewrote it, so what
+                        # compile could not finish on it is answered.
+                        self.working_state.compile_failures.pop(redrafted, None)
 
             # Recorded by slide_index so design_slide_content's
             # layout_info can be auto-supplied later (see the
@@ -5109,6 +5140,7 @@ class AgentLoop:
                          "detail": data.get("instruction", "")} for i in indices]
                     ws.revision_queue = list(indices)
                     ws.compile_tried = set()
+                    ws.compile_failures = {}
                     ws.slides_needing_revision = list(indices)
                     ws.amend_redrafted |= set(indices)
                     ws.design_serial += 1
