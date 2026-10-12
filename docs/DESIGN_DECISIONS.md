@@ -574,6 +574,10 @@ Each outstanding slide is asked for in **one request**, and its answer carries t
 The requests run **concurrently**, at most `compile_concurrency` (6) at once.
 - Every request shares one prompt prefix: the sourcing rules, how exhibits are built, the research findings and the deck's whole outline, then the user's own messages.
   Only the slide's own request differs, and it comes last, so a provider can cache the prefix across the deck.
+- The first slide's request goes **alone**, and the rest are sent once it is answered (#325).
+  A provider writes its cache as it serves a request, so requests sent together each pay for the shared prefix in full; on the three-slide footer probe the prefix is 40.9K of each request's 47.5K characters.
+  One request's latency buys every other slide that prefix from the cache.
+  A first request that fails releases the others at once.
 - The answer is checked by the same code a drafted slide went through: each builder validates its own arguments, the grounding check refuses a figure nothing stands behind, `design_slide_content` finishes the copy it is handed (`written`) without a call of its own, and `validate_slide_json` checks the slide.
 - An exhibit is put on the slide the request was for, whatever slide index the answer named.
 - A slide that fails any check is asked **once more** (`MAX_ATTEMPTS` 2), in the same conversation, with each call's result and a line per failure.
@@ -593,6 +597,19 @@ The requests run **concurrently**, at most `compile_concurrency` (6) at once.
 Before compile, drafting a slide took four or five sequential calls: choose an exhibit, call `design_slide_content` (which made a call of its own for the copy), validate, end the turn.
 On the three-slide HTTP caching task the whole run took 17 chat calls before compile and 11 after, including two retries and a revision round (`technical-http-caching/20261012-162837-claude-code`).
 Recorded concurrent answers arrive in completion order, so replay hands each request the answer recorded under its own hash; when the prompt drifted (every prompt does on another day, since each carries the date), the answer recorded from the same place in the run, which names the slide, and only then the next in order.
+
+### Prompt layout for a prefix cache (#325)
+
+Providers cache a request by prefix, reading tools first, then the system prompt, then the conversation (R-107), so the system prompt the loop's model-driven steps share is laid out with everything that holds for the whole run first and everything a step changes last.
+- **Head, the same at every step:** the date line, the rules, the detail level, the research rules for the run's mode, how exhibits are built, the tools the run has, and the design system.
+  The design system is written with its keys sorted: restored from saved state between parts of a run it comes back in another key order, which was the same tokens as a different prompt.
+- **Tail:** the research findings (which grow while research runs and then hold), the tools offered only at some steps (`revise_slides` while amending, `edit_deck_with_code` once a rendered file exists), the work completed so far, and the next step.
+  Before this the completed work and the step-filtered tool list sat ahead of the design system, so a request's cacheable prefix ended about 12K characters in.
+- What a cache could have answered is measured on every run, in every mode, replays included (`app.research.prefix`, `prefix.jsonl` in the run directory, `python -m app.research prefix <run>`): each chat request against every request already answered when it was sent, counting a shared prefix from 1,024 tokens up.
+  A replay yields once before each answer, so requests a phase sends together are measured as concurrent, as they are against a real provider.
+- On the replay of `probe-footer-not-cover/20261013-061639-claude-code`, the share of chat input a cache could have answered went from 4.8% to 40.9%.
+  Steps whose tools differ still share nothing: tools come first, so the change step (two tools) and the closing message (none) cannot reuse each other's prefix.
+  Sending every step the same tools and restricting them with OpenAI's `allowed_tools` would remove that, at the price of every request carrying every schema, and is not done here.
 
 ## 15. How a run is checked afterwards
 
