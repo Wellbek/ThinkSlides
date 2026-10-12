@@ -359,11 +359,11 @@ So once a page is bound (`settle.settle`):
 - In a row of several frames, an exhibit shorter than the row is centred on it; copy stays at the row's top.
   At the top of a column the copy runs the full length of, a short flow left the rest of that column empty.
 - **Short prose alone is the heading's lead (#392).**
-  When everything under the heading is prose and it fills at most `SHORT_PROSE_SHARE` (half) of the space there at body size, it is set a rung up, in the pack's `standfirst`, all of it together, and starts `LEAD_GAP` (10% of the content box) under the heading, or the archetype's own gap if that is larger.
-  Only when the lead still fits every row's own band and the space under the heading; otherwise the page is settled as below.
-  Centred at body size, three sentences of about 60 characters floated mid-page as an island apart from their heading, 1.25in of air above them and 1.9in below (`probe-footer-not-cover/20261013-061639-claude-code`, all three pages); set as a lead they read as the opening of a report page.
-  Across the 24 languages the gate admits from the evidence runs, a page of three short sentences became a lead in 20 (in the other 4 the lead did not fit, or the copy was not set in the body rung to begin with); nine sentences stayed at body size in 23, and in the 24th (Risk Brief), whose narrow prose slot already splits them over three pages, one of those pages became a lead; a page with an exhibit beside its prose was untouched; and no page changed its arrangement or split differently.
-  Prose beside an exhibit is not a lead: the group there is set at the optical centre, as below.
+  When there is a heading and everything under it is prose filling at most `SHORT_PROSE_SHARE` (half) of the space there, the prose starts exactly `LEAD_GAP` (10% of the content box) under the heading, or the archetype's own gap if that is larger, at the rung selection gave it; the space left is below it.
+  Centred instead, three sentences of about 60 characters floated mid-page as an island apart from their heading, 1.25in of air above them and 1.9in below (`probe-footer-not-cover/20261013-061639-claude-code`, all three pages).
+  Only the position changes: setting such prose a rung up was tried and dropped, since a rung is selection's decision (it would have set over-long paragraphs and bulleted lists in a display rung, and changed face part-way through a split story).
+  Prose beside an exhibit, and prose that is not short, is settled at the optical centre as below.
+  Across the 24 languages the gate admits from the evidence runs, composing three short sentences, nine, and three beside a table, no page changed its arrangement, its rungs, its split or its copy budget against the rule before it.
 - The heading stays where the archetype puts it, and the rows below it are set as one group in the space under it, at the optical centre: `OPTICAL_SHARE` (0.4) of the free space above the group, the rest below, and never closer to the heading than the archetype's own gap.
 - Nothing moves when the space freed is under `MIN_SLACK` (8% of the content box): a page that nearly fills its arrangement is the arrangement working.
 - Only content and exhibit pages that are a clean vertical stack of grid-placed frames are settled, the shape an authored language derives; an opener, a divider and a closing page compose their space on purpose, and a measured pack is left as its own pages were.
@@ -666,7 +666,7 @@ The ones that report on the decisions above:
 | `PLAIN_COLUMN_SHARE` | 0.34 | `design/vocabulary.py` |
 | `MIN_SLACK` | 0.08 of the content box | `design/settle.py` |
 | `OPTICAL_SHARE` | 0.4 of the free space, above the group | `design/settle.py` |
-| `SHORT_PROSE_SHARE`, `LEAD_GAP`, `LEAD_ROLE` | 0.5 of the space under the heading, 0.10 of the content box, `standfirst` | `design/settle.py` |
+| `SHORT_PROSE_SHARE`, `LEAD_GAP` | 0.5 of the space under the heading, 0.10 of the content box | `design/settle.py` |
 | `W_SMALL_RUNG` | 3.0 | `design/select.py` |
 | `PARALLEL_SPREAD` | 2.0 (longest / shortest paragraph) | `design/select.py` |
 | `CAPACITY_STARTS` | 12 starting words, fewest kept | `design/setting.py` |
@@ -727,7 +727,7 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #380 | `technical-http-caching/20261012-162837-claude-code` | A last-round `replace` set slide 3's five-sentence body in the `exhibit` arrangement's caption slot, 439 characters where it holds about 175, and the last line ran off the page. | A re-placement must not make the page worse; an alternative must hold the copy (section 13). |
 | #350 | `technical-http-caching/20261012-162837-claude-code` | A Mermaid sequence diagram imported with no message arrows, a black mark at its top-left and its note unboxed; on the stacked arrangement it shrank to a third of its slot. | An imported SVG's floor is its smallest label at 10pt (section 7); the import fixes themselves are in `renderer/svg/importer.py`. |
 | #378 | the eight `probe-*` decks, 2026-10-04, and `technical-http-caching/20261012-162837-claude-code` | Two sentences beside or above a one-row flow kept the archetype's full heights: the flow floated in a tall frame and the bottom third of the page was empty, on every probe deck, so `validation_converged` failed for spacing alone. | Settling short material (section 10). |
-| #392 | `probe-footer-not-cover/20261013-061639-claude-code`, and the 24 admitted evidence languages composing three and nine short sentences and three beside a table | Three sentences under a heading floated mid-page apart from it on every page of the deck. | Short prose alone is the heading's lead (section 10). |
+| #392 | `probe-footer-not-cover/20261013-061639-claude-code`, and the 24 admitted evidence languages composing three and nine short sentences and three beside a table | Three sentences under a heading floated mid-page apart from it on every page of the deck. | Short prose alone starts under its heading (section 10). |
 | #371 | the 23 languages authored in `benchmark/evidence/`, composing a heading and three points of about 100 characters | On 10 of them one point was set in a caption, footnote or standfirst rung and the other two in the body. | Parallel points share a rung (section 6.3). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

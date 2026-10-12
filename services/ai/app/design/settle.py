@@ -51,18 +51,14 @@ OPTICAL_SHARE = 0.4
 SETTLED_ROLES = ("content", "exhibit")
 
 # A page of prose alone that fills at most this share of the space under its
-# heading is short: set at body size and centred in that space, three
-# sentences floated mid-page as an island apart from their heading (#392).
+# heading is short: centred in that space, three sentences floated mid-page
+# as an island apart from their heading (#392).
 SHORT_PROSE_SHARE = 0.5
 
 # Where short prose starts under its heading: this share of the content box
-# below it, the archetype's own gap if that is larger. Close enough to read
-# as the heading's lead, far enough not to crowd it.
+# below it, or the archetype's own gap if that is larger. Close enough to
+# read as the heading's lead, far enough not to crowd it.
 LEAD_GAP = 0.10
-
-# The rung short prose is set in, a step up from the body, as a publication
-# sets a short text page as its lead paragraph.
-LEAD_ROLE = "standfirst"
 
 
 def settle(frames: tuple[Frame, ...], pack: Pack, grid: GridSpec,
@@ -98,11 +94,9 @@ def settle(frames: tuple[Frame, ...], pack: Pack, grid: GridSpec,
         return frames
 
     def measure(body):
-        """Each row cut to what it holds; and whether every row's copy fits
-        the band the archetype gave that row."""
+        """Each row cut to what it holds."""
         heights: dict[str, float] = {}
         row_heights = []
-        within = True
         for row in body:
             top = min(_band(f)[0] for f in row)
             bottom = max(_band(f)[1] for f in row)
@@ -115,45 +109,36 @@ def settle(frames: tuple[Frame, ...], pack: Pack, grid: GridSpec,
             if any(n is None for n in natural):
                 row_heights.append(bottom - top)
                 continue
-            within = within and max(natural) <= (bottom - top) + 1e-6
             height = min(bottom - top, max(natural))
             row_heights.append(height)
             for frame in row:
                 heights[frame.id] = min(_band(frame)[1] - _band(frame)[0], height)
-        return heights, row_heights, within
+        return heights, row_heights
 
-    heights, row_heights, _ = measure(body)
+    heights, row_heights = measure(body)
     gap = _typical_gap(placed)
     start = min(_band(f)[0] for f in body[0])
     end = max(_band(f)[1] for f in body[-1])
     used = sum(row_heights) + gap * (len(body) - 1)
     ceiling = (max(_band(f)[1] for f in rows[first - 1]) if first else start)
     designed_gap = start - ceiling
-    prose = _prose_only(body)
-    if prose and used <= SHORT_PROSE_SHARE * (end - ceiling):
-        # Short prose is the heading's lead: a rung up when that still fits
-        # the space under the heading, all of it together.
-        lead = _set_as_lead(body, pack)
-        if lead is not None:
-            lead_heights, lead_rows, lead_within = measure(lead)
-            lead_used = sum(lead_rows) + gap * (len(lead) - 1)
-            if lead_within and lead_used <= end - ceiling - max(designed_gap, LEAD_GAP):
-                body, heights, row_heights, used = lead, lead_heights, lead_rows, lead_used
-                swapped = {f.id: f for row in body for f in row}
-                frames = tuple(swapped.get(f.id, f) for f in frames)
+    # Short prose alone, under a heading, is the heading's lead: set a fixed
+    # step under it, at its own size, rather than centred apart from it.
+    lead_at = ceiling + max(designed_gap, LEAD_GAP)
+    led = (first > 0 and _prose_only(body)
+           and used <= SHORT_PROSE_SHARE * (end - ceiling)
+           and lead_at + used <= end)
     slack = (end - start) - used
     if slack < MIN_SLACK:
         return frames
 
     # The group is placed in all the space under the heading, the archetype's
     # own gap below the heading included, at the optical centre - but never
-    # closer to the heading than that gap. Prose alone is the heading's
-    # lead and starts a fixed step under it instead: centred, a few lines
-    # read as an island apart from their heading (#392).
+    # closer to the heading than that gap. A lead starts its fixed step
+    # under the heading instead.
     free = end - ceiling - used
     moved: dict[str, tuple[float, float]] = {}
-    offset_below = min(free * OPTICAL_SHARE, LEAD_GAP) if prose else free * OPTICAL_SHARE
-    cursor = ceiling + max(designed_gap, offset_below)
+    cursor = lead_at if led else ceiling + max(designed_gap, free * OPTICAL_SHARE)
     for row, height in zip(body, row_heights):
         top = min(_band(f)[0] for f in row)
         for frame in row:
@@ -187,19 +172,6 @@ def _prose_only(body) -> bool:
     return all(frame.content and not frame.children
                and all(isinstance(item, TextBlock) for item in frame.content)
                for row in body for frame in row)
-
-
-def _set_as_lead(body, pack: Pack):
-    """The rows with every body-rung block set in the lead rung, or None
-    when the pack has no such rung or any block is set in another one."""
-    if LEAD_ROLE not in pack.type_roles:
-        return None
-    if any(item.type_role != "body" for row in body for frame in row
-           for item in frame.content):
-        return None
-    return [[frame.model_copy(update={"content": tuple(
-                item.model_copy(update={"type_role": LEAD_ROLE}) for item in frame.content)})
-             for frame in row] for row in body]
 
 
 def _holds_an_exhibit(frame: Frame) -> bool:

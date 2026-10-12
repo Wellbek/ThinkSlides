@@ -10,8 +10,7 @@ frame several times its height under a band of empty page.
 from app.design import run as design_run
 from app.design.bind import _band
 from app.design.repair import overflow_findings
-from app.design.settle import (LEAD_GAP, LEAD_ROLE, MIN_SLACK, OPTICAL_SHARE,
-                                SHORT_PROSE_SHARE)
+from app.design.settle import LEAD_GAP, MIN_SLACK, OPTICAL_SHARE, SHORT_PROSE_SHARE
 from tests.test_replace_holds_copy import pack, slide  # noqa: F401 - fixtures
 
 STACKED = "claim-evidence-stacked"
@@ -86,33 +85,42 @@ SHORT = ["Every runner read from and wrote to the same shared disk.",
          "A full or slow volume failed builds that had nothing else in common."]
 
 
-def test_short_prose_is_set_as_the_headings_lead_not_floated(pack, slide):  # noqa: F811
-    """#392: three sentences under a heading were centred in the space below
-    it, an island apart from their heading. Short prose alone is set a rung
-    up, LEAD_GAP under the heading."""
-    doc = design_run.compose([_prose_only(slide, SHORT)], pack)
+def _gap_under_heading(doc):
     (page,) = doc.pages
     heading = next(f for f in page.frames if f.id == page.provenance.heading_frame)
     copy = next(f for f in page.frames if f.content and f.id != heading.id)
-    assert {block.type_role for block in copy.content} == {LEAD_ROLE}
-    gap = _band(copy)[0] - _band(heading)[1]
-    assert gap <= LEAD_GAP + 1e-6
+    return page, copy, _band(copy)[0] - _band(heading)[1]
+
+
+def test_short_prose_starts_under_its_heading_not_floated(pack, slide):  # noqa: F811
+    """#392: three sentences under a heading were centred in the space below
+    it, an island apart from their heading. Short prose alone starts
+    LEAD_GAP under the heading, at its own rung."""
+    doc = design_run.compose([_prose_only(slide, SHORT)], pack)
+    page, copy, gap = _gap_under_heading(doc)
+    archetype = pack.archetype(page.archetype)
+    stated = {f.id: _band(f) for f in archetype.frames if _band(f)}
+    designed = stated[copy.id][0] - stated[page.provenance.heading_frame][1]
+    assert abs(gap - max(designed, LEAD_GAP)) < 1e-3
+    assert {block.type_role for block in copy.content} == {"body"}
     assert not overflow_findings(doc, page, pack)
 
 
-def test_prose_that_fills_its_page_keeps_the_body_rung(pack, slide):  # noqa: F811
-    doc = design_run.compose([_prose_only(slide, SHORT * 4)], pack)
-    rungs = {block.type_role for page in doc.pages for f in page.frames
-             if f.id != page.provenance.heading_frame for block in f.content
-             if hasattr(block, "type_role")}
-    assert LEAD_ROLE not in rungs
+def test_prose_that_is_not_short_is_set_at_the_optical_centre(pack, slide, monkeypatch):  # noqa: F811
+    from app.design import settle
+
+    monkeypatch.setattr(settle, "SHORT_PROSE_SHARE", 0.0)
+    _, _, gap = _gap_under_heading(design_run.compose([_prose_only(slide, SHORT)], pack))
+    assert gap > LEAD_GAP
 
 
 def test_prose_beside_an_exhibit_is_not_a_lead(pack, slide):  # noqa: F811
-    _, page = _composed(pack, slide, STACKED)
-    rungs = {block.type_role for f in page.frames for block in f.content
-             if hasattr(block, "type_role")}
-    assert LEAD_ROLE not in rungs
+    """#378's case is unchanged: the group is set at the optical centre."""
+    doc, page = _composed(pack, slide, STACKED)
+    heading = next(f for f in page.frames if f.id == page.provenance.heading_frame)
+    group_top = min(_band(f)[0] for f in page.frames
+                    if _band(f) and f.id != heading.id and f.content)
+    assert group_top - _band(heading)[1] > LEAD_GAP
 
 
 def test_the_lead_parameters_are_stated():
