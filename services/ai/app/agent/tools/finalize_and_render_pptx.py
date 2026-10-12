@@ -39,6 +39,8 @@ class Composed(NamedTuple):
     below_floor: dict
     # Rendered page numbers, from 1, that are covers.
     covers: frozenset
+    # Per rendered page, the source slide it came from (None when none).
+    sources: tuple
 
 
 class FinalizeAndRenderPptxTool:
@@ -183,6 +185,9 @@ class FinalizeAndRenderPptxTool:
             covers: frozenset = frozenset(
                 index + 1 for index, slide in enumerate(slides)
                 if isinstance(slide, dict) and cls._is_cover(slide, index))
+            # Pages the renderer appended after the designed deck: one page
+            # per slide on the template and stock paths.
+            appended: frozenset = frozenset(range(designed_count + 1, len(slides) + 1))
 
             # A run with no template and no pack is about to render stock
             # Office placeholders, which is never what anyone asked for -
@@ -233,7 +238,10 @@ class FinalizeAndRenderPptxTool:
                                 slides, pack, metadata, output_path,
                                 design_system,
                             )
-                            result_path, placed, over_budget, unmovable, below_floor, covers = composed
+                            result_path, placed, over_budget, unmovable, below_floor, covers, _ = composed
+                            appended = frozenset(
+                                number for number, source in enumerate(composed.sources, start=1)
+                                if source is not None and source >= designed_count)
                             render_path = "composed"
                         except Unplaceable as exc:
                             # Material no archetype can carry, even split.
@@ -318,7 +326,7 @@ class FinalizeAndRenderPptxTool:
 
             operation_report = operation_problems + cls._apply_deck_operations(
                 result_path, operations, style_pack, style_system, covers,
-                slides=len(slides))
+                appended, slides=len(slides))
 
             file_size = os.path.getsize(result_path) if os.path.exists(result_path) else 0
 
@@ -557,15 +565,21 @@ class FinalizeAndRenderPptxTool:
     @staticmethod
     def _is_cover(slide: dict, index: int) -> bool:
         """Whether a slide the stock or template path renders is a cover:
-        the first slide, when it says it is a title page."""
+        the first slide, when it says it is a cover or a title page. Said
+        exactly - "Title and Content" and "Title Only" are content layouts
+        whose names happen to contain the word."""
         if index != 0:
             return False
-        said = " ".join(str(slide.get(key) or "") for key in
-                        ("role", "slideType", "layoutName", "layoutId")).lower()
-        return any(word in said for word in ("cover", "title"))
+        role = str(slide.get("role") or "").strip().lower()
+        kind = str(slide.get("contentType") or slide.get("slideType") or "").strip().lower()
+        layout = {str(slide.get(key) or "").strip().lower()
+                  for key in ("layoutName", "layoutId")}
+        return (role in ("cover", "title") or kind in ("cover", "title")
+                or bool(layout & {"title slide", "title", "cover"}))
 
     @staticmethod
-    def _deck_style(pack, design_system: dict, covers: frozenset):
+    def _deck_style(pack, design_system: dict, covers: frozenset,
+                    appended: frozenset = frozenset()):
         """The deck's own colours, face and margin, for an operation to wear."""
         from app.renderer.deck_ops import DeckStyle
 
@@ -580,7 +594,7 @@ class FinalizeAndRenderPptxTool:
                 face=pack.body_face, small_pt=small,
                 margin_in=min(margin.top, margin.right, margin.bottom, margin.left) or 0.5,
                 side_in=min(margin.left, margin.right) or 0.5,
-                cover_pages=covers)
+                cover_pages=covers, appended_pages=appended)
         palette = {str(entry.get("name")): str(entry.get("value"))
                    for entry in ((design_system or {}).get("palette") or {}).get("colors") or []
                    if isinstance(entry, dict) and entry.get("value")}
@@ -593,12 +607,12 @@ class FinalizeAndRenderPptxTool:
             accent_alt=palette.get("accent", defaults.accent_alt),
             ground=palette.get("background", defaults.ground),
             face=str(fonts.get("minorFont") or fonts.get("body") or defaults.face),
-            cover_pages=covers)
+            cover_pages=covers, appended_pages=appended)
 
     @classmethod
     def _apply_deck_operations(cls, path: str, operations: list, pack,
-                               design_system: dict, covers: frozenset, *,
-                               slides: int) -> list[dict]:
+                               design_system: dict, covers: frozenset,
+                               appended: frozenset, *, slides: int) -> list[dict]:
         """Apply the run's deck-wide operations to the file just written.
 
         Never fails the render: a deck without its overlay is still a deck,
@@ -610,7 +624,7 @@ class FinalizeAndRenderPptxTool:
 
         try:
             return deck_ops.apply(path, operations,
-                                  cls._deck_style(pack, design_system, covers),
+                                  cls._deck_style(pack, design_system, covers, appended),
                                   dict(run_context.get_assets()))
         except Exception as exc:   # noqa: BLE001 - the deck itself rendered
             logger.warning("deck_operations_failed", error=str(exc), slides=slides)
@@ -672,7 +686,8 @@ class FinalizeAndRenderPptxTool:
             render_doc(doc, pack, output_path, design_system=design_system),
             placed, copy_over_budget(doc, pack), sorted(set(placed) - movable),
             below_floor,
-            cls._composed_covers(slides, doc))
+            cls._composed_covers(slides, doc),
+            tuple(page.provenance.source_slide for page in doc.pages))
 
     @classmethod
     def _generate_markdown_fallback(cls, slides: list[dict], metadata: dict) -> str:

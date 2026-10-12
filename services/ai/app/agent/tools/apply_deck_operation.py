@@ -100,6 +100,12 @@ class ApplyDeckOperationTool:
             if not target:
                 return ToolResult(success=False,
                                   error="Name the id of the operation to remove.")
+            known = [str(op.get("id")) for op in run_context.get_deck_operations()]
+            if target not in known:
+                listed = ", ".join(known) or "the deck carries none"
+                return ToolResult(success=False, error=(
+                    f"There is no operation {target!r} on the deck ({listed}); "
+                    "nothing was removed."))
             return ToolResult(success=True, data={
                 "action": "remove", "id": target,
                 "summary": f"Operation {target!r} is removed; the deck is rendered again without it.",

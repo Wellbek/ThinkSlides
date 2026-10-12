@@ -508,7 +508,7 @@ The eight probes answered all of them with `edit_deck_with_code` (`benchmark/rep
   The render applies every recorded operation to every file it writes, after composition and before the replay of recorded scripts.
   There is therefore one way an operation reaches a deck, the same on the first render as on the tenth, and a re-render cannot drop one.
   It is applied to the written file rather than inside composition so that it holds on all three render paths (composed, uploaded template, stock) and on pages the renderer appends itself, such as the Sources appendix.
-  An operation replaced under its own id, or removed by id, is gone from the next render.
+  An operation replaced under its own id, or removed by id, is gone from the next render; a removal naming an id the deck does not carry is refused with the ids it does, rather than reported as done.
 - **Placement.**
   An overlay sits at its anchor, inset from the top or bottom edge by the smaller of `EDGE_INSET_IN` and the pack's narrowest margin, which keeps it in the margin band, clear of the grid's content by construction.
   Across, it sits on the grid's side margin, so a footer ends where the copy ends: set `EDGE_INSET_IN` from the edge it lined up with nothing on a page whose copy starts 0.85in in (`probe-footer-not-cover/20261013-061639-claude-code`).
@@ -516,7 +516,8 @@ The eight probes answered all of them with `edit_deck_with_code` (`benchmark/rep
   A picture is fitted inside the size asked for at its own aspect, never stretched; with no size, a picture is 0.6in high and a QR code 1.0in.
   Text with no size is set at the pack's caption rung.
 - **Collision.**
-  On each page the overlay is tested against the page's content: every shape with text, every picture, table, chart and group, and every overlay already placed on that page by an earlier operation.
+  On each page the overlay is tested against the page's content: every shape with text, every picture, table, chart and group, and every overlay already placed on that page by an earlier operation - including what the slide shows from its layout and master (a template's own logo or footer), but not their empty placeholders, which draw nothing.
+  A watermark is not content to a later overlay: it crosses everything by design.
   A shape without text (a panel, a rule) and a shape covering at least `GROUND_SHARE` of the page are grounds, not content: an overlay may sit on them, as type sits on a panel.
   Overlap counts only past `TOLERANCE_IN`.
   The overlay is tried at each of `SHRINK_STEPS` of its size in turn and placed at the first that covers nothing; at none, the page goes without it, and the report names the page and what it would have covered.
@@ -531,15 +532,19 @@ The eight probes answered all of them with `edit_deck_with_code` (`benchmark/rep
   Every overlay's colour is checked against the ground it actually lands on - the topmost solid shape without text under its centre, else the slide's background - and replaced by the deck's ink (or reversed ink, on a dark ground) when it falls short: `TEXT_CONTRAST` for text, `MARK_CONTRAST` for a bar, a rule or a shape.
   Without it an accent progress bar on a cover painted in the accent was simply not there.
 - **A recolour** is applied to the pack and the design system before anything is drawn, so what the render paints from them is in the new colour, charts included (they reach the file as pictures, which no pass over the file can recolour).
-  The same operation then repaints, on every page, layout and master, each colour that was the role's previous value - the pack's or design system's own, and the theme slot's - and sets the theme slot (`accent1`, `accent2`), so whatever a template or a later page draws from the theme is in the new colour too.
-- **A link** splits runs at the phrase's edges, so only the phrase is linked, matched without regard to case.
+  The same operation then repaints, on every page, layout, master and native chart, each colour that was the role's previous value - the pack's or design system's own, and the theme slot's - and sets the theme slot (`accent1`, `accent2`), so whatever a template or a later page draws from the theme is in the new colour too.
+  A value the deck also uses for another role (ink, muted, ground, the other accent) is left on the page: where accent and ink share a hex, repainting it would turn the body text the new colour.
+- **A link** splits runs at the phrase's edges, so only the phrase is linked, matched without regard to case, as a whole word ("AI" is not the "ai" in "maintain"), and never across a line break or into a field.
   It is underlined and carries Office's `hlinkClr` extension set to the text's own colour, so it is not drawn in the theme's hyperlink blue: on the dark cover of `probe-hyperlink-terms` that blue was the defect.
   A phrase the deck never uses is reported, not silently a no-op.
 - **"All but the cover"** skips the pages a reader takes for a cover: on the composed path, pages set as covers, plus the first page of the slide the deck opens on when that slide is a cover by composition's own rule (`page_role`), even when composition set it on a content page for the copy it carries.
   A short deck that opens on content (#347) has no cover, and the operation goes on every page; the report says so, and the closing message is told to tell the user, since they asked to skip a page the deck does not have.
-  On the template and stock paths it is the first slide when the slide calls itself a cover or a title page.
+  On the template and stock paths it is the first slide when the slide calls itself a cover or a title page, by its role, content type or layout name read whole ("Title and Content" is not a title page).
+- **"Last"** is the last page of the deck as designed, not the Sources appendix the renderer appends after it.
+  A listed page past the end of the deck is reported as left off, with the deck's length, rather than dropped without a word.
 - **Pictures** come from the user only.
   An image overlay names a picture the user supplied; one that names any other is refused, and the change step is told to make the rest of the change and ask for the picture rather than draw a stand-in.
+  The run records the picture's content hash with the operation and finds it by that on every render, since names are positional and a later upload can move them.
   `probe-overlay-picture` drew a coffee cup out of ellipses and shipped it as the user's coffee cup.
 - **A failure costs one operation.**
   A missing picture or a phrase not found is reported for that operation and the others are applied; an error inside one operation is reported for it, and the render still ships the deck.

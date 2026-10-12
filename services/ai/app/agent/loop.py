@@ -1994,6 +1994,7 @@ class AgentLoop:
             self.working_state.code_edit_log = list(state_dict.get("code_edit_log") or [])
             self.working_state.deck_operations = [
                 dict(op) for op in state_dict.get("deck_operations") or []]
+            run_context.set_deck_operations(self.working_state.deck_operations)
             self.working_state.deck_operation_report = [
                 dict(entry) for entry in state_dict.get("deck_operation_report") or []]
             self.working_state.amending = bool(state_dict.get("amending", False))
@@ -2934,13 +2935,24 @@ class AgentLoop:
             added = [dict(op) for op in data.get("operations") or [] if op]
             if not added:
                 return
+            assets = run_context.get_assets()
             for operation in added:
+                element = operation.get("element") or {}
+                if element.get("type") == "image" and element.get("asset") in assets:
+                    # Kept by content, not by its positional name, so a later
+                    # upload cannot swap the picture under the operation.
+                    import hashlib
+
+                    operation["element"] = {**element, "sha256": hashlib.sha256(
+                        assets[element["asset"]]).hexdigest()}
                 taken = {op.get("id") for op in ws.deck_operations}
                 if not operation.get("id"):
                     operation["id"] = next(f"op{n}" for n in range(1, len(taken) + 2)
                                            if f"op{n}" not in taken)
                 ws.deck_operations = [op for op in ws.deck_operations
                                       if op.get("id") != operation["id"]] + [operation]
+        # Visible to the tool too, so a removal names an id that exists.
+        run_context.set_deck_operations(ws.deck_operations)
         ws.design_serial += 1
         if ws.amending:
             # A finding the operation brings is the change's to answer, not

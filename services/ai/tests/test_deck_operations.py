@@ -521,3 +521,133 @@ def test_every_render_applies_the_recorded_operations(tmp_path, monkeypatch):
 def test_a_render_without_operations_reports_none(tmp_path, monkeypatch):
     result, _ = _render(tmp_path, "plain", [], monkeypatch)
     assert result.data["deckOperations"] == []
+
+
+# ── found in review ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("slide, cover", [
+    ({"layoutName": "Title and Content"}, False),
+    ({"layoutName": "Title Only"}, False),
+    ({"layoutName": "Title Slide"}, True),
+    ({"contentType": "title"}, True),
+    ({"role": "cover"}, True),
+])
+def test_only_a_title_page_is_a_cover_on_the_template_path(slide, cover):
+    assert FinalizeAndRenderPptxTool._is_cover(slide, 0) is cover
+    assert FinalizeAndRenderPptxTool._is_cover(slide, 1) is False
+
+
+def test_a_link_is_a_whole_word_and_never_spans_a_break(tmp_path):
+    from pptx.oxml import parse_xml
+    from pptx.oxml.ns import nsdecls
+
+    path = _deck(tmp_path / "d.pptx", pages=1, text_boxes=[
+        (1, 1, 1, 8, 1, "We maintain AI tooling, as Acme said.")])
+    presentation = Presentation(path)
+    paragraph = presentation.slides[0].shapes[0].text_frame.paragraphs[0]._p
+    # "Acme" then a soft break then "Corp": not a mention of "Acme Corp".
+    paragraph.append(parse_xml(f'<a:br {nsdecls("a")}/>'))
+    run = parse_xml(f'<a:r {nsdecls("a")}><a:t>Corp results</a:t></a:r>')
+    paragraph.append(run)
+    presentation.save(path)
+    report = deck_ops.apply(path, [
+        {"kind": "link", "id": "ai", "phrase": "AI", "url": "https://example.com/ai"},
+        {"kind": "link", "id": "acme", "phrase": "said. Corp", "url": "https://example.com"},
+    ], STYLE)
+    assert report[0]["linked"] == 1
+    runs = Presentation(path).slides[0].shapes[0].text_frame.paragraphs[0].runs
+    assert [r.text for r in runs if r.hyperlink.address] == ["AI"]
+    assert "never mentions" in report[1]["problem"]
+
+
+def test_a_master_logo_is_content_an_overlay_keeps_clear_of(tmp_path):
+    path = _deck(tmp_path / "d.pptx", pages=1)
+    presentation = Presentation(path)
+    # A template's own wordmark, set in its master: drawn on the slide, then
+    # moved into the master's shape tree.
+    mark = presentation.slides[0].shapes.add_textbox(
+        Inches(W - 0.5 - 2.0), Inches(0.2), Inches(2.0), Inches(1.0))
+    mark.text_frame.text = "ACME"
+    presentation.slide_masters[0].shapes._spTree.append(mark._element)
+    presentation.save(path)
+    report = deck_ops.apply(path, [{"kind": "overlay", "id": "logo", "anchor": "top-right",
+                                    "element": {"type": "image", "asset": "logo.png"}}],
+                            STYLE, {"logo.png": _png()})
+    assert report[0]["pages"] == []
+    assert "the text 'ACME'" in report[0]["skipped"][0]["reason"]
+
+
+def test_a_watermark_does_not_crowd_out_a_later_overlay(tmp_path):
+    path = _deck(tmp_path / "d.pptx", pages=1)
+    report = deck_ops.apply(path, [
+        {"kind": "overlay", "id": "wm", "layer": "watermark", "anchor": "center",
+         "element": {"type": "text", "text": "CONFIDENTIAL"}},
+        {"kind": "overlay", "id": "dot", "anchor": "center",
+         "element": {"type": "shape", "shape": "ellipse"}},
+    ], STYLE)
+    assert report[1]["pages"] == [1]
+
+
+def test_reapplying_one_operation_leaves_another_with_a_longer_id(tmp_path):
+    path = _deck(tmp_path / "d.pptx", pages=1)
+    ops = [{"kind": "overlay", "id": "logo-footer", "anchor": "bottom-left",
+            "element": {"type": "text", "text": "Footer"}},
+           {"kind": "overlay", "id": "logo", "anchor": "top-left",
+            "element": {"type": "text", "text": "Logo"}}]
+    deck_ops.apply(path, ops, STYLE)
+    names = sorted(s.name for s in _shapes(path, 1))
+    assert names == ["ts-overlay-op-logo-1", "ts-overlay-op-logo-footer-1"]
+
+
+def test_removing_an_operation_the_deck_does_not_carry_is_refused():
+    token = run_context.set_deck_operations([{"id": "op1", "kind": "recolour"}])
+    try:
+        result = asyncio.run(ApplyDeckOperationTool.run(action="remove", id="op 1"))
+        kept = asyncio.run(ApplyDeckOperationTool.run(action="remove", id="op1"))
+    finally:
+        run_context._deck_operations.reset(token)
+    assert not result.success and "op1" in result.error
+    assert kept.success
+
+
+def test_an_image_operation_keeps_its_picture_when_names_move(tmp_path):
+    logo, photo = _png(200, 100), _png(100, 200)
+    loop = _loop()
+    token = run_context.set_assets({"picture_1.png": logo})
+    try:
+        loop._record_deck_operation({"action": "add", "operations": [
+            {"kind": "overlay", "anchor": "top-right",
+             "element": {"type": "image", "asset": "picture_1.png"}}]})
+    finally:
+        run_context._assets.reset(token)
+    op = loop.working_state.deck_operations[0]
+    path = _deck(tmp_path / "d.pptx", pages=1)
+    # A later upload took the name; the operation still finds the logo.
+    report = deck_ops.apply(path, [op], STYLE,
+                            {"picture_1.png": photo, "picture_2.png": logo})
+    assert report[0]["pages"] == [1]
+    (shape,) = _shapes(path, 1)
+    assert shape.image.blob == logo
+
+
+def test_a_recolour_leaves_a_colour_another_role_shares(tmp_path):
+    shared = DeckStyle(ink="#1F4E79", accent="#1F4E79")
+    path = _deck(tmp_path / "d.pptx", pages=1, fill="#1F4E79",
+                 text_boxes=[(1, 1, 1, 8, 1, "Body")])
+    deck_ops.apply(path, [{"kind": "recolour", "id": "r", "role": "accent",
+                           "to": "#E4572E"}], shared)
+    assert str(Presentation(path).slides[0].shapes[0].fill.fore_color.rgb) == "1F4E79"
+
+
+def test_the_last_page_is_the_deck_not_its_appendix(tmp_path):
+    path = _deck(tmp_path / "d.pptx", pages=4)
+    report = deck_ops.apply(path, [
+        {"kind": "overlay", "id": "qr", "anchor": "bottom-left", "pages": "last",
+         "element": {"type": "qr", "data": "https://example.com"}},
+        {"kind": "overlay", "id": "n", "anchor": "top-left", "pages": [2, 9],
+         "element": {"type": "text", "text": "x"}},
+    ], DeckStyle(appended_pages=frozenset({4})))
+    assert report[0]["pages"] == [3]
+    assert report[1]["pages"] == [2]
+    assert report[1]["skipped"] == [{"page": 9, "reason": "the deck has 4 pages"}]

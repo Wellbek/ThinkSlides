@@ -27,6 +27,7 @@ appendix), which composition never sees.
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import os
 import re
@@ -139,6 +140,10 @@ class ImageElement(_Model):
 
     type: Literal["image"] = "image"
     asset: str = Field(min_length=1)
+    # The picture's content hash, recorded by the run when the operation is
+    # added. Names are positional (picture_1.png, ...) and a later upload can
+    # move them; the hash keeps the operation on the picture it was given.
+    sha256: Optional[str] = None
 
 
 class QrElement(_Model):
@@ -290,6 +295,9 @@ class DeckStyle:
     side_in: float = 0.5
     # Rendered page numbers, from 1, that are covers - for "all-but-cover".
     cover_pages: frozenset[int] = frozenset({1})
+    # Pages the renderer appended after the designed deck (the Sources
+    # appendix): not what a user means by "the last page".
+    appended_pages: frozenset[int] = frozenset()
     # Colours on the page that are a role's previous value, repainted when
     # that role is recoloured: what the pack or the template drew it in.
     previous: dict[str, frozenset[str]] = field(default_factory=dict)
@@ -363,15 +371,18 @@ def anchored(anchor: str, width: float, height: float, page_w: float,
     return Box(left, top, width, height)
 
 
-def pages_for(spec, count: int, covers: frozenset[int]) -> list[int]:
+def pages_for(spec, count: int, covers: frozenset[int],
+              appended: frozenset[int] = frozenset()) -> list[int]:
     """The page numbers, from 1, that an overlay's ``pages`` names in a deck
-    of ``count`` pages."""
+    of ``count`` pages. "last" is the last page of the deck as designed, not
+    an appendix the renderer added after it."""
     if isinstance(spec, list):
         return sorted({page for page in spec if 1 <= page <= count})
     if spec == "first":
         return [1] if count else []
     if spec == "last":
-        return [count] if count else []
+        designed = [page for page in range(1, count + 1) if page not in appended]
+        return designed[-1:] if designed else ([count] if count else [])
     if spec == "all-but-cover":
         return [page for page in range(1, count + 1) if page not in covers]
     return list(range(1, count + 1))
@@ -480,12 +491,30 @@ def _solid_fill(fill) -> Optional[str]:
     return None
 
 
+def _inherited(slide) -> list:
+    """The shapes a slide shows from its layout and master: everything there
+    but placeholders, which draw nothing until a slide fills them. A logo or
+    a band a template puts in its master is on every page as surely as one
+    on the slide, and an overlay must not land on it."""
+    if slide._element.get("showMasterSp") == "0":
+        return []
+    shapes = []
+    for owner in (slide.slide_layout.slide_master, slide.slide_layout):
+        shapes.extend(shape for shape in owner.shapes if not shape.is_placeholder)
+    return shapes
+
+
+def _visible(slide) -> list:
+    """Every shape drawn on the page, back to front: inherited first."""
+    return _inherited(slide) + list(slide.shapes)
+
+
 def _ground_at(slide, box: Box, default: str) -> str:
     """The colour behind the middle of ``box``: the topmost solid shape there
     without text of its own, else the slide's background."""
     x, y = box.left + box.width / 2, box.top + box.height / 2
     ground = None
-    for shape in slide.shapes:
+    for shape in _visible(slide):
         if _ours(shape) or (shape.name or "").startswith("ts-background") or _has_text(shape):
             continue
         shape_box = _box_of(shape)
@@ -514,7 +543,10 @@ def _apply_overlay(presentation, op: Overlay, style: DeckStyle,
 
     placed: list[int] = []
     skipped: list[dict] = []
-    for number in pages_for(op.pages, len(slides), style.cover_pages):
+    if isinstance(op.pages, list):
+        skipped.extend({"page": page, "reason": f"the deck has {len(slides)} pages"}
+                       for page in sorted(set(op.pages)) if page > len(slides))
+    for number in pages_for(op.pages, len(slides), style.cover_pages, style.appended_pages):
         slide = slides[number - 1]
         _remove(slide, op.id)
         if isinstance(op.element, ProgressElement):
@@ -539,11 +571,18 @@ def _apply_overlay(presentation, op: Overlay, style: DeckStyle,
     return report
 
 
+def _blocks(shape, page: Box) -> bool:
+    """Whether an overlay may not cover this shape: content, or an overlay
+    this render already placed - so two operations anchored to one corner do
+    not stack. A watermark is neither; it crosses everything by design."""
+    if (shape.name or "").startswith(BACKGROUND_PREFIX):
+        return False
+    return (shape.name or "").startswith(OVERLAY_PREFIX) or _is_obstacle(shape, page)
+
+
 def _obstacles(slide, page: Box) -> list[Box]:
-    # Overlays this render already put on the page count too, so two
-    # operations anchored to the same corner do not stack.
-    return [box for box in (_box_of(shape) for shape in slide.shapes
-                            if _ours(shape) or _is_obstacle(shape, page)) if box]
+    return [box for box in (_box_of(shape) for shape in _visible(slide)
+                            if _blocks(shape, page)) if box]
 
 
 def _clear_box(slide, op: Overlay, width: float, height: float, page: Box,
@@ -566,22 +605,26 @@ def _why_not(slide, op: Overlay, width: float, height: float, page: Box,
     """Why an overlay could not go on this page, naming what it would cover."""
     step = SHRINK_STEPS[-1]
     box = anchored(op.anchor, width * step, height * step, page.width, page.height, *inset)
-    for shape in slide.shapes:
+    for shape in _visible(slide):
         other = _box_of(shape)
-        if other is None or not box.overlaps(other):
+        if other is None or not box.overlaps(other) or not _blocks(shape, page):
             continue
         if _ours(shape):
             return f"another added element already sits at the {op.anchor}"
-        if _is_obstacle(shape, page):
-            text = shape.text_frame.text.strip() if _has_text(shape) else ""
-            what = f"the text '{text[:40]}'" if text else "a picture, table or chart"
-            return f"even at half size it would cover {what} at the {op.anchor}"
+        text = shape.text_frame.text.strip() if _has_text(shape) else ""
+        what = f"the text '{text[:40]}'" if text else "a picture, table or chart"
+        return f"even at half size it would cover {what} at the {op.anchor}"
     return f"no clear space at the {op.anchor}"
 
 
 def _picture_bytes(element, assets: dict[str, bytes]) -> Optional[bytes]:
     if isinstance(element, ImageElement):
-        data = assets.get(element.asset)
+        data = None
+        if element.sha256:
+            data = next((blob for blob in assets.values()
+                         if hashlib.sha256(blob).hexdigest() == element.sha256), None)
+        if data is None and not element.sha256:
+            data = assets.get(element.asset)
         if data is None:
             names = ", ".join(sorted(assets)) or "none were supplied"
             raise ValueError(f"there is no picture named {element.asset!r} "
@@ -644,10 +687,12 @@ def _name(op: Overlay, number: int) -> str:
 
 
 def _remove(slide, op_id: str) -> None:
+    """Take off what this operation drew last time, and nothing else: the
+    name is matched whole, so removing ``logo`` leaves ``logo-footer``."""
+    mine = re.compile(rf"^(?:{re.escape(OVERLAY_PREFIX)}|{re.escape(BACKGROUND_PREFIX)})"
+                      rf"{re.escape(op_id)}-\d+$")
     for shape in list(slide.shapes):
-        name = shape.name or ""
-        if any(name.startswith(f"{prefix}{op_id}-")
-               for prefix in (OVERLAY_PREFIX, BACKGROUND_PREFIX)):
+        if mine.match(shape.name or ""):
             shape._element.getparent().remove(shape._element)
 
 
@@ -834,11 +879,22 @@ def _apply_recolour(presentation, op: Recolour, style: DeckStyle) -> dict:
                                      encoding="UTF-8", standalone=True)
     old.discard(new)
     old.discard("")
+    # A value the deck also uses for another role is not repainted on the
+    # page: where accent and ink share a hex, repainting it would turn the
+    # body text the new colour. The theme slot still moves.
+    others = {getattr(style, role).lstrip("#").upper()
+              for role in ("ink", "ink_reversed", "muted", "ground",
+                           "accent_alt" if op.role == "accent" else "accent")}
+    old -= others
 
     parts = [slide.part for slide in presentation.slides]
     for master in presentation.slide_masters:
         parts.append(master.part)
         parts.extend(layout.part for layout in master.slide_layouts)
+    # Native charts keep their series colours in their own parts.
+    parts.extend(rel.target_part for slide in presentation.slides
+                 for rel in slide.part.rels.values()
+                 if rel.reltype == RT.CHART)
     repainted = 0
     for part in parts:
         for element in part._element.iter(f"{_A}srgbClr"):
@@ -854,7 +910,8 @@ def _apply_recolour(presentation, op: Recolour, style: DeckStyle) -> dict:
 def _apply_link(presentation, op: Link) -> dict:
     from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 
-    pattern = re.compile(re.escape(op.phrase), re.IGNORECASE)
+    # Whole words only: "AI" is not the "ai" in "maintain".
+    pattern = re.compile(rf"(?<!\w){re.escape(op.phrase)}(?!\w)", re.IGNORECASE)
     pages: list[int] = []
     linked = 0
     for number, slide in enumerate(presentation.slides, start=1):
@@ -879,10 +936,28 @@ def _runs(paragraph) -> list:
     return [child for child in paragraph if child.tag == f"{_A}r"]
 
 
+# What a line break or a field reads as when a paragraph is searched: one
+# character no phrase contains, so a mention never spans the break a reader
+# sees, and a field (a slide number) is never linked into.
+_SEPARATOR = "\n"
+
+
+def _pieces(paragraph) -> list[tuple[object, str]]:
+    """The paragraph's runs, breaks and fields in order, each with the text
+    it contributes to a search."""
+    out = []
+    for child in paragraph:
+        if child.tag == f"{_A}r":
+            out.append((child, child.findtext(f"{_A}t") or ""))
+        elif child.tag in (f"{_A}br", f"{_A}fld"):
+            out.append((child, _SEPARATOR))
+    return out
+
+
 def _link_paragraph(paragraph, pattern, relate) -> int:
     """Link every match of ``pattern`` in one paragraph, splitting runs at the
     match's edges so only the phrase itself is linked. Returns how many."""
-    text = "".join(run.findtext(f"{_A}t") or "" for run in _runs(paragraph))
+    text = "".join(piece for _, piece in _pieces(paragraph))
     matches = [(m.start(), m.end()) for m in pattern.finditer(text)]
     for start, end in matches:
         _split_at(paragraph, start)
@@ -890,11 +965,11 @@ def _link_paragraph(paragraph, pattern, relate) -> int:
     done = 0
     for start, end in matches:
         inside, offset = [], 0
-        for run in _runs(paragraph):
-            length = len(run.findtext(f"{_A}t") or "")
-            if length and start <= offset and offset + length <= end:
-                inside.append(run)
-            offset += length
+        for element, piece in _pieces(paragraph):
+            if (element.tag == f"{_A}r" and piece
+                    and start <= offset and offset + len(piece) <= end):
+                inside.append(element)
+            offset += len(piece)
         if not inside or any(_linked(run) for run in inside):
             continue
         rId = relate()
@@ -906,9 +981,11 @@ def _link_paragraph(paragraph, pattern, relate) -> int:
 
 def _split_at(paragraph, position: int) -> None:
     offset = 0
-    for run in _runs(paragraph):
+    for run, text in _pieces(paragraph):
+        if run.tag != f"{_A}r":
+            offset += len(text)
+            continue
         t = run.find(f"{_A}t")
-        text = (t.text or "") if t is not None else ""
         if offset < position < offset + len(text):
             tail = copy.deepcopy(run)
             t.text = text[:position - offset]
