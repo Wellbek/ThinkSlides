@@ -393,7 +393,10 @@ Rules of the ladder:
 - A page draws at most **2 layout revisions** (`LAYOUT_REVISION_CAP`), per page rather than per run, so one stubborn page cannot spend the budget of every other flagged page.
 - Both layout verdicts are answered the same way, so one page drawing both is one revision.
 - An avoid set that would leave no archetype is ignored rather than obeyed: placing a page the way it was placed before beats refusing to place it.
-- Every composed page records its **alternatives**: the pack's other arrangements that could carry the same material legibly, leaving out the one it is on and the ones it was asked to avoid.
+- **A re-placement must not make the page worse.**
+  If, once repaired, a re-placed page still has copy running out of a frame, the page is placed as if nothing were ruled out, which puts it back on an arrangement that holds it.
+  The selector charges overflow as a cost, so the cheapest arrangement left after a `replace` could be one whose only prose slot is a caption a third the size of the copy, and repair cannot set copy below its designed floor: on the last round of `technical-http-caching/20261012-162837-claude-code` the body ran off the bottom of the page and shipped (#380).
+- Every composed page records its **alternatives**: the pack's other arrangements that could carry the same material legibly, with its copy inside its frames after repair, leaving out the one it is on and the ones it was asked to avoid.
   A slide none of whose pages has an alternative is reported as unmovable by the render, and the loop does not offer it a `replace`: its finding goes on to the redraft rung instead.
   Before this, the loop learnt that a page could not move only by spending a render on it - probes for #376 saw a second `replace` swap two pages between the only two arrangements that held them, and a third hand both back unchanged.
 - The placements a `replace` rules out come from the render result, not from shared state.
@@ -577,5 +580,6 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #376 | the nine languages authored in the `probe-*` evidence runs | Five were refused for a derived stacked page that ran a frame off the canvas, though each page as authored fitted; the refusal named a frame the model never wrote. | Unsound derived arrangements are dropped (section 3). |
 | #376 | `probe-overlay-picture/20261002-182649-claude-code` | A message after a finished deck restarted the pipeline from intake, so no edit tool was ever offered. | A later message amends the finished deck (section 13). |
 | #323 | `technical-http-caching/20261012-162837-claude-code` | Three slides asked for at once in one answer each; two failed a check (a diagram label over 40 characters, copy under its density floor) and were fixed by their one retry; the run took 11 chat calls where the same task took 17 before. | Compile (section 14). |
+| #380 | `technical-http-caching/20261012-162837-claude-code` | A last-round `replace` set slide 3's five-sentence body in the `exhibit` arrangement's caption slot, 439 characters where it holds about 175, and the last line ran off the page. | A re-placement must not make the page worse; an alternative must hold the copy (section 13). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

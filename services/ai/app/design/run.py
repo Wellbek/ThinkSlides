@@ -38,7 +38,7 @@ from typing import Iterable, Optional, Sequence
 from app.design.bind import build_page
 from app.design.material import MaterialShape, shape_from
 from app.design.pack import ColorRoles, Pack
-from app.design.repair import repair
+from app.design.repair import overflow_findings, repair
 from app.design.schema import DesignDoc, Frame, Page, PackRef, TextBlock
 from app.design.select import choose, fit, readable_somewhere
 from app.design.vocabulary import ensure, remeasured
@@ -532,17 +532,43 @@ def _place_plainly(shape: MaterialShape, pack: Pack, previous: Optional[str],
     return placed
 
 
+def _holds_copy(shape: MaterialShape, selection, pack: Pack, index: int) -> bool:
+    """Whether this placement keeps every block of copy inside its frame,
+    once repair has done what it can.
+
+    The selector charges overflow as a cost, so the cheapest arrangement
+    left after a `replace` can still be one whose only prose slot is a
+    caption a third the size of the copy; repair cannot set copy below its
+    designed floor, and the page ran off its bottom edge (#380).
+    """
+    page = build_page("probe", shape, selection, pack, considered=(),
+                      source_slide=index)
+    doc = DesignDoc(pack=PackRef(id=pack.id, version=pack.version),
+                    canvas=pack.canvas, grid=pack.grid, pages=(page,))
+    healed = repair(doc, page, pack).page
+    return not overflow_findings(doc, healed, pack)
+
+
 def _alternatives(shape: MaterialShape, pack: Pack, previous: Optional[str],
-                  ruled_out: frozenset[str]) -> tuple[str, ...]:
+                  ruled_out: frozenset[str], index: int = 0) -> tuple[str, ...]:
     """The other arrangements that could carry this material legibly.
 
     What a `replace` verdict would have to choose from. Without it the loop
     learns that a page cannot move only by spending a render on it: probes
     for #376 saw a second `replace` swap two pages between the only two
     arrangements that held them, and a third hand back both unchanged.
+
+    An arrangement counts only if the copy fits it too: one it overflows is
+    not somewhere the page can go, and offering it spends a round (#380).
     """
-    return tuple(a.id for a in pack.archetypes if a.id not in ruled_out
-                 and fit(shape, a, pack, previous_archetype=previous) is not None)
+    others = []
+    for archetype in pack.archetypes:
+        if archetype.id in ruled_out:
+            continue
+        selection = fit(shape, archetype, pack, previous_archetype=previous)
+        if selection is not None and _holds_copy(shape, selection, pack, index):
+            others.append(archetype.id)
+    return tuple(others)
 
 
 def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
@@ -579,6 +605,18 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
             try:
                 placed = _place(shape, pack, previous, avoided,
                                 plain=not skip_unplaceable)
+                if avoided and not all(_holds_copy(part, selection, pack, index)
+                                       for part, selection in placed):
+                    # A re-placement must not make the page worse. One whose
+                    # copy runs out of its frames on the new arrangement keeps
+                    # the arrangement it had, which the render then reports
+                    # as unmovable, so the finding goes on to a redraft
+                    # (#380: on the last round it shipped off the page).
+                    logger.warning("replacement_would_overflow", pack=pack.id,
+                                   slide_index=index,
+                                   archetypes=[sel.archetype.id for _, sel in placed])
+                    placed = _place(shape, pack, previous,
+                                    plain=not skip_unplaceable)
             except Unplaceable:
                 if not avoided:
                     raise
@@ -612,7 +650,8 @@ def compose(slides: Sequence[dict], pack: Pack, *, title: str = "",
                               considered=tuple(a.id for a in pack.archetypes),
                               source_slide=index)
             others = _alternatives(part, pack, previous,
-                                   frozenset(avoided) | {selection.archetype.id})
+                                   frozenset(avoided) | {selection.archetype.id},
+                                   index)
             page = page.model_copy(update={"provenance": page.provenance.model_copy(
                 update={"alternatives": others})})
             previous = selection.archetype.id
