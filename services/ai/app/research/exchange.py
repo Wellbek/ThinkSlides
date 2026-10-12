@@ -43,6 +43,17 @@ def request_sha(payload) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
+def vision_sha(prompt: str, images) -> str:
+    """A vision request's hash, the pictures included.
+
+    Every page of a deck is judged with the same prompt, so a hash of the
+    prompt alone is the same for all of them, and answers recorded as pages
+    were judged concurrently replayed onto the wrong pages.
+    """
+    digests = [hashlib.sha256(str(image).encode()).hexdigest()[:16] for image in images or []]
+    return request_sha({"prompt": prompt, "images": digests})
+
+
 def estimated_usage(request_text: str, response_text: str) -> SimpleNamespace:
     return SimpleNamespace(usage=SimpleNamespace(
         prompt_tokens=int(len(request_text) / CHARS_PER_TOKEN),
@@ -118,7 +129,8 @@ class ClaudeCodeExchange:
         self.seq = max((int(p.name[:4]) for p in directory.glob("[0-9][0-9][0-9][0-9].request.json")),
                        default=0)
 
-    async def ask(self, kind: str, request: dict, readable: str) -> dict:
+    async def ask(self, kind: str, request: dict, readable: str,
+                  sha: str | None = None) -> dict:
         self.seq += 1
         stem = f"{self.seq:04d}"
         request = {"seq": self.seq, "kind": kind, "where": _where(), **request}
@@ -140,7 +152,7 @@ class ClaudeCodeExchange:
                 raise TimeoutError(f"no answer to request {stem} after {self.timeout_s:.0f}s")
             await asyncio.sleep(POLL_SECONDS)
         (self.directory / f"{stem}.pending").unlink(missing_ok=True)
-        self.cassette.append(kind, request_sha(request.get("messages") or request.get("prompt")),
+        self.cassette.append(kind, sha or request_sha(request.get("messages") or request.get("prompt")),
                              answer, where=request.get("where") or "")
         return answer
 
@@ -228,7 +240,8 @@ class ClaudeCodeVisionProvider(VisionLLMProvider):
             "",
             prompt,
         ])
-        answer = await self.exchange.ask("vision", {"prompt": prompt, "images": paths}, readable)
+        answer = await self.exchange.ask("vision", {"prompt": prompt, "images": paths}, readable,
+                                         sha=vision_sha(prompt, images))
         # An image costs roughly a fixed block of tokens; 1,000 per page is the
         # conservative end for a slide-sized render.
         usage.record("claude-code", self.model, estimated_usage(
@@ -267,7 +280,8 @@ class RecordingVisionProvider(VisionLLMProvider):
 
     async def chat_with_images(self, prompt, images, *args, **kwargs) -> str:
         text = await self.inner.chat_with_images(prompt, images, *args, **kwargs)
-        self.cassette.append("vision", request_sha(prompt), {"content": text}, where=_where())
+        self.cassette.append("vision", vision_sha(prompt, images), {"content": text},
+                             where=_where())
         return text
 
 
@@ -325,7 +339,7 @@ class ReplayVisionProvider(VisionLLMProvider):
         self.tape = _Tape(cassette, "vision")
 
     async def chat_with_images(self, prompt, images, *args, **kwargs) -> str:
-        return self.tape.next(request_sha(prompt), _where()).get("content") or ""
+        return self.tape.next(vision_sha(prompt, images), _where()).get("content") or ""
 
 
 class RecordedSearchError(RuntimeError):

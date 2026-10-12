@@ -383,6 +383,8 @@ Repair runs in code rather than as a tool because the validator it replaced was 
 
 A rendered deck is checked in two ways (`validate_rendered_output`): geometry, read from the rendered PDF, and a vision check of each page for two classes of defect only, damage (overlap, spill, illegible type, low contrast) and arrangement (a large empty area beside a crowded one, an exhibit in a shape that fights it, something oddly placed).
 Colours, typefaces and wording are explicitly not defects.
+The pages are judged concurrently, at most `compile_concurrency` at once, and a page whose call fails is skipped on its own rather than ending the review of the pages after it.
+A recorded verdict is keyed by its page's picture as well as the prompt, which every page shares, so a replay gives each page its own verdict whatever order they were recorded in.
 
 Each finding carries the **smallest fix** that would work, and the fix decides the rung:
 

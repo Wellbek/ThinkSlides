@@ -16,11 +16,13 @@ proxied - see Stage A) already work.
 """
 
 from __future__ import annotations
-import os
+import asyncio
 import base64
+import os
 import shutil
 import tempfile
 import time
+from typing import Optional
 
 from app.agent.tools._today import today_line
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
@@ -434,32 +436,53 @@ class ValidateRenderedOutputTool:
             doc = fitz.open(pdf_path)
             try:
                 page_count = min(len(doc), MAX_VISION_REVIEW_SLIDES)
+                images = []
                 for page_index in range(page_count):
-                    page = doc[page_index]
-                    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-                    img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
-
-                    response = await vision_provider.chat_with_images(
-                        prompt=_aesthetic_prompt(),
-                        images=[f"data:image/png;base64,{img_b64}"],
-                        temperature=0.2,
-                        max_tokens=250,
-                    )
-                    parsed = extract_json_object(response)
-                    if parsed and parsed.get("hasIssue") and parsed.get("issue"):
-                        issues.append({
-                            "slideIndex": page_index,
-                            "type": "aesthetic",
-                            "detail": str(parsed["issue"])[:200],
-                            # Which rung of the revision ladder this asks for.
-                            # A verdict that only says "wrong" leaves redraft
-                            # as the single remedy, and redrafting a slide
-                            # whose copy was fine to move a frame down is the
-                            # most expensive way to fix the smallest problem.
-                            "fix": _fix_tier(parsed.get("fix")),
-                        })
+                    pix = doc[page_index].get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                    images.append(base64.b64encode(pix.tobytes("png")).decode("utf-8"))
             finally:
                 doc.close()
+
+            # Every page at once, a few at a time: the pages are independent,
+            # and judged one after another a twelve-page deck waited on twelve
+            # calls in a row on every validation round. A page whose call
+            # fails is skipped on its own; it used to end the review of every
+            # page after it.
+            from app.config import settings
+
+            limit = asyncio.Semaphore(max(1, int(settings.compile_concurrency)))
+
+            async def judge(page_index: int, img_b64: str) -> Optional[dict]:
+                async with limit:
+                    try:
+                        response = await vision_provider.chat_with_images(
+                            prompt=_aesthetic_prompt(),
+                            images=[f"data:image/png;base64,{img_b64}"],
+                            temperature=0.2,
+                            max_tokens=250,
+                        )
+                    except Exception as e:  # one page's failure is that page's
+                        logger.warning("vision_page_review_failed",
+                                       page=page_index + 1, error=str(e))
+                        return None
+                parsed = extract_json_object(response)
+                if parsed and parsed.get("hasIssue") and parsed.get("issue"):
+                    return {
+                        "slideIndex": page_index,
+                        "type": "aesthetic",
+                        "detail": str(parsed["issue"])[:200],
+                        # Which rung of the revision ladder this asks for.
+                        # A verdict that only says "wrong" leaves redraft
+                        # as the single remedy, and redrafting a slide
+                        # whose copy was fine to move a frame down is the
+                        # most expensive way to fix the smallest problem.
+                        "fix": _fix_tier(parsed.get("fix")),
+                    }
+                return None
+
+            verdicts = await asyncio.gather(
+                *(judge(index, image) for index, image in enumerate(images)))
+            issues.extend(v for v in verdicts if v is not None)
         except Exception as e:
             logger.warning("vision_aesthetic_review_skipped", error=str(e))
         return issues
