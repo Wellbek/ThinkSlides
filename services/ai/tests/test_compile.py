@@ -242,3 +242,54 @@ async def test_replay_gives_a_drifted_concurrent_request_the_answer_from_its_own
         trace._span.set(None)
 
     assert first["message"]["content"] == "slide 1"
+
+
+@pytest.mark.asyncio
+async def test_the_first_slide_is_asked_alone_so_the_rest_reuse_its_cached_prefix(monkeypatch):
+    """#325: every compile request shares tools, system prompt and
+    conversation; sent together, none can reuse the prefix a provider caches
+    while serving another. The first goes alone; the rest follow its answer."""
+    import asyncio
+
+    log = []
+
+    async def fake_slide(loop, index, shared, tools, context, messages, session_id, phase,
+                         answered=None):
+        log.append(f"ask {index}")
+        await asyncio.sleep(0.01)
+        log.append(f"answered {index}")
+        if answered is not None:
+            answered.set()
+        yield "event", {"slide": index}
+
+    loop = _loop()
+    loop.working_state.presentation_structure = {"totalSlides": 3, "slides": [{}, {}, {}]}
+    monkeypatch.setattr(slide_compile, "outstanding", lambda loop: [0, 1, 2])
+    monkeypatch.setattr(slide_compile, "system_prompt", lambda loop, context: "S")
+    monkeypatch.setattr(slide_compile, "offered_tools", lambda loop: [])
+    monkeypatch.setattr(slide_compile, "compile_slide", fake_slide)
+    events = [e async for e in slide_compile.compile_all(
+        loop, {}, [], uuid.uuid4(), pipeline.PHASES_BY_NAME["compile"])]
+
+    assert len(events) == 3
+    assert log[:2] == ["ask 0", "answered 0"]
+    # The rest then go together.
+    assert log[2:4] == ["ask 1", "ask 2"]
+
+
+@pytest.mark.asyncio
+async def test_a_first_slide_that_fails_does_not_hold_the_others(monkeypatch):
+    async def failing(loop, index, shared, tools, context, messages, session_id, phase,
+                      answered=None):
+        if index == 0:
+            raise RuntimeError("boom")
+        yield "event", {"slide": index}
+
+    loop = _loop()
+    monkeypatch.setattr(slide_compile, "outstanding", lambda loop: [0, 1])
+    monkeypatch.setattr(slide_compile, "system_prompt", lambda loop, context: "S")
+    monkeypatch.setattr(slide_compile, "offered_tools", lambda loop: [])
+    monkeypatch.setattr(slide_compile, "compile_slide", failing)
+    events = [e async for e in slide_compile.compile_all(
+        loop, {}, [], uuid.uuid4(), pipeline.PHASES_BY_NAME["compile"])]
+    assert events == [("event", {"slide": 1})]

@@ -377,10 +377,11 @@ async def test_run_tracks_structure_and_slides_and_auto_assembles_finalize_paylo
 
 @pytest.mark.asyncio
 async def test_compile_writes_every_slide_at_once_in_one_answer_each(monkeypatch):
-    """#323: after the outline, each slide is one request, and they are in
-    flight together. Its answer carries the exhibits and the copy; the copy
-    is finished by design_slide_content without a call of its own, and a
-    slide that fails its check is asked once more, with what failed."""
+    """#323: after the outline, each slide is one request. The first goes
+    alone, so the prefix every request shares is in a provider's cache before
+    the rest are sent (#325). Its answer carries the exhibits and the copy;
+    the copy is finished by design_slide_content without a call of its own,
+    and a slide that fails its check is asked once more, with what failed."""
     session_id = uuid.uuid4()
     loop = _loop()
     loop.redis_client = _FakeRedis({f"working_state:{session_id}": _ready_state()})
@@ -400,8 +401,8 @@ async def test_compile_writes_every_slide_at_once_in_one_answer_each(monkeypatch
             {"id": f"w{index}", "function": {"name": "write_slide",
                                              "arguments": json.dumps({"slide": slide})}}]}
 
-    both_asked = asyncio.Event()
     asked: list[int] = []
+    answered: list[int] = []
 
     async def _chat(messages, tools=None):
         if not any(t["function"]["name"] == "write_slide" for t in tools or []):
@@ -411,11 +412,11 @@ async def test_compile_writes_every_slide_at_once_in_one_answer_each(monkeypatch
             asked.append(-1)
             return _answer(1)
         index = 0 if "slide 1 of 2" in request else 1
+        # The second slide is asked only once the first has been answered.
+        assert index == 0 or answered == [0], "the first slide goes alone"
         asked.append(index)
-        if len(asked) == 2:
-            both_asked.set()
-        # Neither answer comes back until both slides have been asked for.
-        await asyncio.wait_for(both_asked.wait(), timeout=2)
+        await asyncio.sleep(0)
+        answered.append(index)
         return _answer(index)
 
     monkeypatch.setattr(loop, "_chat_with_retry", _chat)
@@ -447,7 +448,7 @@ async def test_compile_writes_every_slide_at_once_in_one_answer_each(monkeypatch
 
     [ev async for ev in loop.run(session_id)]
 
-    assert sorted(asked[:2]) == [0, 1]
+    assert asked[:2] == [0, 1]
     assert asked[2:] == [-1], "one retry, for the slide whose check failed"
     assert [s["slideIndex"] for s in loop.working_state.ordered_slides()] == [0, 1]
     assert loop.working_state.has_called_finalize is True
