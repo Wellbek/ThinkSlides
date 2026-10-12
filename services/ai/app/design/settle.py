@@ -50,6 +50,16 @@ OPTICAL_SHARE = 0.4
 # divider or a closing page composes its space on purpose.
 SETTLED_ROLES = ("content", "exhibit")
 
+# A page of prose alone that fills at most this share of the space under its
+# heading is short: centred in that space, three sentences floated mid-page
+# as an island apart from their heading (#392).
+SHORT_PROSE_SHARE = 0.5
+
+# Where short prose starts under its heading: this share of the content box
+# below it, or the archetype's own gap if that is larger. Close enough to
+# read as the heading's lead, far enough not to crowd it.
+LEAD_GAP = 0.10
+
 
 def settle(frames: tuple[Frame, ...], pack: Pack, grid: GridSpec,
            heading_frame: str, role: str) -> tuple[Frame, ...]:
@@ -83,41 +93,52 @@ def settle(frames: tuple[Frame, ...], pack: Pack, grid: GridSpec,
     if not body:
         return frames
 
-    heights: dict[str, float] = {}
-    row_heights = []
-    for row in body:
-        top = min(_band(f)[0] for f in row)
-        bottom = max(_band(f)[1] for f in row)
-        natural = []
-        for frame in row:
-            width_in = (frame.place.span * column
-                        + max(0, frame.place.span - 1) * grid.gutter_in)
-            needed = natural_height_in(frame, width_in, pack)
-            natural.append(None if needed is None else needed / box.height)
-        if any(n is None for n in natural):
-            row_heights.append(bottom - top)
-            continue
-        height = min(bottom - top, max(natural))
-        row_heights.append(height)
-        for frame in row:
-            heights[frame.id] = min(_band(frame)[1] - _band(frame)[0], height)
+    def measure(body):
+        """Each row cut to what it holds."""
+        heights: dict[str, float] = {}
+        row_heights = []
+        for row in body:
+            top = min(_band(f)[0] for f in row)
+            bottom = max(_band(f)[1] for f in row)
+            natural = []
+            for frame in row:
+                width_in = (frame.place.span * column
+                            + max(0, frame.place.span - 1) * grid.gutter_in)
+                needed = natural_height_in(frame, width_in, pack)
+                natural.append(None if needed is None else needed / box.height)
+            if any(n is None for n in natural):
+                row_heights.append(bottom - top)
+                continue
+            height = min(bottom - top, max(natural))
+            row_heights.append(height)
+            for frame in row:
+                heights[frame.id] = min(_band(frame)[1] - _band(frame)[0], height)
+        return heights, row_heights
 
+    heights, row_heights = measure(body)
     gap = _typical_gap(placed)
     start = min(_band(f)[0] for f in body[0])
     end = max(_band(f)[1] for f in body[-1])
     used = sum(row_heights) + gap * (len(body) - 1)
+    ceiling = (max(_band(f)[1] for f in rows[first - 1]) if first else start)
+    designed_gap = start - ceiling
+    # Short prose alone, under a heading, is the heading's lead: set a fixed
+    # step under it, at its own size, rather than centred apart from it.
+    lead_at = ceiling + max(designed_gap, LEAD_GAP)
+    led = (first > 0 and _prose_only(body)
+           and used <= SHORT_PROSE_SHARE * (end - ceiling)
+           and lead_at + used <= end)
     slack = (end - start) - used
     if slack < MIN_SLACK:
         return frames
 
     # The group is placed in all the space under the heading, the archetype's
     # own gap below the heading included, at the optical centre - but never
-    # closer to the heading than that gap.
-    ceiling = (max(_band(f)[1] for f in rows[first - 1]) if first else start)
-    designed_gap = start - ceiling
+    # closer to the heading than that gap. A lead starts its fixed step
+    # under the heading instead.
     free = end - ceiling - used
     moved: dict[str, tuple[float, float]] = {}
-    cursor = ceiling + max(designed_gap, free * OPTICAL_SHARE)
+    cursor = lead_at if led else ceiling + max(designed_gap, free * OPTICAL_SHARE)
     for row, height in zip(body, row_heights):
         top = min(_band(f)[0] for f in row)
         for frame in row:
@@ -144,6 +165,13 @@ def settle(frames: tuple[Frame, ...], pack: Pack, grid: GridSpec,
     if _stacked_over(settled, tolerance=1e-6) or _band(settled[-1])[1] > 1.0 + 1e-6:
         return frames
     return tuple(out)
+
+
+def _prose_only(body) -> bool:
+    """Whether every frame under the heading holds text and nothing else."""
+    return all(frame.content and not frame.children
+               and all(isinstance(item, TextBlock) for item in frame.content)
+               for row in body for frame in row)
 
 
 def _holds_an_exhibit(frame: Frame) -> bool:
