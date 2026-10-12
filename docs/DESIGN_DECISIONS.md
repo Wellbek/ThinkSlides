@@ -164,6 +164,8 @@ The page's **role** is what the slide declares, or else: first slide cover, last
 A drafted slide declares it from the plan's `contentType` (`title` is a cover, `conclusion` a closing, anything else content), so position decides only for a slide that says nothing; the stock renderer follows the same rule.
 A plan of fewer than four slides (`MIN_SLIDES_FOR_A_COVER`) opens on content unless the request asks for a cover: a three-slide deck asked to cover three topics spent a third of itself on a title page (#347).
 A pull quote is offered only when the body has enough copy for a highlight to be a highlight.
+It is offered, not owed: when placing it would leave anything else without a slot, the page is placed without it (#388).
+On a heading-and-column arrangement the quote took the column, the body had nowhere to go, every arrangement was refused, and a page with room in its column was split in two.
 
 ## 6. Stage II: choosing each page's archetype
 
