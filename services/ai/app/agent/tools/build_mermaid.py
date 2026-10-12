@@ -87,7 +87,8 @@ class BuildMermaidTool:
 
         problem = mermaid.check(source)
         if problem:
-            return ToolResult(success=False, error=problem)
+            # The source refused, not the renderer broken (#345).
+            return ToolResult(success=False, rejected=True, error=problem)
 
         palette = _palette_of(run_context.get_design_system())
         try:
@@ -104,7 +105,7 @@ class BuildMermaidTool:
                        f"point in prose."),
             )
         except ValueError as exc:
-            return ToolResult(success=False, error=str(exc))
+            return ToolResult(success=False, rejected=True, error=str(exc))
 
         block = {"type": "diagram",
                  "diagram": {"format": "svg", "svg": svg,

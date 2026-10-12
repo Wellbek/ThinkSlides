@@ -634,8 +634,11 @@ class BuildChartTool:
 
     @staticmethod
     def _error(message: str, start: float) -> ToolResult:
+        # A refusal of the arguments, with what to change: a verdict on the
+        # model's input, not the tool breaking (#345).
         return ToolResult(
-            success=False, error=message, duration_ms=int((time.time() - start) * 1000)
+            success=False, rejected=True, error=message,
+            duration_ms=int((time.time() - start) * 1000)
         )
 
 
@@ -785,8 +788,11 @@ class BuildTableTool:
 
     @staticmethod
     def _error(message: str, start: float) -> ToolResult:
+        # A refusal of the arguments, with what to change: a verdict on the
+        # model's input, not the tool breaking (#345).
         return ToolResult(
-            success=False, error=message, duration_ms=int((time.time() - start) * 1000)
+            success=False, rejected=True, error=message,
+            duration_ms=int((time.time() - start) * 1000)
         )
 
 
@@ -889,8 +895,11 @@ class BuildKeyMetricsTool:
 
     @staticmethod
     def _error(message: str, start: float) -> ToolResult:
+        # A refusal of the arguments, with what to change: a verdict on the
+        # model's input, not the tool breaking (#345).
         return ToolResult(
-            success=False, error=message, duration_ms=int((time.time() - start) * 1000)
+            success=False, rejected=True, error=message,
+            duration_ms=int((time.time() - start) * 1000)
         )
 
 
@@ -1084,8 +1093,11 @@ class BuildChartGridTool:
 
     @staticmethod
     def _error(message: str, start: float) -> ToolResult:
+        # A refusal of the arguments, with what to change: a verdict on the
+        # model's input, not the tool breaking (#345).
         return ToolResult(
-            success=False, error=message, duration_ms=int((time.time() - start) * 1000)
+            success=False, rejected=True, error=message,
+            duration_ms=int((time.time() - start) * 1000)
         )
 
 
