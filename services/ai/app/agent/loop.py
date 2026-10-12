@@ -616,6 +616,13 @@ class WorkingState:
         # file from the slides and would silently drop every one of them, so
         # each render replays this log over the fresh file (#376).
         self.code_edit_log: list[dict] = []
+        # The typed deck-wide operations the user asked for (an overlay, a
+        # recolour, links), in order. Every render applies all of them to
+        # the file it writes, so a re-render cannot lose one (#376); and what
+        # the last render made of them - pages each landed on and pages it
+        # had to leave out - for the closing message to say.
+        self.deck_operations: list[dict] = []
+        self.deck_operation_report: list[dict] = []
         # A message arrived on a session whose deck is finished: the run
         # amends that deck rather than building a new one.
         self.amending: bool = False
@@ -1290,6 +1297,8 @@ class WorkingState:
         self.has_called_validate = False
         self.validation_clean = False
         self.code_edit_log = []
+        self.deck_operations = []
+        self.deck_operation_report = []
         self.edited_since_validation = False
         self.amending = False
         self.amend_request = ""
@@ -1852,6 +1861,8 @@ class AgentLoop:
             "code_edits_applied": self.working_state.code_edits_applied,
             "edited_since_validation": self.working_state.edited_since_validation,
             "code_edit_log": self.working_state.code_edit_log,
+            "deck_operations": self.working_state.deck_operations,
+            "deck_operation_report": self.working_state.deck_operation_report,
             "amending": self.working_state.amending,
             "amend_request": self.working_state.amend_request,
             "handover_issues": self.working_state.handover_issues,
@@ -1981,6 +1992,11 @@ class AgentLoop:
             self.working_state.edited_since_validation = bool(state_dict.get(
                 "edited_since_validation", False))
             self.working_state.code_edit_log = list(state_dict.get("code_edit_log") or [])
+            self.working_state.deck_operations = [
+                dict(op) for op in state_dict.get("deck_operations") or []]
+            run_context.set_deck_operations(self.working_state.deck_operations)
+            self.working_state.deck_operation_report = [
+                dict(entry) for entry in state_dict.get("deck_operation_report") or []]
             self.working_state.amending = bool(state_dict.get("amending", False))
             self.working_state.amend_request = state_dict.get("amend_request") or ""
             self.working_state.amend_done = bool(state_dict.get("amend_done", False))
@@ -2871,6 +2887,80 @@ class AgentLoop:
             "reason": str(data.get("reason") or tool_result.error or ""),
         }
 
+    def _deck_operation_note(self) -> str:
+        """The closing note for deck-wide operations the last render could
+        not apply as asked: the pages each was left off and why, why one
+        could not be applied at all, and where the request had to be read
+        (a cover the deck does not have). Empty when every one landed
+        everywhere it was asked for."""
+        lines, notes = [], []
+        for entry in self.working_state.deck_operation_report:
+            if entry.get("note"):
+                notes.append(f"- {entry.get('id')} ({entry.get('kind')}): {entry['note']}")
+            if entry.get("problem"):
+                lines.append(f"- {entry.get('id')} ({entry.get('kind')}): not applied - "
+                             f"{entry['problem']}")
+                continue
+            for skipped in entry.get("skipped") or ():
+                lines.append(f"- {entry.get('id')} ({entry.get('kind')}): left off "
+                             f"page {skipped.get('page')}, because {skipped.get('reason')}")
+        note = ""
+        if lines:
+            note += ("\n\n## Closing note - what was added could not go everywhere\n"
+                     + "\n".join(lines[:12])
+                     + "\nTell the user which pages went without it and why, and that "
+                     "another position or a smaller size would fit there.")
+        if notes:
+            note += ("\n\n## Closing note - how the request was read\n"
+                     + "\n".join(notes[:12])
+                     + "\nSay this to the user in a few words.")
+        return note
+
+    def _record_deck_operation(self, data: dict) -> None:
+        """Keep, replace or drop one typed deck operation, and re-render.
+
+        Recorded rather than applied: the render applies every recorded
+        operation to each deck it writes, so the first application and the
+        tenth go the same way (#376). An operation without an id gets the
+        next free ``opN``; one with an id already recorded replaces it.
+        """
+        ws = self.working_state
+        if data.get("action") == "remove":
+            target = str(data.get("id") or "")
+            kept = [op for op in ws.deck_operations if op.get("id") != target]
+            if len(kept) == len(ws.deck_operations):
+                return
+            ws.deck_operations = kept
+        else:
+            added = [dict(op) for op in data.get("operations") or [] if op]
+            if not added:
+                return
+            assets = run_context.get_assets()
+            for operation in added:
+                element = operation.get("element") or {}
+                if element.get("type") == "image" and element.get("asset") in assets:
+                    # Kept by content, not by its positional name, so a later
+                    # upload cannot swap the picture under the operation.
+                    import hashlib
+
+                    operation["element"] = {**element, "sha256": hashlib.sha256(
+                        assets[element["asset"]]).hexdigest()}
+                taken = {op.get("id") for op in ws.deck_operations}
+                if not operation.get("id"):
+                    operation["id"] = next(f"op{n}" for n in range(1, len(taken) + 2)
+                                           if f"op{n}" not in taken)
+                ws.deck_operations = [op for op in ws.deck_operations
+                                      if op.get("id") != operation["id"]] + [operation]
+        # Visible to the tool too, so a removal names an id that exists.
+        run_context.set_deck_operations(ws.deck_operations)
+        ws.design_serial += 1
+        if ws.amending:
+            # A finding the operation brings is the change's to answer, not
+            # the layout ladder's - see `caused_by_change`.
+            ws.amend_done = True
+            ws.amend_edited = True
+            ws.change_findings = []
+
     @property
     def compile_concurrency(self) -> int:
         """How many slides compile asks for at once (#323)."""
@@ -3310,6 +3400,9 @@ class AgentLoop:
         # user asked for, or must gain pages instead (#368).
         run_context.set_page_count_fixed(
             bool(int((self.working_state.brief or {}).get("slideCount") or 0)))
+        # The overlays, recolours and links the user asked for, applied to
+        # every deck the render writes (#376).
+        run_context.set_deck_operations(self.working_state.deck_operations)
         structure = self.working_state.presentation_structure or {}
         tool_result = None
         async for kind, payload in self._call_tool(
@@ -3621,6 +3714,9 @@ class AgentLoop:
                 "slide or shortening those slides' copy would set them at the "
                 "usual size."
             )
+        operation_note = self._deck_operation_note()
+        if operation_note:
+            prompt += operation_note
         if ws.amending and not ws.amend_done and not ws.amend_edited:
             # The change step ran out of turns. Its directive is still the
             # last thing the prompt says, and without this the summary read
@@ -4847,6 +4943,8 @@ class AgentLoop:
             self.working_state.copy_over_budget = {
                 int(index): [dict(field) for field in fields] for index, fields in
                 (tool_result.data.get("copyOverBudget") or {}).items()}
+            self.working_state.deck_operation_report = [
+                dict(entry) for entry in tool_result.data.get("deckOperations") or []]
             # Visible to the tools as well as to the loop, so a tool that
             # edits the deck edits the same file the download and the vision
             # check read rather than a copy of it.
@@ -5177,6 +5275,8 @@ class AgentLoop:
                     ws.amend_redrafted |= set(indices)
                     ws.design_serial += 1
                     ws.amend_done = True
+            if fn_name == "apply_deck_operation" and tool_result.success:
+                self._record_deck_operation(tool_result.data or {})
             if fn_name == "edit_deck_with_code":
                 self._remember_code_attempt(fn_args, tool_result)
                 # A script that only looked at the deck changed nothing: it is
@@ -5935,6 +6035,7 @@ class AgentLoop:
             "finalize_and_render_pptx — Render the final PPTX file",
             "validate_rendered_output — Check the ACTUAL rendered output: overflow/overlap in the real geometry, plus placeholder copy, repeated points, bullets restating a chart, and package integrity (MUST be called after finalize_and_render_pptx, and is the true last step)",
             "revise_slides — Send slides of a finished deck back to be redrafted with the user's request as the instruction (changes to what a slide says or shows)",
+            "apply_deck_operation - Add something to the pages of the whole deck (a logo, watermark, footer, page numbers, QR code, progress bar), recolour one of its colours everywhere, or link every mention of a phrase - placed by anchor, kept clear of content, and kept through every re-render",
             "edit_deck_with_code — Write a short script that opens the already-rendered deck with python-pptx and fixes one precise thing (an overlap, a shape's position, a slide that needs moving) - only once finalize_and_render_pptx has produced a file to edit. Checked before it runs and before its edit is kept. Prefer design_slide_content for an ordinary content fix; reach for this when the fix is about WHERE something sits rather than what it says",
         ]
         # Same rule as document_tools and image_tools above, applied to the
@@ -6149,13 +6250,18 @@ class AgentLoop:
         """What the model is told about the pictures a script can open."""
         notes = getattr(self, "asset_notes", {})
         if not notes:
-            return (" The user has supplied no pictures, and a script has no "
-                    "network: if the request needs a picture you do not have, "
-                    "draw a plain stand-in from shapes and say in your reply "
-                    "that it is a stand-in they can replace with their own.")
+            # No stand-in drawn from shapes: a coffee cup made of ellipses is
+            # not the user's coffee cup, and the probe that drew one shipped
+            # it (#376). The rest of the change is made, and the reply asks.
+            return (" The user has supplied no pictures, and nothing can be "
+                    "fetched: if the request needs a picture you do not have, "
+                    "make the rest of the change and say in your reply that "
+                    "the picture itself has to be attached to the chat.")
         listing = "; ".join(f"{name} ({note})" if note else name
                             for name, note in notes.items())
-        return (" Pictures the user supplied sit beside the deck: " + listing + ".")
+        return (" Pictures the user supplied, by name (apply_deck_operation's "
+                "image element takes the name, and a script finds them beside "
+                "the deck): " + listing + ".")
 
     def _install_assets(self, catalog: list) -> None:
         """Make the user's pictures readable to a script, under plain names.

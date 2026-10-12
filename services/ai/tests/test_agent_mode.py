@@ -214,7 +214,9 @@ def test_every_described_tool_is_one_the_run_can_actually_call():
     for line in lines[start:]:
         if not line or not line[0].isdigit():
             break
-        described.append(line.split(". ", 1)[1].split(" —")[0].strip())
+        # A line's first word is its tool name - the rule the loop's own
+        # withholding reads it by - whatever separates it from the prose.
+        described.append(line.split(". ", 1)[1].split()[0])
 
     assert described
     assert set(described) <= registered, set(described) - registered
@@ -227,7 +229,7 @@ def _described_tools(prompt: str) -> set[str]:
     for line in lines[start:]:
         if not line or not line[0].isdigit():
             break
-        described.add(line.split(". ", 1)[1].split(" \u2014")[0].strip())
+        described.add(line.split(". ", 1)[1].split()[0])
     return described
 
 

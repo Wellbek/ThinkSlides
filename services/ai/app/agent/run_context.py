@@ -82,6 +82,8 @@ _pack: ContextVar[object | None] = ContextVar("thinkslides_pack", default=None)
 # placed again from the same material rather than redrafted from scratch.
 _avoid_arrangements: ContextVar[dict | None] = ContextVar(
     "thinkslides_avoid_arrangements", default=None)
+_deck_operations: ContextVar[list | None] = ContextVar(
+    "thinkslides_deck_operations", default=None)
 
 # Where this run's rendered deck is on disk. A path rather than the bytes:
 # `finalize_and_render_pptx` writes a real file that the download, the vision
@@ -184,6 +186,20 @@ def get_arrangements_to_avoid() -> dict:
 
 def reset_arrangements_to_avoid(token: Token) -> None:
     _avoid_arrangements.reset(token)
+
+
+def set_deck_operations(operations: list | None) -> Token:
+    """The typed deck-wide operations every render applies (#376).
+
+    The loop's record, carried here for the same reason as the arrangements
+    to avoid: the render applies what the run recorded, not what a model
+    passes it.
+    """
+    return _deck_operations.set(list(operations or []))
+
+
+def get_deck_operations() -> list:
+    return list(_deck_operations.get() or [])
 
 
 def set_rendered_path(path: str | None) -> Token:

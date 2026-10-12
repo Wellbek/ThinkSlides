@@ -187,7 +187,7 @@ class TestTheRenderRoutesWithoutBeingAsked:
             ]},
         ]
         out = str(tmp_path / "composed.pptx")
-        written, placed, _, _, _ = FinalizeAndRenderPptxTool._render_composed(
+        written, placed, *_ = FinalizeAndRenderPptxTool._render_composed(
             slides, pack, {"title": "Deck"}, out, {}
         )
         import os

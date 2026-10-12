@@ -17,11 +17,30 @@ from app.titles import slide_title
 from app.renderer.pptx_renderer import PPTXRenderer
 from app.renderer.preview_generator import PreviewGenerator
 from app.observability.logging import get_logger
+from typing import NamedTuple
 import time
 import os
 import uuid
 
 logger = get_logger(__name__)
+
+
+class Composed(NamedTuple):
+    """What laying a deck out in its pack produced, besides the file."""
+
+    path: str
+    # Per source slide, the archetypes its pages were placed on.
+    placed: dict
+    # Per source slide, copy still over its frames' budget after repair.
+    over_budget: dict
+    # Slides no other arrangement could carry.
+    unmovable: list
+    # Pages and slides set below the readable floor (#368).
+    below_floor: dict
+    # Rendered page numbers, from 1, that are covers.
+    covers: frozenset
+    # Per rendered page, the source slide it came from (None when none).
+    sources: tuple
 
 
 class FinalizeAndRenderPptxTool:
@@ -153,6 +172,22 @@ class FinalizeAndRenderPptxTool:
             # geometry comes from. An uploaded template has no pack, and
             # keeps the XML-clone path that makes it faithful.
             pack = run_context.get_pack()
+            # The user's deck-wide operations (#376). A recolour is applied to
+            # the pack and the design system before anything is drawn, so
+            # what the render paints from them - charts included, which reach
+            # the file as pictures - is in the new colour; the same operation
+            # then repaints the file itself after the render, for whatever
+            # the template drew. Style is read before the recolour, so the
+            # file pass knows which colour it replaces.
+            operations, operation_problems = cls._deck_operations()
+            style_pack, style_system = pack, design_system
+            pack, design_system = cls._recoloured(pack, design_system, operations)
+            covers: frozenset = frozenset(
+                index + 1 for index, slide in enumerate(slides)
+                if isinstance(slide, dict) and cls._is_cover(slide, index))
+            # Pages the renderer appended after the designed deck: one page
+            # per slide on the template and stock paths.
+            appended: frozenset = frozenset(range(designed_count + 1, len(slides) + 1))
 
             # A run with no template and no pack is about to render stock
             # Office placeholders, which is never what anyone asked for -
@@ -199,10 +234,14 @@ class FinalizeAndRenderPptxTool:
                 try:
                     if pack is not None:
                         try:
-                            result_path, placed, over_budget, unmovable, below_floor = cls._render_composed(
+                            composed = cls._render_composed(
                                 slides, pack, metadata, output_path,
                                 design_system,
                             )
+                            result_path, placed, over_budget, unmovable, below_floor, covers, _ = composed
+                            appended = frozenset(
+                                number for number, source in enumerate(composed.sources, start=1)
+                                if source is not None and source >= designed_count)
                             render_path = "composed"
                         except Unplaceable as exc:
                             # Material no archetype can carry, even split.
@@ -218,6 +257,7 @@ class FinalizeAndRenderPptxTool:
                                 error=str(exc),
                             )
                             pack = None
+                            style_pack = None
                             render_path = "fallback"
                     if pack is None:
                         renderer = PPTXRenderer(
@@ -284,6 +324,10 @@ class FinalizeAndRenderPptxTool:
                     duration_ms=int((time.time() - start) * 1000),
                 )
 
+            operation_report = operation_problems + cls._apply_deck_operations(
+                result_path, operations, style_pack, style_system, covers,
+                appended, slides=len(slides))
+
             file_size = os.path.getsize(result_path) if os.path.exists(result_path) else 0
 
             # Generate preview images
@@ -329,6 +373,9 @@ class FinalizeAndRenderPptxTool:
                     # are: no other arrangement carries them (#376).
                     "unmovableSlides": unmovable,
                     "belowFloor": below_floor,
+                    # What each deck-wide operation made of this deck: the
+                    # pages it landed on and the ones it had to leave (#376).
+                    "deckOperations": operation_report,
                     # Slides set on the pack's plain page because none of its
                     # own arrangements could carry them (#322).
                     "plainPages": sorted(
@@ -447,10 +494,146 @@ class FinalizeAndRenderPptxTool:
             logger.warning("slide_asset_persist_failed", session_id=session_id, error=str(e))
             return []
 
+    @staticmethod
+    def _deck_operations() -> tuple[list, list[dict]]:
+        """The run's recorded operations, parsed; and one report for each
+        that no longer parses, so a bad record costs that operation only."""
+        from app.renderer import deck_ops
+
+        parsed, problems = [], []
+        for raw in run_context.get_deck_operations():
+            try:
+                parsed.append(deck_ops.parse(raw))
+            except ValueError as exc:
+                problems.append({"id": str((raw or {}).get("id") or ""),
+                                 "kind": str((raw or {}).get("kind") or ""),
+                                 "problem": str(exc)})
+        return parsed, problems
+
+    @staticmethod
+    def _recoloured(pack, design_system: dict, operations: list):
+        """The pack and design system with every recolour applied."""
+        from app.renderer.deck_ops import Recolour
+
+        recolours = [op for op in operations if isinstance(op, Recolour)]
+        if not recolours:
+            return pack, design_system
+        # The design system names the roles by their palette names.
+        palette_name = {"accent": "primary", "accent_alt": "accent"}
+        system = dict(design_system or {})
+        palette = dict(system.get("palette") or {})
+        entries = [dict(entry) for entry in palette.get("colors") or []
+                   if isinstance(entry, dict)]
+        for op in recolours:
+            if pack is not None:
+                pack = pack.model_copy(update={"colors": pack.colors.model_copy(
+                    update={op.role: op.to})})
+            name = palette_name[op.role]
+            for entry in entries:
+                if entry.get("name") == name:
+                    entry["value"] = op.to
+            if entries and not any(entry.get("name") == name for entry in entries):
+                entries.append({"name": name, "value": op.to})
+        if entries:
+            palette["colors"] = entries
+            system["palette"] = palette
+        return pack, system
+
+    @staticmethod
+    def _composed_covers(slides: list, doc) -> frozenset:
+        """The pages of a composed deck a reader takes for its cover.
+
+        A page set as a cover, and the first page of the slide the deck opens
+        with when that slide is a cover by composition's own rule - including
+        when composition set it on a content page because it carries a page
+        of copy, which leaves it the title page all the same.
+        """
+        from app.design.run import page_role
+
+        ordered = sorted((s for s in slides if isinstance(s, dict)),
+                         key=lambda s: int(s.get("slideIndex") or 0))
+        opens_on_cover = bool(ordered) and page_role(ordered[0], 0, len(ordered)) == "cover"
+        covers = {number for number, page in enumerate(doc.pages, start=1)
+                  if page.role == "cover"}
+        if opens_on_cover:
+            first = next((number for number, page in enumerate(doc.pages, start=1)
+                          if page.provenance.source_slide == 0), None)
+            if first is not None:
+                covers.add(first)
+        return frozenset(covers)
+
+    @staticmethod
+    def _is_cover(slide: dict, index: int) -> bool:
+        """Whether a slide the stock or template path renders is a cover:
+        the first slide, when it says it is a cover or a title page. Said
+        exactly - "Title and Content" and "Title Only" are content layouts
+        whose names happen to contain the word."""
+        if index != 0:
+            return False
+        role = str(slide.get("role") or "").strip().lower()
+        kind = str(slide.get("contentType") or slide.get("slideType") or "").strip().lower()
+        layout = {str(slide.get(key) or "").strip().lower()
+                  for key in ("layoutName", "layoutId")}
+        return (role in ("cover", "title") or kind in ("cover", "title")
+                or bool(layout & {"title slide", "title", "cover"}))
+
+    @staticmethod
+    def _deck_style(pack, design_system: dict, covers: frozenset,
+                    appended: frozenset = frozenset()):
+        """The deck's own colours, face and margin, for an operation to wear."""
+        from app.renderer.deck_ops import DeckStyle
+
+        if pack is not None:
+            margin = pack.grid.margin
+            small = next((pack.type_roles[name].size_pt for name in
+                          ("caption", "footnote", "folio") if name in pack.type_roles), 10.0)
+            return DeckStyle(
+                ink=pack.colors.ink, ink_reversed=pack.colors.ink_reversed,
+                muted=pack.colors.ink_muted, accent=pack.colors.accent,
+                accent_alt=pack.colors.accent_alt, ground=pack.colors.ground,
+                face=pack.body_face, small_pt=small,
+                margin_in=min(margin.top, margin.right, margin.bottom, margin.left) or 0.5,
+                side_in=min(margin.left, margin.right) or 0.5,
+                cover_pages=covers, appended_pages=appended)
+        palette = {str(entry.get("name")): str(entry.get("value"))
+                   for entry in ((design_system or {}).get("palette") or {}).get("colors") or []
+                   if isinstance(entry, dict) and entry.get("value")}
+        fonts = ((design_system or {}).get("typography") or {}).get("fonts") or {}
+        defaults = DeckStyle()
+        return DeckStyle(
+            ink=palette.get("text", defaults.ink),
+            muted=palette.get("gray", defaults.muted),
+            accent=palette.get("primary", defaults.accent),
+            accent_alt=palette.get("accent", defaults.accent_alt),
+            ground=palette.get("background", defaults.ground),
+            face=str(fonts.get("minorFont") or fonts.get("body") or defaults.face),
+            cover_pages=covers, appended_pages=appended)
+
+    @classmethod
+    def _apply_deck_operations(cls, path: str, operations: list, pack,
+                               design_system: dict, covers: frozenset,
+                               appended: frozenset, *, slides: int) -> list[dict]:
+        """Apply the run's deck-wide operations to the file just written.
+
+        Never fails the render: a deck without its overlay is still a deck,
+        and the report says what went missing.
+        """
+        if not operations:
+            return []
+        from app.renderer import deck_ops
+
+        try:
+            return deck_ops.apply(path, operations,
+                                  cls._deck_style(pack, design_system, covers, appended),
+                                  dict(run_context.get_assets()))
+        except Exception as exc:   # noqa: BLE001 - the deck itself rendered
+            logger.warning("deck_operations_failed", error=str(exc), slides=slides)
+            return [{"id": op.id, "kind": op.kind, "problem": str(exc)[:300]}
+                    for op in operations]
+
     @classmethod
     def _render_composed(cls, slides: list, pack, metadata: dict,
-                         output_path: str, design_system: dict
-                         ) -> tuple[str, dict[int, list[str]], dict[int, dict], list[int], dict]:
+                         output_path: str, design_system: dict) -> Composed:
         """Lay the deck out in its pack and render it.
 
         Returns the written path; per source slide, the archetypes its pages
@@ -499,9 +682,12 @@ class FinalizeAndRenderPptxTool:
                 placed.setdefault(source, []).append(page.archetype)
                 if page.provenance.alternatives:
                     movable.add(source)
-        return (render_doc(doc, pack, output_path, design_system=design_system),
-                placed, copy_over_budget(doc, pack),
-                sorted(set(placed) - movable), below_floor)
+        return Composed(
+            render_doc(doc, pack, output_path, design_system=design_system),
+            placed, copy_over_budget(doc, pack), sorted(set(placed) - movable),
+            below_floor,
+            cls._composed_covers(slides, doc),
+            tuple(page.provenance.source_slide for page in doc.pages))
 
     @classmethod
     def _generate_markdown_fallback(cls, slides: list[dict], metadata: dict) -> str:
