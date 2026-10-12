@@ -332,6 +332,22 @@ Text is anchored to the top of its frame, except in a headline frame set in the 
 The rule reads the frame, not the block, so a title repair steps down to a smaller rung still rests on the same baseline; a title too long for its band would run up into the empty top of the page rather than down over its standfirst.
 Openers are built upward from a baseline, and a title's band is tall enough for the longest title it is offered; hung from the top, a one-line title left an empty line between itself and its standfirst, so the shorter the title, the further it drifted from what it introduces.
 
+### Settling short material (#378)
+
+An archetype states each frame's height for a page of the material it was measured on.
+A page with less kept those heights: copy held a frame running to the bottom margin, a flow drawn at its own shape floated in a frame several times its height, and the bottom third of the page was empty.
+Validation flagged it every round, and nothing on the ladder could help: a `replace` moved it to another arrangement with the same heights, and a redraft only changes the words.
+
+So once a page is bound (`settle.settle`):
+- Each row below the heading is cut to what it holds, where what it holds has a height of its own: copy as it will be set, plus one line of its own leading; a table planned as the renderer plans it; a diagram or a figure row compiled and measured; an imported SVG at its own aspect.
+  A chart, a photograph or anything else that fills its frame has none, and its row keeps the archetype's height.
+- The rows are closed up at the archetype's own gap.
+- In a row of several frames, an exhibit shorter than the row is centred on it; copy stays at the row's top.
+  At the top of a column the copy runs the full length of, a short flow left the rest of that column empty.
+- The heading stays where the archetype puts it, and the rows below it are set as one group in the space under it, at the optical centre: `OPTICAL_SHARE` (0.4) of the free space above the group, the rest below, and never closer to the heading than the archetype's own gap.
+- Nothing moves when the space freed is under `MIN_SLACK` (8% of the content box): a page that nearly fills its arrangement is the arrangement working.
+- Only content and exhibit pages that are a clean vertical stack of grid-placed frames are settled, the shape an authored language derives; an opener, a divider and a closing page compose their space on purpose, and a measured pack is left as its own pages were.
+
 ## 11. Laying out a table
 
 A table is laid out from its content, not split evenly (`app/renderer/table_layout.py`, `plan_table`), and **always drawn as a native, editable PowerPoint table, never as a picture**, on both render paths (`app/renderer/native_table.py`).
@@ -538,6 +554,8 @@ The ones that report on the decisions above:
 | `PROSE_SHRINK_FLOOR` | 0.35 | `design/authored.py` |
 | `DENSITY_SCALE` | airy 0.7, balanced 1.0, dense 1.45 | `design/authored.py` |
 | `PLAIN_COLUMN_SHARE` | 0.34 | `design/vocabulary.py` |
+| `MIN_SLACK` | 0.08 of the content box | `design/settle.py` |
+| `OPTICAL_SHARE` | 0.4 of the free space, above the group | `design/settle.py` |
 | `CAPACITY_STARTS` | 12 starting words, fewest kept | `design/setting.py` |
 | `COVER_BASELINE`, `SECTION_BASELINE` | 0.93, 0.62 | `design/vocabulary.py` |
 | repair `MAX_ROUNDS` | 3 | `design/repair.py` |
@@ -585,5 +603,6 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #323 | `technical-http-caching/20261012-162837-claude-code` | Three slides asked for at once in one answer each; two failed a check (a diagram label over 40 characters, copy under its density floor) and were fixed by their one retry; the run took 11 chat calls where the same task took 17 before. | Compile (section 14). |
 | #380 | `technical-http-caching/20261012-162837-claude-code` | A last-round `replace` set slide 3's five-sentence body in the `exhibit` arrangement's caption slot, 439 characters where it holds about 175, and the last line ran off the page. | A re-placement must not make the page worse; an alternative must hold the copy (section 13). |
 | #350 | `technical-http-caching/20261012-162837-claude-code` | A Mermaid sequence diagram imported with no message arrows, a black mark at its top-left and its note unboxed; on the stacked arrangement it shrank to a third of its slot. | An imported SVG's floor is its smallest label at 10pt (section 7); the import fixes themselves are in `renderer/svg/importer.py`. |
+| #378 | the eight `probe-*` decks, 2026-10-04, and `technical-http-caching/20261012-162837-claude-code` | Two sentences beside or above a one-row flow kept the archetype's full heights: the flow floated in a tall frame and the bottom third of the page was empty, on every probe deck, so `validation_converged` failed for spacing alone. | Settling short material (section 10). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |

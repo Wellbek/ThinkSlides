@@ -27,6 +27,7 @@ from app.design.schema import (
 )
 from app.design.roles import type_role_for
 from app.design.select import Selection
+from app.design.settle import settle
 
 
 def _type_role(frame: Frame, pack: Pack, item: MaterialItem) -> str:
@@ -133,6 +134,10 @@ def build_page(page_id: str, shape: MaterialShape, selection: Selection,
                           if p.item.role_hint == "heading"), "")
     frames = _compact(_fill(archetype.frames, contents, pack), archetype.frames,
                       pack, archetype.grid or pack.grid)
+    # Short material set at its own size, the space it frees balanced round
+    # it rather than left under it (#378).
+    frames = settle(frames, pack, archetype.grid or pack.grid,
+                    heading_frame, shape.role)
     heading_rung = next(
         (block.type_role for frame in _walk(frames) if frame.id == heading_frame
          for block in frame.content if isinstance(block, TextBlock)), "")
