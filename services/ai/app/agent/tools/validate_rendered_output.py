@@ -103,7 +103,7 @@ def _aesthetic_prompt() -> str:
     "a conspicuous gap beside or beneath it.\n\n"
     "Do NOT flag the colours, the typeface, the wording, or whether the page "
     "is interesting. Those are choices, not defects. A faint watermark set "
-    "behind the copy is something the user asked for, not damage.\n\n"
+    "behind or across the copy is something the user asked for, not damage.\n\n"
     '"fix" is the SMALLEST change that would fix it:\n'
     '- "nudge": the page is right, one thing is in the wrong place or the '
     "wrong size.\n"

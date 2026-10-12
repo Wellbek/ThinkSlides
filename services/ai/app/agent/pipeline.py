@@ -199,6 +199,64 @@ def _only_handover_findings(ws) -> bool:
     return bool(ws.validation_issues) and not ws.actionable(ws.validation_issues)
 
 
+def _change_directive(loop: "AgentLoop") -> str:
+    """The change step's instruction: which tool answers which kind of
+    request, the operations already on the deck, and the pictures to hand.
+
+    Names only the tools this run offers - a directive that names a withheld
+    tool is one the model resolves by trying it anyway.
+    """
+    ws = loop.working_state
+    scripted = "edit_deck_with_code" not in loop._withheld_tools()
+    lines = [
+        "The deck is finished and the user has written again. Their request: "
+        f"{ws.amend_request!r}",
+        "",
+        "Make exactly that change and nothing else.",
+        "- About what a slide says or shows (copy, a chart, a figure, a "
+        "visual): call revise_slides with the slides and the user's specifics.",
+        "- Something added to pages (a logo, a watermark, a footer or page "
+        "numbers, a QR code, a progress bar, a shape), one of the deck's "
+        "colours changed everywhere, or a phrase linked: call "
+        "apply_deck_operation, with every part of the request in one call. "
+        "Say where by anchor and which pages; it keeps what it adds clear of "
+        "each page's content and uses the deck's own colours and face, so do "
+        "not read the deck first.",
+    ]
+    if scripted:
+        lines.append(
+            "- Only what neither can express - something already on a page "
+            "moved, rotated or restyled: edit_deck_with_code, leaving every "
+            "slide's copy, layout and design as they are. Read the slide's "
+            "shapes and the page size from the deck before choosing "
+            "coordinates, place anything you add clear of the content, and use "
+            "the deck's own theme colours and fonts.")
+    if ws.deck_operations:
+        listed = "; ".join(_operation_line(op) for op in ws.deck_operations)
+        lines.append(
+            "The deck already carries these operations (give the same id to "
+            f"replace one, or remove it by id): {listed}.")
+    return ("\n".join(lines) + loop.asset_directive()
+            + " If the request cannot be done to the deck, reply in words "
+            "saying why, with no tool call, and the deck is left as it is."
+            + _change_findings_directive(loop))
+
+
+def _operation_line(op: dict) -> str:
+    """One recorded operation, as the model would recognise it."""
+    kind = op.get("kind")
+    if kind == "recolour":
+        return f"{op.get('id')}: {op.get('role')} recoloured to {op.get('to')}"
+    if kind == "link":
+        return f"{op.get('id')}: {op.get('phrase')!r} linked to {op.get('url')}"
+    element = op.get("element") or {}
+    what = element.get("text") or element.get("asset") or element.get("data") \
+        or element.get("shape") or element.get("type")
+    return (f"{op.get('id')}: {element.get('type')} {what!r} at the "
+            f"{op.get('anchor')} of {op.get('pages')} pages"
+            + (" as a watermark" if op.get("layer") == "watermark" else ""))
+
+
 def _change_findings_directive(loop: "AgentLoop") -> str:
     """What the change's own edit left on the deck, for it to correct."""
     findings = loop.working_state.change_findings
@@ -209,10 +267,11 @@ def _change_findings_directive(loop: "AgentLoop") -> str:
         f"{f.get('detail') or f.get('type') or 'a problem'}" for f in findings)
     return (
         "\n\nThat change is on the deck, and checking it found this, which was "
-        f"not there before it:\n{lines}\nCorrect it with one more script. The "
-        "first stays and is replayed after any render, so correct what it did "
-        "rather than undoing the change. If it cannot be corrected, reply in "
-        "words saying so."
+        f"not there before it:\n{lines}\nCorrect it with one more call: an "
+        "operation replaced under its own id (another anchor, size or set of "
+        "pages), or one more script if a script made it. What is there stays "
+        "and is applied again after any render, so correct it rather than "
+        "undoing the change. If it cannot be corrected, reply in words saying so."
     )
 
 
@@ -353,28 +412,12 @@ PIPELINE: tuple[Phase, ...] = (
         name="change",
         label="content_generation",
         driver=MODEL_DRIVEN,
-        tools=frozenset({"edit_deck_with_code", "revise_slides"}),
+        tools=frozenset({"apply_deck_operation", "edit_deck_with_code", "revise_slides"}),
         # A message that arrived after the deck was finished: the deck exists
         # and is kept, and this is the request to change it (#376).
         applies=lambda loop: loop.working_state.amending,
         done=lambda loop: loop.working_state.amend_done,
-        directive=lambda loop: (
-            "The deck is finished and the user has written again. Their "
-            f"request: {loop.working_state.amend_request!r}\n\n"
-            "Make exactly that change and nothing else. If it is about what a "
-            "slide says or shows (copy, a chart, a figure, a visual), call "
-            "revise_slides with the slides and the user's specifics. If it is "
-            "about where something sits, something added to pages, a "
-            "deck-wide style or a link, use edit_deck_with_code and leave "
-            "every slide's copy, layout and design as they are. Place anything you add clear of "
-            "the existing content (read the slide's shapes and the page size "
-            "from the deck before choosing coordinates), keep it identical "
-            "across the pages it applies to, and use the deck's own theme "
-            "colours and fonts." + loop.asset_directive()
-            + " If the request cannot be done to the deck, reply in words "
-            "saying why, with no tool call, and the deck is left as it is."
-            + _change_findings_directive(loop)
-        ),
+        directive=_change_directive,
         max_turns=4,
         on_decline=_change_declined,
     ),

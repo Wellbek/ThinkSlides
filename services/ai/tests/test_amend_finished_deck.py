@@ -121,7 +121,8 @@ def test_an_amendment_goes_to_the_change_phase_then_validates(deck):
     asyncio.run(loop._load_deck_snapshot("sid"))
     phase = pipeline.next_phase(loop)
     assert phase.name == "change"
-    assert phase.tools == frozenset({"edit_deck_with_code", "revise_slides"})
+    assert phase.tools == frozenset(
+        {"apply_deck_operation", "edit_deck_with_code", "revise_slides"})
     assert "Add a logo" in phase.directive(loop)
     loop.working_state.amend_done = True
     assert pipeline.next_phase(loop).name == "validate"
@@ -237,10 +238,14 @@ def test_a_script_can_place_a_picture_the_user_supplied(deck):
     assert _pictures(deck) == 1
 
 
-def test_without_pictures_the_model_is_told_to_draw_a_stand_in():
+def test_without_pictures_the_model_is_told_to_ask_rather_than_draw_one():
+    """probe-overlay-picture (2026-10-04) drew a coffee cup from ellipses and
+    shipped it as the user's picture. Without one, the reply asks for it."""
     loop = _loop(_Db(None, None))
     loop._install_assets([])
-    assert "stand-in" in loop.asset_directive()
+    directive = loop.asset_directive()
+    assert "stand-in" not in directive
+    assert "attached" in directive
 
 
 def test_an_amendment_sets_the_deck_path_for_the_tools(deck):

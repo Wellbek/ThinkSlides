@@ -247,7 +247,7 @@ def _block_text(block: dict) -> list[str]:
     return out
 
 
-def _role_of(slide: dict, index: int, total: int) -> str:
+def page_role(slide: dict, index: int, total: int) -> str:
     """What kind of page this is, from what the slide says about itself."""
     declared = str(slide.get("role") or "").strip()
     if declared in ("cover", "section", "content", "exhibit", "closing",
@@ -314,7 +314,7 @@ def material_from(slide: dict, *, index: int = 0, total: int = 1) -> MaterialSha
             paragraphs.extend(_runs_text(block) or _block_text(block))
 
     return shape_from(
-        _role_of(slide, index, total),
+        page_role(slide, index, total),
         heading,
         paragraphs,
         exhibits=exhibits,
