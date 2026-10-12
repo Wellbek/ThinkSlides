@@ -7,7 +7,6 @@ edit tool - which needs a rendered deck - was never offered.
 import asyncio
 import datetime
 import io
-import os
 
 import pytest
 from pptx import Presentation
