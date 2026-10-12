@@ -329,6 +329,10 @@ class ReplayProvider(LLMProvider):
         self.tape = _Tape(cassette, "chat")
 
     async def chat(self, messages, tools=None, temperature=0.7, max_tokens=4096) -> dict:
+        # Yield before answering, as a real provider does: calls a phase sends
+        # together are then all in flight before the first is answered, which
+        # is what the prefix ledger needs to see to count them as concurrent.
+        await asyncio.sleep(0)
         return to_loop_response(self.tape.next(request_sha(messages), _where()))
 
 

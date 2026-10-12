@@ -39,6 +39,8 @@ _EXEMPT = {
     "research/exchange.py": "forwards and records prompts others built",
     # Meters a live run's spend around the provider's own calls.
     "research/budget.py": "spend meter around prompts others built",
+    # Measures how much of each request repeats an earlier one's prefix.
+    "research/prefix.py": "prefix-cache ledger around prompts others built",
     # "Reply with exactly: OK" - a connectivity probe whose entire point is a
     # fixed, minimal answer. A date paragraph would both cost tokens on every
     # click of "Test model" and give the model something else to reply with.
