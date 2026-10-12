@@ -45,6 +45,7 @@ from app.research.exchange import (
     recorded_search,
 )
 from app.llm import usage
+from app.research.prefix import LEDGER_NAME, PrefixLedger, PrefixRecordingProvider
 from app.research.task import Task
 
 CLAUDE_CODE = "claude-code"
@@ -255,6 +256,9 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
         exchange = ClaudeCodeExchange(run_dir / "llm", cassette)
         chat, vision = ClaudeCodeProvider(exchange), ClaudeCodeVisionProvider(exchange)
         search = recorded_search(web_search.run_search, cassette, replay=False)
+    # What a prefix cache could have answered of each request (#325),
+    # measured in every mode, so a replay shows a prompt's layout changing.
+    ledger = PrefixLedger(run_dir / LEDGER_NAME)
 
     search_config = _search_config(mode, cassette_from)
     manifest = {
@@ -278,6 +282,8 @@ async def run_task(task: Task, *, mode: str, out_root: Path,
                 chat = RecordingProvider(MeteredProvider(real_chat, meter), cassette)
                 vision = (RecordingVisionProvider(MeteredVisionProvider(real_vision, meter), cassette)
                           if real_vision else None)
+            # Every mode's chat provider, wrapped once.
+            chat = PrefixRecordingProvider(chat, ledger)
             session_id = await _seed(db, task.prompt)
             manifest["sessionId"] = str(session_id)
             with open(run_dir / "events.log", "w") as log:
@@ -411,6 +417,12 @@ def summarise(run_dir: Path) -> str:
         f"{manifest.get('pages')} page(s)",
     ]
     lines += [f"error: {e}" for e in manifest.get("errors") or []]
+    if (run_dir / LEDGER_NAME).exists():
+        from app.research.prefix import summary as prefix_summary
+
+        cache = prefix_summary(run_dir)
+        lines.append(f"{cache['calls']} chat call(s), about {cache['inputTokens']} input tokens, "
+                     f"{cache['cacheableShare']:.0%} of them a prefix an earlier call already sent")
     if (run_dir / "checks.json").exists():
         from app.research.checks import render
 

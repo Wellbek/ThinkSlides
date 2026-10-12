@@ -193,7 +193,13 @@ async def compile_all(loop: "AgentLoop", context: dict, chat_messages: list[dict
     """Compile every outstanding slide concurrently, streaming their events.
 
     Each slide runs as its own task; their events are merged into this one
-    stream in the order they happen. A slide whose request fails is left to
+    stream in the order they happen. The first slide's request goes alone and
+    the rest are sent once it is answered: every request shares the same
+    tools, system prompt and conversation and differs only in its last
+    message, and a provider caches that prefix as it serves a request, so
+    requests sent together all pay for it in full (#325). One request's
+    latency buys every other slide the cached prefix - on a provider that
+    caches by itself; on one that does not, all go at once. A slide whose request fails is left to
     drafting like any other slide compile could not produce: one bad request
     must not end a run whose other slides were written (#381 review). A
     provider that is really down fails drafting next, which ends the run.
@@ -206,17 +212,30 @@ async def compile_all(loop: "AgentLoop", context: dict, chat_messages: list[dict
     tools = offered_tools(loop)
     limit = asyncio.Semaphore(max(1, loop.compile_concurrency))
     queue: asyncio.Queue = asyncio.Queue()
+    primed = asyncio.Event()
+    first = indices[0]
+    from app.llm.provider import caches_prefixes
+
+    if not caches_prefixes(loop.llm):
+        primed.set()
 
     async def one(index: int) -> None:
+        if index != first:
+            await primed.wait()
         async with limit:
             try:
                 async for item in compile_slide(
                     loop, index, shared, tools, context, chat_messages,
                     session_id, phase,
+                    answered=primed if index == first else None,
                 ):
                     await queue.put(item)
             except Exception as e:  # a slide's failure must not lose the others
                 logger.error("slide_compile_failed", slide_index=index, error=str(e))
+            finally:
+                if index == first:
+                    # Never hold the others back on a request that failed.
+                    primed.set()
 
     tasks = [asyncio.create_task(one(i)) for i in indices]
     pending = set(tasks)
@@ -245,8 +264,13 @@ async def compile_all(loop: "AgentLoop", context: dict, chat_messages: list[dict
 async def compile_slide(loop: "AgentLoop", index: int, shared: str, tools: list[dict],
                         context: dict, chat_messages: list[dict],
                         session_id: uuid.UUID, phase: pipeline.Phase,
+                        answered: asyncio.Event | None = None,
                         ) -> AsyncIterator[tuple[str, object]]:
-    """Ask for one slide, check what came back, and ask once more if it failed."""
+    """Ask for one slide, check what came back, and ask once more if it failed.
+
+    ``answered`` is set once the first request has been answered (or has
+    failed), which is when the shared prefix is in a provider's cache.
+    """
     from app.agent.loop import _event, _iso_now
 
     ws = loop.working_state
@@ -267,6 +291,10 @@ async def compile_slide(loop: "AgentLoop", index: int, shared: str, tools: list[
                     loop._chat_with_retry(messages=messages, tools=tools), phase.label,
                 ):
                     if kind == "event":
+                        # A back-off: nothing is cached yet, and the others
+                        # should not wait out this request's retries.
+                        if answered is not None:
+                            answered.set()
                         yield "event", payload
                     else:
                         response = payload
@@ -275,6 +303,9 @@ async def compile_slide(loop: "AgentLoop", index: int, shared: str, tools: list[
                                slide_index=index, attempt=attempt)
                 _hand_to_drafting(loop, index, [f"the request failed: {e}"])
                 return
+            finally:
+                if answered is not None:
+                    answered.set()
 
             assistant = (response or {}).get("message") or {}
             # Every call carries an id from here on, so the transcript a retry

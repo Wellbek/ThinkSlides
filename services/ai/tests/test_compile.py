@@ -242,3 +242,139 @@ async def test_replay_gives_a_drifted_concurrent_request_the_answer_from_its_own
         trace._span.set(None)
 
     assert first["message"]["content"] == "slide 1"
+
+
+class _Caching:
+    """A provider that caches prefixes by itself, as OpenAI does."""
+    prefix_cache = True
+
+
+@pytest.mark.asyncio
+async def test_the_first_slide_is_asked_alone_so_the_rest_reuse_its_cached_prefix(monkeypatch):
+    """#325: every compile request shares tools, system prompt and
+    conversation; sent together, none can reuse the prefix a provider caches
+    while serving another. The first goes alone; the rest follow its answer."""
+    import asyncio
+
+    log = []
+
+    async def fake_slide(loop, index, shared, tools, context, messages, session_id, phase,
+                         answered=None):
+        log.append(f"ask {index}")
+        await asyncio.sleep(0.01)
+        log.append(f"answered {index}")
+        if answered is not None:
+            answered.set()
+        yield "event", {"slide": index}
+
+    loop = _loop()
+    loop.llm = _Caching()
+    loop.working_state.presentation_structure = {"totalSlides": 3, "slides": [{}, {}, {}]}
+    monkeypatch.setattr(slide_compile, "outstanding", lambda loop: [0, 1, 2])
+    monkeypatch.setattr(slide_compile, "system_prompt", lambda loop, context: "S")
+    monkeypatch.setattr(slide_compile, "offered_tools", lambda loop: [])
+    monkeypatch.setattr(slide_compile, "compile_slide", fake_slide)
+    events = [e async for e in slide_compile.compile_all(
+        loop, {}, [], uuid.uuid4(), pipeline.PHASES_BY_NAME["compile"])]
+
+    assert len(events) == 3
+    assert log[:2] == ["ask 0", "answered 0"]
+    # The rest then go together.
+    assert log[2:4] == ["ask 1", "ask 2"]
+
+
+@pytest.mark.asyncio
+async def test_a_first_slide_that_fails_does_not_hold_the_others(monkeypatch):
+    async def failing(loop, index, shared, tools, context, messages, session_id, phase,
+                      answered=None):
+        if index == 0:
+            raise RuntimeError("boom")
+        yield "event", {"slide": index}
+
+    loop = _loop()
+    loop.llm = _Caching()
+    monkeypatch.setattr(slide_compile, "outstanding", lambda loop: [0, 1])
+    monkeypatch.setattr(slide_compile, "system_prompt", lambda loop, context: "S")
+    monkeypatch.setattr(slide_compile, "offered_tools", lambda loop: [])
+    monkeypatch.setattr(slide_compile, "compile_slide", failing)
+    events = [e async for e in slide_compile.compile_all(
+        loop, {}, [], uuid.uuid4(), pipeline.PHASES_BY_NAME["compile"])]
+    assert events == [("event", {"slide": 1})]
+
+
+@pytest.mark.asyncio
+async def test_without_a_caching_provider_every_slide_goes_at_once(monkeypatch):
+    import asyncio
+
+    log = []
+
+    async def fake_slide(loop, index, shared, tools, context, messages, session_id, phase,
+                         answered=None):
+        log.append(f"ask {index}")
+        await asyncio.sleep(0.01)
+        log.append(f"answered {index}")
+        yield "event", {"slide": index}
+
+    loop = _loop()
+    loop.llm = type("Plain", (), {"prefix_cache": False})()
+    monkeypatch.setattr(slide_compile, "outstanding", lambda loop: [0, 1])
+    monkeypatch.setattr(slide_compile, "system_prompt", lambda loop, context: "S")
+    monkeypatch.setattr(slide_compile, "offered_tools", lambda loop: [])
+    monkeypatch.setattr(slide_compile, "compile_slide", fake_slide)
+    [e async for e in slide_compile.compile_all(
+        loop, {}, [], uuid.uuid4(), pipeline.PHASES_BY_NAME["compile"])]
+    assert log[:2] == ["ask 0", "ask 1"]
+
+
+async def _first_request(loop, monkeypatch, chat, answered):
+    """Run the real compile_slide for slide 0; return the order in which the
+    tool dispatch after the answer saw ``answered``."""
+    order = []
+
+    async def _apply(loop, index, calls, context, session_id, phase, offered):
+        order.append(f"apply, answered={answered.is_set()}")
+        yield "result", ([], [])
+
+    monkeypatch.setattr(slide_compile, "_apply", _apply)
+    monkeypatch.setattr(slide_compile, "slide_request", lambda loop, index, context: "ask")
+    loop._chat_with_retry = chat
+    [e async for e in slide_compile.compile_slide(
+        loop, 0, "S", [], {}, [], uuid.uuid4(), pipeline.PHASES_BY_NAME["compile"],
+        answered=answered)]
+    return order
+
+
+@pytest.mark.asyncio
+async def test_the_real_compile_releases_the_others_on_the_answer_not_after_the_tools(monkeypatch):
+    import asyncio
+
+    async def chat(messages, tools=None):
+        return {"message": {"content": ""}, "tool_calls": []}
+
+    answered = asyncio.Event()
+    assert await _first_request(_loop(), monkeypatch, chat, answered) == [
+        "apply, answered=True"]
+
+
+@pytest.mark.asyncio
+async def test_a_back_off_on_the_first_request_releases_the_others(monkeypatch):
+    """A rate-limited first request is not in any cache, and the others must
+    not wait out its retries."""
+    import asyncio
+
+    from app.llm.retry_notices import RetryNotice, publish_retry_notice
+
+    answered = asyncio.Event()
+    during_back_off = []
+    loop = _loop()
+    loop.NOTICE_POLL_SECONDS = 0.01
+
+    async def chat(messages, tools=None):
+        publish_retry_notice(RetryNotice(reason="rate_limit", attempt=1,
+                                         max_attempts=3, delay_seconds=0.0))
+        await asyncio.sleep(0.1)
+        during_back_off.append(answered.is_set())
+        return {"message": {"content": ""}, "tool_calls": []}
+
+    await _first_request(loop, monkeypatch, chat, answered)
+    assert during_back_off == [True]

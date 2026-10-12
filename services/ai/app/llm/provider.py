@@ -219,6 +219,11 @@ class ProviderCredentials:
 class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
 
+    # Whether the endpoint caches a request's prefix by itself, so that
+    # requests sharing a long prefix are cheaper sent one after another than
+    # together (#325). None on a wrapper: it is whatever it wraps.
+    prefix_cache: bool | None = None
+
     @abstractmethod
     async def chat(
         self,
@@ -243,6 +248,9 @@ class LLMProvider(ABC):
 
 
 class ZhipuProvider(LLMProvider):
+    # Not relied on: no automatic prefix cache has been verified for GLM.
+    prefix_cache = False
+
     """Zhipu GLM provider using the zhipuai SDK."""
 
     # A class attribute so it is present on an instance built without running
@@ -361,6 +369,9 @@ class ZhipuProvider(LLMProvider):
 
 
 class AzureOpenAIProvider(LLMProvider):
+    # Azure OpenAI caches prompt prefixes automatically on current models.
+    prefix_cache = True
+
     """Azure OpenAI provider using the openai SDK."""
 
     def __init__(self) -> None:
@@ -450,6 +461,9 @@ class AzureOpenAIProvider(LLMProvider):
 
 
 class OpenAIProvider(LLMProvider):
+    # OpenAI caches prompt prefixes of 1,024 tokens and up automatically.
+    prefix_cache = True
+
     """OpenAI (ChatGPT) provider using the openai SDK.
 
     Also serves any OpenAI-compatible endpoint via ``base_url``.
@@ -522,6 +536,10 @@ class OpenAIProvider(LLMProvider):
 
 
 class AnthropicProvider(LLMProvider):
+    # Anthropic caches only up to explicit cache_control breakpoints, which
+    # this provider does not set.
+    prefix_cache = False
+
     """Claude provider using the anthropic SDK.
 
     Anthropic's Messages API differs from the OpenAI shape in three ways that
@@ -753,6 +771,18 @@ def anthropic_response_to_openai(response) -> dict:
         "message": {"role": "assistant", "content": "\n".join(text_parts)},
         "tool_calls": tool_calls,
     }
+
+
+def caches_prefixes(provider) -> bool:
+    """Whether ``provider``, through any wrappers around it, caches request
+    prefixes by itself."""
+    seen = provider
+    while seen is not None:
+        own = getattr(type(seen), "prefix_cache", None)
+        if own is not None:
+            return bool(own)
+        seen = getattr(seen, "inner", None)
+    return False
 
 
 def build_chat_provider(credentials: ProviderCredentials) -> LLMProvider:

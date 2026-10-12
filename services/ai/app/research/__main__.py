@@ -70,6 +70,9 @@ def main() -> int:
     run.add_argument("--out", type=Path, default=DEFAULT_OUT)
     show = commands.add_parser("show", help="summarise a finished run")
     show.add_argument("run_dir", type=Path)
+    prefix = commands.add_parser(
+        "prefix", help="how much of a run's input a prompt cache could have answered")
+    prefix.add_argument("run_dir", type=Path)
     check = commands.add_parser("check", help="re-run the deterministic checks on a finished run")
     check.add_argument("run_dir", type=Path)
     check.add_argument("--task", type=Path, help="task file, when the manifest's path no longer resolves")
@@ -88,6 +91,13 @@ def main() -> int:
 
     if args.command == "show":
         print(runner.summarise(args.run_dir))
+        return 0
+    if args.command == "prefix":
+        import json as _json
+
+        from app.research.prefix import summary
+
+        print(_json.dumps(summary(args.run_dir), indent=2))
         return 0
     if args.command == "grade":
         import json as _json
