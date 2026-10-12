@@ -38,6 +38,7 @@ and checks the two agree.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -185,17 +186,24 @@ class SlideBudget:
         return self.ON
 
     def describe(self) -> str:
-        """The budget, in the terms whoever writes the slide works in."""
+        """The budget, in the terms whoever writes the slide works in.
+
+        The limits are fractional, so a floor is stated rounded up and a
+        ceiling rounded down: the count stated is one the slide can meet.
+        Rounded to nearest, a floor of 4.4 read "at least 4" to a slide
+        refused for carrying 4 (technical-http-caching, 2026-10-12).
+        """
         if self.archetype in (COVER, DIVIDER):
             return (
                 f"This is a {self.archetype}: it carries its headline and at "
-                f"most {self.blocks_max:.0f} other things. Do not fill it."
+                f"most {math.floor(self.blocks_max)} other things. Do not fill it."
             )
         return (
             f"Aim for about {self.blocks_target:.0f} blocks and "
             f"{self.words_target:.0f} words on this slide "
-            f"(at least {self.blocks_min:.0f} blocks and {self.words_min:.0f} "
-            f"words; no more than {self.blocks_max:.0f} blocks), at roughly "
+            f"(at least {math.ceil(self.blocks_min)} blocks and "
+            f"{math.ceil(self.words_min)} words; no more than "
+            f"{math.floor(self.blocks_max)} blocks), at roughly "
             f"{self.words_per_block:.0f} words a block"
         )
 
@@ -205,12 +213,12 @@ class SlideBudget:
         if substance.blocks < self.blocks_min:
             parts.append(
                 f"{substance.blocks} blocks where this slide should carry at "
-                f"least {self.blocks_min:.0f}"
+                f"least {math.ceil(self.blocks_min)}"
             )
         if substance.words < self.words_min:
             parts.append(
                 f"{substance.words} words where it should carry at least "
-                f"{self.words_min:.0f}"
+                f"{math.ceil(self.words_min)}"
             )
         return " and ".join(parts)
 

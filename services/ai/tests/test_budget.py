@@ -906,3 +906,21 @@ class TestExhibitCountDoesNotDisturbTheMaterialScore:
         assert budget.material_score(["a"], exhibits=0) < (
             budget.material_score(["a"], exhibits=1)
         )
+
+
+def test_a_fractional_limit_is_stated_as_a_count_the_slide_can_meet():
+    """A floor of 4.4 blocks read "4 blocks where this slide should carry at
+    least 4" to a slide refused for carrying 4 (technical-http-caching,
+    2026-10-12)."""
+    from app.budget import SlideBudget, SlideSubstance
+
+    budget = SlideBudget(archetype="content", material=1.0, blocks_target=8,
+                         blocks_min=4.4, blocks_max=11.6, words_target=159,
+                         words_min=86.2, words_max=220, words_per_block=20)
+    short = SlideSubstance(blocks=4, words=80)
+
+    assert budget.verdict(short) == budget.UNDER
+    assert budget.shortfall(short) == (
+        "4 blocks where this slide should carry at least 5 and "
+        "80 words where it should carry at least 87")
+    assert "(at least 5 blocks and 87 words; no more than 11 blocks)" in budget.describe()
