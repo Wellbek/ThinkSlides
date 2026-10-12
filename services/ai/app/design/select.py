@@ -472,7 +472,8 @@ def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,
               archetype: PageArchetype, grid: GridSpec, *,
               item_order: Optional[float] = None,
               slot_order: Optional[float] = None,
-              legible: bool = True) -> float:
+              legible: bool = True,
+              parallel: bool = False) -> float:
     """What it costs to put this item in this slot.
 
     ``legible`` refuses a slot an exhibit cannot be read in. Relaxed only as a
@@ -506,6 +507,15 @@ def pair_cost(item: MaterialItem, slot: SlotSpec, pack: Pack,
         # frame is still usable, but it should lose to one that has a place
         # to put the heading.
         cost += 2.0
+    if item.role_hint == "body" and frame is not None:
+        rung = _rung_of(archetype, slot, pack)
+        if parallel and rung != "body":
+            # One of a set of parallel points, on an archetype with body slots
+            # to hold them all (`_grouped` sized the set to them): any other
+            # rung sets it unlike the rest.
+            return INFEASIBLE
+        if rung in SMALL_TYPE_ROLES:
+            cost += W_SMALL_RUNG
     if slot.max_chars and item.chars > slot.max_chars:
         cost += min(2.0, (item.chars - slot.max_chars) / max(1, slot.max_chars))
     if slot.min_chars and item.chars < slot.min_chars:
@@ -533,18 +543,72 @@ def _suits(slot: SlotSpec, item: MaterialItem) -> bool:
 
 
 def _body_slots(slots: Sequence[SlotSpec], archetype: PageArchetype,
-                slot_order: dict) -> list[SlotSpec]:
+                slot_order: dict, pack: Optional[Pack] = None,
+                parallel: bool = False) -> list[SlotSpec]:
     """This archetype's slots a paragraph could actually sit in, in reading order.
 
     A display-only frame - a headline, an eyebrow - is not one of them, even
     though it accepts text: it exists for the one line that names the page.
+    Nor is a caption or footnote slot, while the archetype has a slot set at
+    body size: points of equal weight were spread across both, and one of
+    three parallel points came out a rung smaller than the others (#371).
     """
     usable = [slot for slot in slots if _carries_prose(archetype, slot)]
+    if pack is not None:
+        # Parallel points keep to the body rung itself: a lead paragraph's
+        # standfirst set the first of three points larger than the other two.
+        keep = ((lambda slot: _rung_of(archetype, slot, pack) == "body") if parallel
+                else (lambda slot: not _sets_small(archetype, slot, pack)))
+        full = [slot for slot in usable if keep(slot)]
+        usable = full or usable
     return sorted(usable, key=lambda s: slot_order.get(s.frame_id, 0.0))
 
 
+# The rungs a frame sets text in that are smaller than the page's body: a
+# paragraph of the argument set in one reads as an aside to the others.
+SMALL_TYPE_ROLES = frozenset({"caption", "footnote"})
+
+# What it costs to set a body paragraph in a caption or footnote slot. Larger
+# than the preferences it competes with (prominence, sequence), so it is
+# chosen only when no slot set at body size can take the paragraph (#371).
+W_SMALL_RUNG = 3.0
+
+
+def _rung_of(archetype: PageArchetype, slot: SlotSpec, pack: Pack) -> str:
+    """The type role this slot sets a paragraph in."""
+    frame = _slot_frame(archetype, slot)
+    if frame is None:
+        return "body"
+    return type_role_for(frame.role, "text", pack, frame.type_role)
+
+
+def _sets_small(archetype: PageArchetype, slot: SlotSpec, pack: Pack) -> bool:
+    """Whether this slot sets text in a rung smaller than the body."""
+    return _rung_of(archetype, slot, pack) in SMALL_TYPE_ROLES
+
+
+# How alike in length a page's paragraphs must be to read as parallel points:
+# the longest at most this many times the shortest.
+PARALLEL_SPREAD = 2.0
+
+
+def parallel_points(items: Sequence[MaterialItem]) -> bool:
+    """Whether this page's paragraphs are a set of parallel points.
+
+    Points of equal weight in a list are set alike, so they share a rung
+    rather than each going to whichever slot is cheapest (#371).
+    """
+    body = [item for item in items if item.kind == "text" and item.role_hint == "body"]
+    if len(body) < 2:
+        return False
+    lengths = [max(1, item.chars) for item in body]
+    return max(lengths) <= PARALLEL_SPREAD * min(lengths)
+
+
 def _grouped(items: list[MaterialItem], slots: Sequence[SlotSpec],
-             archetype: PageArchetype, slot_order: dict) -> list[MaterialItem]:
+             archetype: PageArchetype, slot_order: dict,
+             pack: Optional[Pack] = None,
+             parallel: bool = False) -> list[MaterialItem]:
     """Paragraphs gathered into as many runs as this archetype has room for.
 
     The assignment below is one item to one slot, which read as "a prose
@@ -564,7 +628,7 @@ def _grouped(items: list[MaterialItem], slots: Sequence[SlotSpec],
     """
     body = [item for item in items
             if item.kind == "text" and item.role_hint == "body"]
-    usable = _body_slots(slots, archetype, slot_order)
+    usable = _body_slots(slots, archetype, slot_order, pack, parallel)
     room = len(usable)
     if room < 1 or len(body) <= room:
         return items
@@ -643,7 +707,12 @@ def fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
         return None
 
     slot_order = reading_order(archetype, pack, grid)
-    items = _grouped(items, slots, archetype, slot_order)
+    # Parallel points are held to the body rung only where the archetype has
+    # one to hold them in; one with none is still usable, at a cost.
+    parallel = parallel_points(items) and any(
+        _rung_of(archetype, slot, pack) == "body"
+        for slot in slots if _carries_prose(archetype, slot))
+    items = _grouped(items, slots, archetype, slot_order, pack, parallel)
     # Only the body prose is sequenced. A heading, a quote or an exhibit is
     # placed by what it *is*, and ordering it against the paragraphs would
     # drag the heading toward the middle of the page.
@@ -658,7 +727,7 @@ def fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
             pair_cost(item, slot, pack, archetype, grid,
                       item_order=item_order.get(item.id),
                       slot_order=slot_order.get(slot.frame_id),
-                      legible=legible)
+                      legible=legible, parallel=parallel)
             for slot in slots
         ]
         for item in items
