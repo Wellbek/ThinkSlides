@@ -736,9 +736,13 @@ class PPTXRenderer:
             entry = deck_theme.layout_entry(catalog, layout_id)
 
         role = (entry or {}).get("role", deck_theme.ROLE_CONTENT)
-        # A deck that opens on a content slide has no cover; force the first
-        # slide to read as one so the light/dark rhythm always starts right.
-        if index == 0 and role == deck_theme.ROLE_CONTENT and total > 1:
+        # A deck that opens on a content slide with nothing said about it has
+        # no cover; the first slide is styled as one so the light/dark rhythm
+        # starts right. A slide the plan made content stays content: a short
+        # deck opens on its first claim rather than spending a page (#347).
+        declared = str(slide_data.get("role") or slide_data.get("contentType") or "")
+        if (index == 0 and role == deck_theme.ROLE_CONTENT and total > 1
+                and not declared):
             role = deck_theme.ROLE_COVER
         style = self._theme.style_for(role)
 

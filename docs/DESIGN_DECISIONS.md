@@ -161,6 +161,8 @@ A drafted slide is read into a *material shape* (`run.material_from`, `material.
 - Block types with their own payloads (accent cards, row bands, icon cards, banners, image-card rows) contribute their copy as body text rather than being dropped.
 
 The page's **role** is what the slide declares, or else: first slide cover, last slide closing, everything else content.
+A drafted slide declares it from the plan's `contentType` (`title` is a cover, `conclusion` a closing, anything else content), so position decides only for a slide that says nothing; the stock renderer follows the same rule.
+A plan of fewer than four slides (`MIN_SLIDES_FOR_A_COVER`) opens on content unless the request asks for a cover: a three-slide deck asked to cover three topics spent a third of itself on a title page (#347).
 A pull quote is offered only when the body has enough copy for a highlight to be a highlight.
 
 ## 6. Stage II: choosing each page's archetype

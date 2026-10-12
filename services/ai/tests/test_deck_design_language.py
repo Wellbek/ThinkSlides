@@ -420,3 +420,26 @@ class TestASlideThatCarriesBothCopyAndAVisual:
 
         assert not has_glyph(cover_body)
         assert has_glyph(content_body), "content slides must still be bulleted"
+
+
+def test_a_deck_the_plan_opens_on_content_is_not_given_a_cover():
+    """#347: the first slide was styled as a cover whatever the plan said, so a
+    three-slide deck of three topics lost its first claim to a dark title page."""
+    # As design_slide_content leaves them: the plan's contentType carried on.
+    slides = [
+        {**_slide("content", "Cache-Control sets three contracts", ["max-age", "no-cache"]),
+         "contentType": "content"},
+        {**_slide("content", "An ETag turns a re-download into a 304", ["If-None-Match"]),
+         "contentType": "content"},
+    ]
+    renderer = PPTXRenderer(template_path=None, color_theme=BRAND)
+    with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as f:
+        output_path = f.name
+    try:
+        renderer.render(slides=slides, metadata={"title": "Caching"},
+                        output_path=output_path)
+        first, second = Presentation(output_path).slides
+        assert _background(first) == _background(second)
+        assert not colors.is_dark(_background(first))
+    finally:
+        os.unlink(output_path)
