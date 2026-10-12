@@ -655,6 +655,10 @@ class WorkingState:
         # validation reports issues, drained as each is redrafted, emptied when
         # validation settles.
         self.revision_queue: list[int] = []
+        # Slides compile (#323) has asked for this round. A slide it could not
+        # produce stays outstanding for drafting, and is not asked again until
+        # the next round sends it back.
+        self.compile_tried: set[int] = set()
         # How many times each slide has been revised for its *layout*, and
         # which arrangements it has already been placed on.
         #
@@ -1292,6 +1296,7 @@ class WorkingState:
         self.validation_issues = []
         self.slides_needing_revision = []
         self.revision_queue = []
+        self.compile_tried = set()
         self.layout_revisions = {}
         self.layout_exhausted = set()
         self.arrangements_tried = {}
@@ -1332,6 +1337,26 @@ class WorkingState:
 # inserted or replaces one (see _dispatch_tool_body); passing it through made
 # every call that set it fail on an unexpected keyword.
 _LOOP_ARGUMENTS = {"design_slide_content": frozenset({"placement"})}
+
+
+# What a run with no research and no documents may state, and how it says
+# what it cannot source. Read by the drafting prompt and by compile (#323).
+_UNSOURCED_RULES = (
+    "## Sourcing Content (Deep Thinking is OFF)",
+    "",
+    "- You have no web access on this run, and no research pass runs before you write. Everything on the deck has to come from the user's documents, the conversation, or what you already know - there is no fourth source, and inventing one is not an option this run has.",
+    "- A NAMED, SPECIFIC claim - a company, a person, a product, a dollar figure, a percentage, a date, a statistic - stated as plain fact is a claim you are telling the user is true. If it is not in the user's documents or the conversation, and you are not genuinely certain of it, you have exactly two options: qualify it in the text itself ('a figure on the order of...', 'this varies by source, but a commonly cited estimate is...', 'exact figures were not available; directionally...'), or leave it out and write the point qualitatively instead. There is no third option where you state a specific number or a specific name with no source and no hedge, because the sentence that resulted is indistinguishable from a properly sourced one to the person reading it - the same sentence you would use if you actually knew it.",
+    "- Concretely: 'partnerships with SolarCo and WindTech' invents companies that do not exist. '40% North America, 30% Europe, 30% Asia' invents a distribution nobody gave you. '$10 million' invents a figure with no source, then reused as a different slide's total. Every one of those reads as sourced, and not a single one actually was. This is not a hypothetical - it is what an unqualified run of this exact prompt has actually produced.",
+    "- This applies with full force to build_chart, build_table and "
+    "build_key_metrics. A chart is a stronger claim than a sentence, not a "
+    "weaker one - it tells the reader these numbers were measured, not typed. "
+    "Only build a visual from figures present in the user's documents, the "
+    "conversation, or facts you are genuinely confident of. If a slide's point "
+    "is numeric but you do not have real numbers for it, do not invent placeholder "
+    "ones to fill the chart shape - write the point as prose, qualified, or say "
+    "on the slide and in its notes that the figures were not available.",
+    "",
+)
 
 
 def _tool_arguments(fn_name: str, fn_args: dict) -> dict:
@@ -1830,6 +1855,7 @@ class AgentLoop:
             "validation_issues": self.working_state.validation_issues,
             "slides_needing_revision": self.working_state.slides_needing_revision,
             "revision_queue": self.working_state.revision_queue,
+            "compile_tried": sorted(self.working_state.compile_tried),
             # Without these a resumed run forgets what it has already tried
             # and starts the ladder again from the bottom - which is not a cap
             # of two, it is a cap of two per reload.
@@ -1958,6 +1984,7 @@ class AgentLoop:
                 state_dict.get("change_fix_rounds") or 0)
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
+            self.working_state.compile_tried = set(state_dict.get("compile_tried") or [])
             if "revision_queue" in state_dict:
                 self.working_state.revision_queue = state_dict["revision_queue"]
             elif (state_dict.get("validation_issues")
@@ -2825,6 +2852,13 @@ class AgentLoop:
         }
 
     @property
+    def compile_concurrency(self) -> int:
+        """How many slides compile asks for at once (#323)."""
+        from app.config import settings
+
+        return int(settings.compile_concurrency)
+
+    @property
     def code_amendment_enabled(self) -> bool:
         """Whether this run may have the agent write and run its own code."""
         from app.config import settings
@@ -3217,6 +3251,28 @@ class AgentLoop:
             phase=pipeline.PHASES_BY_NAME["review"],
             run_context_=context,
             session_id=session_id,
+        ):
+            yield item
+
+    async def _phase_compile(
+        self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
+    ) -> AsyncIterator[tuple[str, object]]:
+        """Write every outstanding slide at once, one answer each (#323)."""
+        from app.agent import compile as slide_compile
+
+        count = len(slide_compile.outstanding(self))
+        revising = bool(self.working_state.revision_queue)
+        yield "event", _event("thought", "content_generation", {
+            "content": (
+                f"Revising {count} slide{'s' if count != 1 else ''} at once."
+                if revising else
+                f"Writing all {count} slide{'s' if count != 1 else ''} at once."
+            ),
+            "timestamp": _iso_now(),
+        }, step="compile")
+        async for item in slide_compile.compile_all(
+            self, context, chat_messages, session_id,
+            pipeline.PHASES_BY_NAME["compile"],
         ):
             yield item
 
@@ -3757,7 +3813,17 @@ class AgentLoop:
         outstanding = _slides_outstanding(self)
         if not outstanding:
             return "Every slide is drafted."
-        index = outstanding[0]
+        return self.slide_directive_for(outstanding[0])
+
+    def slide_directive_for(self, index: int, *, compiling: bool = False) -> str:
+        """What to do with one slide, in drafting's words or compile's.
+
+        Drafting is a sequence of calls ending in design_slide_content;
+        compile (#323) is one answer ending in write_slide, so the same
+        instruction names the step that answer ends with.
+        """
+        write = "write it with write_slide" if compiling else (
+            "call design_slide_content for this slide")
         plan = (self.working_state.presentation_structure or {}).get("slides") or []
         planned = plan[index] if index < len(plan) else {}
         title = planned.get("title") or planned.get("heading") or ""
@@ -3773,7 +3839,8 @@ class AgentLoop:
                 " If what is wrong is where something sits rather than what "
                 "it says, edit_deck_with_code can fix that directly on the "
                 "rendered slide instead of a full redraft."
-                if "edit_deck_with_code" not in self._withheld_tools() else ""
+                if not compiling
+                and "edit_deck_with_code" not in self._withheld_tools() else ""
             )
             asked = [i for i in self.working_state.validation_issues
                      if i.get("slideIndex") == index and i.get("type") == "user_request"]
@@ -3782,8 +3849,7 @@ class AgentLoop:
                     f"The user asked for a change to slide {index + 1}"
                     + (f' ("{title}")' if title else "")
                     + f": {asked[0].get('detail')!r}\n\nRedraft this slide so "
-                    "it does that and keeps everything else about it, then "
-                    "call design_slide_content for this slide."
+                    f"it does that and keeps everything else about it, then {write}."
                     + self._attached_exhibits_directive(index)
                     + self._exhibit_capacity_directive()
                     + self._headline_capacity_directive()
@@ -3791,12 +3857,14 @@ class AgentLoop:
             return (
                 f"Revise slide {index + 1}"
                 + (f' ("{title}")' if title else "")
-                + " - the slides this round revises are redrafted one at a time, and "
-                "every slide validation did not flag is carried over unchanged. "
+                + (" - the slides this round revises are rewritten together, and "
+                   if compiling else
+                   " - the slides this round revises are redrafted one at a time, and ")
+                + "every slide validation did not flag is carried over unchanged. "
                 "Validation reported, for this slide:\n"
                 + self._describe_validation_issues(slide_index=index)
                 + "\nShorten the copy, give an oversized visual a smaller region, or move "
-                "it onto its own slide, then call design_slide_content for this slide."
+                f"it onto its own slide, then {write}."
                 + self._attached_exhibits_directive(index)
                 + self._exhibit_capacity_directive()
                 + self._headline_capacity_directive()
@@ -3807,19 +3875,27 @@ class AgentLoop:
         # nudge when a turn produced no tool call - so naming a withheld tool
         # here does not merely mislead once, it re-issues the impossible
         # instruction every time the model fails to follow it.
-        opening = (
-            ". Call select_layout for slide_index=" + f"{index}, then any"
-            if "select_layout" not in self._withheld_tools()
-            else ". Call any"
-        )
+        if compiling:
+            opening = (
+                ". In one answer, call any build_* tool its point needs (a "
+                "chart, table or metric row for figures; a block for content "
+                "with a shape), then write_slide with its copy. This slide only."
+            )
+        else:
+            opening = (
+                ". Call select_layout for slide_index=" + f"{index}, then any"
+                if "select_layout" not in self._withheld_tools()
+                else ". Call any"
+            ) + (
+                " build_* tool its point needs (a chart, table or metric "
+                "row for figures; a block for content with a shape), then "
+                f"design_slide_content for slide_index={index}. This slide only."
+            )
         return (
             f"Draft slide {index + 1} of {len(plan) or index + 1}"
             + (f': "{title}"' if title else "")
             + opening
-            + " build_* tool its point needs (a chart, table or metric "
-            "row for figures; a block for content with a shape), then "
-            f"design_slide_content for slide_index={index}. This slide only."
-            + self._content_type_directive(planned)
+            + self._content_type_directive(planned, compiling=compiling)
             + self._exhibit_capacity_directive()
             + self._headline_capacity_directive()
             + self._format_directive()
@@ -3896,7 +3972,7 @@ class AgentLoop:
             "set at that size is made smaller to match."
         )
 
-    def _content_type_directive(self, planned: dict) -> str:
+    def _content_type_directive(self, planned: dict, *, compiling: bool = False) -> str:
         """What the plan already decided this slide needs, restated as an
         instruction rather than left as a field the drafting turn never reads.
 
@@ -3910,20 +3986,24 @@ class AgentLoop:
         figures" aside - which a run stating "12.1 billion hours of Netflix
         viewing" as a bullet, never as a chart, shows it does not reliably do.
         """
+        # Where the exhibit goes in the order of work: before the copy's own
+        # call when drafting, beside it in the one answer when compiling.
+        then = " in the same answer as write_slide" if compiling else (
+            " before design_slide_content")
         content_type = str(planned.get("contentType") or "").strip().lower()
         if content_type == "chart":
             return (
                 "\nThe plan calls for this to be a chart slide - its key "
                 "points are numbers that tell a story a reader would rather "
-                "see than read. Call build_chart for this slide before "
-                "design_slide_content; do not write the figures as bullets "
+                f"see than read. Call build_chart for this slide{then}; "
+                "do not write the figures as bullets "
                 "instead of building it."
             )
         if content_type == "table":
             return (
                 "\nThe plan calls for this to be a table slide - its key "
                 "points are structured rows and columns. Call build_table "
-                "for this slide before design_slide_content."
+                f"for this slide{then}."
             )
         if content_type == "dashboard":
             questions = [
@@ -3940,7 +4020,7 @@ class AgentLoop:
                 "several exhibits, one answering each of these questions:\n"
                 f"{listed}\nBuild one exhibit per question - build_chart, "
                 "build_table, build_key_metrics or build_stat_callouts, "
-                "whichever fits that question - before design_slide_content. "
+                f"whichever fits that question -{then}. "
                 "A dashboard page with only prose or only one exhibit has not "
                 "done what the plan asked."
             )
@@ -3948,7 +4028,7 @@ class AgentLoop:
             return (
                 "\nThe plan calls for this to be an image slide - call "
                 "select_source_image (or generate_image, if available) for "
-                "this slide before design_slide_content."
+                f"this slide{then}."
             )
         return ""
 
@@ -4392,9 +4472,14 @@ class AgentLoop:
         chosen_by: str = "model",
     ) -> AsyncIterator[tuple[str, object]]:
         """Dispatch one tool call inside its own trace span."""
+        if chosen_by == "model":
+            # Copy already written is compile's to hand over (#323); a model
+            # passing it would skip the call that writes the copy.
+            fn_args.pop("written", None)
         with trace.span(
             "tool", fn_name,
-            reason=f"called by the {chosen_by}",
+            reason=("written by the model in its compile answer"
+                    if chosen_by == "compile" else f"called by the {chosen_by}"),
             step=step,
             callId=call_id,
         ) as tool_span:
@@ -4839,6 +4924,7 @@ class AgentLoop:
                 self.working_state.revision_queue = (
                     [] if validation_done
                     else self.working_state.revision_round(issues, exclude=relayout))
+                self.working_state.compile_tried = set()
             else:
                 self.working_state.validation_failures += 1
                 validation_done = (
@@ -5022,6 +5108,7 @@ class AgentLoop:
                         {"slideIndex": i, "type": "user_request", "fix": "redraft",
                          "detail": data.get("instruction", "")} for i in indices]
                     ws.revision_queue = list(indices)
+                    ws.compile_tried = set()
                     ws.slides_needing_revision = list(indices)
                     ws.amend_redrafted |= set(indices)
                     ws.design_serial += 1
@@ -5736,22 +5823,7 @@ class AgentLoop:
                 "",
             ])
         else:
-            prompt_parts.extend([
-                "## Sourcing Content (Deep Thinking is OFF)",
-                "",
-                "- You have no web access on this run, and no research pass runs before you write. Everything on the deck has to come from the user's documents, the conversation, or what you already know - there is no fourth source, and inventing one is not an option this run has.",
-                "- A NAMED, SPECIFIC claim - a company, a person, a product, a dollar figure, a percentage, a date, a statistic - stated as plain fact is a claim you are telling the user is true. If it is not in the user's documents or the conversation, and you are not genuinely certain of it, you have exactly two options: qualify it in the text itself ('a figure on the order of...', 'this varies by source, but a commonly cited estimate is...', 'exact figures were not available; directionally...'), or leave it out and write the point qualitatively instead. There is no third option where you state a specific number or a specific name with no source and no hedge, because the sentence that resulted is indistinguishable from a properly sourced one to the person reading it - the same sentence you would use if you actually knew it.",
-                "- Concretely: 'partnerships with SolarCo and WindTech' invents companies that do not exist. '40% North America, 30% Europe, 30% Asia' invents a distribution nobody gave you. '$10 million' invents a figure with no source, then reused as a different slide's total. Every one of those reads as sourced, and not a single one actually was. This is not a hypothetical - it is what an unqualified run of this exact prompt has actually produced.",
-                "- This applies with full force to build_chart, build_table and "
-                "build_key_metrics. A chart is a stronger claim than a sentence, not a "
-                "weaker one - it tells the reader these numbers were measured, not typed. "
-                "Only build a visual from figures present in the user's documents, the "
-                "conversation, or facts you are genuinely confident of. If a slide's point "
-                "is numeric but you do not have real numbers for it, do not invent placeholder "
-                "ones to fill the chart shape - write the point as prose, qualified, or say "
-                "on the slide and in its notes that the figures were not available.",
-                "",
-            ])
+            prompt_parts.extend(_UNSOURCED_RULES)
 
         research_tool = ["web_search — Search the web for real facts and return cited sources"] \
             if self.mode == MODE_DEEP else []
@@ -5812,6 +5884,72 @@ class AgentLoop:
             if line.split(" ", 1)[0] not in withheld
         ]
 
+        prompt_parts.extend(self._visuals_lines(withheld))
+        prompt_parts.append("## Tools")
+        prompt_parts.append(
+            "What each tool does. You are only offered the ones the current step needs, "
+            "so a tool you expected but cannot see belongs to a step that is not this one:"
+        )
+        prompt_parts.extend(f"{i}. {line}" for i, line in enumerate(tool_lines, 1))
+        prompt_parts.append("")
+
+        # Add completed work summary if available (critical for issue #7)
+        if working_state and working_state.completed_tools:
+            completed_summary = working_state.get_completed_work_summary()
+            if completed_summary:
+                prompt_parts.append(completed_summary)
+
+        if context.get("design_system"):
+            import json as _json
+            prompt_parts.append("## Design System Context")
+            prompt_parts.append("The following design system was extracted from the user's template.")
+            prompt_parts.append("You MUST follow these design tokens when generating content:")
+            prompt_parts.append("```json")
+            prompt_parts.append(_json.dumps(context["design_system"], indent=2))
+            prompt_parts.append("```")
+            prompt_parts.append("")
+        else:
+            prompt_parts.append("## Design System Context")
+            prompt_parts.append(
+                "No user template is attached. Call extract_template_design_system with no "
+                "template_path to load the built-in default design system before designing slides."
+            )
+            prompt_parts.append("")
+
+        prompt_parts.extend(self._research_lines(context))
+
+        prompt_parts.extend([
+            "",
+            "Explain your reasoning in a sentence before each tool call.",
+            "",
+            # Last, because it is the only part of this prompt that changes as
+            # the run moves, and the workflow above describes a whole run rather
+            # than this moment in one.
+            "## Next Step",
+            "",
+            self._next_step(),
+            "",
+            "Do that, and only that. It is derived from what this run has actually "
+            "completed. The tools you have been given are the ones this step needs; "
+            "re-running something already done is not progress.",
+        ])
+
+        return "\n".join(prompt_parts)
+
+    def _visuals_lines(self, withheld: frozenset[str], *, compiling: bool = False) -> list[str]:
+        """How exhibits are built, for the drafting prompt and for compile.
+
+        Compile (#323) writes a slide's exhibits and its copy in one answer,
+        so the order it is told is that answer's, not a sequence of calls.
+        """
+        copy_step = "the slide" if compiling else "design_slide_content"
+        order = (
+            "- Put a slide's build_chart/build_table/build_key_metrics calls in "
+            "the same answer as its write_slide call."
+            if compiling else
+            "- Call build_chart/build_table/build_key_metrics with the slide_index "
+            "BEFORE calling design_slide_content for that slide."
+        )
         # `compose_slide_regions` divides a page only when the run is choosing
         # its own geometry. On a design language the archetype already says
         # where the exhibits go, so the model is told the truth about that
@@ -5830,17 +5968,16 @@ class AgentLoop:
             "things to show gets both built; give two exhibits of the same "
             "type different slot names so both survive."
         )
-        prompt_parts.extend([
+        return [
             "## Building Visuals",
             "",
             "- Charts, tables and metric rows are built with the build_* tools, not "
-            "written as JSON inside design_slide_content. Each one validates what you "
+            f"written as JSON inside {copy_step}. Each one validates what you "
             "give it (series lengths against categories, plain numbers, rows against "
             "columns) and tells you exactly what is wrong if it does not fit, so a "
             "malformed visual is caught where you stated it rather than silently "
             "dropped at render time.",
-            "- Call build_chart/build_table/build_key_metrics with the slide_index "
-            "BEFORE calling design_slide_content for that slide.",
+            order,
             composition_advice,
             "- Composing a page is not a reason to fill it. Four exhibits "
             "answering the same question read worse than one answering it once, "
@@ -5873,73 +6010,30 @@ class AgentLoop:
             "material, the research results or the conversation. Never invent, "
             "estimate or round-trip a number you are not sure of.",
             "",
-        ])
-        prompt_parts.append("## Tools")
+        ]
+
+    def _research_lines(self, context: dict) -> list[str]:
+        """The run's research findings, numbered, for any prompt that writes copy."""
+        if not context.get("research"):
+            return []
+        prompt_parts: list[str] = []
+        findings = context["research"]
+        distinct_sources = len({r.get("url") for r in findings if r.get("url")})
+        prompt_parts.append("## Research Findings (from web_search)")
         prompt_parts.append(
-            "What each tool does. You are only offered the ones the current step needs, "
-            "so a tool you expected but cannot see belongs to a step that is not this one:"
+            f"{len(findings)} findings from {distinct_sources} distinct sources. Base your "
+            "factual content on them, and prefer a figure that appears in more than one of "
+            "them over one that appears in only a single source. Do NOT call web_search "
+            "again for topics already covered below. These sources are shown to the user "
+            "as citations."
         )
-        prompt_parts.extend(f"{i}. {line}" for i, line in enumerate(tool_lines, 1))
+        for idx, r in enumerate(findings, 1):
+            snippet = (r.get("snippet") or "")[:RESEARCH_SNIPPET_CHARS]
+            prompt_parts.append(
+                f"{idx}. [{r.get('title', '')}]({r.get('url', '')}) - {snippet}"
+            )
         prompt_parts.append("")
-
-        # Add completed work summary if available (critical for issue #7)
-        if working_state and working_state.completed_tools:
-            completed_summary = working_state.get_completed_work_summary()
-            if completed_summary:
-                prompt_parts.append(completed_summary)
-
-        if context.get("design_system"):
-            import json as _json
-            prompt_parts.append("## Design System Context")
-            prompt_parts.append("The following design system was extracted from the user's template.")
-            prompt_parts.append("You MUST follow these design tokens when generating content:")
-            prompt_parts.append("```json")
-            prompt_parts.append(_json.dumps(context["design_system"], indent=2))
-            prompt_parts.append("```")
-            prompt_parts.append("")
-        else:
-            prompt_parts.append("## Design System Context")
-            prompt_parts.append(
-                "No user template is attached. Call extract_template_design_system with no "
-                "template_path to load the built-in default design system before designing slides."
-            )
-            prompt_parts.append("")
-
-        if context.get("research"):
-            findings = context["research"]
-            distinct_sources = len({r.get("url") for r in findings if r.get("url")})
-            prompt_parts.append("## Research Findings (from web_search)")
-            prompt_parts.append(
-                f"{len(findings)} findings from {distinct_sources} distinct sources. Base your "
-                "factual content on them, and prefer a figure that appears in more than one of "
-                "them over one that appears in only a single source. Do NOT call web_search "
-                "again for topics already covered below. These sources are shown to the user "
-                "as citations."
-            )
-            for idx, r in enumerate(findings, 1):
-                snippet = (r.get("snippet") or "")[:RESEARCH_SNIPPET_CHARS]
-                prompt_parts.append(
-                    f"{idx}. [{r.get('title', '')}]({r.get('url', '')}) - {snippet}"
-                )
-            prompt_parts.append("")
-
-        prompt_parts.extend([
-            "",
-            "Explain your reasoning in a sentence before each tool call.",
-            "",
-            # Last, because it is the only part of this prompt that changes as
-            # the run moves, and the workflow above describes a whole run rather
-            # than this moment in one.
-            "## Next Step",
-            "",
-            self._next_step(),
-            "",
-            "Do that, and only that. It is derived from what this run has actually "
-            "completed. The tools you have been given are the ones this step needs; "
-            "re-running something already done is not progress.",
-        ])
-
-        return "\n".join(prompt_parts)
+        return prompt_parts
 
     def _revision_context(self, fn_name: str, fn_args: dict) -> tuple[bool, str, str]:
         """Whether this design_slide_content call is fixing a flagged slide,

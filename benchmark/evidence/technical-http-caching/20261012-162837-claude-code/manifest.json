@@ -1,0 +1,22 @@
+{
+  "search": "tavily",
+  "task": "technical-http-caching",
+  "category": "technical",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/technical/http-caching.yaml",
+  "commit": "c374adf-dirty",
+  "startedAt": "2026-10-12T16:28:37.434984",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null,
+  "sessionId": "c0398437-3549-4bdb-88e4-2365b24ab1c0",
+  "finishedAt": "2026-10-12T16:36:35.644124",
+  "parts": 4,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "stages": [
+    "stage-4.pptx"
+  ],
+  "errors": []
+}

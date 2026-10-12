@@ -186,14 +186,10 @@ class TestARunExplainsItself:
 
     @pytest.mark.asyncio
     async def test_a_finished_run_records_validation_and_every_phase_it_skipped(self, monkeypatch):
-        from tests.test_pipeline import INTAKE, TOOL_RESULTS, _calls, _loop, _text
+        from tests.test_pipeline import INTAKE, TOOL_RESULTS, _loop, _text, _written
 
         loop, session_id, _ = _loop(
-            [_calls(("select_layout", {"slide_index": 0}),
-                    ("design_slide_content", {"slide_index": 0})),
-             _calls(("select_layout", {"slide_index": 1}),
-                    ("design_slide_content", {"slide_index": 1})),
-             _text("Done.")],
+            [_written(), _written(), _text("Done.")],
             state={
                 "brief": json.loads(INTAKE), "scouted": True,
                 "consulted_before_planning": True, "autonomy_confirmed": True,
@@ -219,8 +215,11 @@ class TestARunExplainsItself:
         skipped = {s.name: s.reason for s in t.spans if s.status == "skipped"}
         assert skipped["intake"] == "already satisfied"
         assert "amend" in skipped
+        # The copy is the model's, written in one answer per slide (#323).
         drafted = [s for s in t.spans if s.kind == "tool" and s.name == "design_slide_content"]
-        assert {s.reason for s in drafted} == {"called by the model"}
+        assert {s.reason for s in drafted} == {"written by the model in its compile answer"}
+        compiled = [s for s in t.spans if s.kind == "step" and s.name.startswith("compile slide")]
+        assert sorted(s.name for s in compiled) == ["compile slide 1", "compile slide 2"]
 
 
 class _FailingSession:

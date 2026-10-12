@@ -39,6 +39,20 @@ def _loop(mode: str | None = MODE_SIMPLE, *, consult_user: bool = False) -> Agen
     return loop
 
 
+def _drafting_only(monkeypatch) -> None:
+    """Keep compile (#323) out of a run that scripts the drafting conversation.
+
+    These tests are about what that conversation does - a question raised
+    mid-draft, the turns after it - and about the phases after drafting. On
+    a design language compile would answer first, with replies scripted for
+    a different exchange; its own run is
+    test_compile_writes_every_slide_at_once_in_one_answer_each.
+    """
+    from app.agent import compile as slide_compile
+
+    monkeypatch.setattr(slide_compile, "applies", lambda loop: False)
+
+
 class _FakeRedis:
     """Just enough of the Redis client for the working-state round trip."""
 
@@ -289,7 +303,12 @@ async def test_run_tracks_structure_and_slides_and_auto_assembles_finalize_paylo
     the bookkeeping in between - that the structure and the designed slides are
     tracked, and that the renderer is handed those slides rather than whatever
     the model last retyped.
+
+    This is the drafting conversation, which a design-language run reaches
+    only for a slide compile could not produce; compile is switched off here
+    so the conversation drafts every slide. Compile has its own run below.
     """
+    _drafting_only(monkeypatch)
     session_id = uuid.uuid4()
     loop = _loop()
     loop.redis_client = _FakeRedis({f"working_state:{session_id}": _ready_state()})
@@ -354,6 +373,102 @@ async def test_run_tracks_structure_and_slides_and_auto_assembles_finalize_paylo
 
     tool_results = [e for e in events if e["type"] == "tool_result"]
     assert all(e["success"] for e in tool_results)
+
+
+@pytest.mark.asyncio
+async def test_compile_writes_every_slide_at_once_in_one_answer_each(monkeypatch):
+    """#323: after the outline, each slide is one request, and they are in
+    flight together. Its answer carries the exhibits and the copy; the copy
+    is finished by design_slide_content without a call of its own, and a
+    slide that fails its check is asked once more, with what failed."""
+    session_id = uuid.uuid4()
+    loop = _loop()
+    loop.redis_client = _FakeRedis({f"working_state:{session_id}": _ready_state()})
+    monkeypatch.setattr(loop, "_load_context", lambda *a, **k: _async({}))
+    monkeypatch.setattr(
+        loop, "_build_chat_messages",
+        lambda *a, **k: _async([{"role": "user", "content": "Make a 2-slide deck about cats"}]),
+    )
+    structure = {"title": "Cats", "totalSlides": 2,
+                 "slides": [{"slideIndex": 0, "title": "Cats"},
+                            {"slideIndex": 1, "title": "Why cats"}]}
+
+    def _answer(index: int) -> dict:
+        slide = {"contents": [{"type": "text", "runs": [{"text": f"Heading {index}"}]},
+                              {"type": "text", "runs": [{"text": "A point.", "bullet": False}]}]}
+        return {"message": {"content": ""}, "tool_calls": [
+            {"id": f"w{index}", "function": {"name": "write_slide",
+                                             "arguments": json.dumps({"slide": slide})}}]}
+
+    both_asked = asyncio.Event()
+    asked: list[int] = []
+
+    async def _chat(messages, tools=None):
+        if not any(t["function"]["name"] == "write_slide" for t in tools or []):
+            return {"message": {"content": "Here is your deck."}, "tool_calls": []}
+        request = messages[-1]["content"]
+        if request.startswith("Not all of that"):
+            asked.append(-1)
+            return _answer(1)
+        index = 0 if "slide 1 of 2" in request else 1
+        asked.append(index)
+        if len(asked) == 2:
+            both_asked.set()
+        # Neither answer comes back until both slides have been asked for.
+        await asyncio.wait_for(both_asked.wait(), timeout=2)
+        return _answer(index)
+
+    monkeypatch.setattr(loop, "_chat_with_retry", _chat)
+    checks = {"n": 0}
+
+    async def _execute_tool(name, args):
+        if name == "plan_presentation_structure":
+            return ToolResult(success=True, data=structure)
+        if name == "design_slide_content":
+            # The copy arrives written; this finishes it, it does not write it.
+            assert args.get("written"), "compile hands design_slide_content its copy"
+            return ToolResult(success=True, data={
+                **args["written"], "layoutId": "1", "layoutName": "Content"})
+        if name == "validate_slide_json":
+            checks["n"] += 1
+            slide = json.loads(args["slide_json"])
+            if slide["slideIndex"] == 1 and checks["n"] <= 2:
+                return ToolResult(success=False, rejected=True, error="headline too long")
+            return ToolResult(success=True, data={"valid": True})
+        if name == "finalize_and_render_pptx":
+            return ToolResult(success=True, data={"filePath": "/x.pptx", "fileName": "x.pptx", "previewUrls": []})
+        if name == "validate_rendered_output":
+            return ToolResult(success=True, data={"issues": []})
+        if name == "extract_template_design_system":
+            return ToolResult(success=True, data={"palette": {}, "layouts": []})
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(loop, "_execute_tool", _execute_tool)
+
+    [ev async for ev in loop.run(session_id)]
+
+    assert sorted(asked[:2]) == [0, 1]
+    assert asked[2:] == [-1], "one retry, for the slide whose check failed"
+    assert [s["slideIndex"] for s in loop.working_state.ordered_slides()] == [0, 1]
+    assert loop.working_state.has_called_finalize is True
+
+
+def test_a_model_cannot_hand_design_slide_content_written_copy():
+    """`written` skips the call that writes the copy; it is compile's alone."""
+    loop = _loop()
+    seen = {}
+
+    async def _execute_tool(name, args):
+        seen.update(args)
+        return ToolResult(success=False, error="stop")
+
+    loop._execute_tool = _execute_tool
+    loop.working_state.presentation_structure = {"totalSlides": 1, "slides": [{}]}
+    loop.working_state.pack_id = "a-pack"
+    asyncio.run(_dispatch(loop, "design_slide_content",
+                          {"slide_index": 0, "slide_outline": "{}", "written": {"contents": []}}))
+
+    assert "written" not in seen
 
 
 @pytest.mark.asyncio
@@ -429,6 +544,7 @@ async def test_ask_user_question_stops_the_run_instead_of_calling_the_llm_again(
     The pipeline asks its own questions, but a phase the model drives may still
     raise a genuine one mid-draft, and that has to stop the run just as hard.
     """
+    _drafting_only(monkeypatch)
     session_id = uuid.uuid4()
     loop = _loop()
     loop.redis_client = _FakeRedis({
@@ -855,6 +971,7 @@ async def test_a_rendered_deck_is_always_validated_before_the_run_ends(monkeypat
     argued it back into validating. It has no say now: rendering and checking
     are two phases of the walk, and the run is not over until both are done.
     """
+    _drafting_only(monkeypatch)
     session_id = uuid.uuid4()
     loop = _loop()
     loop.redis_client = _FakeRedis({
@@ -930,6 +1047,7 @@ async def test_working_state_survives_between_finalize_and_validate(monkeypatch)
     anymore - only once validation has actually run (or hit its cap) -
     otherwise a crash/resume between the two steps would lose has_called_finalize
     and last_rendered_path."""
+    _drafting_only(monkeypatch)
     session_id = uuid.uuid4()
     loop = _loop()
     loop.redis_client = _FakeRedis({f"working_state:{session_id}": _ready_state(
@@ -1003,6 +1121,7 @@ async def test_redesign_after_a_validation_issue_then_clean_revalidation(monkeyp
     validation finds an overflow on slide 1, which makes drafting unfinished
     again, which makes the rendered file stale, which sends the run back
     through render and validate. No sub-loop - just the same walk."""
+    _drafting_only(monkeypatch)
     session_id = uuid.uuid4()
     loop = _loop()
     loop.redis_client = _FakeRedis({

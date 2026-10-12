@@ -25,6 +25,9 @@ logger = get_logger(__name__)
 # honestly be dense from one that cannot.
 _DIGIT_RE = re.compile(r"\d")
 
+# The planned content types whose slide is built around an exhibit.
+_EXHIBIT_CONTENT_TYPES = frozenset({"chart", "table", "dashboard"})
+
 # How many of a template's compositions to offer a slide. Enough to cover the
 # shapes a deck actually repeats, few enough that the prompt stays about this
 # slide rather than about the template's catalogue.
@@ -184,14 +187,10 @@ class DesignSlideContentTool:
         selected_image_context: str = "{}",
         prepared_visuals: str = "[]",
         deck_format: str = "",
+        written: str | dict = "",
     ) -> ToolResult:
         start = time.time()
         try:
-            # The workspace's configured model, published by the loop for
-            # the whole run. This tool writes the actual slide copy, so it is
-            # the call that most needs to honour the model chosen in Settings.
-            llm = require_chat_provider()
-
             # coerce_json_arg (not a bare json.loads) because tool-calling
             # models frequently send a native JSON object here despite the
             # parameter's declared "string" type, which crashes json.loads
@@ -219,205 +218,29 @@ class DesignSlideContentTool:
                 if isinstance(block, dict)
             ]
 
-            placeholders = layout.get("placeholders", [])
-            layout_name = layout.get("layoutName", "Default")
-
-            # Resolve the title and body placeholder indices so the LLM does
-            # not have to guess. Falls back to conventional idx 0 (title) and
-            # 1 (body) when the layout did not report placeholders - this
-            # keeps content placeable even if layout selection upstream was
-            # imperfect, instead of producing an empty slide.
-            title_idx = next(
-                (p.get("idx") for p in placeholders
-                 if p.get("type") in ("title", "ctrTitle")),
-                0,
+            prompt, prepared = compose_prompt(
+                outline, slide_index, layout, ds, detail_level, selected_image,
+                attached, deck_format,
             )
-            body_idx = next(
-                (p.get("idx") for p in placeholders if p.get("type") == "body"),
-                1,
-            )
+            title_register = prepared["title_register"]
+            title_idx, body_idx = prepared["title_idx"], prepared["body_idx"]
+            layout_name, pack = prepared["layout_name"], prepared["pack"]
 
-            # Build placeholder description for the prompt
-            ph_desc = []
-            for ph in placeholders:
-                ph_desc.append(
-                    f"  - idx={ph.get('idx')}, type={ph.get('type')}, name={ph.get('name')}"
+            if written:
+                # Copy compile already wrote, in the one call that also wrote
+                # this slide's exhibits (#323): finished here like any other.
+                result_text = written if isinstance(written, str) else json.dumps(written)
+            else:
+                # The workspace's configured model, published by the loop for
+                # the whole run. This tool writes the actual slide copy, so it
+                # is the call that most needs to honour the model chosen in
+                # Settings.
+                llm = require_chat_provider()
+                response = await llm.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    tools=None,
                 )
-            ph_text = "\n".join(ph_desc) if ph_desc else "  No placeholders reported (using title idx=0, body idx=1)"
-
-            ds_info = ""
-            if ds:
-                ds_info = f"""
-Design System Context:
-- Title font: {json.dumps(ds.get('typography', {}).get('titleFont', {}))}
-- Body font: {json.dumps(ds.get('typography', {}).get('bodyFont', {}))}
-- Palette: {json.dumps(ds.get('palette', {}).get('colors', [])[:5])}
-"""
-
-            image_info = (
-                "\nA pre-vetted source image IS available for this slide "
-                f"(what it shows: {selected_image.get('altText', '') or 'see catalog context'!r}). "
-                'If it fits the slide, include {"type": "image", "image": {"source": "selected"}} in contents.'
-                if selected_image.get("data")
-                else "\nNo pre-vetted source image is available for this slide - do not include image content."
-            )
-
-            key_points = outline.get("keyPoints", []) if isinstance(outline, dict) else []
-            kp_list = "\n".join(f"  - {kp}" for kp in key_points) if key_points else "  (none)"
-
-            detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
-            # How much this slide should carry, from what the template's own
-            # pages carry and what this slide actually has to say. Recorded on
-            # the run context as it is computed, because the validator checks
-            # the written slide against the same budget and must not be the
-            # one deciding how thin the material was.
-            density_info = _density_guidance(ds, outline, key_points, attached,
-                                             slide_index, deck_format)
-            # The compositions this template actually uses, read off its own
-            # pages. Offered as region trees the slide can adopt wholesale,
-            # because a rail described in prose is a rail the model has to
-            # re-derive coordinates for.
-            grammar_info = _grammar_guidance(ds)
-
-            # Only ask for source tags when the deck is actually going to show
-            # them and there is research to point at. Asking unconditionally
-            # would have the model inventing reference numbers for a deck with
-            # no reference list - a marker with nothing behind it is worse than
-            # no marker.
-            citation_guidance = ""
-            findings = run_context.get_research_findings() or []
-            if run_context.get_include_sources() and findings:
-                numbered = "\n".join(
-                    f"  [{i}] {(f.get('title') or f.get('url') or '').strip()[:90]}"
-                    for i, f in enumerate(_distinct_by_url(findings), start=1)
-                )
-                citation_guidance = (
-                    "- This deck cites its sources. When a run's content comes from a "
-                    "specific finding below, add \"sourceRef\": N to that run, using the "
-                    "number in brackets. Tag the run carrying the fact, not every run on "
-                    "the slide, and leave a run untagged when it is your own framing "
-                    "rather than something you read. Never use a number that is not "
-                    "listed.\n"
-                    f"  Available sources:\n{numbered}"
-                )
-
-            # The on-page apparatus, which is a different thing from the
-            # deck-wide reference trail above: sourceRef numbers a run for the
-            # appendix, sourceLine says on this page where its figures came
-            # from. The renderer and validate_slide_json have supported both
-            # for as long as they have existed, and nothing here ever told the
-            # model they were available - so decks built on researched figures
-            # carried them with no attribution anywhere on the page.
-            apparatus_guidance = ""
-            if findings:
-                apparatus_guidance = (
-                    "\n- A page that states figures says where they came from. "
-                    "Put a short attribution in \"sourceLine\" - \"Source: \" and "
-                    "the publications behind this slide's numbers, named, not "
-                    "URLs. One line, under the content.\n"
-                    "- Where a figure needs a caveat rather than a source - a "
-                    "definition, a restated basis, a period that differs - put "
-                    "it in \"footnotes\": an array of short lines, and mark the "
-                    "run it belongs to with [^1], [^2] in its text, numbered in "
-                    "the order the footnotes are listed. Every marker needs its "
-                    "footnote and every footnote needs its marker; a marker "
-                    "pointing at nothing is rejected at validation. Use these "
-                    "only where they earn their place - a page of your own "
-                    "framing needs neither."
-                )
-
-            # The flat "there is no image-generation step" was true, and is
-            # now true only when no image provider is configured. Saying it
-            # unconditionally on a workspace that HAS one would have the model
-            # refusing to place an image it had just successfully generated.
-            image_rule = (
-                "Never invent image data yourself - an image reaches a slide "
-                "only through select_source_image or generate_image."
-                if run_context.get_image_connection() is not None else
-                "Never invent image data yourself; there is no image-generation "
-                "step on this run, only reuse of images that genuinely already "
-                "exist."
-            )
-
-            # A visual built through build_chart/build_table/build_key_metrics
-            # is attached to the slide server-side. Telling the model it exists
-            # (but not what is in it) is what keeps the copy from restating the
-            # same figures next to the chart that already shows them.
-            visual_info = _prepared_visual_guidance(attached, outline)
-            # Carried through from the plan rather than re-invented per slide:
-            # the eyebrow only means anything if every slide in a part names
-            # that part identically.
-            section = str(outline.get("section") or "").replace('"', "'").strip()
-            # Which register this slide's headline is in, and whether the
-            # slide can actually back it. A claim over a slide with no chart,
-            # no table and no figures is the deck lying about its own
-            # evidence, so it is demoted here rather than written and then
-            # rejected at validation.
-            title_register, register_guidance, register_note = (
-                _resolve_title_register(outline, attached, key_points)
-            )
-            if register_note:
-                # The model sees the demotion in the returned titleRegister;
-                # an operator needs the reason, because "this deck's headlines
-                # are all topic labels" is a planning failure that looks like a
-                # writing failure.
-                logger.info(
-                    "title_register_demoted",
-                    slide_index=slide_index, planned=titles.CLAIM,
-                    rendered=title_register, reason=register_note,
-                )
-
-            # A run composing against a design language pack does not fill
-            # placeholders: which archetype carries this page, and where each
-            # piece of material sits on it, is decided in code once the
-            # material exists. Telling the model about placeholder indices it
-            # cannot use invites it to emit geometry that is then discarded,
-            # and asking it for bullets produces bullets - which is precisely
-            # the output this whole path exists to stop producing.
-            pack = run_context.get_pack()
-            placement_rules, page_info = _placement_guidance(
-                pack, title_idx, body_idx, layout_name, ph_text
-            )
-            shape_example = _shape_example(
-                pack, slide_index, layout, layout_name, section,
-                title_register, title_idx, body_idx,
-            )
-
-            prompt = f"""{today_line()}
-
-Generate content for a single presentation slide.
-
-Slide Outline:
-{json.dumps(outline, indent=2)}
-
-Key points to cover on this slide:
-{kp_list}
-{density_info}{grammar_info}{apparatus_guidance}
-{page_info}
-{ds_info}
-{image_info}
-{visual_info}
-
-Return a JSON object with this exact structure:
-{shape_example}
-
-Rules:
-{register_guidance}
-{placement_rules}
-- {detail_guidance}
-- Only use "image" type when an image was supplied above - either a pre-vetted source image (source: "selected") or one built by generate_image. {image_rule}
-- Use "table" type for tbl placeholders (or any content placeholder, if no dedicated table placeholder exists) when the content is genuinely tabular (comparisons, structured data with 2+ rows and 2+ columns) - do not force prose bullet points into a table, and do not use a table for anything that reads better as bullets. Shape: {{type: "table", placeholderIdx: N, table: {{headerRow: true, rows: [["Column A", "Column B"], ["Row 1 value", "Row 1 value"], ["Row 2 value", "Row 2 value"]]}}}}. Every row must have the same number of cells as the header row. Keep cell text short (a few words) - tables are rendered at a fixed size, not auto-expanded.
-- Whenever the key points for this slide carry numbers that tell a story a reader would rather SEE than read (a trend over time, a comparison across categories, a breakdown of a whole, a correlation), that is a chart, not a list of sentences - but do not write chart JSON here yourself. Stop and call build_chart for this slide_index first: it carries the full chart vocabulary, picks the right type from the same intent (trend, comparison, whole, correlation, movement between totals), and validates the shape against the type you chose. A "chart" content item written directly in this response is rejected - the placeholder stays whatever build_chart's own {{type: "chart", ...}} block produced when you attach it here.
-- A chart or a table REPLACES the prose it visualizes - do not emit a chart and then also restate the same figures as bullets in the same body placeholder. A short bullet or two of interpretation ("growth flattened after the second year") alongside a chart is good; a duplicate of the chart's own numbers is not.
-- Each content item must have a placeholderIdx matching one of the available placeholders.
-{citation_guidance}"""
-
-            response = await llm.chat(
-                messages=[{"role": "user", "content": prompt}],
-                tools=None,
-            )
-
-            result_text = response.get("message", {}).get("content", "{}")
+                result_text = response.get("message", {}).get("content", "{}")
             slide_data = extract_json_object(result_text)
             if slide_data is None:
                 # Fail loudly instead of silently falling back to an
@@ -508,6 +331,236 @@ Rules:
             )
         except Exception as e:
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
+
+
+def compose_prompt(
+    outline: dict,
+    slide_index: int,
+    layout: dict,
+    ds: dict,
+    detail_level: str,
+    selected_image: dict,
+    attached: list[dict],
+    deck_format: str = "",
+    *,
+    compiling: bool = False,
+) -> tuple[str, dict]:
+    """The prompt that writes one slide's copy, and what finishing it needs.
+
+    Shared by the tool's own call and by compile (#323), which asks for the
+    copy and the slide's exhibits in one answer. ``compiling`` says the
+    exhibits are being written in that same answer rather than built before
+    it, so the prompt asks for them there and does not demote a planned
+    claim for the evidence it has not seen yet.
+    """
+    placeholders = layout.get("placeholders", [])
+    layout_name = layout.get("layoutName", "Default")
+
+    # Resolve the title and body placeholder indices so the LLM does
+    # not have to guess. Falls back to conventional idx 0 (title) and
+    # 1 (body) when the layout did not report placeholders - this
+    # keeps content placeable even if layout selection upstream was
+    # imperfect, instead of producing an empty slide.
+    title_idx = next(
+        (p.get("idx") for p in placeholders
+         if p.get("type") in ("title", "ctrTitle")),
+        0,
+    )
+    body_idx = next(
+        (p.get("idx") for p in placeholders if p.get("type") == "body"),
+        1,
+    )
+
+    # Build placeholder description for the prompt
+    ph_desc = []
+    for ph in placeholders:
+        ph_desc.append(
+            f"  - idx={ph.get('idx')}, type={ph.get('type')}, name={ph.get('name')}"
+        )
+    ph_text = "\n".join(ph_desc) if ph_desc else "  No placeholders reported (using title idx=0, body idx=1)"
+
+    ds_info = ""
+    if ds:
+        ds_info = f"""
+Design System Context:
+- Title font: {json.dumps(ds.get('typography', {}).get('titleFont', {}))}
+- Body font: {json.dumps(ds.get('typography', {}).get('bodyFont', {}))}
+- Palette: {json.dumps(ds.get('palette', {}).get('colors', [])[:5])}
+"""
+
+    image_info = (
+        "\nA pre-vetted source image IS available for this slide "
+        f"(what it shows: {selected_image.get('altText', '') or 'see catalog context'!r}). "
+        'If it fits the slide, include {"type": "image", "image": {"source": "selected"}} in contents.'
+        if selected_image.get("data")
+        else "\nNo pre-vetted source image is available for this slide - do not include image content."
+    )
+
+    key_points = outline.get("keyPoints", []) if isinstance(outline, dict) else []
+    kp_list = "\n".join(f"  - {kp}" for kp in key_points) if key_points else "  (none)"
+
+    detail_guidance = _DETAIL_GUIDANCE.get(detail_level, _DETAIL_GUIDANCE["detailed"])
+    # How much this slide should carry, from what the template's own
+    # pages carry and what this slide actually has to say. Recorded on
+    # the run context as it is computed, because the validator checks
+    # the written slide against the same budget and must not be the
+    # one deciding how thin the material was.
+    density_info = _density_guidance(ds, outline, key_points, attached,
+                                     slide_index, deck_format)
+    # The compositions this template actually uses, read off its own
+    # pages. Offered as region trees the slide can adopt wholesale,
+    # because a rail described in prose is a rail the model has to
+    # re-derive coordinates for.
+    grammar_info = _grammar_guidance(ds)
+
+    # Only ask for source tags when the deck is actually going to show
+    # them and there is research to point at. Asking unconditionally
+    # would have the model inventing reference numbers for a deck with
+    # no reference list - a marker with nothing behind it is worse than
+    # no marker.
+    citation_guidance = ""
+    findings = run_context.get_research_findings() or []
+    if run_context.get_include_sources() and findings:
+        numbered = "\n".join(
+            f"  [{i}] {(f.get('title') or f.get('url') or '').strip()[:90]}"
+            for i, f in enumerate(_distinct_by_url(findings), start=1)
+        )
+        citation_guidance = (
+            "- This deck cites its sources. When a run's content comes from a "
+            "specific finding below, add \"sourceRef\": N to that run, using the "
+            "number in brackets. Tag the run carrying the fact, not every run on "
+            "the slide, and leave a run untagged when it is your own framing "
+            "rather than something you read. Never use a number that is not "
+            "listed.\n"
+            f"  Available sources:\n{numbered}"
+        )
+
+    # The on-page apparatus, which is a different thing from the
+    # deck-wide reference trail above: sourceRef numbers a run for the
+    # appendix, sourceLine says on this page where its figures came
+    # from. The renderer and validate_slide_json have supported both
+    # for as long as they have existed, and nothing here ever told the
+    # model they were available - so decks built on researched figures
+    # carried them with no attribution anywhere on the page.
+    apparatus_guidance = ""
+    if findings:
+        apparatus_guidance = (
+            "\n- A page that states figures says where they came from. "
+            "Put a short attribution in \"sourceLine\" - \"Source: \" and "
+            "the publications behind this slide's numbers, named, not "
+            "URLs. One line, under the content.\n"
+            "- Where a figure needs a caveat rather than a source - a "
+            "definition, a restated basis, a period that differs - put "
+            "it in \"footnotes\": an array of short lines, and mark the "
+            "run it belongs to with [^1], [^2] in its text, numbered in "
+            "the order the footnotes are listed. Every marker needs its "
+            "footnote and every footnote needs its marker; a marker "
+            "pointing at nothing is rejected at validation. Use these "
+            "only where they earn their place - a page of your own "
+            "framing needs neither."
+        )
+
+    # The flat "there is no image-generation step" was true, and is
+    # now true only when no image provider is configured. Saying it
+    # unconditionally on a workspace that HAS one would have the model
+    # refusing to place an image it had just successfully generated.
+    image_rule = (
+        "Never invent image data yourself - an image reaches a slide "
+        "only through select_source_image or generate_image."
+        if run_context.get_image_connection() is not None else
+        "Never invent image data yourself; there is no image-generation "
+        "step on this run, only reuse of images that genuinely already "
+        "exist."
+    )
+
+    # A visual built through build_chart/build_table/build_key_metrics
+    # is attached to the slide server-side. Telling the model it exists
+    # (but not what is in it) is what keeps the copy from restating the
+    # same figures next to the chart that already shows them.
+    visual_info = _prepared_visual_guidance(attached, outline, compiling=compiling)
+    # Carried through from the plan rather than re-invented per slide:
+    # the eyebrow only means anything if every slide in a part names
+    # that part identically.
+    section = str(outline.get("section") or "").replace('"', "'").strip()
+    # Which register this slide's headline is in, and whether the
+    # slide can actually back it. A claim over a slide with no chart,
+    # no table and no figures is the deck lying about its own
+    # evidence, so it is demoted here rather than written and then
+    # rejected at validation.
+    title_register, register_guidance, register_note = (
+        _resolve_title_register(outline, attached, key_points,
+                                exhibits_to_come=compiling)
+    )
+    if register_note:
+        # The model sees the demotion in the returned titleRegister;
+        # an operator needs the reason, because "this deck's headlines
+        # are all topic labels" is a planning failure that looks like a
+        # writing failure.
+        logger.info(
+            "title_register_demoted",
+            slide_index=slide_index, planned=titles.CLAIM,
+            rendered=title_register, reason=register_note,
+        )
+
+    # A run composing against a design language pack does not fill
+    # placeholders: which archetype carries this page, and where each
+    # piece of material sits on it, is decided in code once the
+    # material exists. Telling the model about placeholder indices it
+    # cannot use invites it to emit geometry that is then discarded,
+    # and asking it for bullets produces bullets - which is precisely
+    # the output this whole path exists to stop producing.
+    pack = run_context.get_pack()
+    placement_rules, page_info = _placement_guidance(
+        pack, title_idx, body_idx, layout_name, ph_text
+    )
+    shape_example = _shape_example(
+        pack, slide_index, layout, layout_name, section,
+        title_register, title_idx, body_idx,
+    )
+
+    chart_route = (
+        "Build it with a build_chart call in this same answer:"
+        if compiling else
+        "Stop and call build_chart for this slide_index first:"
+    )
+
+    # Compile states the date once, in the prompt every slide shares.
+    dated = "" if compiling else today_line() + "\n\n"
+    prompt = f"""{dated}Generate content for a single presentation slide.
+
+Slide Outline:
+{json.dumps(outline, indent=2)}
+
+Key points to cover on this slide:
+{kp_list}
+{density_info}{grammar_info}{apparatus_guidance}
+{page_info}
+{ds_info}
+{image_info}
+{visual_info}
+
+Return a JSON object with this exact structure:
+{shape_example}
+
+Rules:
+{register_guidance}
+{placement_rules}
+- {detail_guidance}
+- Only use "image" type when an image was supplied above - either a pre-vetted source image (source: "selected") or one built by generate_image. {image_rule}
+- Use "table" type for tbl placeholders (or any content placeholder, if no dedicated table placeholder exists) when the content is genuinely tabular (comparisons, structured data with 2+ rows and 2+ columns) - do not force prose bullet points into a table, and do not use a table for anything that reads better as bullets. Shape: {{type: "table", placeholderIdx: N, table: {{headerRow: true, rows: [["Column A", "Column B"], ["Row 1 value", "Row 1 value"], ["Row 2 value", "Row 2 value"]]}}}}. Every row must have the same number of cells as the header row. Keep cell text short (a few words) - tables are rendered at a fixed size, not auto-expanded.
+- Whenever the key points for this slide carry numbers that tell a story a reader would rather SEE than read (a trend over time, a comparison across categories, a breakdown of a whole, a correlation), that is a chart, not a list of sentences - but do not write chart JSON here yourself. {chart_route} it carries the full chart vocabulary, picks the right type from the same intent (trend, comparison, whole, correlation, movement between totals), and validates the shape against the type you chose. A "chart" content item written directly in this response is rejected - the placeholder stays whatever build_chart's own {{type: "chart", ...}} block produced when you attach it here.
+- A chart or a table REPLACES the prose it visualizes - do not emit a chart and then also restate the same figures as bullets in the same body placeholder. A short bullet or two of interpretation ("growth flattened after the second year") alongside a chart is good; a duplicate of the chart's own numbers is not.
+- Each content item must have a placeholderIdx matching one of the available placeholders.
+{citation_guidance}"""
+
+    return prompt, {
+        "title_register": title_register,
+        "title_idx": title_idx,
+        "body_idx": body_idx,
+        "layout_name": layout_name,
+        "pack": pack,
+    }
+
 
 def _placement_guidance(pack, title_idx: int, body_idx: int,
                         layout_name: str, ph_text: str) -> tuple[str, str]:
@@ -630,7 +683,8 @@ def _describe_visual(block: dict) -> str:
 
 
 def _resolve_title_register(outline: dict, attached: list[dict],
-                            key_points: list) -> tuple[str, str, str]:
+                            key_points: list, *,
+                            exhibits_to_come: bool = False) -> tuple[str, str, str]:
     """
     The register this slide's headline is in, and what to tell the model.
 
@@ -655,7 +709,13 @@ def _resolve_title_register(outline: dict, attached: list[dict],
             "document."
         ), ""
 
-    has_evidence = bool(attached) or any(
+    # While compiling, the exhibits are written in the same answer as the
+    # copy, so a slide the plan gave an exhibit is given the benefit of it
+    # here; finishing the slide resolves the register again from what was
+    # actually built.
+    planned_exhibit = exhibits_to_come and str(
+        outline.get("contentType") or "").strip().lower() in _EXHIBIT_CONTENT_TYPES
+    has_evidence = bool(attached) or planned_exhibit or any(
         titles.has_quantity(str(point)) for point in key_points or []
     )
     if declared == titles.CLAIM and has_evidence:
@@ -824,8 +884,17 @@ def _words_in(outline: dict) -> int:
 
 
 def _prepared_visual_guidance(attached: list[dict],
-                              outline: dict | None = None) -> str:
+                              outline: dict | None = None, *,
+                              compiling: bool = False) -> str:
     """What to tell the model about visuals already attached to this slide."""
+    if not attached and compiling:
+        # Compile (#323) writes the exhibits in the same answer as the copy,
+        # so nothing has been built yet and nothing needs to be first.
+        return (
+            "\nIf this slide's key points are carried by figures or rows, build "
+            "them with build_chart, build_table or build_key_metrics in this same "
+            "answer - do not write chart or table JSON into the slide yourself."
+        )
     if not attached:
         return (
             "\nNo chart, table or metric row has been built for this slide. If its "

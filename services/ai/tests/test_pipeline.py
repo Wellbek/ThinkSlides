@@ -67,6 +67,12 @@ def _calls(*names_and_args):
     }
 
 
+def _written():
+    """A slide compile answer: its copy, in one write_slide call (#323)."""
+    return _calls(("write_slide", {"slide": {"contents": [
+        {"type": "text", "runs": [{"text": "A heading"}]}]}}))
+
+
 TOOL_RESULTS = {
     "extract_template_design_system": {"palette": {"primary": "#1F4E78"},
                                        "layouts": [{"layoutId": "content"}]},
@@ -268,10 +274,8 @@ class TestTheRunResumesWhereItStopped:
         """
         loop, session_id, seen = _loop(
             [_calls(("web_search", {"query": "german breeds registry"})),
-             _calls(("select_layout", {"slide_index": 0}),
-                    ("design_slide_content", {"slide_index": 0})),
-             _calls(("select_layout", {"slide_index": 1}),
-                    ("design_slide_content", {"slide_index": 1})),
+             _written(),
+             _written(),
              _text("Built you a deck on German dog breeds.")],
             state=self._after_consult(
                 autonomy_asked=True,
@@ -298,13 +302,11 @@ class TestTheRunResumesWhereItStopped:
 
     @pytest.mark.asyncio
     async def test_approving_the_outline_builds_renders_and_validates(self, monkeypatch):
-        """The rest of the run has no pauses left in it: draft each slide in
-        order, render, check the file."""
+        """The rest of the run has no pauses left in it: write every slide,
+        one answer each (#323), render, check the file."""
         loop, session_id, seen = _loop(
-            [_calls(("select_layout", {"slide_index": 0}),
-                    ("design_slide_content", {"slide_index": 0})),
-             _calls(("select_layout", {"slide_index": 1}),
-                    ("design_slide_content", {"slide_index": 1})),
+            [_written(),
+             _written(),
              _text("Built you a two-slide deck on German dog breeds.")],
             state=self._after_consult(
                 autonomy_confirmed=True,

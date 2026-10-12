@@ -58,7 +58,9 @@ def _where() -> str:
     by_id = {s.span_id: s for s in t.spans}
     names = []
     while current is not None and current is not t.root:
-        if current.kind in ("phase", "tool"):
+        # A step names which of a phase's concurrent calls this is, such as
+        # the slide a compile request is for (#323).
+        if current.kind in ("phase", "step", "tool"):
             names.append(f"{current.kind}:{current.name}")
         current = by_id.get(current.parent_id)
     return " > ".join(reversed(names))
