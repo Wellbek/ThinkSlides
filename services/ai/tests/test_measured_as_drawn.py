@@ -118,19 +118,34 @@ class TestCapacityIsSetNotEstimated:
         assert three.height_pt == pytest.approx(
             one.height_pt + 2 * self.BODY.line_height_pt + 2 * 12.0)
 
-    def test_a_long_slot_is_measured_quickly(self):
+    def test_a_long_slot_is_measured_quickly(self, monkeypatch):
         """Setting stops once the slot's lines are full: a pack build asks
-        this of every traced block at widths that rarely repeat."""
-        import time
+        this of every traced block at widths that rarely repeat.
 
-        from app.design.setting import _capacity
+        Counted in work rather than timed: a wall-clock bound failed under
+        the load of the full suite while passing alone.
+        """
+        from app.design.setting import CAPACITY_STARTS, _capacity
+        from app.renderer.typeset import shape
 
+        calls = []
+        real_wrap = shape.wrap
+
+        def counting_wrap(*args, **kwargs):
+            lines = real_wrap(*args, **kwargs)
+            calls.append((kwargs.get("limit"), len(lines)))
+            return lines
+
+        monkeypatch.setattr(shape, "wrap", counting_wrap)
         caption = TypeRole(size_pt=9.0, line_height_pt=11.0)
-        capacity(caption, "Arial", 100.0, 1)    # load the font first
         _capacity.cache_clear()
-        started = time.perf_counter()
         capacity(caption, "Arial", 911.0, 60)
-        assert time.perf_counter() - started < 0.4
+
+        # Each setting stops a line past the slot rather than setting the
+        # whole sample, and the sample doubles until it overruns, so a slot
+        # costs a handful of settings per starting word.
+        assert calls and all(limit == 60 and set_ <= 62 for limit, set_ in calls)
+        assert len(calls) <= CAPACITY_STARTS * 8
 
 
 class TestAnAuthoredSlotHoldsWhatItAdvertises:
