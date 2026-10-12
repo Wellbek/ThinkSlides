@@ -25,7 +25,8 @@ from app.research.task import Task
 MAX_HEADLINE_PT = 48.0
 # Body copy below this is caption-sized on a projected 16:9 slide; the pptx
 # guidance puts body at 14-16pt.
-MIN_BODY_PT = 14.0
+# The readable floor the product owner set (#368): about 12pt, not more.
+MIN_BODY_PT = 12.0
 
 
 @dataclass
@@ -92,11 +93,22 @@ def _checks(run_dir: Path, task: Task, manifest: dict, spans: list[dict], pdf: P
             ", ".join(f"page {n}: {s:.0f}pt" for n, s in big)
             or f"every content headline at or below {MAX_HEADLINE_PT:.0f}pt",
         ))
+        # A page set below the floor to keep a page count the user fixed is
+        # the policy working, and the run reports it to the user: it passes,
+        # and is named (#368).
+        relaxed = set()
+        for span in spans:
+            if (span["kind"] == "tool" and span["name"] == "finalize_and_render_pptx"
+                    and span["status"] == "ok"):
+                relaxed = set(span["attrs"].get("belowFloorPages") or [])
         small = [(p.page_number, p.body_size_pt) for p in pages
                  if p.body_size_pt and p.body_size_pt < MIN_BODY_PT]
+        unreported = [(n, s) for n, s in small if n not in relaxed]
         checks.append(Check(
-            "body_legible", not small,
-            ", ".join(f"page {n}: {s:.1f}pt" for n, s in small)
+            "body_legible", not unreported,
+            ", ".join(f"page {n}: {s:.1f}pt"
+                      + (" (page count fixed, reported)" if n in relaxed else "")
+                      for n, s in small)
             or f"all body copy at {MIN_BODY_PT:.0f}pt or larger",
         ))
 

@@ -20,6 +20,8 @@ producing a page nobody can account for.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 from dataclasses import dataclass, field
 from typing import Callable, Literal, Optional, Sequence
 
@@ -120,6 +122,37 @@ def _next_smaller_role(pack: Pack, current: str,
     return max(smaller)[1] if smaller else None
 
 
+# The lowest copy may be set when the user fixed the page count and the
+# material does not fit at the readable floor (#368). The size tables and
+# diagrams are held to as their floor (`LEGIBLE_CELL_PT`).
+RELAXED_FLOOR_PT = 10.0
+
+_relaxed_to: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
+    "relaxed_floor_pt", default=None)
+
+
+@contextlib.contextmanager
+def relaxed_floor(floor_pt: float = RELAXED_FLOOR_PT):
+    """Let repair set copy below its designed floor, down to ``floor_pt``.
+
+    Entered only when the page count is fixed: with it free, copy that does
+    not fit at the readable floor gains pages instead (#368).
+    """
+    token = _relaxed_to.set(floor_pt)
+    try:
+        yield
+    finally:
+        _relaxed_to.reset(token)
+
+
+def unrelaxed_floor_pt(pack: Pack, frame: Frame) -> float:
+    """The designed floor itself, whatever has been relaxed."""
+    from app.design.roles import type_role_for
+    from app.renderer.typeset.policy import floor_for
+
+    return floor_for(pack, type_role_for(frame.role, "text", pack, frame.type_role))
+
+
 def designed_floor_pt(pack: Pack, frame: Frame) -> float:
     """The smallest size copy in this frame may be set at.
 
@@ -129,10 +162,9 @@ def designed_floor_pt(pack: Pack, frame: Frame) -> float:
     be stepped down again: a deck's prose ended at 12.6pt against a body
     floor of 16.2pt (#348).
     """
-    from app.design.roles import type_role_for
-    from app.renderer.typeset.policy import floor_for
-
-    return floor_for(pack, type_role_for(frame.role, "text", pack, frame.type_role))
+    floor = unrelaxed_floor_pt(pack, frame)
+    relaxed = _relaxed_to.get()
+    return min(floor, relaxed) if relaxed is not None else floor
 
 
 def _overflow_patch(pack: Pack, frame: Frame, block) -> PatchOp:
@@ -223,8 +255,10 @@ def legibility_findings(page: Page, pack: Pack) -> list[Finding]:
             role = pack.type_roles.get(block.type_role)
             if role is None:
                 continue
-            message = check(pack, block.type_role, role.size_pt)
             floor = designed_floor_pt(pack, frame)
+            relaxed = _relaxed_to.get()
+            message = (None if relaxed is not None and role.size_pt >= floor - 1e-6
+                       else check(pack, block.type_role, role.size_pt))
             if message is None and role.size_pt < floor - 1e-6:
                 message = (f"{block.type_role} at {role.size_pt:.1f}pt is below "
                            f"the {floor:.1f}pt this frame's copy is set at "

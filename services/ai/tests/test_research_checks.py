@@ -130,6 +130,21 @@ class TestWhatTheRenderedPagesSay:
         assert checks["headlines_within_the_ramp"]["passed"] is True
         assert checks["text_within_the_page"]["passed"] is True
 
+    def test_a_page_set_small_to_keep_a_fixed_count_passes_when_reported(self, deck_pdf):
+        """#368: below the floor only when the page count is fixed, and then
+        the user is told; the render records which pages."""
+        render = _span("tool", "finalize_and_render_pptx", started="2026-09-24T10:00:01",
+                       attrs={"renderPath": "composed", "belowFloorPages": [3]})
+        checks = _by_name(check_run(_run(deck_pdf, spans=[render]), TASK))
+        assert checks["body_legible"]["passed"] is True
+        assert "page 3" in checks["body_legible"]["detail"]
+        assert "page count fixed, reported" in checks["body_legible"]["detail"]
+
+    def test_the_floor_is_twelve_points(self):
+        from app.research.checks import MIN_BODY_PT
+
+        assert MIN_BODY_PT == 12.0
+
 
 class TestReviewedGaps:
     def test_a_tool_that_raised_or_never_finished_counts_as_failed(self, tmp_path):

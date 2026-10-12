@@ -640,7 +640,7 @@ class TestARenderSaysWhichPagesCannotMove:
         avoid = {1: frozenset(a.id for a in pack.archetypes)}
         token = run_context.set_arrangements_to_avoid(avoid)
         try:
-            _, _, _, unmovable = FinalizeAndRenderPptxTool._render_composed(
+            _, _, _, unmovable, _ = FinalizeAndRenderPptxTool._render_composed(
                 language_specimen_slides(), pack, {"title": "Deck"},
                 str(tmp_path / "deck.pptx"), {})
         finally:

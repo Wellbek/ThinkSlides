@@ -659,6 +659,9 @@ class WorkingState:
         # produce stays outstanding for drafting, and is not asked again until
         # the next round sends it back.
         self.compile_tried: set[int] = set()
+        # Slides whose copy was set below the readable floor, with how small,
+        # because the page count was fixed (#368). Reported at the close.
+        self.below_floor: dict[int, float] = {}
         # What compile could not finish on a slide it handed to drafting, by
         # slide, so the drafting directive can say what to fix.
         self.compile_failures: dict[int, list[str]] = {}
@@ -1301,6 +1304,7 @@ class WorkingState:
         self.revision_queue = []
         self.compile_tried = set()
         self.compile_failures = {}
+        self.below_floor = {}
         self.layout_revisions = {}
         self.layout_exhausted = set()
         self.arrangements_tried = {}
@@ -1860,6 +1864,7 @@ class AgentLoop:
             "slides_needing_revision": self.working_state.slides_needing_revision,
             "revision_queue": self.working_state.revision_queue,
             "compile_tried": sorted(self.working_state.compile_tried),
+            "below_floor": {str(k): v for k, v in self.working_state.below_floor.items()},
             "compile_failures": {str(k): v for k, v in
                                  self.working_state.compile_failures.items()},
             # Without these a resumed run forgets what it has already tried
@@ -1991,6 +1996,8 @@ class AgentLoop:
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
             self.working_state.compile_tried = set(state_dict.get("compile_tried") or [])
+            self.working_state.below_floor = {
+                int(k): float(v) for k, v in (state_dict.get("below_floor") or {}).items()}
             self.working_state.compile_failures = {
                 int(k): list(v) for k, v in
                 (state_dict.get("compile_failures") or {}).items()}
@@ -3299,6 +3306,10 @@ class AgentLoop:
         # back - so this costs an ordinary run nothing.
         run_context.set_arrangements_to_avoid(
             self.working_state.arrangements_to_avoid())
+        # Whether type may go below the readable floor to keep the count the
+        # user asked for, or must gain pages instead (#368).
+        run_context.set_page_count_fixed(
+            bool(int((self.working_state.brief or {}).get("slideCount") or 0)))
         structure = self.working_state.presentation_structure or {}
         tool_result = None
         async for kind, payload in self._call_tool(
@@ -3594,6 +3605,22 @@ class AgentLoop:
                     "latest request, and the change did not add to them; say that, so "
                     "the user does not read them as something the change broke."
                 )
+        if ws.below_floor:
+            # The type-size policy's last clause: type went below the readable
+            # floor only because the page count was fixed, and the user is
+            # told where and why (#368).
+            count = int((ws.brief or {}).get("slideCount") or 0)
+            listed = "; ".join(f"slide {i + 1} at {pt:.1f}pt"
+                               for i, pt in sorted(ws.below_floor.items()))
+            prompt += (
+                "\n\n## Closing note - type set below the readable size\n"
+                f"To keep the deck to the {count} slides the user asked for, some "
+                f"copy is set smaller than the usual floor of about 12pt: {listed}. "
+                "The material on those slides did not fit at a readable size in "
+                "that many pages. Tell the user which slides, and that adding a "
+                "slide or shortening those slides' copy would set them at the "
+                "usual size."
+            )
         if ws.amending and not ws.amend_done and not ws.amend_edited:
             # The change step ran out of turns. Its directive is still the
             # last thing the prompt says, and without this the summary read
@@ -4523,7 +4550,9 @@ class AgentLoop:
                         tool_span.set(changed=bool(payload.data["changed"]))
                     if isinstance(payload.data, dict) and payload.data.get("renderPath"):
                         tool_span.set(renderPath=payload.data["renderPath"],
-                                      plainPages=payload.data.get("plainPages") or [])
+                                      plainPages=payload.data.get("plainPages") or [],
+                                      belowFloorPages=(payload.data.get("belowFloor")
+                                                       or {}).get("pages") or [])
                     if not payload.success:
                         tool_span.status = (
                             "rejected" if payload.rejected else "failed")
@@ -4806,6 +4835,9 @@ class AgentLoop:
         if fn_name == "finalize_and_render_pptx" and tool_result.success:
             self.working_state.has_called_finalize = True
             self.working_state.last_rendered_path = tool_result.data.get("filePath")
+            self.working_state.below_floor = {
+                int(k): float(v) for k, v in
+                ((tool_result.data.get("belowFloor") or {}).get("slides") or {}).items()}
             self.working_state.placed_arrangements = {
                 int(index): list(archetypes) for index, archetypes in
                 (tool_result.data.get("placedArrangements") or {}).items()}
