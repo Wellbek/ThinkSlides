@@ -264,21 +264,31 @@ class RecordingVisionProvider(VisionLLMProvider):
 
 
 class _Tape:
-    """A cassette's answers of one kind, handed out in order."""
+    """A cassette's answers of one kind, handed to the requests that asked them.
+
+    An answer goes to the request it was recorded for: the earliest unused
+    entry whose request hash matches. Only when none matches - the prompt
+    drifted since recording - does the earliest unused entry stand in, which
+    is the order a sequential run asked in. Order alone is not enough once
+    calls run concurrently: slides compiled in parallel are recorded in the
+    order their answers arrived, not the order they were asked (#323).
+    """
 
     def __init__(self, cassette: Cassette, kind: str) -> None:
         self.entries = [e for e in cassette.entries if e["kind"] == kind]
         self.kind = kind
-        self.position = 0
+        self.used: set[int] = set()
 
     def next(self, sha: str) -> dict:
-        if self.position >= len(self.entries):
+        unused = [i for i in range(len(self.entries)) if i not in self.used]
+        if not unused:
             raise LookupError(
-                f"the cassette has no {self.kind} answer #{self.position + 1}: "
+                f"the cassette has no {self.kind} answer #{len(self.used) + 1}: "
                 "the run asked for more than was recorded"
             )
-        entry = self.entries[self.position]
-        self.position += 1
+        position = next((i for i in unused if self.entries[i]["sha"] == sha), unused[0])
+        self.used.add(position)
+        entry = self.entries[position]
         span = trace.current_span()
         if span is not None:
             span.set(replayed=entry["seq"], replayDrift=entry["sha"] != sha)
