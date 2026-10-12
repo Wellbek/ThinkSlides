@@ -1,7 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/stores/chat-store";
+import { useAnnotationStore } from "@/stores/annotation-store";
 import { useAiReadiness } from "@/hooks/useAiReadiness";
 import { EffortSelector } from "./EffortSelector";
 import { DetailLevelSelector } from "./DetailLevelSelector";
@@ -20,6 +21,19 @@ export function Composer() {
   const [content, setContent] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [codeMode, setCodeMode] = useState(false);
+
+  const previewSlide = useAnnotationStore((s) => s.previewSlide);
+  const slideCount = useAnnotationStore((s) => s.slideCount);
+  const composerInsert = useAnnotationStore((s) => s.composerInsert);
+  const takeComposerInsert = useAnnotationStore((s) => s.takeComposerInsert);
+  const insertIntoComposer = useAnnotationStore((s) => s.insertIntoComposer);
+
+  useEffect(() => {
+    const text = composerInsert && takeComposerInsert();
+    if (!text) return;
+    setContent((c) => (c && !c.endsWith(" ") ? `${c} ` : c) + text);
+  }, [composerInsert, takeComposerInsert]);
 
   // Show the most recent user attachments as context chips.
   const lastAttachments = (() => {
@@ -33,7 +47,11 @@ export function Composer() {
   const send = async () => {
     const trimmed = content.trim();
     if (!trimmed || isSending || !activeSessionId || !ready) return;
-    const text = trimmed;
+    // Code mode is only a request in the message for now; whether the agent
+    // may edit the deck with code is still decided by the server's setting.
+    const text = codeMode
+      ? `${trimmed}\n\n(Code mode: where a precise fix to the rendered deck is needed, prefer editing it with code.)`
+      : trimmed;
     setContent("");
     const toUpload = files;
     setFiles([]);
@@ -63,7 +81,7 @@ export function Composer() {
         <textarea
           placeholder={
             ready
-              ? "Ask the agent to edit, regenerate, or explain a slide... (mark a region in the preview to target an edit)"
+              ? "Ask the agent to edit, regenerate, or explain a slide... (mark a spot in the preview to target an edit)"
               : "Set up an AI model to continue this session."
           }
           value={content}
@@ -75,8 +93,23 @@ export function Composer() {
         />
         <div className="ws-composer-bar">
           <button className="ws-cm" onClick={() => fileRef.current?.click()} title="Attach"><Paperclip size={14} /></button>
-          <button className="ws-cm" title="Mention slide"><AtSign size={14} /></button>
-          <button className="ws-cm" title="Code mode"><Code2 size={14} /></button>
+          <button
+            className="ws-cm"
+            disabled={!slideCount}
+            onClick={() => insertIntoComposer(`@slide ${previewSlide + 1} `)}
+            title={slideCount ? `Mention slide ${previewSlide + 1} (the one open in the preview)` : "Mention slide - available once the deck has slides"}
+          >
+            <AtSign size={14} />
+          </button>
+          <button
+            className={`ws-cm ${codeMode ? "active" : ""}`}
+            aria-pressed={codeMode}
+            onClick={() => setCodeMode((v) => !v)}
+            title="Code mode (beta): asks the agent to prefer code-level fixes to the rendered deck. Only takes effect when code edits are enabled on the server."
+          >
+            <Code2 size={14} />
+          </button>
+          {codeMode && <span className="ws-dev-tag">Code mode (beta)</span>}
           <EffortSelector />
           <DetailLevelSelector />
           <SourcesToggle />

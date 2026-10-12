@@ -40,6 +40,9 @@ _search_config: ContextVar[SearchConfig | None] = ContextVar(
 
 _image_connection: ContextVar = ContextVar("image_connection", default=None)
 _figure_connection: ContextVar = ContextVar("figure_connection", default=None)
+_vision_provider: ContextVar[object | None] = ContextVar(
+    "thinkslides_vision_provider", default=None
+)
 _chat_provider: ContextVar[LLMProvider | None] = ContextVar(
     "thinkslides_chat_provider", default=None
 )
@@ -65,6 +68,32 @@ _design_system: ContextVar[dict | None] = ContextVar(
 _slide_material: ContextVar[dict | None] = ContextVar(
     "thinkslides_slide_material", default=None
 )
+
+# The design language pack this run composes against, when it has one. A run
+# on an uploaded template has none and keeps the template-faithful path; a run
+# with no template has one, and every page is laid out by `app/design` rather
+# than by filling a stock Office layout's placeholders. Carried here for the
+# same reason the design system is: it is far too large to make the model
+# copy back, and nothing about it is the model's to decide.
+_pack: ContextVar[object | None] = ContextVar("thinkslides_pack", default=None)
+
+# Per slide index, the archetypes it has already been composed on. The second
+# rung of the revision ladder: a page whose arrangement came out wrong is
+# placed again from the same material rather than redrafted from scratch.
+_avoid_arrangements: ContextVar[dict | None] = ContextVar(
+    "thinkslides_avoid_arrangements", default=None)
+
+# Where this run's rendered deck is on disk. A path rather than the bytes:
+# `finalize_and_render_pptx` writes a real file that the download, the vision
+# check and `edit_deck_with_code` all read, and a second copy in memory would
+# be a second source of truth for the same deck.
+_rendered_path: ContextVar[str | None] = ContextVar(
+    "thinkslides_rendered_path", default=None)
+
+# Pictures the user supplied this session, by the name a script finds them
+# under. Carried here, not as a tool parameter: the model names an asset, it
+# never supplies the bytes or a path.
+_assets: ContextVar[dict | None] = ContextVar("thinkslides_assets", default=None)
 
 
 def set_include_sources(enabled: bool) -> Token:
@@ -107,6 +136,76 @@ def get_design_system() -> dict | None:
 
 def reset_design_system(token: Token) -> None:
     _design_system.reset(token)
+
+
+def set_pack(pack: object | None) -> Token:
+    """Install the design language pack this run composes against."""
+    return _pack.set(pack)
+
+
+def get_pack():
+    """The run's pack, or None when this run is on an uploaded template."""
+    return _pack.get()
+
+
+def reset_pack(token: Token) -> None:
+    _pack.reset(token)
+
+
+_page_count_fixed: ContextVar[bool] = ContextVar("page_count_fixed", default=False)
+
+
+def set_page_count_fixed(fixed: bool) -> Token:
+    """Whether the user fixed the deck's page count (#368).
+
+    Free, copy that does not fit at the readable floor gains a page; fixed,
+    it may be set smaller, and the user is told which slides and why.
+    """
+    return _page_count_fixed.set(bool(fixed))
+
+
+def get_page_count_fixed() -> bool:
+    return _page_count_fixed.get()
+
+
+def set_arrangements_to_avoid(avoid: dict | None) -> Token:
+    """Which arrangements each slide has already been placed on and failed.
+
+    Carried here rather than as a tool parameter for the same reason the pack
+    is: it is the *loop's* bookkeeping, and a model that could set it could
+    talk the deck out of an arrangement nobody complained about.
+    """
+    return _avoid_arrangements.set(avoid or {})
+
+
+def get_arrangements_to_avoid() -> dict:
+    return _avoid_arrangements.get() or {}
+
+
+def reset_arrangements_to_avoid(token: Token) -> None:
+    _avoid_arrangements.reset(token)
+
+
+def set_rendered_path(path: str | None) -> Token:
+    """Record where the deck this run has rendered actually is."""
+    return _rendered_path.set(path)
+
+
+def get_rendered_path() -> str | None:
+    """The rendered deck's path, or None before anything has been rendered."""
+    return _rendered_path.get()
+
+
+def reset_rendered_path(token: Token) -> None:
+    _rendered_path.reset(token)
+
+
+def set_assets(assets: dict | None) -> Token:
+    return _assets.set(assets or {})
+
+
+def get_assets() -> dict:
+    return _assets.get() or {}
 
 
 def set_slide_material(material: dict | None) -> Token:
@@ -195,6 +294,28 @@ def require_chat_provider() -> LLMProvider:
 def reset_chat_provider(token: Token) -> None:
     """Restore whatever provider was in place before ``set_chat_provider``."""
     _chat_provider.reset(token)
+
+
+def set_vision_provider(provider: object | None) -> Token:
+    """Install the organisation's vision provider for the current run."""
+    return _vision_provider.set(provider)
+
+
+def get_vision_provider() -> object | None:
+    """The current run's vision provider, or None when it has none.
+
+    Same rule as the chat provider, for the same reason: a tool that reached
+    for the process-wide, environment-built provider instead turned a
+    workspace with no model configured into one silently running on somebody
+    else's key. Returns None rather than raising, because every caller so far
+    is a best-effort qualitative pass that must degrade rather than fail a run.
+    """
+    return _vision_provider.get()
+
+
+def reset_vision_provider(token: Token) -> None:
+    """Restore whatever provider was in place before ``set_vision_provider``."""
+    _vision_provider.reset(token)
 
 
 def set_image_connection(connection: object | None) -> Token:

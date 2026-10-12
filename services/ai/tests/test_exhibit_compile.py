@@ -1,0 +1,427 @@
+"""
+Issue #286: a table or a metrics block silently rendered nothing on the
+authored design-language path.
+
+Two independent defects compounded. `_exhibit_primitives` dispatched every
+non-chart exhibit through `block_compiler.fit(...)`, but nothing on this
+path had ever constructed a `block_compiler` - `render_doc`'s default was
+`None` and nothing overrode it, so `if block_compiler is None: return []`
+fired for every metrics row, diagram and typed block a deck composed this
+way. And even with a compiler, "metrics" (`build_key_metrics`'s own content
+type) had no method to dispatch to - the closest name, `_compile_stat_callout`,
+reads a different wrapper key and a different field name.
+
+`table` had no code path at all, on either count: there was never a
+`_compile_table`, and the docstring's claim that tables were "drawn by the
+code that already draws them" was aspirational.
+
+These tests render the actual `.pptx` and count shapes, the same way the
+issue was confirmed - composing a doc and reading `frame.content` back is not
+enough, because that only proves the material was *bound*, not that it drew.
+"""
+
+
+from app.design.authored import Language, PageKind, Slot, to_pack
+from app.design.geometry import check_doc
+from app.design import run as design_run
+from app.design.schema import Canvas
+from app.design.vocabulary import ensure
+
+CANVAS = Canvas(w_in=13.333, h_in=7.5)
+
+
+def _pack(slot_kind: str, span: int = 6):
+    language = Language(
+        name="Probe", rationale="x", columns=6, body_pt=18.0,
+        pages=(PageKind(name="p", role="content", frequency=1.0, slots=(
+            Slot(kind="heading", span=6, required=True),
+            Slot(kind=slot_kind, span=span),
+        )),),
+    )
+    return ensure(to_pack(language, CANVAS))
+
+
+def _shape_kinds(pptx_path: str) -> list[str]:
+    from pptx import Presentation
+
+    prs = Presentation(pptx_path)
+    slide = prs.slides[0]
+    return [shape.shape_type for shape in slide.shapes]
+
+
+class TestATableRendersAsANativeTable:
+    """A table is carried as an image mark, so the primitive layer keeps its
+    five kinds, and drawn as a native, editable table - never a picture."""
+
+    @staticmethod
+    def _slide():
+        return {"slideIndex": 0, "role": "content", "heading": "A table",
+                "contents": [{"type": "table", "table": {
+                    "headerRow": True,
+                    "rows": [["Year", "Revenue"],
+                            ["2024", "$10m"], ["2025", "$12m"]]}}]}
+
+    def test_the_exhibit_binds_to_the_slot(self):
+        pack = _pack("figure")
+        doc = design_run.compose([self._slide()], pack)
+        page = doc.pages[0]
+        figure = next(f for f in page.frames if f.role == "figure")
+        assert len(figure.content) == 1
+
+    def test_the_table_actually_draws_a_shape(self, tmp_path):
+        from app.renderer.designdoc_renderer import render_doc
+
+        pack = _pack("figure")
+        doc = design_run.compose([self._slide()], pack)
+        out = str(tmp_path / "table.pptx")
+        render_doc(doc, pack, out)
+        kinds = _shape_kinds(out)
+        # A heading text box plus the table. One shape is the bug: the
+        # exhibit bound and drew nothing.
+        assert len(kinds) >= 2
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
+        assert MSO_SHAPE_TYPE.TABLE in kinds
+        assert MSO_SHAPE_TYPE.PICTURE not in kinds
+
+    def test_an_empty_table_draws_nothing_but_does_not_crash(self, tmp_path):
+        from app.renderer.designdoc_renderer import render_doc
+
+        pack = _pack("figure")
+        slide = {"slideIndex": 0, "role": "content", "heading": "Empty",
+                 "contents": [{"type": "table", "table": {"rows": []}}]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        out = str(tmp_path / "empty.pptx")
+        render_doc(doc, pack, out)  # must not raise
+
+
+class TestAMetricsRowRendersItsFiguresAndLabels:
+    """`build_key_metrics` writes `{"value": ..., "label": ...}` - a
+    different field name from the block compiler's own `_compile_stat_callout`
+    contract (`"caption"`), reconciled in `compile._EXHIBIT_TO_BLOCK_KIND`."""
+
+    @staticmethod
+    def _slide():
+        return {"slideIndex": 0, "role": "content", "heading": "The numbers",
+                "contents": [{"type": "metrics", "metrics": {"items": [
+                    {"value": "24%", "label": "Adoption"},
+                    {"value": "$1.8m", "label": "Cost"},
+                ]}}]}
+
+    def test_the_exhibit_binds_to_a_statistic_slot(self):
+        pack = _pack("statistic")
+        doc = design_run.compose([self._slide()], pack)
+        page = doc.pages[0]
+        row = next(f for f in page.frames if f.role == "statRow")
+        assert len(row.content) == 1
+
+    def test_both_figures_draw_as_text(self, tmp_path):
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+        from app.renderer.designdoc_renderer import render_doc
+
+        pack = _pack("statistic")
+        doc = design_run.compose([self._slide()], pack)
+        out = str(tmp_path / "metrics.pptx")
+        render_doc(doc, pack, out)
+        from pptx import Presentation
+
+        prs = Presentation(out)
+        texts = [shape.text_frame.text for shape in prs.slides[0].shapes
+                if shape.shape_type == MSO_SHAPE_TYPE.TEXT_BOX
+                and shape.has_text_frame]
+        joined = " ".join(texts)
+        assert "24%" in joined and "Adoption" in joined
+        assert "$1.8m" in joined and "Cost" in joined
+
+    def test_a_metrics_row_composes_on_a_dark_ground_too(self, tmp_path):
+        """The block compiler is built from the page's own ground - a metrics
+        row on a dark cover must not render dark-on-dark."""
+        from app.renderer.designdoc_renderer import render_doc
+
+        language = Language(
+            name="Dark", rationale="x", columns=6, body_pt=18.0,
+            ground="#0E1420", ink="#F2F5F9", accent="#3AA0FF",
+            pages=(PageKind(name="p", role="cover", frequency=1.0, slots=(
+                Slot(kind="heading", span=6, required=True),
+                Slot(kind="statistic", span=6),
+            )),),
+        )
+        pack = ensure(to_pack(language, CANVAS))
+        doc = design_run.compose([self._slide()], pack, skip_unplaceable=True)
+        out = str(tmp_path / "dark.pptx")
+        render_doc(doc, pack, out)  # must not raise, and see the render itself
+
+
+class TestADiagramAndATypedBlockStillWork:
+    """These reached `_compile_diagram`/typed-block methods by their names
+    already matching - the fix is that `block_compiler` is no longer always
+    `None`, and this is the regression guard that it did not need any
+    kind-name mapping to keep working."""
+
+    def test_a_diagram_still_composes_and_draws(self, tmp_path):
+        from app.renderer.designdoc_renderer import render_doc
+
+        pack = _pack("figure")
+        slide = {"slideIndex": 0, "role": "content", "heading": "Flow",
+                 "contents": [{"type": "diagram", "diagram": {"steps": [
+                     {"label": "Intake"}, {"label": "Review"},
+                     {"label": "Ship"}]}}]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        out = str(tmp_path / "diagram.pptx")
+        render_doc(doc, pack, out)  # must not raise
+
+
+class TestTheGeometryStaysSound:
+    def test_a_page_with_a_table_and_a_metrics_row_is_geometrically_clean(self):
+        language = Language(
+            name="Mix", rationale="x", columns=6, body_pt=18.0,
+            pages=(PageKind(name="p", role="content", frequency=1.0, slots=(
+                Slot(kind="heading", span=6, required=True),
+                Slot(kind="statistic", span=6, name="row"),
+                Slot(kind="figure", span=6),
+            )),),
+        )
+        pack = ensure(to_pack(language, CANVAS))
+        slide = {"slideIndex": 0, "role": "content", "heading": "Both",
+                "contents": [
+                    {"type": "metrics", "metrics": {"items": [
+                        {"value": "5", "label": "x"}]}},
+                    {"type": "table", "table": {"rows": [["a", "b"]]}},
+                ]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        assert check_doc(doc) == []
+
+
+class TestATableIsANativeTable:
+    """A table is data a user edits after delivery, so it is never a picture.
+    The composed path rasterised every table and placed the image in its
+    frame, where a short table in a tall frame was stretched until it read as
+    a condensed face."""
+
+    ROWS = [["Strategy", "Capacity", "Rollback"],
+            ["Rolling", "Low", "Prior revision; may reverse partial exposure"],
+            ["Blue-green", "High", "Route traffic back to blue"],
+            ["Canary", "Medium", "Return traffic to stable; scale down canary"]]
+
+    def _render(self, tmp_path):
+        from pptx import Presentation
+
+        from app.design import run
+        from app.renderer.designdoc_renderer import render_doc
+
+        pack = run.load("bxsl-investor")
+        slides = [
+            {"slideIndex": 0, "contents": [
+                {"type": "text", "runs": [{"text": "Cover"}]}]},
+            {"slideIndex": 1, "role": "content", "contents": [
+                {"type": "text", "runs": [{"text": "Three strategies compared"}]},
+                {"type": "table", "table": {"headerRow": True, "rows": self.ROWS}}]},
+        ]
+        doc = run.compose(slides, pack)
+        out = str(tmp_path / "deck.pptx")
+        render_doc(doc, pack, out, design_system={})
+        return Presentation(out).slides[1]
+
+    def test_it_is_an_editable_table_not_a_picture(self, tmp_path):
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+        slide = self._render(tmp_path)
+        tables = [s for s in slide.shapes if s.has_table]
+        assert len(tables) == 1
+        assert not any(s.shape_type == MSO_SHAPE_TYPE.PICTURE for s in slide.shapes)
+        table = tables[0].table
+        assert table.cell(1, 2).text == "Prior revision; may reverse partial exposure"
+
+    def test_it_is_fitted_by_type_size_never_scaled(self, tmp_path):
+        from app.renderer import table_layout
+
+        slide = self._render(tmp_path)
+        (frame,) = [s for s in slide.shapes if s.has_table]
+        sizes = {run.font.size.pt for row in frame.table.rows for cell in row.cells
+                 for paragraph in cell.text_frame.paragraphs for run in paragraph.runs}
+        assert min(sizes) >= table_layout.MIN_CELL_PT
+        heights = [row.height for row in frame.table.rows]
+        assert frame.height == sum(heights)
+
+    @staticmethod
+    def _draw(table, ground, design_system):
+        from pptx import Presentation
+
+        from app.renderer import native_table
+        from app.renderer.layout import PositionConfig
+        from app.renderer.primitives import PaintContext
+        from app.renderer.typography import TypeScale
+
+        slide = Presentation().slides.add_slide(Presentation().slide_layouts[6])
+        context = PaintContext(ground=ground, default_color="#FFFFFF",
+                               type_scale=TypeScale())
+        native_table.add_native_table(
+            slide, table, PositionConfig(0.5, 0.5, 8.0, 3.0), design_system,
+            context, id_prefix="t", placement="top")
+        (frame,) = [s for s in slide.shapes if s.has_table]
+        return frame.table
+
+    def test_text_on_a_hairline_table_reads_on_a_dark_page(self):
+        """A hairline table's cells are transparent; its text sits on the
+        page and was always near-black, so it vanished on a dark one."""
+        from app import colors
+
+        table = self._draw({"headerRow": True, "rows": [["A", "B"], ["x", "y"]]},
+                           "#101418", {"dataViz": {"tableTreatment": "hairline",
+                                                   "tableHeaderFilled": False}})
+        run = table.cell(1, 0).text_frame.paragraphs[0].runs[0]
+        assert colors.contrast_ratio("#101418", f"#{run.font.color.rgb}") >= 4.5
+
+    def test_a_footnote_marker_takes_its_cells_colour(self):
+        """A marked run in an unfilled header took the header's white."""
+        table = self._draw({"headerRow": True, "rows": [["Revenue[1]", "B"], ["x", "y"]]},
+                           "#FFFFFF", {"dataViz": {"tableTreatment": "hairline",
+                                                   "tableHeaderFilled": False}})
+        runs = table.cell(0, 0).text_frame.paragraphs[0].runs
+        assert len({str(r.font.color.rgb) for r in runs}) == 1
+
+    def test_the_template_path_draws_it_the_same_way(self):
+        from app.renderer import native_table, pptx_renderer
+
+        assert "native_table.add_native_table" in __import__("inspect").getsource(
+            pptx_renderer.PPTXRenderer._add_table)
+        assert native_table.add_native_table is not None
+
+
+class TestTheStatCalloutCompilerReadsEitherContract:
+    """`_compile_stat_callout` now serves two callers with two field names -
+    its own `caption`, and `build_key_metrics`'s `label`."""
+
+    def test_a_native_stat_callout_still_uses_caption(self):
+        from app.renderer.blocks import BlockCompiler
+        from app.renderer.deck_theme import SlideStyle
+        from app.renderer.layout import PositionConfig
+        from app.renderer.typography import TypeScale
+
+        compiler = BlockCompiler(
+            style=SlideStyle(role="content", background="#FFFFFF",
+                             title_color="#111111", body_color="#111111",
+                             bullet_color="#0F62FE", accent_color="#0F62FE",
+                             footer_color="#666666"),
+            type_scale=TypeScale(title_font="Arial", body_font="Arial",
+                                 title_size_pt=32.0, body_size_pt=14.0,
+                                 caption_size_pt=10.0),
+            design_system={},
+        )
+        rect = PositionConfig(left=0.0, top=0.0, width=6.0, height=2.0)
+        marks = compiler.fit("statCallout",
+                             {"statCallout": {"items": [
+                                 {"value": "5", "caption": "native"}]}},
+                             rect)
+        assert any("native" in "".join(r.text for r in m.runs)
+                  for m in marks if m.runs)
+
+    def test_a_metrics_alias_uses_label(self):
+        from app.renderer.blocks import BlockCompiler
+        from app.renderer.deck_theme import SlideStyle
+        from app.renderer.layout import PositionConfig
+        from app.renderer.typography import TypeScale
+
+        compiler = BlockCompiler(
+            style=SlideStyle(role="content", background="#FFFFFF",
+                             title_color="#111111", body_color="#111111",
+                             bullet_color="#0F62FE", accent_color="#0F62FE",
+                             footer_color="#666666"),
+            type_scale=TypeScale(title_font="Arial", body_font="Arial",
+                                 title_size_pt=32.0, body_size_pt=14.0,
+                                 caption_size_pt=10.0),
+            design_system={},
+        )
+        rect = PositionConfig(left=0.0, top=0.0, width=6.0, height=2.0)
+        marks = compiler.fit("statCallout",
+                             {"metrics": {"items": [
+                                 {"value": "24%", "label": "Adoption"}]}},
+                             rect)
+        assert any("Adoption" in "".join(r.text for r in m.runs)
+                  for m in marks if m.runs)
+
+
+class TestTheDispatchMapIsMinimal:
+    """`_EXHIBIT_TO_BLOCK_KIND` exists for the one name that genuinely
+    differs. "diagram" is not in it, and must not need to be."""
+
+    def test_only_metrics_is_remapped(self):
+        from app.design.compile import _EXHIBIT_TO_BLOCK_KIND
+
+        assert _EXHIBIT_TO_BLOCK_KIND == {"metrics": "statCallout"}
+
+
+class TestAFigureImageActuallyDraws:
+    """Issue #287, found while building #283's block-returning tool.
+
+    Every real producer of an image block - `generate_image`,
+    `select_source_image`, and every test fixture - nests the source under
+    "image": `{"type": "image", "image": {"source": ..., "data": ...}}`.
+    `bind._content_for` looked for a top-level "source" key that no real
+    producer ever wrote, fell through to the whole raw block, and handed
+    that to the renderer as the image's own source - which resolves nothing.
+    """
+
+    @staticmethod
+    def _pack():
+        return _pack("figure")
+
+    @staticmethod
+    def _png_b64() -> str:
+        import base64
+
+        return base64.b64encode(bytes.fromhex(
+            "89504e470d0a1a0a0000000d4948445200000001000000010"
+            "8060000001f15c4890000000a49444154789c6360000002000"
+            "1e221bc330000000049454e44ae426082")).decode("ascii")
+
+    def test_the_figure_binds_with_the_real_source_not_the_whole_block(self):
+        pack = self._pack()
+        slide = {"slideIndex": 0, "role": "content", "heading": "A figure",
+                "contents": [{"type": "image",
+                             "image": {"source": "base64",
+                                      "data": self._png_b64()},
+                             "altText": "a test figure"}]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        figure = next(f for f in doc.pages[0].frames if f.role == "figure")
+        source = figure.content[0].source
+        assert source == {"source": "base64", "data": self._png_b64()}
+        assert figure.content[0].alt_text == "a test figure"
+
+    def test_the_figure_draws_a_real_picture(self, tmp_path):
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+        from app.renderer.designdoc_renderer import render_doc
+
+        pack = self._pack()
+        slide = {"slideIndex": 0, "role": "content", "heading": "A figure",
+                "contents": [{"type": "image",
+                             "image": {"source": "base64",
+                                      "data": self._png_b64()}}]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        out = str(tmp_path / "figure.pptx")
+        render_doc(doc, pack, out)
+        kinds = _shape_kinds(out)
+        assert MSO_SHAPE_TYPE.PICTURE in kinds
+
+    def test_alt_text_nested_in_the_image_dict_is_read(self):
+        pack = self._pack()
+        slide = {"slideIndex": 0, "role": "content", "heading": "A figure",
+                "contents": [{"type": "image",
+                             "image": {"source": "base64",
+                                      "data": self._png_b64(),
+                                      "altText": "nested"}}]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        figure = next(f for f in doc.pages[0].frames if f.role == "figure")
+        assert figure.content[0].alt_text == "nested"
+
+    def test_a_block_with_no_usable_source_resolves_to_an_empty_dict(self):
+        """Never a crash - `_resolve_image_bytes({})` already returns None
+        gracefully, treated as "skip this image", the same as any other
+        malformed figure."""
+        pack = self._pack()
+        slide = {"slideIndex": 0, "role": "content", "heading": "Bad",
+                "contents": [{"type": "image", "notImage": "nonsense"}]}
+        doc = design_run.compose([slide], pack, skip_unplaceable=True)
+        figure = next(f for f in doc.pages[0].frames if f.role == "figure")
+        assert figure.content[0].source == {}

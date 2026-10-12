@@ -38,11 +38,6 @@ class Settings(BaseSettings):
     # thorough, longer snippets). Defaults to advanced so factual grounding is
     # as strong as possible.
     tavily_search_depth: Literal["basic", "advanced"] = "advanced"
-    # Model used for lower-stakes internal tool LLM calls (planning, key-data
-    # extraction). Defaults to the cheap/fast flash model to speed up
-    # generation; slide content design still uses the main model.
-    zhipu_tools_model: str = "glm-4.5-flash"
-
     # Azure OpenAI
     azure_openai_api_key: Optional[str] = None
     azure_openai_endpoint: Optional[str] = None
@@ -50,8 +45,11 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = "2024-02-15-preview"
 
     # ── Vision LLM (for PDF/image-based template analysis) ──
-    vision_llm_provider: Literal["zhipu", "azure_openai"] = "zhipu"
-    zhipu_vision_model: str = "glm-4.6v"
+    # Which model looks at an image is the workspace's choice in Settings,
+    # like every other model in the product - see build_vision_provider. There
+    # is deliberately no environment default: one here meant a workspace that
+    # had configured nothing still read the user's own template on somebody
+    # else's key.
     azure_openai_vision_deployment: str = "gpt-4o"
 
     # ── Storage ─────────────────────────────────
@@ -67,6 +65,46 @@ class Settings(BaseSettings):
     # ── JWT ─────────────────────────────────────
     jwt_secret: str = "thinkslides-dev-jwt-secret-change-in-production"
     jwt_algorithm: str = "HS256"
+
+    # ── Design language ─────────────────────────
+    # Whether a run with no uploaded template composes its pages against a
+    # design language pack instead of filling one of eight stock Office
+    # layouts. It was opt-in while the packs were not yet fit to put in front
+    # of a user: they were traced from reference PDFs and carried chart axis
+    # labels and page numbers as content slots (#275), described pages the
+    # renderer refuses to place (#276), and were traces of five specific pages
+    # rather than recovered patterns (#268). All three now pass their own
+    # gates, asserted against the shipped packs in tests/test_pack_quality.py,
+    # so this is on. An uploaded template is unaffected either way - that run
+    # keeps the template-faithful path.
+    design_language_enabled: bool = True
+
+    # Whether the agent may write and run its own Python to fix a deck the
+    # typed tools could not.
+    #
+    # Off by default, and deliberately. Three deterministic gates stand in
+    # front of it - an AST allowlist, a privilege-dropped process with no
+    # network, and a check on the file it hands back - but the container
+    # hardening those gates assume (a non-root user, dropped capabilities, a
+    # pids limit) is part of the deployment rather than of this service, and
+    # a flag that turns itself on before the deployment has caught up is a
+    # flag that decided a security question on an operator's behalf. Turn it
+    # on with `CODE_AMENDMENT_ENABLED=true` once the container is hardened.
+    #
+    # One thing worth knowing before you do. The runner asks for its own
+    # network namespace and reports whether it got one; inside a container
+    # with `cap_drop: ALL` it does not, because `unshare` needs CAP_SYS_ADMIN
+    # and granting that back would undo more than it bought. So in production
+    # what keeps a script off the network is the AST gate refusing to let it
+    # name `socket`, `urllib`, `http` or `requests` - the layer that is a
+    # proof rather than a containment - and every run records
+    # `network_namespace` so the difference is visible rather than assumed.
+    code_amendment_enabled: bool = False
+
+    # How many slides compile asks the model for at once (#323). Each is one
+    # request, so this is the run's peak concurrency against the provider's
+    # rate limit; the provider's own back-off handles a limit it still hits.
+    compile_concurrency: int = 6
 
     # `extra="ignore"` is load-bearing, not tidiness. `.env` at the repo root
     # is the single file the setup docs tell you to create, and it carries the

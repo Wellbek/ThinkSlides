@@ -22,6 +22,8 @@ from app.db.models import (
     Organisation,
     OrganisationAISettings,
     OrganisationConnection,
+    DeckSnapshot,
+    RunSpan,
     Template,
     User,
 )
@@ -38,6 +40,8 @@ __all__ = [
     "Organisation",
     "OrganisationAISettings",
     "OrganisationConnection",
+    "DeckSnapshot",
+    "RunSpan",
     "Template",
     "User",
     "get_db",

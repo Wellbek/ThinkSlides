@@ -17,7 +17,7 @@ import uuid
 import pytest
 
 from app.agent import pipeline
-from app.agent.loop import AgentLoop
+from app.agent.loop import AgentLoop, WorkingState
 from app.agent.registry import ToolResult
 
 INTAKE = json.dumps({
@@ -65,6 +65,12 @@ def _calls(*names_and_args):
             for i, (name, args) in enumerate(names_and_args)
         ],
     }
+
+
+def _written():
+    """A slide compile answer: its copy, in one write_slide call (#323)."""
+    return _calls(("write_slide", {"slide": {"contents": [
+        {"type": "text", "runs": [{"text": "A heading"}]}]}}))
 
 
 TOOL_RESULTS = {
@@ -195,7 +201,16 @@ class TestTheOrderIsFixed:
 
         assert "ask_user_question" in seen
         question = next(e for e in events if e["type"] == "question")
-        assert question["question"] == "How should I pitch this?"
+        # The format question is reserved ahead of everything else and always
+        # fires first. With nothing else to ask, the pitch-depth fallback
+        # rides along as the second question rather than being dropped -
+        # consultation is not skipped for want of a question, only because
+        # the user said to skip it.
+        assert question["question"] == "What kind of presentation is this?"
+        asked = [q["question"] for q in question["questions"]]
+        assert asked == [
+            "What kind of presentation is this?", "How should I pitch this?",
+        ]
         assert loop.working_state.consulted_before_planning is True
 
     @pytest.mark.asyncio
@@ -212,9 +227,12 @@ class TestTheOrderIsFixed:
 
         question = next(e for e in events if e["type"] == "question")
         asked = [q["question"] for q in question["questions"]]
-        # The clarifying question, and not the handover one the user never
-        # implied.
-        assert asked == ["Which breeds should it cover?"]
+        # The format question first, then the clarifying question - and not
+        # the handover one the user never implied, nor the pitch-depth
+        # fallback, which only fires when nothing else was asked.
+        assert asked == [
+            "What kind of presentation is this?", "Which breeds should it cover?",
+        ]
 
 
 class TestTheRunResumesWhereItStopped:
@@ -256,10 +274,8 @@ class TestTheRunResumesWhereItStopped:
         """
         loop, session_id, seen = _loop(
             [_calls(("web_search", {"query": "german breeds registry"})),
-             _calls(("select_layout", {"slide_index": 0}),
-                    ("design_slide_content", {"slide_index": 0})),
-             _calls(("select_layout", {"slide_index": 1}),
-                    ("design_slide_content", {"slide_index": 1})),
+             _written(),
+             _written(),
              _text("Built you a deck on German dog breeds.")],
             state=self._after_consult(
                 autonomy_asked=True,
@@ -286,13 +302,11 @@ class TestTheRunResumesWhereItStopped:
 
     @pytest.mark.asyncio
     async def test_approving_the_outline_builds_renders_and_validates(self, monkeypatch):
-        """The rest of the run has no pauses left in it: draft each slide in
-        order, render, check the file."""
+        """The rest of the run has no pauses left in it: write every slide,
+        one answer each (#323), render, check the file."""
         loop, session_id, seen = _loop(
-            [_calls(("select_layout", {"slide_index": 0}),
-                    ("design_slide_content", {"slide_index": 0})),
-             _calls(("select_layout", {"slide_index": 1}),
-                    ("design_slide_content", {"slide_index": 1})),
+            [_written(),
+             _written(),
              _text("Built you a two-slide deck on German dog breeds.")],
             state=self._after_consult(
                 autonomy_confirmed=True,
@@ -419,14 +433,16 @@ class TestRevisionWalksBackwards:
         # Validation comes back with a problem on slide 2.
         ws.validation_clean = False
         ws.validation_issues = [{"slideIndex": 1, "type": "overflow"}]
-        ws.slides_needing_revision = [1]
+        ws.revision_queue = [1]
         ws.validated_serial = ws.design_serial
 
         assert pipeline.next_phase(loop).name == "draft"
 
         # Rewriting it settles the finding: what is outstanding now is a fresh
-        # render, not another go at the same slide.
+        # render, not another go at the same slide. (The dispatcher drains the
+        # queue as each flagged slide is redrafted.)
         ws.add_slide({"slideIndex": 1, "title": "shorter"})
+        ws.revision_queue.remove(1)
 
         assert pipeline.next_phase(loop).name == "render"
 
@@ -755,3 +771,507 @@ class TestTheOutlineReviewAnswerIsActedOn:
         assert events == []
         assert ws.presentation_structure is not None
         assert ws.accumulated_slides
+
+
+class TestAStalledRevisionHandsOverWhatItHas:
+    """
+    A stall after a deck has already rendered once is not the same failure
+    as one before anything has. This used to treat them identically -
+    "nothing was generated" after every slide was drafted and the deck had
+    already rendered, because the redraft loop trying to fix the last few
+    flagged slides never converged. Twelve slides of real work is not
+    nothing, and the file the first render produced still opens.
+
+    Reproduces the reported shape exactly: draft finishes, render and
+    validate find real problems, and every attempt to fix them keeps
+    failing - `design_slide_content`/`validate_slide_json` returning
+    `success: False` turn after turn, which is what a genuine content or
+    schema problem looks like, not a mocked no-op.
+    """
+
+    @staticmethod
+    def _stalled_after_one_render(**overrides):
+        state = {
+            "brief": json.loads(INTAKE),
+            "scouted": True,
+            "consulted_before_planning": True,
+            "reviewed_outline_with_user": True,
+            "design_system": {"palette": {}, "layouts": []},
+            "mode": "deep",
+            "detail_level": "detailed",
+            "presentation_structure": {
+                "totalSlides": 3,
+                "slides": [{"slideIndex": i} for i in range(3)],
+            },
+            "accumulated_slides": [{"slideIndex": i} for i in range(3)],
+            "design_serial": 3,
+            "rendered_serial": 3,
+            "validated_serial": 3,
+            "has_called_finalize": True,
+            "last_rendered_path": "/tmp/deck.pptx",
+            "pending_render_result": {"filePath": "/tmp/deck.pptx",
+                                      "previewUrls": []},
+            "pending_slide_previews": [
+                {"slideIndex": i, "previewUrl": f"/p/{i}.png"} for i in range(3)
+            ],
+            "previews_published": False,
+            "validation_clean": False,
+            "validation_issues": [
+                {"slideIndex": 1, "type": "overflow",
+                 "detail": "text runs off the slide"},
+            ],
+            "slides_needing_revision": [1],
+        }
+        state.update(overrides)
+        return state
+
+    @pytest.mark.asyncio
+    async def test_it_hands_over_the_deck_instead_of_a_bare_error(
+            self, monkeypatch):
+        # Every attempt to fix slide 1 fails outright - a real content or
+        # schema problem, not a no-op - so nothing about working state can
+        # change no matter how many turns are spent on it.
+        script = [_calls(("design_slide_content", {"slide_index": 1}))
+                 for _ in range(20)]
+        loop, session_id, seen = _loop(
+            script, state=self._stalled_after_one_render(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+
+        async def _failing_execute(name, args):
+            seen.append(name)
+            return ToolResult(success=False, error="that slide will not validate")
+
+        monkeypatch.setattr(loop, "_execute_tool", _failing_execute)
+
+        events = [e async for e in loop.run(session_id)]
+
+        assert not [e for e in events if e["type"] == "error"], (
+            "a stall with a render to fall back on must not end on a bare "
+            "error - the whole point is that it hands the deck over instead")
+
+        finalized = [e for e in events if e["type"] == "deck_finalized"]
+        assert finalized, "the deck from the first render must still be handed over"
+        assert finalized[0]["validationClean"] is False
+
+        unresolved = [e for e in events if e["type"] == "validation_unresolved"]
+        assert unresolved, "the residual issue must still be stated, not hidden"
+
+    @pytest.mark.asyncio
+    async def test_the_thought_names_what_happened(self, monkeypatch):
+        script = [_calls(("design_slide_content", {"slide_index": 1}))
+                 for _ in range(20)]
+        loop, session_id, _ = _loop(
+            script, state=self._stalled_after_one_render(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            loop, "_execute_tool",
+            lambda name, args: _async(
+                ToolResult(success=False, error="will not validate")),
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        thoughts = " ".join(
+            e.get("content", "") for e in events if e["type"] == "thought")
+        assert "handing over the deck" in thoughts
+
+    @pytest.mark.asyncio
+    async def test_working_state_is_cleared_so_a_resume_starts_clean(
+            self, monkeypatch):
+        script = [_calls(("design_slide_content", {"slide_index": 1}))
+                 for _ in range(20)]
+        loop, session_id, _ = _loop(
+            script, state=self._stalled_after_one_render(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            loop, "_execute_tool",
+            lambda name, args: _async(
+                ToolResult(success=False, error="will not validate")),
+        )
+
+        _ = [e async for e in loop.run(session_id)]
+
+        assert f"working_state:{session_id}" not in loop.redis_client.store
+
+    @pytest.mark.asyncio
+    async def test_a_stall_before_any_render_still_gets_the_bare_error(
+            self, monkeypatch):
+        """The fallback is specifically for a stall with something to hand
+        over. One before the first render ever succeeds still has nothing,
+        and the honest answer is still the plain error."""
+        script = [_calls(("design_slide_content", {"slide_index": 0}))
+                 for _ in range(20)]
+        loop, session_id, _ = _loop(
+            script,
+            state=self._stalled_after_one_render(
+                has_called_finalize=False,
+                last_rendered_path=None,
+                pending_render_result=None,
+                pending_slide_previews=[],
+                validation_clean=False,
+                validation_issues=[],
+                slides_needing_revision=[],
+                design_serial=0,
+                accumulated_slides=[],
+                presentation_structure={
+                    "totalSlides": 1, "slides": [{"slideIndex": 0}],
+                },
+            ),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            loop, "_execute_tool",
+            lambda name, args: _async(
+                ToolResult(success=False, error="will not draft")),
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        errors = [e for e in events if e["type"] == "error"]
+        assert errors and errors[0].get("code") == "phase_stalled"
+
+
+class TestEditDeckWithCodeDuringARevision:
+    """The follow-up to #283 ("they can use code whenever it seems
+    reasonable") only does something if a script's fix can actually resolve
+    a flagged slide - see #288. This drives a real revision pass, scripting
+    the model to reach for edit_deck_with_code instead of design_slide_content,
+    and checks the whole chain: the tool fires mid-draft, the flag it
+    resolves is cleared without a fresh render, the walker returns to
+    validate for a real check against the edited file, and the run finishes
+    clean rather than stalling or looping.
+    """
+
+    @staticmethod
+    def _flagged_slide_one(**overrides):
+        # `_stalled_after_one_render` does not set `offered_directions`, so
+        # without it the walker never reaches `draft` at all - it stalls
+        # back at `design` re-offering directions instead, which is a
+        # different phase entirely from the one this class is about. Nor
+        # does it satisfy `_research_is_thin`, which sits earlier still in
+        # the pipeline than `design` - a deck this far along (drafted,
+        # rendered, mid-revision) has obviously cleared research too.
+        overrides.setdefault("offered_directions", True)
+        overrides.setdefault("web_search_calls", 10)
+        overrides.setdefault(
+            "researched_urls",
+            [f"https://example.com/{i}" for i in range(6)],
+        )
+        # A redraft that falls out of the flagged-slide path re-renders, and
+        # finalize_and_render_pptx refuses without a look having been
+        # settled one of three ways - fine to have been decided any of
+        # those ways for what this class is testing.
+        overrides.setdefault("autonomy_confirmed", True)
+        return TestAStalledRevisionHandsOverWhatItHas._stalled_after_one_render(
+            **overrides
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_fix_clears_the_flag_and_the_deck_finishes_clean(
+            self, monkeypatch):
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 1,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the overflowing box up",
+            "inputs": "none",
+        }))]
+        loop, session_id, seen = _loop(
+            script, state=self._flagged_slide_one(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        assert "edit_deck_with_code" in seen, (
+            "the tool must actually be reachable and called mid-draft, not "
+            "just offered"
+        )
+        assert "finalize_and_render_pptx" not in seen, (
+            "a script edit does not bump design_serial, so render must be "
+            "skipped rather than overwriting the file the script just fixed"
+        )
+        assert "validate_rendered_output" in seen, (
+            "clearing the flag locally is not enough - the walker has to "
+            "come back through validate and check the edited file for real"
+        )
+        assert not [e for e in events if e["type"] == "error"]
+        finalized = [e for e in events if e["type"] == "deck_finalized"]
+        assert finalized and finalized[0]["validationClean"] is True
+
+    @pytest.mark.asyncio
+    async def test_it_does_not_close_the_unrelated_amend_phase(
+            self, monkeypatch):
+        """`code_amendment_done` gates a different phase entirely - a fix
+        applied while drafting must not mark that backstop as already spent
+        for a defect it never saw."""
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 1,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the overflowing box up",
+            "inputs": "none",
+        }))]
+        loop, session_id, _ = _loop(
+            script, state=self._flagged_slide_one(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        _ = [e async for e in loop.run(session_id)]
+
+        assert loop.working_state.code_amendment_done is False
+
+    @pytest.mark.asyncio
+    async def test_a_successful_edit_counts_as_progress(self, monkeypatch):
+        """The other half of #288: before this counter existed, a script fix
+        that changed nothing `_progress_marker` was watching looked
+        indistinguishable from a turn that did nothing at all."""
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 1,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the overflowing box up",
+            "inputs": "none",
+        }))]
+        loop, session_id, _ = _loop(
+            script, state=self._flagged_slide_one(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        _ = [e async for e in loop.run(session_id)]
+
+        assert loop.working_state.code_edits_applied == 1
+
+    @pytest.mark.asyncio
+    async def test_the_backstop_edit_is_validated_before_the_deck_is_handed_over(
+            self, monkeypatch):
+        """The `amend` backstop runs once validation has spent its budget, so
+        nothing walked back to `validate` after it: the edit shipped
+        unchecked and the closing note listed the findings it had just
+        fixed (probe-watermark, #376)."""
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 2,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the flow up under its copy",
+            "inputs": "none",
+        }))]
+        loop, session_id, seen = _loop(
+            script, state=self._flagged_slide_one(
+                validation_attempts=WorkingState().MAX_VALIDATION_ATTEMPTS,
+                slides_needing_revision=[],
+                revision_queue=[],
+                validation_issues=[{"slideIndex": 2, "type": "aesthetic",
+                                    "detail": "the diagram floats low"}]),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        events = [e async for e in loop.run(session_id)]
+
+        assert "draft" not in loop._phase_visits
+        edited = seen.index("edit_deck_with_code")
+        assert "validate_rendered_output" in seen[edited:]
+        assert loop.working_state.code_amendment_done is True
+        assert loop.working_state.edited_since_validation is False
+        finalized = [e for e in events if e["type"] == "deck_finalized"]
+        assert finalized and finalized[0]["validationClean"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_script_that_misses_gets_re_flagged_not_stuck(
+            self, monkeypatch):
+        """The edited file still fails validation - a real re-check, not a
+        rubber stamp, so the deck goes back through one more revision pass
+        rather than being declared clean on the strength of the script
+        alone."""
+        script = [_calls(("edit_deck_with_code", {
+            "slide_index": 1,
+            "code": "from pptx import Presentation\n",
+            "intent": "move the overflowing box up",
+            "inputs": "none",
+        }))] + [_calls(("select_layout", {"slide_index": 1}),
+                       ("design_slide_content", {"slide_index": 1}))
+                for _ in range(10)]
+        loop, session_id, seen = _loop(
+            script, state=self._flagged_slide_one(),
+            messages=[{"role": "user", "content": "go ahead"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        validate_calls = 0
+
+        async def _execute(name, args):
+            nonlocal validate_calls
+            seen.append(name)
+            if name == "validate_rendered_output":
+                validate_calls += 1
+                # Clean once the redraft has happened, still broken on the
+                # check the script's fix alone triggers - the fix genuinely
+                # did not work, so a redraft has to be what actually clears
+                # it.
+                issues = [] if validate_calls > 1 else [
+                    {"slideIndex": 1, "type": "overflow",
+                     "detail": "still runs off the slide"},
+                ]
+                return ToolResult(success=True, data={"issues": issues})
+            if name == "design_slide_content":
+                return ToolResult(success=True, data={
+                    "slideIndex": args.get("slide_index"), "title": "t",
+                    "contents": [],
+                })
+            return ToolResult(success=True, data=dict(TOOL_RESULTS.get(name) or {}))
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute)
+
+        events = [e async for e in loop.run(session_id)]
+
+        # It came back through validate a second time on the strength of the
+        # edit alone, found the same problem, and fell back to a redraft -
+        # not stuck re-running the same script forever.
+        assert seen.count("validate_rendered_output") >= 2
+        assert "design_slide_content" in seen
+        assert not [e for e in events if e["type"] == "error"]
+
+
+class TestAnAmendmentAnswersOnlyForWhatItChanged:
+    """probe-watermark (2026-10-04): asked for a watermark, the run redrafted
+    a slide's copy because validation found the empty lower third the deck
+    had been handed over with."""
+
+    @pytest.mark.asyncio
+    async def test_a_finding_the_deck_already_had_redrafts_nothing(
+            self, monkeypatch):
+        finding = {"slideIndex": 1, "type": "aesthetic", "fix": "redraft",
+                   "detail": "the lower third is empty"}
+        state = TestEditDeckWithCodeDuringARevision._flagged_slide_one(
+            amending=True, amend_request="Put a DRAFT watermark on every page",
+            amend_done=True, validation_attempts=0, validated_serial=-1,
+            validation_issues=[], slides_needing_revision=[], revision_queue=[],
+            handover_issues=[{"slideIndex": 1, "type": "aesthetic",
+                              "detail": "the lower third is empty"}],
+        )
+        loop, session_id, seen = _loop(
+            [], state=state, messages=[{"role": "user", "content": "go"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+
+        async def _execute(name, args):
+            seen.append(name)
+            if name == "validate_rendered_output":
+                return ToolResult(success=True, data={"issues": [dict(finding)]})
+            return ToolResult(success=True, data=dict(TOOL_RESULTS.get(name) or {}))
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute)
+
+        events = [e async for e in loop.run(session_id)]
+
+        assert seen.count("validate_rendered_output") == 1
+        assert "draft" not in loop._phase_visits
+        assert "amend" not in loop._phase_visits
+        assert not [e for e in events if e["type"] == "error"]
+
+
+    @pytest.mark.asyncio
+    async def test_what_a_change_broke_is_corrected_by_the_change(
+            self, monkeypatch):
+        """probe-hyperlink-terms (2026-10-04): a script's blue link on a dark
+        cover was answered by re-placing the cover and redrafting its copy.
+        It goes back to the change step, once, for a second script."""
+        state = TestEditDeckWithCodeDuringARevision._flagged_slide_one(
+            amending=True, amend_request="Link every mention of object store",
+            amend_done=False, validation_attempts=0, validated_serial=-1,
+            validation_issues=[], slides_needing_revision=[], revision_queue=[],
+            handover_issues=[],
+        )
+        edit = ("edit_deck_with_code", {
+            "code": "from pptx import Presentation\n",
+            "intent": "link the term", "inputs": "none"})
+        loop, session_id, seen = _loop(
+            [_calls(edit), _calls(edit)], state=state,
+            messages=[{"role": "user", "content": "go"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+        checks = iter([
+            [{"slideIndex": 0, "type": "aesthetic", "fix": "nudge",
+              "detail": "the link is blue on the dark ground"}],
+            [],
+        ])
+
+        async def _execute(name, args):
+            seen.append(name)
+            if name == "validate_rendered_output":
+                return ToolResult(success=True, data={"issues": next(checks)})
+            return ToolResult(success=True, data=dict(TOOL_RESULTS.get(name) or {}))
+
+        monkeypatch.setattr(loop, "_execute_tool", _execute)
+
+        events = [e async for e in loop.run(session_id)]
+
+        tools = [s for s in seen if s != "model"]
+        assert tools == ["edit_deck_with_code", "validate_rendered_output",
+                         "edit_deck_with_code", "validate_rendered_output"]
+        assert "draft" not in loop._phase_visits
+        finalized = [e for e in events if e["type"] == "deck_finalized"]
+        assert finalized and finalized[0]["validationClean"] is True
+
+
+    @pytest.mark.asyncio
+    async def test_a_run_ending_on_a_declined_change_keeps_its_snapshot(
+            self, monkeypatch):
+        """Review of #376's fixes: a run that ended on a change declined in
+        words never reached the point where validation settles, so no
+        snapshot was written and the next message amended the deck as it was
+        before this run."""
+        state = TestEditDeckWithCodeDuringARevision._flagged_slide_one(
+            amending=True, amend_request="Flip the chart",
+            amend_done=False, validation_attempts=0, validated_serial=-1,
+            validation_issues=[], slides_needing_revision=[], revision_queue=[],
+            handover_issues=[{"slideIndex": 1, "type": "aesthetic",
+                              "detail": "the lower third is empty"}],
+        )
+        loop, session_id, seen = _loop(
+            [_text("There is no chart to flip.")], state=state,
+            messages=[{"role": "user", "content": "go"}],
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            AgentLoop, "code_amendment_enabled", property(lambda self: True),
+        )
+        saved = []
+
+        async def _save(sid):
+            saved.append(sid)
+
+        monkeypatch.setattr(loop, "_save_deck_snapshot", _save)
+
+        _ = [e async for e in loop.run(session_id)]
+
+        assert "validate_rendered_output" not in seen
+        assert saved == [session_id]

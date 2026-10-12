@@ -1,0 +1,2580 @@
+{
+  "id": "bxsl-investor",
+  "version": "1",
+  "label": "Blackstone Secured Lending Fund 1Q26 Investor Presentation",
+  "source_note": "Dense 4:3 investor deck: nearly two charts a page, a full footnote apparatus, and an attribution line on most pages.",
+  "canvas": {
+    "w_in": 10.0,
+    "h_in": 7.5,
+    "bleed_in": 0.0,
+    "safe_in": 0.0
+  },
+  "grid": {
+    "columns": 3,
+    "gutter_in": 0.38463874816894505,
+    "margin": {
+      "top": 0.3,
+      "right": 0.6896387481689448,
+      "bottom": 0.3,
+      "left": 0.53
+    },
+    "baseline_in": 0.23333333333333334,
+    "rows": null,
+    "row_gutter_in": 0.0
+  },
+  "grid_confidence": {
+    "value": 0.7858796449068283,
+    "residual": 0.0,
+    "note": "3 columns, agreed by 3 of 6 pages; no single grid fits them all"
+  },
+  "rhythm": {
+    "unit_pt": 16.8,
+    "phase_pt": 4.55,
+    "confidence": {
+      "value": 0.7974863594395073,
+      "residual": 0.05062841014012317,
+      "note": "62 body lines"
+    }
+  },
+  "spacing": {
+    "base_pt": 4.2,
+    "steps": [
+      0.5,
+      1.0,
+      1.5,
+      2.0,
+      3.0,
+      4.0,
+      6.0,
+      8.0
+    ],
+    "confidence": {
+      "value": 0.0,
+      "residual": 0.0,
+      "note": "no spacing ladder recovered; derived from the rhythm"
+    }
+  },
+  "type_roles": {
+    "body": {
+      "size_pt": 11.0,
+      "line_height_pt": 13.2,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 11.0,
+      "measured_median_pt": 11.0,
+      "measured_max_pt": 11.0
+    },
+    "headline": {
+      "size_pt": 48.0,
+      "line_height_pt": 50.9,
+      "weight": "bold",
+      "face": "display",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 48.0,
+      "measured_median_pt": 48.0,
+      "measured_max_pt": 48.0
+    },
+    "pullquote": {
+      "size_pt": 28.0,
+      "line_height_pt": 36.4,
+      "weight": "bold",
+      "face": "display",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink_muted",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 28.0,
+      "measured_median_pt": 28.0,
+      "measured_max_pt": 28.0
+    },
+    "standfirst": {
+      "size_pt": 24.0,
+      "line_height_pt": 31.2,
+      "weight": "regular",
+      "face": "display",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 24.0,
+      "measured_median_pt": 24.0,
+      "measured_max_pt": 24.0
+    },
+    "footnote": {
+      "size_pt": 7.0,
+      "line_height_pt": 8.4,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 7.0,
+      "measured_median_pt": 7.0,
+      "measured_max_pt": 7.0
+    },
+    "caption": {
+      "size_pt": 10.6,
+      "line_height_pt": 12.6,
+      "weight": "light",
+      "face": "body",
+      "case": "none",
+      "tracking_per_mille": 0,
+      "color_role": "ink",
+      "space_before": null,
+      "space_after": null,
+      "min_pt": 6.0,
+      "measure_chars_target": null,
+      "measured_min_pt": 10.6,
+      "measured_median_pt": 10.6,
+      "measured_max_pt": 10.6
+    }
+  },
+  "colors": {
+    "ground": "#FFFFFF",
+    "ground_alt": "#EEEEEE",
+    "ground_dark": "#101820",
+    "ink": "#000000",
+    "ink_muted": "#595959",
+    "ink_reversed": "#FFFFFF",
+    "accent": "#006492",
+    "accent_alt": "#A5CD24",
+    "rule": "#D6D6DE",
+    "scrim": "#000000"
+  },
+  "archetypes": [
+    {
+      "id": "exhibit",
+      "label": "exhibit",
+      "role": "exhibit",
+      "frequency": 0.3514,
+      "grid": {
+        "columns": 4,
+        "gutter_in": 0.5687370385064019,
+        "margin": {
+          "top": 0.3,
+          "right": 0.6487370385064006,
+          "bottom": 0.3,
+          "left": 0.52
+        },
+        "baseline_in": 0.23333333333333334,
+        "rows": null,
+        "row_gutter_in": 0.0
+      },
+      "grid_confidence": {
+        "value": 0.6530431475839671,
+        "residual": 0.006236826339323364,
+        "note": "4 columns on this page"
+      },
+      "frames": [
+        {
+          "id": "body-0",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.0381636796174226,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-1",
+          "role": "standfirst",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 4,
+            "row": null,
+            "row_span": null,
+            "y": 0.10448259424280237,
+            "h": 0.0846666830557364
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-2",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.24806594848632812,
+            "h": 0.03189332750108507
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-3",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.28802594785337093,
+            "h": 0.07971014492753623
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-5",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.40789927729853875,
+            "h": 0.07492367779767069
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-6",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.4665340564869068,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-7",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.4828229550962095,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-8",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.5168251320167824,
+            "h": 0.03189335575810185
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-9",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.592602934660735,
+            "h": 0.11189332184968172
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-10",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.6385710539641204,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-11",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.767139971697772,
+            "h": 0.03189335575810185
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-12",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.2924722247653537,
+            "y": 0.8053621645326967,
+            "w": 0.44297309451633027,
+            "h": 0.07333333333333332
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-13",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.8065711127387153,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-14",
+          "role": "footnotes",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 4,
+            "row": null,
+            "row_span": null,
+            "y": 0.920706628870081,
+            "h": 0.0343547679759838
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "body-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 61,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.36666666666666664,
+          "min_chars": null,
+          "max_chars": 55,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26,
+          "min_chars": null,
+          "max_chars": 82,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-3",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26,
+          "min_chars": null,
+          "max_chars": 150,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26,
+          "min_chars": null,
+          "max_chars": 174,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 19,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.21666666666666667,
+          "min_chars": null,
+          "max_chars": 47,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-8",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26,
+          "min_chars": null,
+          "max_chars": 62,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26,
+          "min_chars": null,
+          "max_chars": 340,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 22,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-11",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26,
+          "min_chars": null,
+          "max_chars": 70,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.26,
+          "min_chars": null,
+          "max_chars": 120,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-13",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 23,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-14",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.13499999999999998,
+          "min_chars": null,
+          "max_chars": 374,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        2,
+        7,
+        10,
+        16,
+        18,
+        19,
+        20,
+        23,
+        25,
+        26,
+        29,
+        37,
+        39
+      ],
+      "note": "14 frames read from page 2, set aside: 1 too narrow to set copy in; traced from page 2, one of 13 pages the publication sets this way"
+    },
+    {
+      "id": "text-page",
+      "label": "text page",
+      "role": "content",
+      "frequency": 0.2973,
+      "grid": {
+        "columns": 3,
+        "gutter_in": 0.38463874816894505,
+        "margin": {
+          "top": 0.3,
+          "right": 0.6896387481689448,
+          "bottom": 0.3,
+          "left": 0.53
+        },
+        "baseline_in": 0.23333333333333334,
+        "rows": null,
+        "row_gutter_in": 0.0
+      },
+      "grid_confidence": {
+        "value": 0.7918646656204261,
+        "residual": 0.004375510303151847,
+        "note": "3 columns on this page"
+      },
+      "frames": [
+        {
+          "id": "figure-0",
+          "role": "figure",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.05053705992522063,
+            "h": 0.08877777523464626
+          },
+          "type_role": null,
+          "z": 1,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-1",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.07358961458559389,
+            "h": 0.07981480492485894
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "headline-2",
+          "role": "headline",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.32187036584924766,
+            "h": 0.2049114331723027
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-4",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.696071144386574,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-5",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.752385965983073,
+            "h": 0.07971014492753623
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-6",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.8460266678421585,
+            "h": 0.05314009661835748
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-7",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.9193600124782986,
+            "h": 0.05314009661835748
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "figure-0",
+          "accepts": [
+            "figure"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": null,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 120,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "headline-2",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.8,
+          "min_chars": null,
+          "max_chars": 27,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 48,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 244,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 122,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 120,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        1,
+        11,
+        21,
+        30,
+        31,
+        33,
+        34,
+        35,
+        38,
+        41,
+        42
+      ],
+      "note": "7 frames read from page 1, set aside: 2 too narrow to set copy in; traced from page 1, one of 11 pages the publication sets this way"
+    },
+    {
+      "id": "row-bands",
+      "label": "row bands",
+      "role": "content",
+      "frequency": 0.0811,
+      "grid": {
+        "columns": 5,
+        "gutter_in": 1.218,
+        "margin": {
+          "top": 0.3,
+          "right": 0.5269999999999986,
+          "bottom": 0.3,
+          "left": 0.541
+        },
+        "baseline_in": 0.23333333333333334,
+        "rows": null,
+        "row_gutter_in": 0.0
+      },
+      "grid_confidence": {
+        "value": 0.8667480165636059,
+        "residual": 0.006504788740038161,
+        "note": "5 columns on this page"
+      },
+      "frames": [
+        {
+          "id": "body-0",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.03749704007749204,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-1",
+          "role": "standfirst",
+          "place": {
+            "kind": "frac",
+            "x": 0.05,
+            "y": 0.10418629116482205,
+            "w": 0.9028307596842448,
+            "h": 0.11555555555555556
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-8",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.3862007141113281,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "headline-9",
+          "role": "headline",
+          "place": {
+            "kind": "grid",
+            "col": 3,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.4359248125994647,
+            "h": 0.13394557811595775
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-12",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.4750896312572338,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-15",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.5598281295211227,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-16",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.6110359474464699,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-18",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.2611388948228624,
+            "y": 0.6456637347186053,
+            "w": 0.32480089399549694,
+            "h": 0.024444444444444442
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-19",
+          "role": "footnotes",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 5,
+            "row": null,
+            "row_span": null,
+            "y": 0.6931510642722801,
+            "h": 0.2619103325737847
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "body-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 27,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.36666666666666664,
+          "min_chars": null,
+          "max_chars": 56,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-8",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 41,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "headline-9",
+          "accepts": [
+            "text"
+          ],
+          "required": true,
+          "prominence": 0.7333333333333333,
+          "min_chars": null,
+          "max_chars": 7,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 39,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-15",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 36,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-16",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 25,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-18",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 44,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-19",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.13499999999999998,
+          "min_chars": null,
+          "max_chars": 3056,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        3,
+        6,
+        27
+      ],
+      "note": "9 frames read from page 3, set aside: 11 too narrow to set copy in; traced from page 3, one of 3 pages the publication sets this way"
+    },
+    {
+      "id": "exhibit-2",
+      "label": "exhibit",
+      "role": "exhibit",
+      "frequency": 0.0541,
+      "grid": {
+        "columns": 3,
+        "gutter_in": 0.3601325751410589,
+        "margin": {
+          "top": 0.3,
+          "right": 0.5211325751410589,
+          "bottom": 0.3,
+          "left": 0.494
+        },
+        "baseline_in": 0.23333333333333334,
+        "rows": null,
+        "row_gutter_in": 0.0
+      },
+      "grid_confidence": {
+        "value": 0.7323448022773056,
+        "residual": 0.005146492855601773,
+        "note": "3 columns on this page"
+      },
+      "frames": [
+        {
+          "id": "body-1",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04940000110202365,
+            "y": 0.08002667603669343,
+            "w": 0.8995944446987576,
+            "h": 0.12222222222222222
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-2",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.04940000110202365,
+            "y": 0.21339871441876446,
+            "w": 0.7689296192593045,
+            "h": 0.030396468551070602
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-3",
+          "role": "caption",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.2497918588143808,
+            "h": 0.05072463768115942
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "caption-4",
+          "role": "caption",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.25403453685619215,
+            "h": 0.05072463768115942
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-5",
+          "role": "standfirst",
+          "place": {
+            "kind": "frac",
+            "x": 0.07056666480170357,
+            "y": 0.3400956330475984,
+            "w": 0.16327379014756943,
+            "h": 0.0663722002947772
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-6",
+          "role": "standfirst",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.3400956330475984,
+            "h": 0.0663722002947772
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-7",
+          "role": "standfirst",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.3400956330475984,
+            "h": 0.0663722002947772
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-9",
+          "role": "standfirst",
+          "place": {
+            "kind": "frac",
+            "x": 0.37466668023003474,
+            "y": 0.4712962680392795,
+            "w": 0.13624805874294704,
+            "h": 0.06632891054506655
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-10",
+          "role": "standfirst",
+          "place": {
+            "kind": "frac",
+            "x": 0.6781389024522569,
+            "y": 0.4736851727520978,
+            "w": 0.14624226888020833,
+            "h": 0.06632891054506655
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-11",
+          "role": "standfirst",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.606118830928096,
+            "h": 0.0686544912832755
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-12",
+          "role": "standfirst",
+          "place": {
+            "kind": "frac",
+            "x": 0.3755277845594618,
+            "y": 0.6068518744574652,
+            "w": 0.15028135511610244,
+            "h": 0.0663288257740162
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-13",
+          "role": "standfirst",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.6068889476634838,
+            "h": 0.0663288257740162
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-14",
+          "role": "footnotes",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.7286140724464699,
+            "h": 0.23671497584541062
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "body-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.24000000000000002,
+          "min_chars": null,
+          "max_chars": 488,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 104,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-3",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 33,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "caption-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.17666666666666667,
+          "min_chars": null,
+          "max_chars": 80,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 10,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 12,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 10,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 8,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 9,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-11",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 15,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 9,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-13",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.4,
+          "min_chars": null,
+          "max_chars": 11,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-14",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.13499999999999998,
+          "min_chars": null,
+          "max_chars": 2702,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        8,
+        22
+      ],
+      "note": "13 frames read from page 8, set aside: 2 too narrow to set copy in; traced from page 8, one of 2 pages the publication sets this way"
+    },
+    {
+      "id": "text-page-2",
+      "label": "text page",
+      "role": "content",
+      "frequency": 0.0541,
+      "grid": null,
+      "grid_confidence": {
+        "value": 0.0,
+        "residual": 0.0,
+        "note": "this page is not on a recoverable grid"
+      },
+      "frames": [
+        {
+          "id": "body-0",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.0381636796174226,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-1",
+          "role": "standfirst",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.10448259424280237,
+            "h": 0.0846666830557364
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-3",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.24038591738100404,
+            "h": 0.07971014492753623
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-4",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.3177192687988281,
+            "h": 0.05635183828848378
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-6",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.38847851223415797,
+            "h": 0.03940740514684606
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-10",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.7095525670934606,
+            "h": 0.029462969744646992
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "pullquote-11",
+          "role": "pullquote",
+          "place": {
+            "kind": "frac",
+            "x": 0.40223609076605904,
+            "y": 0.7548148261176215,
+            "w": 0.48256259494357645,
+            "h": 0.09642294424551512
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-12",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.7698118421766493,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-13",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.8206933480721933,
+            "h": 0.02657004830917874
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-14",
+          "role": "footnotes",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.9049732914677373,
+            "h": 0.033816425120772944
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "body-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 32,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.36666666666666664,
+          "min_chars": null,
+          "max_chars": 51,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-3",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.185,
+          "min_chars": null,
+          "max_chars": 126,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-4",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 76,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 94,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 59,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "pullquote-11",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.6,
+          "min_chars": null,
+          "max_chars": 25,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-12",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 22,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-13",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 33,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-14",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.11666666666666667,
+          "min_chars": null,
+          "max_chars": 42,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        5,
+        14
+      ],
+      "note": "10 frames read from page 5, set aside: 6 too narrow to set copy in; traced from page 5, one of 2 pages the publication sets this way"
+    },
+    {
+      "id": "exhibit-3",
+      "label": "exhibit",
+      "role": "exhibit",
+      "frequency": 0.0541,
+      "grid": {
+        "columns": 3,
+        "gutter_in": 0.6916502956814241,
+        "margin": {
+          "top": 0.3,
+          "right": 0.560650295681423,
+          "bottom": 0.3,
+          "left": 0.5159999999999998
+        },
+        "baseline_in": 0.23333333333333334,
+        "rows": null,
+        "row_gutter_in": 0.0
+      },
+      "grid_confidence": {
+        "value": 0.833429466822753,
+        "residual": 0.005401405462605419,
+        "note": "3 columns on this page"
+      },
+      "frames": [
+        {
+          "id": "body-0",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.05,
+            "y": 0.0381636796174226,
+            "w": 0.13211199442545574,
+            "h": 0.024444444444444442
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-1",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 2,
+            "row": null,
+            "row_span": null,
+            "y": 0.08158222481056496,
+            "h": 0.029439996790002892
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-2",
+          "role": "column",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.1229525813349971,
+            "h": 0.05530665362322772
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "body-3",
+          "role": "column",
+          "place": {
+            "kind": "frac",
+            "x": 0.049499999152289496,
+            "y": 0.2044618394639757,
+            "w": 0.13661702473958334,
+            "h": 0.026000001695421007
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-5",
+          "role": "standfirst",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.24938778347439236,
+            "h": 0.07589933607313368
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-6",
+          "role": "footnotes",
+          "place": {
+            "kind": "frac",
+            "x": 0.37241550021701386,
+            "y": 0.25282084147135414,
+            "w": 0.14140985276963974,
+            "h": 0.03111111111111111
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-7",
+          "role": "footnotes",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.2957394352665654,
+            "h": 0.033816425120772944
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-9",
+          "role": "footnotes",
+          "place": {
+            "kind": "grid",
+            "col": 1,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.3745632030345775,
+            "h": 0.06763285024154589
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "standfirst-10",
+          "role": "standfirst",
+          "place": {
+            "kind": "grid",
+            "col": 2,
+            "span": 1,
+            "row": null,
+            "row_span": null,
+            "y": 0.37520260281032985,
+            "h": 0.07589001125759548
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        },
+        {
+          "id": "footnote-25",
+          "role": "footnotes",
+          "place": {
+            "kind": "grid",
+            "col": 0,
+            "span": 3,
+            "row": null,
+            "row_span": null,
+            "y": 0.8083066587094907,
+            "h": 0.1859903381642512
+          },
+          "type_role": null,
+          "z": 2,
+          "bleed": [],
+          "pad": null,
+          "ground": null,
+          "scrim": null,
+          "clip": false,
+          "children": [],
+          "content": []
+        }
+      ],
+      "slots": [
+        {
+          "frame_id": "body-0",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.18333333333333332,
+          "min_chars": null,
+          "max_chars": 18,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-1",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.24000000000000002,
+          "min_chars": null,
+          "max_chars": 79,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-2",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.24000000000000002,
+          "min_chars": null,
+          "max_chars": 244,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "body-3",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.23333333333333334,
+          "min_chars": null,
+          "max_chars": 18,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-5",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.3333333333333333,
+          "min_chars": null,
+          "max_chars": 11,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-6",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.11833333333333333,
+          "min_chars": null,
+          "max_chars": 30,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-7",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.11833333333333333,
+          "min_chars": null,
+          "max_chars": 42,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-9",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.11833333333333333,
+          "min_chars": null,
+          "max_chars": 114,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "standfirst-10",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.3333333333333333,
+          "min_chars": null,
+          "max_chars": 11,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        },
+        {
+          "frame_id": "footnote-25",
+          "accepts": [
+            "text"
+          ],
+          "required": false,
+          "prominence": 0.13499999999999998,
+          "min_chars": null,
+          "max_chars": 2112,
+          "max_lines": null,
+          "aspect_min": null,
+          "aspect_max": null
+        }
+      ],
+      "example_pages": [
+        12,
+        17
+      ],
+      "note": "10 frames read from page 17, set aside: 16 too narrow to set copy in; traced from page 17, one of 2 pages the publication sets this way"
+    }
+  ],
+  "vocabulary_gaps": [],
+  "illustration": {
+    "kind": "photographic",
+    "treatment": "full",
+    "placement": "inset",
+    "style_note": "",
+    "palette_roles": [
+      "accent",
+      "ink"
+    ],
+    "confidence": {
+      "value": 0.0,
+      "residual": 0.0,
+      "note": "only 1 image(s) across the sampled pages; too few to read a treatment from"
+    }
+  },
+  "policy": {
+    "body_min_ratio": 0.019351851851851853,
+    "caption_min_ratio": 0.013240740740740742,
+    "display_min_ratio": 0.030555555555555558,
+    "absolute_floor_pt": 6.0
+  },
+  "body_face": "Guardian Sans TT",
+  "display_face": "Sanomat TT",
+  "mono_face": "Consolas"
+}

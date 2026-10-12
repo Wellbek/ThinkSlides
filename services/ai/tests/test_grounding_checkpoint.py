@@ -207,8 +207,111 @@ class TestTheOfferRidesInTheConsultation:
         events = [e async for e in loop.run(session_id)]
 
         question = next(e for e in events if e["type"] == "question")
-        # Only the research offer: this user implied nothing about handing over
-        # and left nothing ambiguous, so nothing else is worth a round trip.
-        assert len(question["questions"]) == 1
-        assert question["questions"][0]["options"] == [DEEP_RESEARCH_YES, DEEP_RESEARCH_NO]
+        # The reserved format question, then the research offer: this user
+        # implied nothing about handing over and left nothing ambiguous, so
+        # nothing else is worth a round trip.
+        asked = [q["question"] for q in question["questions"]]
+        assert asked[0] == "What kind of presentation is this?"
+        assert len(asked) == 2
+        assert "Research them on the web" in asked[1]
+        assert question["questions"][1]["options"] == [DEEP_RESEARCH_YES, DEEP_RESEARCH_NO]
         assert events[-1]["paused"] is True
+
+
+class TestADiagramIsNotAFigure:
+    """
+    The ungrounded-figures backstop covers the builders that present a number
+    as measured. A diagram presents structure.
+
+    "The request reaches the load balancer, then the application server, then
+    the database" asserts no measurement, and it is usually the user's own
+    architecture read back from their own brief. Blocking it meant process and
+    architecture decks - the ones that most need a diagram and have no figures
+    at all - silently fell back to three bullets and half an empty page, with
+    the refusal reaching the model as advice about unverifiable numbers.
+
+    A diagram that was given values or dates is a different thing, and is
+    still caught.
+    """
+
+    def _blocked(self, fn_args: dict, tool: str = "build_diagram") -> bool:
+        loop = AgentLoop(db=None, mode=MODE_SIMPLE)
+        assert loop._has_grounding() is False
+        message = loop._check_precondition(tool, fn_args)
+        return bool(message and "no source behind this figure" in message)
+
+    def test_a_flow_of_named_steps_is_allowed(self):
+        assert self._blocked({"items": [
+            {"label": "Request", "detail": "the user's device"},
+            {"label": "Load balancer"},
+            {"label": "Application server"},
+        ]}) is False
+
+    def test_a_timeline_carrying_dates_is_still_caught(self):
+        assert self._blocked({"items": [
+            {"label": "Pilot", "date": "Q1 2026"},
+            {"label": "Rollout", "date": "Q3 2026"},
+        ]}) is True
+
+    def test_a_funnel_carrying_counts_is_still_caught(self):
+        assert self._blocked({"items": [
+            {"label": "Visitors", "value": "120,000"},
+            {"label": "Signups", "value": "4,300"},
+        ]}) is True
+
+    def test_a_chart_is_caught_whatever_it_carries(self):
+        assert self._blocked({"items": []}, tool="build_chart") is True
+
+    def test_a_table_of_figures_is_caught(self):
+        assert self._blocked({"columns": ["Region", "Revenue"],
+                              "rows": [["EMEA", "$4.2bn"], ["APAC", "31%"]]},
+                             tool="build_table") is True
+
+    def test_a_table_of_names_and_verdicts_is_allowed(self):
+        """A comparison with no measurement in it asserts nothing that could be
+        wrong; refusing it left technical decks with prose and half an empty
+        page (#301)."""
+        assert self._blocked({"columns": ["Directive", "May be stored", "Reused without asking"],
+                              "rows": [["max-age=N", "Yes", "For N seconds"],
+                                       ["no-store", "No", "Never"]]},
+                             tool="build_table") is False
+
+    def test_a_sequence_diagram_of_status_codes_is_allowed(self):
+        source = ("sequenceDiagram\n    C->>O: GET /page\n    O-->>C: 200 + ETag v42\n"
+                  "    C->>O: If-None-Match v42\n    O-->>C: 304 Not Modified")
+        assert self._blocked({"source": source}, tool="build_mermaid") is False
+
+    def test_a_graph_labelled_with_measurements_is_caught(self):
+        source = "graph LR\n    A[Cache hit 94%] --> B[Origin 1.2 s]"
+        assert self._blocked({"source": source}, tool="build_mermaid") is True
+
+    def test_a_table_with_the_unit_in_its_header_is_caught(self):
+        """build_table asks for units in the header, so a figure table's cells
+        are bare numbers."""
+        assert self._blocked({"columns": ["Region", "Revenue ($B)"],
+                              "rows": [["EMEA", "42"], ["APAC", "17"]]},
+                             tool="build_table") is True
+
+    def test_rows_sent_as_a_json_string_are_read_as_rows(self):
+        import json
+
+        assert self._blocked({"columns": json.dumps(["Region", "Share"]),
+                              "rows": json.dumps([["EMEA", "31%"], ["APAC", "22%"]])},
+                             tool="build_table") is True
+
+    def test_a_mermaid_chart_is_caught_whatever_its_labels(self):
+        assert self._blocked({"source": 'pie\n    "Cloud" : 42\n    "On-prem" : 58'},
+                             tool="build_mermaid") is True
+
+    def test_durations_with_their_unit_are_measurements(self):
+        assert self._blocked({"columns": ["Specialty", "Wait"],
+                              "rows": [["Orthopaedics", "18-week target missed"]]},
+                             tool="build_table") is True
+
+    def test_protocol_versions_are_not_measurements(self):
+        source = "sequenceDiagram\n    C->>S: GET / HTTP/1.1\n    S-->>C: TLS 1.3 handshake, OAuth 2.0 token"
+        assert self._blocked({"source": source}, tool="build_mermaid") is False
+
+    def test_a_diagram_whose_labels_carry_figures_is_caught(self):
+        assert self._blocked({"items": [{"label": "Visitors", "detail": "120,000 a month"},
+                                        {"label": "Signups"}]}) is True

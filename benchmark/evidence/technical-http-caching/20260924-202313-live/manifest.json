@@ -1,0 +1,27 @@
+{
+  "search": "tavily",
+  "task": "technical-http-caching",
+  "category": "technical",
+  "mode": "live",
+  "taskFile": "benchmark/tasks/technical/http-caching.yaml",
+  "commit": "3d4ecb7",
+  "startedAt": "2026-09-24T20:23:13.942669",
+  "replayOf": null,
+  "model": "gpt-5.6-luna",
+  "maxCostUsd": 0.3,
+  "provider": "openai",
+  "sessionId": "dc0ee5cb-0355-4887-ae6c-707c51c2461e",
+  "spend": {
+    "calls": 26,
+    "inputTokens": 149934,
+    "cachedInputTokens": 28716,
+    "outputTokens": 10146,
+    "costUsd": 0.036993
+  },
+  "finishedAt": "2026-09-24T20:25:41.943483",
+  "parts": 4,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "errors": []
+}

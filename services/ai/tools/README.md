@@ -40,3 +40,20 @@ first organisation that has a row there.
 Every tool call and result is printed and written to `<outdir>/events.log`,
 the deck lands at `<outdir>/deck.pptx`, and the slides at
 `<outdir>/png/bench/slide_*.png`.
+
+## `python -m app.research` - a benchmark task, headless
+
+Supersedes `e2e.py` for anything that should be repeated or compared.
+A task is a YAML file under `benchmark/tasks/`; the run answers its own pauses from the task, and everything it produced lands in `benchmark/runs/<task>/<stamp>-<mode>/`: the manifest, `events.log`, one span tree per part (`trace-<n>.jsonl` and a readable `trace-<n>.md`), `cassette.jsonl`, the deck and its pages.
+
+```
+cd services/ai
+PYTHONPATH=. .venv/bin/python -m app.research run ../../benchmark/tasks/technical/http-caching.yaml
+PYTHONPATH=. .venv/bin/python -m app.research run <task.yaml> --mode replay --cassette <run>/cassette.jsonl
+PYTHONPATH=. .venv/bin/python -m app.research show <run-dir>
+```
+
+- `claude-code` (the default) writes each model request to `llm/<seq>.request.md` and waits for `llm/<seq>.response.json`, which a Claude Code session writes as the model. Nothing is billed to an API; token counts are estimates of what the calls would cost on one. The answers are a frontier model's, so this measures the pipeline and gives a frontier reference - not a cheap model's quality.
+- `replay` answers from a cassette in order, search results included, at no cost. A replay of a claude-code run rebuilds the same pages.
+
+It needs `make infra` (Postgres and Redis on localhost) and LibreOffice. Search uses Tavily when `TAVILY_API_KEY` is in the environment or the repository's `.env`.

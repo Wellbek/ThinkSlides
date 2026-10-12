@@ -49,6 +49,22 @@ class TestGetPdfPath:
         preview_gen = PreviewGenerator(output_dir=str(tmp_path / "previews"))
         assert preview_gen.get_pdf_path(f"nonexistent-{time.time_ns()}") is None
 
+    def test_a_pdf_older_than_the_deck_is_not_reused(self, tmp_path):
+        """A script that edits the deck after the render leaves the cached PDF
+        showing the deck as it was; validation must not judge that page (#376)."""
+        previews = tmp_path / "previews" / "sid"
+        previews.mkdir(parents=True)
+        pdf = previews / "deck.pdf"
+        pdf.write_bytes(b"%PDF")
+        deck = tmp_path / "deck.pptx"
+        deck.write_bytes(b"x")
+        preview_gen = PreviewGenerator(output_dir=str(tmp_path / "previews"))
+        os.utime(pdf, (1000, 1000))
+        os.utime(deck, (2000, 2000))
+        assert preview_gen.get_pdf_path("sid", str(deck)) is None
+        os.utime(deck, (500, 500))
+        assert preview_gen.get_pdf_path("sid", str(deck)) == str(pdf)
+
     def test_generate_previews_persists_the_intermediate_pdf(self, tmp_path):
         pptx_path = _render_a_pptx(tmp_path)
         preview_gen = PreviewGenerator(output_dir=str(tmp_path / "previews"))

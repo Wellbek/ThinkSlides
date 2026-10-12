@@ -1,0 +1,21 @@
+id: technical-raft-consensus
+category: technical
+prompt: |
+  Five slides for engineers who operate etcd on how Raft keeps a cluster
+  consistent: leader election, log replication, what happens during a
+  network partition, and why a cluster needs an odd number of members.
+slides: 5
+mode: simple
+detail: detailed
+answers:
+  - first
+  - first
+  - Go ahead as planned
+checklist:
+  - The deck has exactly 5 slides
+  - Leader election is explained with terms, votes and randomised election timeouts
+  - Log replication shows a leader appending, followers acknowledging, and commit on a majority
+  - The partition slide says which side keeps making progress and why the minority cannot commit
+  - The quorum arithmetic for 3, 4 and 5 members is stated correctly (a 4-member cluster tolerates one failure, like 3)
+  - At least one slide carries a diagram of message flow between nodes
+  - No figure (latency, throughput) is stated without a source

@@ -37,6 +37,11 @@ class ToolResult(BaseModel):
     success: bool
     data: Any = None
     error: Optional[str] = None
+    # A failure that is the tool doing its job: it ran to the end and turned
+    # its input down, as a validator does a draft. Traced as "rejected" rather
+    # than "failed", so a run's checks do not read a verdict as a tool that
+    # broke (#345). Only meaningful when success is False.
+    rejected: bool = False
     duration_ms: int = 0
     token_count: Optional[int] = None
 
@@ -193,6 +198,11 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     from app.agent.tools.design_slide_content import DesignSlideContentTool
     from app.agent.tools.validate_slide_json import ValidateSlideJsonTool
     from app.agent.tools.build_diagram import BuildDiagramTool
+    from app.agent.tools.build_mermaid import BuildMermaidTool
+    from app.agent.tools.draw_svg import DrawSvgTool
+    from app.agent.tools.edit_deck_with_code import EditDeckWithCodeTool
+    from app.agent.tools.revise_slides import ReviseSlidesTool
+    from app.agent.tools.compute_visual_with_code import ComputeVisualWithCodeTool
     from app.agent.tools.compose_regions import ComposeSlideRegionsTool
     from app.agent.tools.select_source_image import SelectSourceImageTool
     from app.agent.tools.finalize_and_render_pptx import FinalizeAndRenderPptxTool
@@ -203,6 +213,7 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     )
 
     AnalyzeDocumentTool.register(registry)
+    ReviseSlidesTool.register(registry)
     ExtractKeyDataTool.register(registry)
     ExtractTemplateDesignSystemTool.register(registry)
     WebSearchTool.register(registry)
@@ -212,6 +223,10 @@ def _register_default_tools(registry: ToolRegistry) -> None:
     BuildChartTool.register(registry)
     BuildChartGridTool.register(registry)
     BuildDiagramTool.register(registry)
+    BuildMermaidTool.register(registry)
+    DrawSvgTool.register(registry)
+    EditDeckWithCodeTool.register(registry)
+    ComputeVisualWithCodeTool.register(registry)
     BuildTableTool.register(registry)
     BuildKeyMetricsTool.register(registry)
     BuildStatCalloutsTool.register(registry)

@@ -1,0 +1,20 @@
+id: consulting-bank-churn
+category: consulting
+prompt: |
+  Six slides for the executive team of a mid-sized retail bank on why
+  customers under 35 are moving their current accounts to digital banks,
+  and three moves the bank could make in the next year.
+slides: 6
+mode: deep
+detail: detailed
+answers:
+  - first
+  - first
+  - Go ahead as planned
+checklist:
+  - The deck has exactly 6 slides
+  - Switching or digital-bank adoption figures carry a named source
+  - Drivers of switching are grouped and evidenced, not listed as opinion
+  - The three moves are specific, each with the problem it addresses
+  - No chart mixes incommensurable quantities
+  - Titles state a finding rather than a topic

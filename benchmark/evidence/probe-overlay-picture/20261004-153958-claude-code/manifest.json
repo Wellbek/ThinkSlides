@@ -1,0 +1,23 @@
+{
+  "search": "tavily",
+  "task": "probe-overlay-picture",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/overlay-picture-every-page.yaml",
+  "commit": "cb66032",
+  "startedAt": "2026-10-04T15:39:58.228871",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null,
+  "sessionId": "7c21e96e-1393-4842-a5a6-d652eda9e3d1",
+  "finishedAt": "2026-10-04T15:55:00.494143",
+  "parts": 5,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "stages": [
+    "stage-4.pptx",
+    "stage-5.pptx"
+  ],
+  "errors": []
+}

@@ -1,0 +1,22 @@
+id: technical-k8s-rollouts
+category: technical
+prompt: |
+  Six slides for a platform team deciding between rolling updates,
+  blue-green and canary releases on Kubernetes. Cover how each works,
+  what it costs in spare capacity, how rollback works, and when to pick
+  which. Research current Argo Rollouts and Flagger support.
+slides: 6
+mode: deep
+detail: detailed
+answers:
+  - first
+  - first
+  - Go ahead as planned
+checklist:
+  - The deck has exactly 6 slides
+  - Rolling update is explained in terms of maxSurge and maxUnavailable
+  - Blue-green is described as two full environments with a traffic switch
+  - Canary is described as shifting a share of traffic with analysis before promotion
+  - A comparison covers spare capacity, rollback speed and blast radius for all three
+  - Claims about Argo Rollouts or Flagger features cite a source
+  - The last slide gives a recommendation rule, not a summary of topics

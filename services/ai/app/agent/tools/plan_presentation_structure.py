@@ -10,6 +10,7 @@ from app.agent.run_context import require_chat_provider
 from app.agent.tools._today import today_line
 from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app import budget as budget_model
+from app.design import deck_format as deck_format_module
 from app.measure import archetypes as archetype_model
 from app.observability.logging import get_logger
 import json
@@ -54,6 +55,177 @@ _DETAIL_GUIDANCE = {
 # the size a quarter-page leaves it.
 MIN_EXHIBIT_QUESTIONS = 2
 MAX_EXHIBIT_QUESTIONS = 4
+
+
+def _format_guidance(fmt, target_slide_count: int = 0) -> str:
+    """What this format expects of the plan, folded in beside the detail
+    guidance and the density guidance it already reads alongside.
+
+    The format's slide range is a default for a brief that names no count.
+    Stated beside a count it is a second, contradicting instruction - "Target
+    Slide Count: 3" next to "Plan roughly 10-18 slides" - and a model given
+    both planned 12 slides for a request for 6 (#300).
+    """
+    if fmt.single_page:
+        # A poster is not a deck: everything the material has goes on the one
+        # page a poster is, so the plan's job changes from pacing several
+        # slides to sectioning one.
+        return (
+            f"\n\nFormat: {fmt.label}. This is a SINGLE PAGE, not a deck - "
+            f"totalSlides MUST be 1. Plan its material as sections on that "
+            f"one page rather than as separate slides: {fmt.vocabulary}. Use "
+            "\"section\" on each slide's single entry only if you genuinely "
+            "need more than one contentType block; otherwise fold every "
+            "section into the one slide's keyPoints and notes."
+        )
+    if target_slide_count > 0:
+        return (
+            f"\n\nFormat: {fmt.label} - {fmt.description}. The slide count "
+            f"is stated above and is not this format's usual length; favour "
+            f"this page vocabulary: {fmt.vocabulary}."
+        )
+    return (
+        f"\n\nFormat: {fmt.label} - {fmt.description}. Plan roughly "
+        f"{fmt.pages_min}-{fmt.pages_max} slides unless the material clearly "
+        f"calls for fewer or more, and favour this page vocabulary: "
+        f"{fmt.vocabulary}."
+    )
+
+
+# Below this many slides a closing recap or a section divider is a page the
+# brief's own topics needed: six slides asked to cover five things leave four
+# for them once a cover and a recap are spent. The cover stays from three
+# slides up: the design engine reads the first page as the cover by position
+# (#347), so a plan that opened on content would be styled as one anyway.
+MIN_SLIDES_FOR_A_CLOSING_RECAP = 8
+# Below this a body-less cover would leave the deck with too little content:
+# a three-slide deck that asked for three topics spent a third of itself on a
+# title (#347).
+MIN_SLIDES_FOR_A_COVER = 4
+
+
+def _count_rules(target_slide_count: int) -> str:
+    """The rules for the first and last slide, and for the count itself.
+
+    A stated count is the brief, not a preference: the cover is one of the
+    slides it counts, and a short deck spends none of them on a recap.
+    """
+    cover = (
+        '- First slide should be a title slide (contentType "title") - it '
+        "carries only a title and an optional subtitle, no body bullets, so "
+        "give it 0-1 key points."
+    )
+    if 0 < target_slide_count < MIN_SLIDES_FOR_A_COVER:
+        # A title slide with no body would be a third of a three-slide deck,
+        # half of a two-slide one and all of a one-slide one; the first page
+        # carries content instead, unless the request asked for a cover.
+        cover = (
+            "- Do NOT plan a separate title slide unless the request asks for "
+            "a cover or a title page: every slide carries content "
+            '(contentType "content", "twoColumn", "chart" or "table") with '
+            "its key points, and the first one's headline names the subject."
+        )
+    if target_slide_count <= 0:
+        return cover + (
+            "\n- Last slide should be a conclusion/summary slide. If it recaps "
+            'points (3-5 key points), give it contentType "content" so the '
+            'points render in a body placeholder - only use contentType '
+            '"conclusion" (title-only) for a slide with no body content.'
+        )
+    count = (
+        f"- The deck has EXACTLY {target_slide_count} slides, any title slide "
+        f'included: "totalSlides" is {target_slide_count} and "slides" lists '
+        f"{target_slide_count} entries. If the material has more parts than "
+        "that, combine them; if it has fewer, give each more room. Neither is "
+        "a reason to change the count."
+    )
+    if target_slide_count < MIN_SLIDES_FOR_A_CLOSING_RECAP:
+        closing = (
+            "- Do NOT add a conclusion or summary slide or a section divider, "
+            "whatever the format's vocabulary suggests: at this length each "
+            "would take a slide the content needs. The last content slide "
+            "closes the argument itself."
+        )
+    else:
+        closing = (
+            "- Last slide should be a conclusion/summary slide, counted in the "
+            'total. If it recaps points (3-5 key points), give it contentType '
+            '"content" so the points render in a body placeholder - only use '
+            'contentType "conclusion" (title-only) for a slide with no body '
+            "content."
+        )
+    return "\n".join((count, cover, closing))
+
+
+def _listed(structure: dict) -> int:
+    return len([s for s in structure.get("slides") or [] if isinstance(s, dict)])
+
+
+def _distance(structure: dict, target_slide_count: int) -> int:
+    return abs(_listed(structure) - target_slide_count)
+
+
+def _count_violation(structure: dict, target_slide_count: int) -> str | None:
+    """What is wrong with a plan's length against a stated count, or None."""
+    if target_slide_count <= 0:
+        return None
+    listed = _listed(structure)
+    declared = int(structure.get("totalSlides") or 0)
+    if listed == target_slide_count and declared == target_slide_count:
+        return None
+    return (
+        f"The brief asks for exactly {target_slide_count} slides, any title "
+        f"slide included. Your plan lists {listed} slides"
+        + (f" and declares totalSlides {declared}" if declared != listed else "")
+        + f". Return the whole plan again as ONLY the JSON object, with "
+        f"exactly {target_slide_count} entries in \"slides\" and "
+        f"\"totalSlides\": {target_slide_count}."
+    )
+
+
+def _merged_into_one_page(structure: dict) -> dict:
+    """Every planned slide, folded into the single page a poster is.
+
+    Section by section rather than run together as one undifferentiated
+    list: a poster's abstract, method and results are still distinct
+    sections on the one sheet, and the section headings are what a reader
+    orients by. Nothing is dropped - the verification issue #285 states
+    plainly, "every section of the material appears on it".
+    """
+    slides = [s for s in (structure.get("slides") or []) if isinstance(s, dict)]
+    if not slides:
+        return structure
+
+    ordered = sorted(slides, key=lambda s: int(s.get("slideIndex") or 0))
+    key_points: list[str] = []
+    notes: list[str] = []
+    for slide in ordered:
+        heading = str(slide.get("title") or slide.get("section") or "").strip()
+        if heading:
+            key_points.append(f"{heading}:")
+        key_points.extend(
+            str(point) for point in (slide.get("keyPoints") or [])
+            if str(point).strip()
+        )
+        note = str(slide.get("notes") or "").strip()
+        if note:
+            notes.append(f"{heading}: {note}" if heading else note)
+
+    first = ordered[0]
+    merged = {
+        "slideIndex": 0,
+        "title": structure.get("title") or first.get("title") or "",
+        "section": "",
+        "titleRegister": "label",
+        "keyPoints": key_points,
+        "suggestedLayout": first.get("suggestedLayout") or "Content",
+        "contentType": "content",
+        "notes": "\n".join(notes),
+    }
+    structure = dict(structure)
+    structure["slides"] = [merged]
+    structure["totalSlides"] = 1
+    return structure
 
 
 def demote_unearned_dashboards(slides: list) -> list[str]:
@@ -278,6 +450,16 @@ class PlanPresentationStructureTool:
                     description="Content depth: concise, detailed, or comprehensive",
                     required=False,
                 ),
+                ToolParameter(
+                    name="deck_format",
+                    type="string",
+                    required=False,
+                    description=(
+                        "What kind of presentation this is (boardroom, pitch, "
+                        "academic, dashboard, poster). Supplied automatically; "
+                        "you do not need to pass this."
+                    ),
+                ),
             ],
         )
 
@@ -290,9 +472,11 @@ class PlanPresentationStructureTool:
         audience: str = "general",
         design_system_summary: str = "{}",
         detail_level: str = "detailed",
+        deck_format: str = "",
     ) -> ToolResult:
         start = time.time()
         try:
+            fmt = deck_format_module.by_id(deck_format)
             # The workspace's configured model. There is no environment
             # fallback: a run reaches a tool only after the loop resolved
             # Settings into a provider, and its absence is an error, not a
@@ -319,6 +503,8 @@ class PlanPresentationStructureTool:
                 parsed_ds, _deck_material(content_summary, parsed_data)
             )
             chapter_info = _chapter_guidance(parsed_ds)
+            count_rules = _count_rules(0 if fmt.single_page else target_slide_count)
+            format_info = _format_guidance(fmt, target_slide_count)
 
             prompt = f"""{today_line()}
 
@@ -331,7 +517,7 @@ Key Data: {json.dumps(parsed_data, indent=2)[:2000]}
 
 Target Audience: {audience}
 Target Slide Count: {target_slide_count if target_slide_count > 0 else 'auto-determine'}
-{layout_info}{density_info}{chapter_info}
+{layout_info}{density_info}{chapter_info}{format_info}
 
 Return a JSON object with this structure:
 {{
@@ -356,8 +542,7 @@ Return a JSON object with this structure:
 
 Rules:
 - Before anything else, check this plan against every explicit, checkable instruction above (a stated count, "one per X", a specific list of items to cover, an explicit exclusion) - not the general topic, the concrete asks. If the plan cannot satisfy one (the content summary does not actually contain enough distinct items for the count asked), or you are deliberately adding slides or scope nobody asked for, name it plainly in "deviations": what was asked, what you planned instead, and why. An empty list is a claim that the plan matches what was asked, not a default - leave it empty only when that is actually true. This is shown to the user before the deck is built, so a real mismatch named here is a redirect; the same mismatch unsaid is the user finding out only once it is rendered.
-- First slide should be a title slide (contentType "title") - it carries only a title and an optional subtitle, no body bullets, so give it 0-1 key points.
-- Last slide should be a conclusion/summary slide. If it recaps points (3-5 key points), give it contentType "content" so the points render in a body placeholder - only use contentType "conclusion" (title-only) for a slide with no body content.
+{count_rules}
 - Every slide that has key points MUST use a contentType whose layout has a body placeholder: "content" (one body), "twoColumn" (two bodies), "chart", "table", or "image". Never assign 3-5 key points to a "title" or "conclusion" slide - those layouts have no body placeholder and the points would be dropped.
 - Give every slide a "titleRegister", which says what its headline is FOR:
   * "claim" - the slide carries a finding and its headline states it: "Applied AI recorded the highest innovation score of all 14 trends". A reader who reads only the claim headlines of a deck has read its argument. Use this for any slide backed by a chart, a table, figures or a comparison.
@@ -396,7 +581,62 @@ Rules:
                     duration_ms=int((time.time() - start) * 1000),
                 )
 
+            # A stated count is checked here, in code, rather than left to the
+            # model's own "deviations" report, which came back empty on a plan
+            # of 12 for a request of 6. One correction turn, naming the exact
+            # miss; a second miss is kept and reported as a deviation by the
+            # loop, because a plan of the wrong length still beats no plan.
+            violation = None if fmt.single_page else _count_violation(structure, target_slide_count)
+            if violation:
+                logger.info("plan_count_missed", target=target_slide_count,
+                            planned=len(structure.get("slides") or []))
+                try:
+                    retry = await llm.chat(
+                        messages=[
+                            {"role": "user", "content": prompt},
+                            {"role": "assistant", "content": result_text},
+                            {"role": "user", "content": violation},
+                        ],
+                        tools=None,
+                    )
+                    replanned = extract_json_object(
+                        retry.get("message", {}).get("content", "{}"))
+                except Exception as exc:
+                    # The first plan parsed; losing it to a failed correction
+                    # would turn a wrong length into no plan at all.
+                    logger.warning("plan_count_correction_failed", error=str(exc))
+                    replanned = None
+                if replanned is not None and replanned.get("slides") and (
+                        _distance(replanned, target_slide_count)
+                        <= _distance(structure, target_slide_count)):
+                    structure = replanned
+
+            if not fmt.single_page:
+                # Drafting walks range(totalSlides) and the loop's own count
+                # check reads it, so a total that disagrees with the list
+                # would draft some other number of slides than was planned
+                # and hide the miss from the user.
+                structure["totalSlides"] = _listed(structure)
+
             duration_ms = int((time.time() - start) * 1000)
+            if fmt.single_page and int(structure.get("totalSlides") or 0) != 1:
+                # A single-page format that came back as a multi-slide plan is
+                # the model treating it as a deck anyway - the instruction
+                # said "totalSlides MUST be 1" and it wrote a plan for six.
+                # Merged rather than truncated: `_slides_outstanding` walks
+                # `range(totalSlides)`, so leaving five extra slides in the
+                # structure would draft five pages nothing downstream expects
+                # a poster to have, and truncating them would silently drop
+                # whatever those slides argued. Every section's material
+                # survives, folded into the one slide a poster actually is.
+                before = int(structure.get("totalSlides") or 0)
+                structure = _merged_into_one_page(structure)
+                structure.setdefault("deviations", []).append(
+                    f"{fmt.label} is a single page: the plan's {before} "
+                    "slides were merged into one, section by section."
+                )
+                logger.info("single_page_format_plan_merged",
+                           format_id=fmt.id, slides_before=before)
             demotions = demote_unearned_dashboards(structure.get("slides") or [])
             if demotions:
                 structure["dashboardWarnings"] = demotions

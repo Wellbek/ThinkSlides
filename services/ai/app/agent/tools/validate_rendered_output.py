@@ -16,11 +16,13 @@ proxied - see Stage A) already work.
 """
 
 from __future__ import annotations
-import os
+import asyncio
 import base64
+import os
 import shutil
 import tempfile
 import time
+from typing import Optional
 
 from app.agent.tools._today import today_line
 from app.agent.registry import ToolRegistry, ToolResult, ToolParameter
@@ -53,6 +55,90 @@ MAX_VISION_REVIEW_SLIDES = 12
 # placement more coarsely than glyph placement, so a point or two of bleed is
 # not a layout defect. Anything beyond this is genuinely off the slide.
 IMAGE_OVERFLOW_TOLERANCE_PT = 4.0
+
+# The rungs of the revision ladder, smallest first. A page is revised at most
+# twice, so which rung is asked for is the difference between fixing a page
+# and rebuilding it.
+FIX_NUDGE = "nudge"
+FIX_REPLACE = "replace"
+FIX_REDRAFT = "redraft"
+FIX_TIERS = (FIX_NUDGE, FIX_REPLACE, FIX_REDRAFT)
+
+
+def _fix_tier(raw) -> str:
+    """The rung this verdict asks for, defaulting to the cheapest.
+
+    Defaulting down rather than up on purpose: an unparseable verdict should
+    cost a nudge (answered by placing the page again) rather than a
+    redraft that throws away copy nobody complained about.
+    """
+    value = str(raw or "").strip().lower()
+    return value if value in FIX_TIERS else FIX_NUDGE
+
+
+# The aesthetic pass judges *arrangement* as well as damage.
+#
+# It used to say "not subjective style preferences", which was the right
+# instinct and too broad a cut: it ruled out the whole class of defect an
+# authored design language actually produces. A page with its material in the
+# top third and two thirds of white below it is not a matter of taste, and
+# neither is a chart squeezed into a shape that fights it. Both are visible in
+# a screenshot and answerable without an opinion about the deck.
+#
+# What stays out is everything a reasonable designer could disagree about:
+# the palette, the typeface, the wording, whether the page is interesting.
+def _aesthetic_prompt() -> str:
+    """Built per call so the date is this run's, not the import's."""
+    return f"{today_line()}\n\n" + (
+    "Look at this presentation slide screenshot and judge it as a page.\n\n"
+    "Reply with ONLY a JSON object:\n"
+    '{"hasIssue": true|false, "issue": "one short sentence, or empty string", '
+    '"fix": "nudge|replace|redraft"}\n\n'
+    "Flag a defect in either of these two classes, and nothing else.\n"
+    "1. DAMAGE: text overlapping other text, anything spilling off the slide, "
+    "type too small to read, illegibly low contrast.\n"
+    "2. ARRANGEMENT: a large area of the page empty while another is crowded; "
+    "an exhibit squeezed into a shape that fights it (a wide chart in a narrow "
+    "box, a tall one stretched flat); something sitting oddly high or low with "
+    "a conspicuous gap beside or beneath it.\n\n"
+    "Do NOT flag the colours, the typeface, the wording, or whether the page "
+    "is interesting. Those are choices, not defects. A faint watermark set "
+    "behind the copy is something the user asked for, not damage.\n\n"
+    '"fix" is the SMALLEST change that would fix it:\n'
+    '- "nudge": the page is right, one thing is in the wrong place or the '
+    "wrong size.\n"
+    '- "replace": the page needs a different arrangement of the same '
+    "material.\n"
+    '- "redraft": the copy itself is the problem - too much of it, too little, '
+    "or the wrong thing.\n"
+    "Prefer the smallest that would work."
+    )
+
+
+BACKGROUND_PREFIX = "ts-background"
+
+
+def background_texts(pptx_path: str) -> frozenset[str]:
+    """Text of shapes the deck marks as meant to sit behind content.
+
+    A watermark overlaps the copy on purpose. The geometry check reads text
+    boxes out of the rendered PDF, where nothing says which were intended, so
+    a script names such a shape `ts-background-<what>` and its text is not
+    counted as an overlap or an overflow.
+    """
+    try:
+        from pptx import Presentation
+
+        found = set()
+        for slide in Presentation(pptx_path).slides:
+            for shape in slide.shapes:
+                if shape.name.startswith(BACKGROUND_PREFIX) and shape.has_text_frame:
+                    text = shape.text_frame.text.strip()
+                    if text:
+                        found.add(text)
+        return frozenset(found)
+    except Exception:  # noqa: BLE001 - an unreadable deck is reported elsewhere
+        return frozenset()
 
 
 class ValidateRenderedOutputTool:
@@ -119,7 +205,7 @@ class ValidateRenderedOutputTool:
                 )
 
             preview_gen = PreviewGenerator()
-            pdf_path = preview_gen.get_pdf_path(session_id)
+            pdf_path = preview_gen.get_pdf_path(session_id, pptx_path)
             cleanup_dir = None
             if not pdf_path:
                 cleanup_dir = tempfile.mkdtemp(prefix="thinkslides_validate_")
@@ -136,7 +222,7 @@ class ValidateRenderedOutputTool:
 
             advisories: list[dict] = []
             try:
-                issues = cls._check_geometry(pdf_path)
+                issues = cls._check_geometry(pdf_path, ignore_text=background_texts(pptx_path))
                 issues.extend(output_qa.check_package(pptx_path))
                 slides = coerce_json_arg(slides_json, []) or []
                 if isinstance(slides, list):
@@ -190,7 +276,7 @@ class ValidateRenderedOutputTool:
             return ToolResult(success=False, error=str(e), duration_ms=int((time.time() - start) * 1000))
 
     @staticmethod
-    def _check_geometry(pdf_path: str) -> list[dict]:
+    def _check_geometry(pdf_path: str, ignore_text: frozenset[str] = frozenset()) -> list[dict]:
         """
         The ground-truth check: read every text span's actual bounding box
         as LibreOffice laid it out (PyMuPDF's structured text extraction),
@@ -225,7 +311,7 @@ class ValidateRenderedOutputTool:
                     for line in block.get("lines", []):
                         for span in line.get("spans", []):
                             text = (span.get("text") or "").strip()
-                            if not text:
+                            if not text or text in ignore_text:
                                 continue
                             spans.append((tuple(span["bbox"]), text))
 
@@ -334,40 +420,69 @@ class ValidateRenderedOutputTool:
         """
         issues: list[dict] = []
         try:
-            from app.llm import get_vision_llm_provider
             import fitz
 
-            vision_provider = get_vision_llm_provider()
+            from app.agent import run_context
+
+            # The workspace's own configured model, not a process-wide one
+            # built from environment variables - see run_context's
+            # require_chat_provider for what that fallback used to cost. None
+            # when the run's provider has no vision support, in which case the
+            # geometric check above still stands on its own.
+            vision_provider = run_context.get_vision_provider()
+            if vision_provider is None:
+                logger.info("aesthetic_check_skipped", reason="no_vision_provider")
+                return issues
             doc = fitz.open(pdf_path)
             try:
                 page_count = min(len(doc), MAX_VISION_REVIEW_SLIDES)
+                images = []
                 for page_index in range(page_count):
-                    page = doc[page_index]
-                    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-                    img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
-
-                    response = await vision_provider.chat_with_images(
-                        prompt=(
-                            f"{today_line()}\n\n"
-                            "Look at this presentation slide screenshot. Reply with ONLY a JSON "
-                            'object: {"hasIssue": true|false, "issue": "one short sentence, or '
-                            'empty string"}. Only flag a genuine visual defect - overlapping '
-                            "text, text spilling off the slide, illegibly low contrast - not "
-                            "subjective style preferences."
-                        ),
-                        images=[f"data:image/png;base64,{img_b64}"],
-                        temperature=0.2,
-                        max_tokens=200,
-                    )
-                    parsed = extract_json_object(response)
-                    if parsed and parsed.get("hasIssue") and parsed.get("issue"):
-                        issues.append({
-                            "slideIndex": page_index,
-                            "type": "aesthetic",
-                            "detail": str(parsed["issue"])[:200],
-                        })
+                    pix = doc[page_index].get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                    images.append(base64.b64encode(pix.tobytes("png")).decode("utf-8"))
             finally:
                 doc.close()
+
+            # Every page at once, a few at a time: the pages are independent,
+            # and judged one after another a twelve-page deck waited on twelve
+            # calls in a row on every validation round. A page whose call
+            # fails is skipped on its own; it used to end the review of every
+            # page after it.
+            from app.config import settings
+
+            limit = asyncio.Semaphore(max(1, int(settings.compile_concurrency)))
+
+            async def judge(page_index: int, img_b64: str) -> Optional[dict]:
+                async with limit:
+                    try:
+                        response = await vision_provider.chat_with_images(
+                            prompt=_aesthetic_prompt(),
+                            images=[f"data:image/png;base64,{img_b64}"],
+                            temperature=0.2,
+                            max_tokens=250,
+                        )
+                    except Exception as e:  # one page's failure is that page's
+                        logger.warning("vision_page_review_failed",
+                                       page=page_index + 1, error=str(e))
+                        return None
+                parsed = extract_json_object(response)
+                if parsed and parsed.get("hasIssue") and parsed.get("issue"):
+                    return {
+                        "slideIndex": page_index,
+                        "type": "aesthetic",
+                        "detail": str(parsed["issue"])[:200],
+                        # Which rung of the revision ladder this asks for.
+                        # A verdict that only says "wrong" leaves redraft
+                        # as the single remedy, and redrafting a slide
+                        # whose copy was fine to move a frame down is the
+                        # most expensive way to fix the smallest problem.
+                        "fix": _fix_tier(parsed.get("fix")),
+                    }
+                return None
+
+            verdicts = await asyncio.gather(
+                *(judge(index, image) for index, image in enumerate(images)))
+            issues.extend(v for v in verdicts if v is not None)
         except Exception as e:
             logger.warning("vision_aesthetic_review_skipped", error=str(e))
         return issues

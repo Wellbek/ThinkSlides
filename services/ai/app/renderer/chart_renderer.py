@@ -565,6 +565,27 @@ def _measured_values(series_entry: dict, values: list, forecast_from: int) -> li
     return out
 
 
+def _solid_part(value: float, measured: float) -> float:
+    """How much of one bar is measured rather than projected, sign kept.
+
+    The measured portion lies between zero and the value itself, on the
+    value's own side of the baseline. Stating it that way rather than as
+    `max(0.0, min(value, measured))` is the whole fix for issue #292: that
+    clamp read every negative datum as arithmetic that had gone wrong and
+    flattened it to a zero-height bar, so a chart of declines drew nothing
+    at all - silently, because a chart with no bars still has a title and
+    axes and still attaches to its slide.
+
+    The guard the clamp was written for is kept: a stated `measured` larger
+    than the value cannot push the solid part past the value, in either
+    direction.
+    """
+    if value != value or measured != measured:   # NaN
+        return 0.0
+    low, high = (value, 0.0) if value < 0 else (0.0, value)
+    return min(max(measured, low), high)
+
+
 def _draw_bars_with_forecast(ax, offsets, values, measured, forecast_from,
                              bar_width, color, name, horizontal=False) -> None:
     """
@@ -575,10 +596,8 @@ def _draw_bars_with_forecast(ax, offsets, values, measured, forecast_from,
     extrapolated", and #125's footnote is the words for it - validation
     requires both.
     """
-    solid = [
-        max(0.0, min(value, measured[index])) if value == value else 0.0
-        for index, value in enumerate(values)
-    ]
+    solid = [_solid_part(value, measured[index])
+             for index, value in enumerate(values)]
     if horizontal:
         ax.barh(offsets, solid, height=bar_width, label=name, color=color)
     else:
@@ -586,7 +605,11 @@ def _draw_bars_with_forecast(ax, offsets, values, measured, forecast_from,
 
     for index, value in enumerate(values):
         base = solid[index]
-        if value != value or value - base <= 0:
+        # Anything of the bar the solid part did not cover, in whichever
+        # direction the value runs. `value - base > 0` was the test here,
+        # which skipped the outline for every negative bar as surely as the
+        # old clamp skipped its fill - see issue #292.
+        if value != value or value - base == 0:
             continue
         outline = dict(facecolor="none", edgecolor=color, linewidth=1.4,
                        linestyle=FORECAST_DASH, hatch=None)
@@ -1209,8 +1232,15 @@ def _cartesian_furniture(ax, categories, chart_data, style, font, base_pt,
         ax.tick_params(**{"axis": "x" if horizontal else "y",
                           value_side: False, f"label{value_side}": False})
     if not style.show_category_axis:
+        # The tick marks and the rule go; the category *names* stay. The two
+        # axes are not symmetric: a value axis is redundant on a chart that
+        # prints its values on the bars, so hiding it loses nothing, while
+        # the category labels are the only thing saying which bar is which.
+        # Dropping them turned a sourced three-segment forecast into three
+        # unlabelled green rectangles over an axis titled "Market Segments".
         ax.tick_params(**{"axis": "y" if horizontal else "x",
-                          category_side: False, f"label{category_side}": False})
+                          category_side: False,
+                          f"label{category_side}": True})
 
     _set_grid(value_axis, style.show_value_gridlines, style)
     _set_grid(category_axis, style.show_category_gridlines, style)
@@ -2172,3 +2202,5 @@ def _draw_data_labels(
     else:
         bottom, top = ax.get_ylim()
         ax.set_ylim(bottom, top + (top - bottom) * 0.12)
+
+

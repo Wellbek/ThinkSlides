@@ -1,0 +1,94 @@
+{
+  "task": "probe-qr-last-page",
+  "run": "20261004-154002-claude-code",
+  "mode": "claude-code",
+  "model": null,
+  "commit": "cb66032",
+  "passed": 8,
+  "decided": 10,
+  "blockingFailures": [],
+  "checks": [
+    {
+      "name": "delivered",
+      "passed": true,
+      "detail": "deck: deck.pptx",
+      "blocking": true
+    },
+    {
+      "name": "terminated_cleanly",
+      "passed": true,
+      "detail": "termination: complete",
+      "blocking": false
+    },
+    {
+      "name": "slide_count",
+      "passed": true,
+      "detail": "3 pages, task asks for 3",
+      "blocking": true
+    },
+    {
+      "name": "text_within_the_page",
+      "passed": true,
+      "detail": "no overflow or overlap in the rendered geometry",
+      "blocking": true
+    },
+    {
+      "name": "headlines_within_the_ramp",
+      "passed": true,
+      "detail": "every content headline at or below 48pt",
+      "blocking": false
+    },
+    {
+      "name": "body_legible",
+      "passed": true,
+      "detail": "all body copy at 14pt or larger",
+      "blocking": false
+    },
+    {
+      "name": "rendered_in_its_design",
+      "passed": true,
+      "detail": "last render: composed",
+      "blocking": false
+    },
+    {
+      "name": "validation_converged",
+      "passed": false,
+      "detail": "5 round(s), 2 issue(s) left",
+      "blocking": false
+    },
+    {
+      "name": "shipped_what_was_validated",
+      "passed": true,
+      "detail": "the delivered file is the one validation saw",
+      "blocking": false
+    },
+    {
+      "name": "no_failed_tool_calls",
+      "passed": false,
+      "detail": "edit_deck_with_code x1",
+      "blocking": false
+    }
+  ],
+  "metrics": {
+    "modelCalls": 38,
+    "inputTokens": 238218,
+    "cachedInputTokens": 0,
+    "outputTokens": 8315,
+    "tokensEstimated": true,
+    "costUsd": null,
+    "runSeconds": 896.2,
+    "draftsRejected": 0,
+    "validationRounds": 5,
+    "pages": 3,
+    "wordsPerPage": [
+      16,
+      64,
+      64
+    ],
+    "inkCoverage": [
+      0.302,
+      0.372,
+      0.412
+    ]
+  }
+}

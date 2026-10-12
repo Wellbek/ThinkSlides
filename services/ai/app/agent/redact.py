@@ -32,6 +32,12 @@ from typing import Any
 # Fields whose value is a base64 blob rather than something to read.
 BINARY_FIELDS = ("data", "renderedPng", "imageData", "pngBase64")
 
+# Fields the loop keeps and the model never sees. `sourceText` is a whole
+# uploaded document, carried so a figure can be traced to an offset inside it;
+# putting it in the conversation would spend the context window on text the
+# model already has a summary of.
+LOOP_ONLY_FIELDS = ("sourceText",)
+
 # Below this a value is small enough to be a marker or a data URI stub
 # rather than a real payload, and rewriting it would lose information for
 # no benefit.
@@ -87,6 +93,12 @@ def redact_binary(payload: Any) -> Any:
         changed = False
         out: dict[str, Any] = {}
         for key, value in payload.items():
+            if key in LOOP_ONLY_FIELDS:
+                # Dropped outright rather than replaced with a placeholder:
+                # the model has a summary of this already, and a note saying
+                # a document was here would only invite it to ask for one.
+                changed = True
+                continue
             if (
                 key in BINARY_FIELDS
                 and isinstance(value, str)

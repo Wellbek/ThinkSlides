@@ -53,8 +53,27 @@ SLIDE_TOOLS = frozenset({
     "select_source_image",
     "design_slide_content",
     "validate_slide_json",
+    # Available whenever it seems reasonable, not only as the last-resort
+    # `amend` phase below - a script that opens the deck and fixes one
+    # precise thing (an overlap, a region that needs to move) can be a
+    # smaller, faster move than a full redraft of the slide's content, and
+    # the model is left to judge which one a given revision actually needs.
+    # `AgentLoop._withheld_tools` keeps this out of the offer until a deck
+    # exists to edit and the operator has turned the capability on.
+    "edit_deck_with_code",
     *BUILD_VISUAL_TOOLS,
     *BLOCK_BUILDER_TOOLS,
+})
+
+# The two tools that exist to decide *where things go* on a template's page.
+# A run composing against a design language pack does not use them: the whole
+# point of that path is that the model never emits geometry, it says what the
+# page is about and the pack's archetypes decide the rest. Leaving them
+# offered would be worse than useless - a model that can see a way to place a
+# box will place one, and then two systems are deciding the same thing.
+TEMPLATE_GEOMETRY_TOOLS = frozenset({
+    "select_layout",
+    "compose_slide_regions",
 })
 
 
@@ -81,6 +100,9 @@ class Phase:
     # How many model turns this phase gets before the run gives up on it.
     max_turns: int = 0
     pauses: bool = False
+    # What happens when the model answers in words and calls no tool, for a
+    # phase it may decline - one whose honest answer can be "nothing to do".
+    on_decline: Callable[["AgentLoop"], None] | None = None
 
 
 # ── Conditions, named so the table below reads as prose ──────────────────
@@ -120,18 +142,106 @@ def _slides_outstanding(loop: "AgentLoop") -> list[int]:
     if missing:
         return missing
 
-    # Nothing has been rewritten since validation complained, so its findings
-    # still stand. An empty slides_needing_revision means the opposite of
-    # nothing: it is compute_slides_needing_revision saying the defect is
-    # spread widely enough that the whole deck is in scope.
-    if ws.validation_issues and ws.validated_serial == ws.design_serial:
-        return ws.slides_needing_revision or list(range(total))
-    return []
+    # The slides the last validation flagged and this round has not redrafted
+    # yet. A queue rather than "nothing changed since validation": that test
+    # went false the moment the first flagged slide was redrafted, so a round
+    # revised one slide and re-rendered with the rest untouched (#299). The
+    # queue is emptied when validation settles, so a run at its cap does not
+    # draft again after its last check.
+    return list(ws.revision_queue)
+
+
+def _compiles(loop: "AgentLoop") -> bool:
+    from app.agent import compile as slide_compile
+
+    return slide_compile.applies(loop)
+
+
+def _compile_outstanding(loop: "AgentLoop") -> list[int]:
+    from app.agent import compile as slide_compile
+
+    return slide_compile.outstanding(loop)
+
+
+def _wants_code_amendment(loop: "AgentLoop") -> bool:
+    """Whether this run has a defect only a script could fix, with no slide
+    left in `slides_needing_revision` for it to attach to.
+
+    `edit_deck_with_code` itself is offered throughout drafting once a deck
+    exists (see `SLIDE_TOOLS` and `AgentLoop._withheld_tools`) - it is
+    reachable whenever it seems reasonable, not held back for this phase
+    alone. What this phase catches is the case that leaves behind: a deck
+    validation still calls unhappy after its revision budget, with nothing
+    specific flagged for the draft phase to walk back to and offer the tool
+    on. Without this backstop that state has no phase that applies to it at
+    all, and the run would finish silently unclean.
+    """
+    ws = loop.working_state
+    return bool(
+        loop.code_amendment_enabled
+        and ws.has_called_finalize
+        and ws.last_rendered_path
+        # Validation ran out of revision passes with something still wrong.
+        # A clean deck needs no script, and a deck still inside its revision
+        # budget should use the typed tools, which is what those passes are.
+        and ws.at_validation_cap
+        and not ws.validation_clean
+        # During an amendment, not for findings the deck was handed over
+        # with: the change is not the user asking for those to be fixed.
+        and not _only_handover_findings(ws)
+    )
+
+
+def _only_handover_findings(ws) -> bool:
+    """Whether every finding left is one this run does not act on: one the
+    deck was handed over with, or one the change step has had its turn to
+    correct."""
+    return bool(ws.validation_issues) and not ws.actionable(ws.validation_issues)
+
+
+def _change_findings_directive(loop: "AgentLoop") -> str:
+    """What the change's own edit left on the deck, for it to correct."""
+    findings = loop.working_state.change_findings
+    if not findings:
+        return ""
+    lines = "\n".join(
+        f"  - {'Slide ' + str(f['slideIndex'] + 1) if isinstance(f.get('slideIndex'), int) else 'Deck'}: "
+        f"{f.get('detail') or f.get('type') or 'a problem'}" for f in findings)
+    return (
+        "\n\nThat change is on the deck, and checking it found this, which was "
+        f"not there before it:\n{lines}\nCorrect it with one more script. The "
+        "first stays and is replayed after any render, so correct what it did "
+        "rather than undoing the change. If it cannot be corrected, reply in "
+        "words saying so."
+    )
+
+
+def _change_declined(loop: "AgentLoop") -> None:
+    """A change answered in words leaves the deck as it was handed over, and
+    what validation said of it then still stands: checking it again spent a
+    vision call per page on a deck nobody touched (probe-rotate-exhibit)."""
+    ws = loop.working_state
+    ws.amend_done = True
+    if not ws.amend_edited and not ws.amend_redrafted:
+        # Nothing was changed. Declined after a script edited the deck or
+        # revise_slides redrafted some of it, the deck carries that change,
+        # and what validation found after it stands.
+        ws.restore_handover()
 
 
 def _validation_settled(loop: "AgentLoop") -> bool:
+    """Clean or out of budget, and nothing has changed the file since.
+
+    A script edit reopens it for one more look, even at the cap: the check
+    schedules no revision there, but it is what the closing message reports,
+    and the `amend` backstop's edit otherwise shipped unchecked.
+    """
     ws = loop.working_state
-    return ws.validation_clean or ws.at_validation_cap
+    # During an amendment a deck that carries only what it was handed over
+    # with is as settled as it is going to be: the change broke nothing.
+    return ((ws.validation_clean or ws.at_validation_cap
+             or _only_handover_findings(ws))
+            and not ws.edited_since_validation)
 
 
 PIPELINE: tuple[Phase, ...] = (
@@ -184,7 +294,7 @@ PIPELINE: tuple[Phase, ...] = (
         # The substantial round, now that the audience, angle and depth are
         # settled. Searching before that spends the budget on facets the user
         # was about to rule out.
-        applies=_wants_research,
+        applies=lambda loop: _wants_research(loop) and not loop.working_state.amending,
         # Enough sources, the search budget spent, or the model has stopped
         # asking - a topic with little written about it must not strand a run.
         done=lambda loop: (
@@ -219,6 +329,16 @@ PIPELINE: tuple[Phase, ...] = (
         directive=lambda loop: "Show the user the outline and ask whether to build it.",
     ),
     Phase(
+        name="compile",
+        label="content_generation",
+        driver=LOOP_DRIVEN,
+        # Every outstanding slide in one answer each, all at once (#323). A
+        # slide it could not produce falls through to drafting below.
+        applies=lambda loop: _compiles(loop),
+        done=lambda loop: not _compile_outstanding(loop),
+        directive=lambda loop: "Write every outstanding slide, one answer each.",
+    ),
+    Phase(
         name="draft",
         label="content_generation",
         driver=MODEL_DRIVEN,
@@ -228,6 +348,35 @@ PIPELINE: tuple[Phase, ...] = (
         # Per slide, not for the whole phase: the loop re-enters this phase
         # once per outstanding slide.
         max_turns=6,
+    ),
+    Phase(
+        name="change",
+        label="content_generation",
+        driver=MODEL_DRIVEN,
+        tools=frozenset({"edit_deck_with_code", "revise_slides"}),
+        # A message that arrived after the deck was finished: the deck exists
+        # and is kept, and this is the request to change it (#376).
+        applies=lambda loop: loop.working_state.amending,
+        done=lambda loop: loop.working_state.amend_done,
+        directive=lambda loop: (
+            "The deck is finished and the user has written again. Their "
+            f"request: {loop.working_state.amend_request!r}\n\n"
+            "Make exactly that change and nothing else. If it is about what a "
+            "slide says or shows (copy, a chart, a figure, a visual), call "
+            "revise_slides with the slides and the user's specifics. If it is "
+            "about where something sits, something added to pages, a "
+            "deck-wide style or a link, use edit_deck_with_code and leave "
+            "every slide's copy, layout and design as they are. Place anything you add clear of "
+            "the existing content (read the slide's shapes and the page size "
+            "from the deck before choosing coordinates), keep it identical "
+            "across the pages it applies to, and use the deck's own theme "
+            "colours and fonts." + loop.asset_directive()
+            + " If the request cannot be done to the deck, reply in words "
+            "saying why, with no tool call, and the deck is left as it is."
+            + _change_findings_directive(loop)
+        ),
+        max_turns=4,
+        on_decline=_change_declined,
     ),
     Phase(
         name="render",
@@ -242,6 +391,25 @@ PIPELINE: tuple[Phase, ...] = (
         driver=LOOP_DRIVEN,
         done=_validation_settled,
         directive=lambda loop: "Check the rendered file with validate_rendered_output.",
+    ),
+    Phase(
+        name="amend",
+        label="validation",
+        driver=MODEL_DRIVEN,
+        tools=frozenset({"edit_deck_with_code"}),
+        # The backstop, not the primary path - see `_wants_code_amendment`.
+        # `edit_deck_with_code` is offered throughout drafting already; this
+        # only fires for the state that leaves nothing else to apply to.
+        applies=_wants_code_amendment,
+        done=lambda loop: loop.working_state.code_amendment_done,
+        directive=lambda loop: (
+            "validate_rendered_output reported something the build_* tools "
+            "cannot fix. Write one short script with edit_deck_with_code to "
+            "correct it, or reply in words, with no tool call, if a script "
+            "would not help."
+        ),
+        max_turns=4,
+        on_decline=lambda loop: setattr(loop.working_state, "code_amendment_done", True),
     ),
 )
 

@@ -1,0 +1,22 @@
+id: consulting-ev-charging-uk
+category: consulting
+prompt: |
+  A boardroom deck of eight slides for the strategy committee of a UK
+  fuel-retail chain deciding whether to add rapid EV charging at its
+  forecourts. Size the opportunity, show the competitive landscape, lay
+  out the economics of a site, and end with a recommendation.
+slides: 8
+mode: deep
+detail: detailed
+answers:
+  - first
+  - first
+  - Go ahead as planned
+checklist:
+  - The deck has exactly 8 slides
+  - Market size or EV adoption figures carry a named source and year
+  - The competitive landscape names real charging operators
+  - Site economics show capex, utilisation and payback as an explicit chain, with assumptions labelled
+  - Every chart plots one measure per axis, with units
+  - Titles state a finding rather than a topic
+  - The final slide makes a recommendation with conditions

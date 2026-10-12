@@ -15,13 +15,15 @@ from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession
 from app import ai_settings
 from app.agent import run_context
+from app.llm import usage
 from app.agent.event_types import ALL_EVENT_TYPES
 from app.agent.redact import redact_binary
 from app.agent.registry import get_registry, ToolResult
 from app.agent import pipeline
+from app.design import deck_format
 from app.agent.summaries import summarize_tool_result
 from app.agent.tools._binding import slot_key
-from app.agent.tools._json_extract import extract_json_object
+from app.agent.tools._json_extract import coerce_json_arg, extract_json_object
 from app.agent.tools.build_visuals import BUILD_VISUAL_TOOLS
 from app.agent.tools.search_backends import normalize_recency
 from app.agent.tools.build_blocks import BLOCK_BUILDER_TOOLS
@@ -31,10 +33,12 @@ from app.agent.tools.generate_image import GenerateImageTool
 from app.connections.catalog import KIND_FIGURE, KIND_IMAGE, KIND_MCP
 from app.llm.provider import (
     AINotConfiguredError,
+    LLMProvider,
     _is_quota_exhausted,
     _is_rate_limit_error,
     _is_request_too_large,
     build_chat_provider,
+    build_vision_provider,
 )
 from app.llm.retry_notices import (
     REASON_TRANSIENT,
@@ -43,7 +47,9 @@ from app.llm.retry_notices import (
     reset_retry_observer,
     set_retry_observer,
 )
+from app.observability import trace
 from app.observability.logging import get_logger
+from app.llm.traced import TracedChatProvider, TracedVisionProvider
 import asyncio
 import json
 import re
@@ -526,6 +532,24 @@ class WorkingState:
     def __init__(self) -> None:
         self.accumulated_slides: list[dict] = []
         self.presentation_structure: dict | None = None
+        # The design language pack this run composes against, by id. Set once
+        # the plan exists (the choice is measured against the deck's own
+        # material) and only when no template was uploaded - an uploaded
+        # template keeps the template-faithful path, which is the promise
+        # made to a customer who supplied one.
+        self.pack_id: str | None = None
+        # Figures the deck states that nothing this run retrieved carries.
+        # Reported, not removed: the copy is the user's to keep, and what they
+        # should not have is a page asserting a measurement with no record of
+        # where it came from.
+        self.unsupported_figures: list[str] = []
+        # What the outline's headlines do, read end to end. Recorded so the
+        # drafting phase can be told which pages to fix rather than handed a
+        # grade it cannot act on.
+        self.arc: dict | None = None
+        # The uploaded sources, kept as text so a figure can be traced to an
+        # offset inside one rather than merely to the file it was in.
+        self.document_texts: list[dict] = []
         # slide_index -> the select_layout result for that slide. Lets the
         # loop auto-supply design_slide_content's layout_info instead of
         # requiring the LLM to copy the full layout object it just received
@@ -543,6 +567,11 @@ class WorkingState:
         # numbers through a second LLM response is how a chart ends up
         # disagreeing with the bullets beside it.
         self.prepared_visuals: dict[int, list[dict]] = {}
+        # slide_index -> slot_key -> the validation round each prepared block
+        # was built in. Kept beside the blocks rather than inside them, so a
+        # bookkeeping field never reaches the renderer or a prompt. See
+        # prepare_visual for what it decides.
+        self.prepared_rounds: dict[int, dict[tuple, int]] = {}
         # Marks a slide placed itself through draw_primitives. Kept apart from
         # prepared_visuals because they are not content blocks - they attach to
         # the slide's ``primitives`` list, not to its ``contents``.
@@ -566,6 +595,54 @@ class WorkingState:
         # gate requires this (or the retry cap), so a deck with a known
         # rendering defect can't be announced as finished.
         self.validation_clean: bool = False
+        # Whether the amend phase specifically has had its turn. One pass,
+        # not a loop, for that phase alone: a script that did not fix the
+        # deck there is unlikely to be fixed by another script, and the run
+        # has to end. `edit_deck_with_code` calls made earlier, during
+        # drafting, do not set this - see `code_edits_applied` for those.
+        self.code_amendment_done: bool = False
+        # How many times a script has been written and kept this run, in
+        # any phase. `code_amendment_done` only tracks the backstop phase, so
+        # a fix applied mid-draft needs its own counter - otherwise the stall
+        # detector in `_progress_marker` cannot tell a successful edit apart
+        # from a turn that changed nothing.
+        self.code_edits_applied: int = 0
+        # A script changed the file after the last validation looked at it.
+        # The `amend` backstop runs after validation has settled, so without
+        # this its edit shipped unchecked, and the closing note told the user
+        # about the findings it had just fixed as if they were still there.
+        self.edited_since_validation: bool = False
+        # The scripts that edited this deck, in order. A render rebuilds the
+        # file from the slides and would silently drop every one of them, so
+        # each render replays this log over the fresh file (#376).
+        self.code_edit_log: list[dict] = []
+        # A message arrived on a session whose deck is finished: the run
+        # amends that deck rather than building a new one.
+        self.amending: bool = False
+        self.amend_request: str = ""
+        self.amend_done: bool = False
+        # What validation found on the deck when it was handed over, kept
+        # when a later message amends it. The user took the deck with those
+        # findings; a request for a watermark is not a request to rewrite the
+        # slides they were on, and treating them as new sent every amendment
+        # back through drafting (#376).
+        self.handover_issues: list[dict] = []
+        # Whether this amendment's change step edited the deck, and which
+        # slides it sent back to drafting with revise_slides. A new finding
+        # on any other slide is the script's doing, and goes back to the
+        # change step to correct rather than to the layout ladder: re-placing
+        # a page cannot recolour a link a script made blue, and the cover it
+        # re-placed and then redrafted was one the user never asked to
+        # change (probe-hyperlink-terms, #376).
+        self.amend_edited: bool = False
+        self.amend_redrafted: set[int] = set()
+        # What validation found that the change caused, for the change step
+        # to correct; and how many times it has been sent back for that.
+        self.change_findings: list[dict] = []
+        self.change_fix_rounds: int = 0
+        # The last script that failed, and why, so the next attempt renders as
+        # a diff against it rather than as a second wall of code.
+        self.last_code_attempt: dict | None = None
         # Issues reported by the most recent validation run, replayed to the
         # model when it tries to stop without fixing them.
         self.validation_issues: list[dict] = []
@@ -574,6 +651,42 @@ class WorkingState:
         # need its other slides rewritten, and regenerating them costs an LLM
         # call each and risks changing copy the user was happy with.
         self.slides_needing_revision: list[int] = []
+        # Slides a revision round still has to redraft, in order. Filled when
+        # validation reports issues, drained as each is redrafted, emptied when
+        # validation settles.
+        self.revision_queue: list[int] = []
+        # Slides compile (#323) has asked for this round. A slide it could not
+        # produce stays outstanding for drafting, and is not asked again until
+        # the next round sends it back.
+        self.compile_tried: set[int] = set()
+        # Slides whose copy was set below the readable floor, with how small,
+        # because the page count was fixed (#368). Reported at the close.
+        self.below_floor: dict[int, float] = {}
+        # What compile could not finish on a slide it handed to drafting, by
+        # slide, so the drafting directive can say what to fix.
+        self.compile_failures: dict[int, list[str]] = {}
+        # How many times each slide has been revised for its *layout*, and
+        # which arrangements it has already been placed on.
+        #
+        # Per slide rather than per run: a run-level cap lets one stubborn page
+        # spend the whole budget and leaves every other flagged page unfixed.
+        # And a page that has been placed twice has nothing left to learn from
+        # a third arrangement - `LAYOUT_REVISION_CAP` is two because the ladder
+        # has three rungs and the first two are the cheap ones.
+        self.layout_revisions: dict[int, int] = {}
+        # Slides a `replace` could not move, as the last render found them: no
+        # arrangement but the ones already tried carries the material, so
+        # composition would ignore the avoid set and hand the page back as it
+        # is. Asking anyway only spends a revision on the same page.
+        self.layout_exhausted: set[int] = set()
+        self.arrangements_tried: dict[int, set[str]] = {}
+        # What the last render placed each slide on, from its result - what a
+        # "replace" verdict rules out.
+        self.placed_arrangements: dict[int, list[str]] = {}
+        # Per slide, the fields whose copy the last render could not fit at the
+        # size their frames were designed for: [{"field", "chars", "fits"}].
+        # Turned into a redraft finding with a budget after validation (#348).
+        self.copy_over_budget: dict[int, list[dict]] = {}
         self.validation_attempts: int = 0
         self.MAX_VALIDATION_ATTEMPTS = 3
         # Checks that could not run at all (LibreOffice conversion error, a
@@ -625,6 +738,17 @@ class WorkingState:
         # a second pause that has not happened yet.
         self.offered_directions: bool = False
         self.chosen_direction: dict | None = None
+        # What kind of presentation this is - a pitch, a boardroom deck, a
+        # poster. Resolved once from the user's own words (see
+        # deck_format.resolve, called near user_confirmed_autonomy below) and
+        # read by code from here on: the authoring prompt, the canvas, the
+        # type floor, the plan's page-count band and the per-slide budget all
+        # read this rather than re-parsing free text each time they need it.
+        self.deck_format: str = deck_format.DEFAULT_FORMAT
+        # True when the direction was picked on the user's behalf because
+        # they answered the question without naming one. Drives the wording of
+        # the announcement, so the choice is visible rather than silent.
+        self.direction_deferred: bool = False
         # What was offered, so the reply can be resolved back to a bundle.
         self.proposed_directions: list[dict] = []
         # What the run understood the request to be, from the intake step: the
@@ -675,6 +799,130 @@ class WorkingState:
     # simpler (and no more expensive) than steering slide-by-slide edits.
     FULL_REWRITE_ISSUE_RATIO = 0.6
 
+    # How many times one page may be revised for its layout before the run
+    # stops trying. Two, because the ladder's first two rungs - nudge and
+    # replace, both answered by placing the page again - are the cheap ones, and a page that both have
+    # failed on has a copy problem rather than a layout one.
+    LAYOUT_REVISION_CAP = 2
+
+    def layout_revision_for(self, issues: list[dict]) -> dict[int, str]:
+        """Which slides to revise for their layout, and on which rung.
+
+        A slide at its cap is left alone rather than escalated: the point of
+        the cap is that the run stops, and quietly promoting it to a redraft
+        is the run not stopping.
+        """
+        wanted: dict[int, str] = {}
+        for issue in issues:
+            index = issue.get("slideIndex")
+            fix = str(issue.get("fix") or "").strip().lower()
+            if not isinstance(index, int) or fix not in ("nudge", "replace"):
+                continue
+            if self.layout_revisions.get(index, 0) >= self.LAYOUT_REVISION_CAP:
+                continue
+            if index in self.layout_exhausted:
+                # Placing it again would give the same page. The finding
+                # falls through to the next rung, a redraft of the slide.
+                continue
+            # A nudge is answered as a replace. Nothing in composition reads a
+            # finding, so re-rendering "the same page, moved" reproduced the
+            # identical page and spent a revision on it (#359). Placing the
+            # page on another arrangement at least changes it; the ratchet
+            # and the next validation round judge whether it is better.
+            wanted[index] = "replace"
+        return wanted
+
+    def record_layout_revision(self, index: int, archetype: str = "") -> None:
+        """Count one revision of this page, and remember what it was placed on."""
+        self.layout_revisions[index] = self.layout_revisions.get(index, 0) + 1
+        if archetype:
+            self.arrangements_tried.setdefault(index, set()).add(archetype)
+
+    def copy_findings(self) -> list[dict]:
+        """A redraft finding, with a budget, for each slide whose copy the
+        last render could not fit at a readable size.
+
+        Measured rather than seen: repair keeps copy at the size its frame was
+        designed for (#348), so copy that does not fit stays too long, and
+        the only remedy left is fewer words. A budget - "cut it to about N
+        characters" - is something a writer can act on; "it overflows" is not.
+        """
+        findings = []
+        for index, fields in sorted(self.copy_over_budget.items()):
+            over = [f for f in fields
+                    if 0 < int(f.get("fits", 0)) < int(f.get("chars", 0))]
+            if not over:
+                continue
+            parts = "; ".join(
+                f"{f['field']} is about {f['chars']} characters where the page "
+                f"sets about {f['fits']} at a readable size" for f in over)
+            findings.append({
+                "slideIndex": index, "type": "copy_over_budget", "fix": "redraft",
+                "detail": (f"{parts[0].upper()}{parts[1:]} - cut each to about "
+                           "that, rather than cutting fields that fit"),
+            })
+        return findings
+
+    def new_since_handover(self, issues: list[dict]) -> list[dict]:
+        """The findings an amendment has to answer for: those the deck did
+        not already carry when it was handed over. All of them otherwise."""
+        if not self.amending:
+            return list(issues)
+        return [i for i in issues
+                if (i.get("slideIndex"), i.get("type")) not in self.handover_findings]
+
+    # How many times the change step is sent back to correct what its own
+    # edit left on the deck. One: a second script that misses is unlikely to
+    # be followed by a third that does not.
+    CHANGE_FIX_ROUNDS = 1
+
+    def caused_by_change(self, issues: list[dict]) -> list[dict]:
+        """New findings on slides the change did not send back to drafting:
+        the change's script put them there. None without a script - a change
+        made only with revise_slides re-rendered the deck, and what that
+        brought is the ladder's to answer."""
+        if not self.amending or not self.amend_edited:
+            return []
+        return [i for i in self.new_since_handover(issues)
+                if i.get("slideIndex") not in self.amend_redrafted]
+
+    def actionable(self, issues: list[dict]) -> list[dict]:
+        """The findings the revision ladder answers: during an amendment,
+        only new ones on slides the change redrafted."""
+        caused = self.caused_by_change(issues)
+        return [i for i in self.new_since_handover(issues) if i not in caused]
+
+    @property
+    def handover_findings(self) -> set[tuple]:
+        """The handover's findings as (slide, type): what a later one is
+        matched on, since a vision verdict words the same defect differently
+        each time."""
+        return {(i.get("slideIndex"), i.get("type")) for i in self.handover_issues}
+
+    def restore_handover(self) -> None:
+        """The deck is as it was handed over: so is what validation said."""
+        self.validation_issues = [dict(i) for i in self.handover_issues]
+        self.validation_clean = not self.handover_issues
+        self.has_called_validate = True
+
+    def arrangements_to_avoid(self) -> dict[int, frozenset[str]]:
+        """What `compose` should not offer each slide again."""
+        return {index: frozenset(seen)
+                for index, seen in self.arrangements_tried.items() if seen}
+
+    def revision_round(self, issues: list[dict], exclude=()) -> list[int]:
+        """The slides a revision round redrafts for these findings.
+
+        A finding with no slide - a package fault, a deck-wide pattern - puts
+        every slide in the round, as it always did: there is no one slide to
+        send back, and an empty round would only re-validate the same file.
+        """
+        total = len(self.accumulated_slides) or int(
+            (self.presentation_structure or {}).get("totalSlides") or 0)
+        if any(not isinstance(i.get("slideIndex"), int) for i in issues):
+            return [i for i in range(total) if i not in exclude]
+        return sorted({i["slideIndex"] for i in issues if i["slideIndex"] not in exclude})
+
     def compute_slides_needing_revision(self, issues: list[dict]) -> list[int]:
         """
         Which slides the next revision pass should touch.
@@ -713,7 +961,128 @@ class WorkingState:
                     return
         self.accumulated_slides.append(slide)
 
-    def resolve_and_add_slide(self, slide_data: dict) -> None:
+    def insert_slide(self, slide: dict) -> None:
+        """
+        Add a slide *between* two existing ones, pushing the rest down.
+
+        ``add_slide`` is replace-or-append, which is right when the model is
+        redesigning a slide it got wrong and wrong when the user asks for a new
+        one. "Add a slide about X after slide 2" designs a slide at index 2 and
+        destroyed whatever already held that index; nothing renumbered, so the
+        deck silently lost a page.
+
+        Renumbering is the whole job: ``slideIndex`` is not a label, it is the
+        read order the renderer, the markdown fallback and the validator all
+        sort by (see ``ordered_slides``), so a tail that keeps its old numbers
+        is a deck with two slide 2s.
+        """
+        self.design_serial += 1
+        at = slide.get("slideIndex")
+        if at is None:
+            self.accumulated_slides.append(slide)
+            return
+        for existing in self.accumulated_slides:
+            index = existing.get("slideIndex")
+            if isinstance(index, int) and index >= at:
+                existing["slideIndex"] = index + 1
+        self.accumulated_slides.append(slide)
+        self._renumber_dependents(at, +1)
+
+    def remove_slide(self, at: int) -> bool:
+        """
+        Drop a slide and close the gap. Returns whether anything was removed.
+
+        The counterpart of ``insert_slide`` and the same renumbering rule: a
+        deck with a hole in its index sequence sorts correctly but reports the
+        wrong page numbers everywhere they are derived from the index.
+        """
+        before = len(self.accumulated_slides)
+        self.accumulated_slides = [
+            slide for slide in self.accumulated_slides
+            if slide.get("slideIndex") != at
+        ]
+        if len(self.accumulated_slides) == before:
+            return False
+
+        self.design_serial += 1
+        for slide in self.accumulated_slides:
+            index = slide.get("slideIndex")
+            if isinstance(index, int) and index > at:
+                slide["slideIndex"] = index - 1
+        self._renumber_dependents(at, -1)
+        return True
+
+    def _renumber_dependents(self, at: int, delta: int) -> None:
+        """
+        Move everything else that is keyed by slide index along with the deck.
+
+        Layouts, vetted images, composed regions and prepared visuals are all
+        stored per slide index. Leaving them behind when the deck renumbers
+        does not fail loudly - it silently binds slide 3's chart to slide 4,
+        which is worse than an error.
+        """
+        def shifted(store: dict) -> dict:
+            moved = {}
+            for index, value in store.items():
+                if isinstance(index, int) and (
+                    index >= at if delta > 0 else index > at
+                ):
+                    moved[index + delta] = value
+                elif index == at and delta < 0:
+                    continue          # the slide that was removed
+                else:
+                    moved[index] = value
+            return moved
+
+        self.selected_layouts = shifted(self.selected_layouts)
+        self.selected_images = shifted(self.selected_images)
+        self.prepared_regions = shifted(self.prepared_regions)
+        self.prepared_visuals = shifted(self.prepared_visuals)
+        self.prepared_rounds = shifted(self.prepared_rounds)
+        self.prepared_primitives = shifted(self.prepared_primitives)
+
+    def prepare_visual(self, index: int, block: dict) -> None:
+        """Hold a built block for the slide it names, replacing what it rebuilds.
+
+        One block per type, per region, *per slot*: rebuilding the stat
+        callouts in the right rail must not discard the ones in the left, and
+        a dashboard's bridge chart must not discard the mix chart beside it.
+        Region alone was enough while a slide carried one chart; on a page
+        with no region tree two charts both bind to the same nothing, and the
+        second silently replaced the first - the tool reported success and
+        the exhibit never reached the page.
+
+        A revision round is the exception. A model redrafting a flagged page
+        rebuilds its exhibits, and it names the slot afresh each time rather
+        than repeating the first draft's: a Kubernetes deck's comparison table
+        was built as "strategy-comparison", rebuilt with no slot, then rebuilt
+        as "strategy_comparison", and the page shipped all three stacked
+        until the text ran off it. So a block built after a validation round
+        replaces the blocks of its type and region built before that round,
+        unless its slot names one of them - a targeted fix to one exhibit on
+        a dashboard keeps the others.
+        """
+        key = slot_key(block)
+        current = self.validation_attempts
+        slots = self.prepared_visuals.setdefault(index, [])
+        rounds = self.prepared_rounds.setdefault(index, {})
+
+        if any(slot_key(existing) == key for existing in slots):
+            superseded = {key}
+        else:
+            superseded = {
+                slot_key(existing) for existing in slots
+                if slot_key(existing)[:2] == key[:2]
+                and rounds.get(slot_key(existing), current) < current
+            }
+        slots[:] = [existing for existing in slots
+                    if slot_key(existing) not in superseded]
+        for gone in superseded:
+            rounds.pop(gone, None)
+        slots.append(block)
+        rounds[key] = current
+
+    def resolve_and_add_slide(self, slide_data: dict, *, insert: bool = False) -> None:
         """
         Add a designed slide, first resolving any image content item whose
         source is the "selected" sentinel. design_slide_content is told
@@ -783,7 +1152,13 @@ class WorkingState:
 
         slide_data = _credit_generated_images(slide_data)
 
-        self.add_slide(slide_data)
+        # Attachments are read off the *old* numbering above, so the deck can
+        # only renumber once they have been consumed - insert_slide moves the
+        # stores along with the slides it shifts.
+        if insert:
+            self.insert_slide(slide_data)
+        else:
+            self.add_slide(slide_data)
 
     def get_slides_json(self) -> str:
         """The deck as JSON, in the order the slides are meant to be read.
@@ -914,8 +1289,27 @@ class WorkingState:
         self.has_called_finalize = False
         self.has_called_validate = False
         self.validation_clean = False
+        self.code_edit_log = []
+        self.edited_since_validation = False
+        self.amending = False
+        self.amend_request = ""
+        self.amend_done = False
+        self.handover_issues = []
+        self.amend_edited = False
+        self.amend_redrafted = set()
+        self.change_findings = []
+        self.change_fix_rounds = 0
         self.validation_issues = []
         self.slides_needing_revision = []
+        self.revision_queue = []
+        self.compile_tried = set()
+        self.compile_failures = {}
+        self.below_floor = {}
+        self.layout_revisions = {}
+        self.layout_exhausted = set()
+        self.arrangements_tried = {}
+        self.placed_arrangements = {}
+        self.copy_over_budget = {}
         self.validation_attempts = 0
         self.validation_failures = 0
         self.last_rendered_path = None
@@ -931,7 +1325,9 @@ class WorkingState:
         self.reviewed_outline_with_user = False
         self.offered_deep_research = False
         self.offered_directions = False
+        self.deck_format = deck_format.DEFAULT_FORMAT
         self.chosen_direction = None
+        self.direction_deferred = False
         self.proposed_directions = []
         self.brief = None
         self.scouted = False
@@ -942,6 +1338,120 @@ class WorkingState:
         self.rendered_serial = -1
         self.validated_serial = -1
         self.phase_turns = {}
+
+
+# Arguments a tool's schema offers the model that the loop acts on itself and
+# the tool never sees. `placement` decides whether a designed slide is
+# inserted or replaces one (see _dispatch_tool_body); passing it through made
+# every call that set it fail on an unexpected keyword.
+_LOOP_ARGUMENTS = {"design_slide_content": frozenset({"placement"})}
+
+
+# What a run with no research and no documents may state, and how it says
+# what it cannot source. Read by the drafting prompt and by compile (#323).
+_UNSOURCED_RULES = (
+    "## Sourcing Content (Deep Thinking is OFF)",
+    "",
+    "- You have no web access on this run, and no research pass runs before you write. Everything on the deck has to come from the user's documents, the conversation, or what you already know - there is no fourth source, and inventing one is not an option this run has.",
+    "- A NAMED, SPECIFIC claim - a company, a person, a product, a dollar figure, a percentage, a date, a statistic - stated as plain fact is a claim you are telling the user is true. If it is not in the user's documents or the conversation, and you are not genuinely certain of it, you have exactly two options: qualify it in the text itself ('a figure on the order of...', 'this varies by source, but a commonly cited estimate is...', 'exact figures were not available; directionally...'), or leave it out and write the point qualitatively instead. There is no third option where you state a specific number or a specific name with no source and no hedge, because the sentence that resulted is indistinguishable from a properly sourced one to the person reading it - the same sentence you would use if you actually knew it.",
+    "- Concretely: 'partnerships with SolarCo and WindTech' invents companies that do not exist. '40% North America, 30% Europe, 30% Asia' invents a distribution nobody gave you. '$10 million' invents a figure with no source, then reused as a different slide's total. Every one of those reads as sourced, and not a single one actually was. This is not a hypothetical - it is what an unqualified run of this exact prompt has actually produced.",
+    "- This applies with full force to build_chart, build_table and "
+    "build_key_metrics. A chart is a stronger claim than a sentence, not a "
+    "weaker one - it tells the reader these numbers were measured, not typed. "
+    "Only build a visual from figures present in the user's documents, the "
+    "conversation, or facts you are genuinely confident of. If a slide's point "
+    "is numeric but you do not have real numbers for it, do not invent placeholder "
+    "ones to fill the chart shape - write the point as prose, qualified, or say "
+    "on the slide and in its notes that the figures were not available.",
+    "",
+)
+
+
+def _tool_arguments(fn_name: str, fn_args: dict) -> dict:
+    """The arguments the tool itself takes, without the ones the loop consumes."""
+    consumed = _LOOP_ARGUMENTS.get(fn_name)
+    if not consumed:
+        return fn_args
+    return {k: v for k, v in fn_args.items() if k not in consumed}
+
+
+# A number stated with what it measures: a percentage, a currency amount, or
+# a number carrying a magnitude or unit, joined by a space or a hyphen
+# ("18 weeks", "18-week", "4.2bn", "5x"), a grouped count ("120,000"), or a
+# year. Not a bare number and not a bare
+# decimal in running text: "304 Not Modified", "v42", "HTTP/1.1" and
+# "TLS 1.3" name things rather than measure them.
+_MEASUREMENT_RE = re.compile(
+    r"\d(?:[\d,.]*\d)?\s?%"
+    r"|[$€£¥]\s?\d"
+    r"|\d(?:[\d,.]*\d)?[\s-]?(?:k|m|bn|mn|thousand|million|billion|trillion"
+    r"|ms|s|sec|secs|seconds?|mins?|minutes?|hrs?|hours?|days?|weeks?|months?|years?"
+    r"|pp|bps|kb|mb|gb|tb|kg|km|t|tonnes?|kw|mw|gw|kwh|mwh|gwh|usd|eur|gbp)\b"
+    r"|\d\s?[x×](?=\W|$)"
+    r"|\b\d{1,3}(?:,\d{3})+\b"
+    r"|\b(?:19|20)\d{2}\b",
+    re.IGNORECASE,
+)
+
+# A table cell that is a number and nothing else - "42", "3,200", "4.2",
+# "-7", "~450" - is data. Units belong in the header ("Revenue ($B)"), which
+# is exactly what build_table asks for, so a figure table's cells are bare.
+_NUMERIC_CELL_RE = re.compile(r"^[~<>≈+-]?\s*[$€£¥]?\s*\d[\d,.\s]*%?$")
+
+# Mermaid diagram types that are charts: their whole content is quantities.
+_MERMAID_CHARTS = ("pie", "xychart", "sankey", "quadrantchart", "gantt")
+
+# Builders whose whole purpose is a quantity, or whose content cannot be read
+# before it runs.
+_ALWAYS_FIGURES = frozenset({
+    "build_chart", "build_chart_grid", "build_key_metrics", "draw_svg",
+    "compute_visual_with_code",
+})
+
+
+def _asserts_measurement(text: str) -> bool:
+    return bool(_MEASUREMENT_RE.search(text))
+
+
+def _cells(value) -> list:
+    """A table argument as a flat list of cells, however the model sent it."""
+    value = coerce_json_arg(value, value)
+    if isinstance(value, list):
+        return [cell for item in value for cell in (_cells(item) if isinstance(item, list) else [item])]
+    return [value] if value not in (None, "") else []
+
+
+def _visual_asserts_figures(fn_name: str, fn_args: dict) -> bool:
+    """Whether this visual would present a number as measured.
+
+    Decided from what the visual carries, not from which builder draws it.
+    A chart or a metric row exists to carry figures. A table carries them
+    when any cell is a number or states a measurement; a diagram or a
+    Mermaid graph when a label states a measurement, or when the graph is a
+    chart type. A table of directives against yes and no, or a sequence
+    whose arrows read "304 Not Modified", asserts nothing that could be
+    wrong, and refusing them left conceptual and technical decks with prose
+    and half an empty page (#301).
+    """
+    if fn_name in _ALWAYS_FIGURES:
+        return True
+    if fn_name == "build_table":
+        cells = [str(c).strip() for c in _cells(fn_args.get("columns")) + _cells(fn_args.get("rows"))]
+        return any(_NUMERIC_CELL_RE.match(c) or _asserts_measurement(c) for c in cells if c)
+    if fn_name == "build_mermaid":
+        source = str(fn_args.get("source") or "")
+        first = source.strip().split(None, 1)[0].lower() if source.strip() else ""
+        return first.startswith(_MERMAID_CHARTS) or _asserts_measurement(source)
+    if fn_name == "build_diagram":
+        items = coerce_json_arg(fn_args.get("items"), fn_args.get("items"))
+        if not isinstance(items, list):
+            return False
+        return any(
+            str(item.get("value") or "").strip() or str(item.get("date") or "").strip()
+            or _asserts_measurement(f"{item.get('label') or ''} {item.get('detail') or ''}")
+            for item in items if isinstance(item, dict)
+        )
+    return True
 
 
 class AgentLoop:
@@ -967,6 +1477,8 @@ class AgentLoop:
     figure_connection = None
     mcp_servers: list = []
     mcp_tools_by_phase: dict = {}
+    trace_sinks: list = []
+    termination = trace.COMPLETE
 
     # Transient provider failures (5xx, timeouts) are a wait, not a failure.
     # Rate limits are retried in the provider layer instead - see
@@ -986,8 +1498,21 @@ class AgentLoop:
         org_id: uuid.UUID | None = None,
         detail_level: str | None = None,
         include_sources: bool | None = None,
+        trace_sinks: list | None = None,
+        chat_provider: LLMProvider | None = None,
+        vision_provider=None,
+        search_config: ai_settings.SearchConfig | None = None,
     ) -> None:
         """
+        ``trace_sinks`` receive the run's span tree when it ends. None means
+        the run_spans table, for a loop that has a database at all.
+
+        ``chat_provider``, ``vision_provider`` and ``search_config`` replace
+        what the workspace's settings would resolve to. Headless runs use them
+        to put a run on a provider nobody saved in Settings - a recorded
+        cassette, or requests answered by hand - without touching the
+        workspace.
+
         ``mode`` is the effort level the user picked in the composer. Pass None
         to inherit the mode of the run being resumed (see _load_working_state),
         which is what the answer-a-question path does - the resume request has
@@ -1005,6 +1530,16 @@ class AgentLoop:
         no composer to read it from, so None inherits it from the paused run.
         """
         self.db = db
+        if trace_sinks is None:
+            from app.observability.trace_store import DatabaseSink
+
+            trace_sinks = [DatabaseSink()] if db is not None else []
+        self.trace_sinks = trace_sinks
+        self._chat_override = chat_provider
+        self._vision_override = vision_provider
+        self._search_override = search_config
+        # Set on every way out of _run, and recorded on the trace's root span.
+        self.termination = trace.COMPLETE
         # A fork, not the global singleton: run-scoped tools discovered from one
         # organisation's MCP server must not still be registered when another
         # organisation's run starts, in a service that is shared.
@@ -1028,13 +1563,16 @@ class AgentLoop:
         self.include_sources = include_sources
         self.search_config: ai_settings.SearchConfig | None = None
         self._search_token = None
+        self._usage_token = None
         self._provider_token = None
+        self._vision_token = None
         self._citation_tokens: list = []
         # The density budget's two channels: the design system the budget is
         # read from, and how much material stood behind each slide when it was
         # written. Both are published on the run context because the validator
         # cannot be handed them as tool arguments - see run_context.
         self._design_system_token = None
+        self._pack_token = None
         self._material_token = None
         # Set from the conversation in _run: the consultation checkpoints are
         # enforced, so the user's "just build it" has to be able to lift them.
@@ -1088,20 +1626,23 @@ class AgentLoop:
         self._settings_row = row
 
         credentials = ai_settings.resolve_chat_credentials(row)
-        if credentials is None:
+        if self._chat_override is not None:
+            self.llm = TracedChatProvider(self._chat_override)
+        elif credentials is None:
             raise AINotConfiguredError()
-        try:
-            self.llm = build_chat_provider(credentials)
-        except ValueError as e:
-            logger.error(
-                "configured_chat_provider_unusable",
-                provider=credentials.provider,
-                error=str(e),
-            )
-            raise AINotConfiguredError(
-                f"The AI model saved in Settings cannot be used: {e}. Open "
-                "Settings and correct the provider, model or API key."
-            ) from e
+        else:
+            try:
+                self.llm = TracedChatProvider(build_chat_provider(credentials))
+            except ValueError as e:
+                logger.error(
+                    "configured_chat_provider_unusable",
+                    provider=credentials.provider,
+                    error=str(e),
+                )
+                raise AINotConfiguredError(
+                    f"The AI model saved in Settings cannot be used: {e}. Open "
+                    "Settings and correct the provider, model or API key."
+                ) from e
         # Tools make their own LLM calls (slide content, planning, key data,
         # image prompts) and cannot be passed a provider through the registry.
         # Publishing it on the run context is what makes the Settings choice
@@ -1109,14 +1650,53 @@ class AgentLoop:
         # reasoning - and require_chat_provider is what makes its absence an
         # error rather than a silent fallback.
         self._provider_token = run_context.set_chat_provider(self.llm)
+        # Start counting. Nothing counted tokens before, which made every
+        # question about what a run cost unanswerable and every claim about it
+        # a guess.
+        self._usage_token = usage.start()
 
-        if self.mode == MODE_DEEP:
+        # The qualitative pass in validate_rendered_output looks at rendered
+        # pages, and it was reaching for the process-wide, environment-built
+        # vision provider - the same footgun require_chat_provider exists to
+        # close, one layer down. Built from the workspace's own credentials so
+        # the Settings choice applies to what looks at the deck too. Best
+        # effort: a provider with no vision support leaves this None, and the
+        # qualitative pass skips rather than failing the run.
+        if self._vision_override is not None:
+            self._vision_token = run_context.set_vision_provider(
+                TracedVisionProvider(self._vision_override)
+            )
+        elif credentials is not None:
+            try:
+                self._vision_token = run_context.set_vision_provider(
+                    TracedVisionProvider(build_vision_provider(credentials))
+                )
+            except ValueError as e:
+                logger.info(
+                    "vision_provider_unavailable",
+                    provider=credentials.provider,
+                    reason=str(e),
+                )
+
+        # Resolved whatever the mode is. A Simple run needs to know whether
+        # there is a backend to research *with* before it can offer the user
+        # the upgrade - and resolving this only in Deep mode made that offer
+        # unreachable: `_can_offer_research` requires a search config, which
+        # only existed once Deep was already on. Every Simple run therefore
+        # declined to ask, however plainly its brief stood on facts.
+        if self._search_override is not None:
+            config, reason = self._search_override, ""
+        else:
             config, reason = ai_settings.resolve_search_config(row)
+        self.search_config = config
+        if self.mode == MODE_DEEP:
             if config is None:
                 logger.info("deep_mode_downgraded", reason=reason)
                 self.mode = MODE_SIMPLE
             else:
-                self.search_config = config
+                # Only a Deep run publishes it to the run context: that is what
+                # puts web_search within reach, and a Simple run knowing a
+                # backend exists must not be a Simple run using it.
                 self._search_token = run_context.set_search_config(config)
 
         await self._connect_mcp_servers()
@@ -1127,7 +1707,8 @@ class AgentLoop:
             "agent_run_configured",
             mode=self.mode,
             organisation_id=str(self.org_id) if self.org_id else None,
-            chat_provider=credentials.provider if credentials else None,
+            chat_provider=(type(self._chat_override).__name__ if self._chat_override
+                           else credentials.provider if credentials else None),
             search_backend=self.search_config.backend if self.search_config else None,
             mcp_servers=len(self.mcp_servers),
         )
@@ -1252,11 +1833,12 @@ class AgentLoop:
             self.redis_client = redis.from_url(redis_url, decode_responses=False)
         return self.redis_client
 
-    async def _save_working_state(self, session_id: uuid.UUID) -> None:
-        """Save working state to Redis for resume after user input."""
+    def _state_dict(self) -> dict:
+        """Everything a later run needs to carry on from this one."""
         state_dict = {
             "accumulated_slides": self.working_state.accumulated_slides,
             "presentation_structure": self.working_state.presentation_structure,
+            "pack_id": self.working_state.pack_id,
             "selected_layouts": self.working_state.selected_layouts,
             "selected_images": self.working_state.selected_images,
             "current_step_index": self.working_state.current_step_index,
@@ -1266,8 +1848,41 @@ class AgentLoop:
             "validation_attempts": self.working_state.validation_attempts,
             "validation_failures": self.working_state.validation_failures,
             "validation_clean": self.working_state.validation_clean,
+            "code_amendment_done": self.working_state.code_amendment_done,
+            "code_edits_applied": self.working_state.code_edits_applied,
+            "edited_since_validation": self.working_state.edited_since_validation,
+            "code_edit_log": self.working_state.code_edit_log,
+            "amending": self.working_state.amending,
+            "amend_request": self.working_state.amend_request,
+            "handover_issues": self.working_state.handover_issues,
+            "amend_edited": self.working_state.amend_edited,
+            "amend_redrafted": sorted(self.working_state.amend_redrafted),
+            "change_findings": self.working_state.change_findings,
+            "change_fix_rounds": self.working_state.change_fix_rounds,
+            "amend_done": self.working_state.amend_done,
             "validation_issues": self.working_state.validation_issues,
             "slides_needing_revision": self.working_state.slides_needing_revision,
+            "revision_queue": self.working_state.revision_queue,
+            "compile_tried": sorted(self.working_state.compile_tried),
+            "below_floor": {str(k): v for k, v in self.working_state.below_floor.items()},
+            "compile_failures": {str(k): v for k, v in
+                                 self.working_state.compile_failures.items()},
+            # Without these a resumed run forgets what it has already tried
+            # and starts the ladder again from the bottom - which is not a cap
+            # of two, it is a cap of two per reload.
+            "layout_revisions": {
+                str(k): v for k, v in
+                self.working_state.layout_revisions.items()},
+            "layout_exhausted": sorted(self.working_state.layout_exhausted),
+            "arrangements_tried": {
+                str(k): sorted(v) for k, v in
+                self.working_state.arrangements_tried.items()},
+            "placed_arrangements": {
+                str(k): list(v) for k, v in
+                self.working_state.placed_arrangements.items()},
+            "copy_over_budget": {
+                str(k): list(v) for k, v in
+                self.working_state.copy_over_budget.items()},
             "last_rendered_path": self.working_state.last_rendered_path,
             "pending_slide_previews": self.working_state.pending_slide_previews,
             "previews_published": self.working_state.previews_published,
@@ -1281,7 +1896,9 @@ class AgentLoop:
             # question would find the checkpoint unmet and ask all over again.
             "consulted_before_planning": self.working_state.consulted_before_planning,
             "offered_directions": self.working_state.offered_directions,
+            "deck_format": self.working_state.deck_format,
             "chosen_direction": self.working_state.chosen_direction,
+            "direction_deferred": self.working_state.direction_deferred,
             "proposed_directions": self.working_state.proposed_directions,
             "reviewed_outline_with_user": self.working_state.reviewed_outline_with_user,
             "offered_deep_research": self.working_state.offered_deep_research,
@@ -1307,6 +1924,11 @@ class AgentLoop:
             "image_catalog": self.context.get("imageCatalog"),
             "detail_level": self.detail_level,
         }
+        return state_dict
+
+    async def _save_working_state(self, session_id: uuid.UUID) -> None:
+        """Save working state to Redis for resume after user input."""
+        state_dict = self._state_dict()
         redis_client = await self._get_redis_client()
         await redis_client.set(
             f"working_state:{session_id}",
@@ -1324,8 +1946,19 @@ class AgentLoop:
 
         try:
             state_dict = json.loads(state_json)
+        except Exception as e:
+            logger.error("failed_to_load_working_state", session_id=str(session_id), error=str(e))
+            return False
+        return self._apply_state_dict(state_dict, session_id)
+
+    def _apply_state_dict(self, state_dict: dict, session_id: uuid.UUID) -> bool:
+        """Restore a saved state. Returns True if it was restored."""
+        try:
             self.working_state.accumulated_slides = state_dict.get("accumulated_slides", [])
             self.working_state.presentation_structure = state_dict.get("presentation_structure")
+            # A resumed run composes in the language it started in. Re-choosing
+            # would let a deck change house style halfway through.
+            self.working_state.pack_id = state_dict.get("pack_id")
             # JSON round-trips dict keys as strings; slide_index is looked up
             # as an int everywhere else, so convert back on load.
             self.working_state.selected_layouts = {
@@ -1341,8 +1974,56 @@ class AgentLoop:
             self.working_state.validation_attempts = state_dict.get("validation_attempts", 0)
             self.working_state.validation_failures = state_dict.get("validation_failures", 0)
             self.working_state.validation_clean = state_dict.get("validation_clean", False)
+            self.working_state.code_amendment_done = state_dict.get(
+                "code_amendment_done", False)
+            self.working_state.code_edits_applied = state_dict.get(
+                "code_edits_applied", 0)
+            self.working_state.edited_since_validation = bool(state_dict.get(
+                "edited_since_validation", False))
+            self.working_state.code_edit_log = list(state_dict.get("code_edit_log") or [])
+            self.working_state.amending = bool(state_dict.get("amending", False))
+            self.working_state.amend_request = state_dict.get("amend_request") or ""
+            self.working_state.amend_done = bool(state_dict.get("amend_done", False))
+            self.working_state.handover_issues = list(
+                state_dict.get("handover_issues") or [])
+            self.working_state.amend_edited = bool(state_dict.get("amend_edited", False))
+            self.working_state.amend_redrafted = {
+                int(i) for i in state_dict.get("amend_redrafted") or []}
+            self.working_state.change_findings = list(
+                state_dict.get("change_findings") or [])
+            self.working_state.change_fix_rounds = int(
+                state_dict.get("change_fix_rounds") or 0)
             self.working_state.validation_issues = state_dict.get("validation_issues", [])
             self.working_state.slides_needing_revision = state_dict.get("slides_needing_revision", [])
+            self.working_state.compile_tried = set(state_dict.get("compile_tried") or [])
+            self.working_state.below_floor = {
+                int(k): float(v) for k, v in (state_dict.get("below_floor") or {}).items()}
+            self.working_state.compile_failures = {
+                int(k): list(v) for k, v in
+                (state_dict.get("compile_failures") or {}).items()}
+            if "revision_queue" in state_dict:
+                self.working_state.revision_queue = state_dict["revision_queue"]
+            elif (state_dict.get("validation_issues")
+                  and state_dict.get("validated_serial") == state_dict.get("design_serial")):
+                # Saved before the queue existed: validation's findings still
+                # stood, which is what used to make those slides outstanding.
+                self.working_state.revision_queue = (
+                    list(state_dict.get("slides_needing_revision") or [])
+                    or self.working_state.revision_round(state_dict["validation_issues"]))
+            self.working_state.layout_revisions = {
+                int(k): int(v) for k, v in
+                (state_dict.get("layout_revisions") or {}).items()}
+            self.working_state.layout_exhausted = {
+                int(i) for i in (state_dict.get("layout_exhausted") or [])}
+            self.working_state.arrangements_tried = {
+                int(k): set(v) for k, v in
+                (state_dict.get("arrangements_tried") or {}).items()}
+            self.working_state.placed_arrangements = {
+                int(k): list(v) for k, v in
+                (state_dict.get("placed_arrangements") or {}).items()}
+            self.working_state.copy_over_budget = {
+                int(k): list(v) for k, v in
+                (state_dict.get("copy_over_budget") or {}).items()}
             self.working_state.last_rendered_path = state_dict.get("last_rendered_path")
             self.working_state.pending_slide_previews = state_dict.get("pending_slide_previews", [])
             self.working_state.previews_published = state_dict.get("previews_published", False)
@@ -1358,7 +2039,13 @@ class AgentLoop:
             self.working_state.offered_directions = state_dict.get(
                 "offered_directions", False
             )
+            self.working_state.deck_format = state_dict.get(
+                "deck_format", deck_format.DEFAULT_FORMAT
+            )
             self.working_state.chosen_direction = state_dict.get("chosen_direction")
+            self.working_state.direction_deferred = state_dict.get(
+                "direction_deferred", False
+            )
             self.working_state.proposed_directions = state_dict.get(
                 "proposed_directions", []
             )
@@ -1405,6 +2092,85 @@ class AgentLoop:
             logger.error("failed_to_load_working_state", session_id=str(session_id), error=str(e))
             return False
 
+    async def _save_deck_snapshot(self, session_id: uuid.UUID) -> None:
+        """Keep the finished deck's state, so a later message can amend it."""
+        from app.db.models import DeckSnapshot
+
+        if self.db is None:
+            return
+        try:
+            state = json.loads(json.dumps(self._state_dict(), default=str))
+            row = await self.db.get(DeckSnapshot, session_id)
+            if row is None:
+                self.db.add(DeckSnapshot(session_id=session_id, state=state))
+            else:
+                row.state = state
+            await self.db.commit()
+            logger.info("saved_deck_snapshot", session_id=str(session_id))
+        except Exception as e:  # noqa: BLE001 - a failed snapshot must not fail the run
+            await self.db.rollback()
+            logger.error("failed_to_save_deck_snapshot", session_id=str(session_id), error=str(e))
+
+    async def _load_deck_snapshot(self, session_id: uuid.UUID) -> bool:
+        """Start from the session's finished deck, if it has one and the user
+        has written since. Returns True when the run is now an amendment."""
+        from sqlalchemy import select
+        from app.db.models import ChatMessage, DeckSnapshot
+
+        if self.db is None:
+            return False
+        try:
+            row = await self.db.get(DeckSnapshot, session_id)
+            if row is None or not row.state:
+                return False
+            latest = await self.db.execute(
+                select(ChatMessage)
+                .where(ChatMessage.session_id == session_id, ChatMessage.role == "user")
+                .order_by(ChatMessage.created_at.desc()).limit(1))
+            message = latest.scalar_one_or_none()
+            if message is None or not (message.content or "").strip():
+                return False
+            if message.created_at <= row.updated_at:
+                return False
+            if not self._apply_state_dict(dict(row.state), session_id):
+                self.working_state.reset()
+                return False
+        except Exception as e:  # noqa: BLE001
+            logger.error("failed_to_load_deck_snapshot", session_id=str(session_id), error=str(e))
+            return False
+        ws = self.working_state
+        if not (ws.has_called_finalize and ws.last_rendered_path
+                and os.path.exists(ws.last_rendered_path)):
+            # The deck's file is gone, so there is nothing to amend.
+            self.working_state.reset()
+            return False
+        ws.amending = True
+        ws.amend_request = message.content.strip()
+        ws.amend_done = False
+        # What the last run concluded about the deck does not apply to the
+        # changed one: it is judged afresh. What it found is kept as the
+        # baseline the change is judged against.
+        ws.handover_issues = [dict(issue) for issue in ws.validation_issues or []]
+        ws.amend_edited = False
+        ws.amend_redrafted = set()
+        ws.change_findings = []
+        ws.change_fix_rounds = 0
+        ws.validation_clean = False
+        ws.validation_issues = []
+        ws.slides_needing_revision = []
+        ws.revision_queue = []
+        # The last run's compile bookkeeping is about slides it was writing,
+        # not the ones this amendment sends back.
+        ws.compile_tried = set()
+        ws.compile_failures = {}
+        ws.validation_attempts = 0
+        ws.validation_failures = 0
+        ws.validated_serial = -1
+        ws.code_amendment_done = False
+        ws.previews_published = False
+        logger.info("amending_finished_deck", session_id=str(session_id))
+        return True
+
     async def _clear_working_state(self, session_id: uuid.UUID) -> None:
         """Clear saved working state from Redis."""
         redis_client = await self._get_redis_client()
@@ -1424,10 +2190,18 @@ class AgentLoop:
         run context is torn down however the loop ends - including when the
         consumer stops iterating early.
         """
+        self._phase_visits: dict[str, int] = {}
+        run_trace = trace.begin(
+            "run",
+            sessionId=str(session_id),
+            organisationId=str(self.org_id) if self.org_id else None,
+        )
         try:
             async for event in self._run(session_id):
                 yield event
+            self._log_usage(session_id)
         except AINotConfiguredError as e:
+            self.termination = trace.NOT_CONFIGURED
             # A workspace with no model configured cannot generate anything.
             # Said once, plainly, with a code the interface can act on - rather
             # than let each of a dozen LLM calls discover it separately.
@@ -1441,36 +2215,62 @@ class AgentLoop:
                 "code": "ai_not_configured",
                 "timestamp": _iso_now(),
             })
+        except BaseException:
+            self.termination = trace.ERROR
+            raise
         finally:
-            if self._search_token is not None:
-                run_context.reset_search_config(self._search_token)
-                self._search_token = None
-            if self._provider_token is not None:
-                run_context.reset_chat_provider(self._provider_token)
-                self._provider_token = None
-            if self._image_token is not None:
-                run_context.reset_image_connection(self._image_token)
-                self._image_token = None
-            if self._figure_token is not None:
-                run_context.reset_figure_connection(self._figure_token)
-                self._figure_token = None
-            if self._design_system_token is not None:
-                run_context.reset_design_system(self._design_system_token)
-                self._design_system_token = None
-            if self._material_token is not None:
-                run_context.reset_slide_material(self._material_token)
-                self._material_token = None
-            # Reset in reverse, so nested sets unwind to what was there before.
-            while self._citation_tokens:
-                token = self._citation_tokens.pop()
-                try:
-                    if token.var is run_context._include_sources:
-                        run_context.reset_include_sources(token)
-                    else:
-                        run_context.reset_research_findings(token)
-                except ValueError:
-                    # Set in a different context than the one tearing down.
-                    pass
+            try:
+                run_trace.root.set(
+                    mode=self.mode,
+                    detailLevel=self.detail_level,
+                    slides=len(self.working_state.accumulated_slides),
+                    validationAttempts=self.working_state.validation_attempts,
+                )
+                self._record_skipped_phases()
+                await trace.finish(run_trace, self.trace_sinks, termination=self.termination)
+            finally:
+                self._reset_run_context()
+
+    def _reset_run_context(self) -> None:
+        """Unwind everything _configure and _run published, however the run ended."""
+        if self._usage_token is not None:
+            usage.reset(self._usage_token)
+            self._usage_token = None
+        if self._search_token is not None:
+            run_context.reset_search_config(self._search_token)
+            self._search_token = None
+        if self._provider_token is not None:
+            run_context.reset_chat_provider(self._provider_token)
+            self._provider_token = None
+        if self._vision_token is not None:
+            run_context.reset_vision_provider(self._vision_token)
+            self._vision_token = None
+        if self._image_token is not None:
+            run_context.reset_image_connection(self._image_token)
+            self._image_token = None
+        if self._figure_token is not None:
+            run_context.reset_figure_connection(self._figure_token)
+            self._figure_token = None
+        if self._design_system_token is not None:
+            run_context.reset_design_system(self._design_system_token)
+            self._design_system_token = None
+        if self._pack_token is not None:
+            run_context.reset_pack(self._pack_token)
+            self._pack_token = None
+        if self._material_token is not None:
+            run_context.reset_slide_material(self._material_token)
+            self._material_token = None
+        # Reset in reverse, so nested sets unwind to what was there before.
+        while self._citation_tokens:
+            token = self._citation_tokens.pop()
+            try:
+                if token.var is run_context._include_sources:
+                    run_context.reset_include_sources(token)
+                else:
+                    run_context.reset_research_findings(token)
+            except ValueError:
+                # Set in a different context than the one tearing down.
+                pass
 
     async def _run(
         self,
@@ -1484,6 +2284,9 @@ class AgentLoop:
         # Only reset if no previous state was found
         if not state_loaded:
             self.working_state.reset()
+            # A message after a finished deck amends it, rather than starting
+            # a new deck from nothing (#376).
+            await self._load_deck_snapshot(session_id)
 
         # Resolve models, search backend, and the effective mode. Must run
         # after the working state load, which can supply the mode on a resume.
@@ -1518,7 +2321,7 @@ class AgentLoop:
         # or lose grounding for facts it already looked up. A template's design
         # system (just loaded above) always wins, since it reflects the current
         # session rather than a potentially-stale resume snapshot.
-        if state_loaded:
+        if state_loaded or self.working_state.amending:
             if "design_system" not in context and self._resumed_design_system:
                 context["design_system"] = self._resumed_design_system
             if self._resumed_research:
@@ -1527,6 +2330,14 @@ class AgentLoop:
                 context["imageCatalog"] = self._resumed_image_catalog
 
         self.context = context
+
+        # An amendment edits the deck the last run rendered, so the tools must
+        # find it - the path is otherwise only set at render time, in the
+        # process that rendered it - and the pictures the user supplied.
+        if self.working_state.amending:
+            self._rendered_path_token = run_context.set_rendered_path(
+                self.working_state.last_rendered_path)
+        self._install_assets(context.get("imageCatalog") or [])
 
         # ── Phase 2: Build messages ──────────────────
         chat_messages = await self._build_chat_messages(session_id)
@@ -1559,12 +2370,22 @@ class AgentLoop:
             context["design_system"] = chosen.get("designSystem") or {}
             run_context.set_design_system(context["design_system"])
             self._clean_up_direction_previews(session_id, chosen.get("id"))
+            # Said out loud, and said differently when it was not their pick:
+            # choosing on someone's behalf is only acceptable if they can see
+            # it happened and can say otherwise.
+            lead = (
+                f"You left the look to me, so I am building in the "
+                f"{chosen.get('name') or 'recommended'} direction"
+                if self.working_state.direction_deferred
+                else f"Building in the {chosen.get('name') or 'chosen'} direction"
+            )
             yield _event("thought", "content_analysis", {
                 "content": (
-                    f"Building in the {chosen.get('name') or 'chosen'} direction: "
-                    f"{chosen.get('rationale') or ''}".strip()
+                    f"{lead}: {chosen.get('rationale') or ''}".strip()
                     + (f" Recoloured to {recoloured}, as you asked."
                        if recoloured else "")
+                    + (" Say the word if you would rather have one of the others."
+                       if self.working_state.direction_deferred else "")
                 ),
                 "timestamp": _iso_now(),
             }, step="design")
@@ -1580,6 +2401,15 @@ class AgentLoop:
         # because it decides whether the design pause happens at all.
         if user_confirmed_autonomy(chat_messages):
             self.working_state.autonomy_confirmed = True
+
+        # What kind of presentation this is, resolved the same way: scanned
+        # from the user's own words rather than trusted to survive as a line
+        # of prose. Only overwritten when a message actually names one, so a
+        # later, unrelated reply cannot silently reset an earlier answer with
+        # the default.
+        matched_format = deck_format.resolve_from_chat(chat_messages)
+        if matched_format:
+            self.working_state.deck_format = matched_format
 
         research_answer = user_answered_deep_research(chat_messages)
         if research_answer is not None:
@@ -1629,6 +2459,28 @@ class AgentLoop:
         if self._material_token is None:
             self._material_token = run_context.set_slide_material({})
 
+        # The design language the user chose, reinstalled for THIS run.
+        #
+        # `_resolve_pack` used to be reachable from exactly one place - the
+        # `plan_presentation_structure` branch of `_dispatch_tool` - so the
+        # pack was installed only on the run that did the planning. Every
+        # consulted run then pauses for the outline review immediately
+        # afterwards (observed: 31ms later), and the resumed run that
+        # actually drafts and renders never called it again. The pack lives
+        # in a ContextVar, which does not survive the process, so
+        # `run_context.get_pack()` was None at render and
+        # finalize_and_render_pptx quietly took its stock-placeholder
+        # branch. The user picked a design language, watched three previews
+        # of it, and got a deck of Office bullets - see issue #290.
+        #
+        # Idempotent by construction: `_resolve_pack` reinstalls only when
+        # `_pack_token` is None or the chosen pack changed, returns early
+        # for an uploaded template, and no-ops on a fresh run with no plan
+        # and no chosen direction (`for_plan({})` finds no slides).
+        self._resolve_pack(
+            self.working_state.presentation_structure or {}, context
+        )
+
         # ── The run walks its pipeline ────────────────────────────────────
         #
         # Each pass takes the first phase that applies and is not finished, and
@@ -1649,20 +2501,37 @@ class AgentLoop:
             before = self._progress_marker()
             paused = False
             failed = False
+            visits = self._phase_visits[phase.name] = self._phase_visits.get(phase.name, 0) + 1
 
-            async for kind, payload in self._run_phase(
-                phase, context, chat_messages, session_id
-            ):
-                if kind == "event":
-                    yield payload
-                elif kind == "paused":
-                    paused = True
-                elif kind == "provider_failed":
-                    failed = True
+            with trace.span(
+                "phase", phase.name,
+                reason="first phase that applies and is not finished"
+                       + (f" (visit {visits})" if visits > 1 else ""),
+                driver=phase.driver,
+                visit=visits,
+            ) as phase_span:
+                async for kind, payload in self._run_phase(
+                    phase, context, chat_messages, session_id
+                ):
+                    if kind == "event":
+                        yield payload
+                    elif kind == "paused":
+                        paused = True
+                    elif kind == "provider_failed":
+                        failed = True
+                if phase_span is not None:
+                    phase_span.set(
+                        progressed=self._progress_marker() != before,
+                        done=phase.done(self),
+                        paused=paused,
+                        **self._phase_outcome(phase.name),
+                    )
 
             if paused:
+                self.termination = trace.PAUSED
                 return
             if failed:
+                self.termination = trace.PROVIDER_FAILED
                 return
 
             if self._progress_marker() != before:
@@ -1681,6 +2550,51 @@ class AgentLoop:
                     session_id=str(session_id),
                 )
                 if stalls >= 2:
+                    # A stall after a deck has already rendered once is not
+                    # the same failure as one before anything has: the first
+                    # has something to hand over and the second does not.
+                    # This used to treat them identically - "nothing was
+                    # generated" after twelve slides and a successful render,
+                    # because the redraft loop trying to fix the last three
+                    # never converged. Twelve slides of real work is not
+                    # nothing, and the file the first render produced still
+                    # opens.
+                    if (self.working_state.pending_render_result
+                            or self.working_state.amending):
+                        logger.warning(
+                            "phase_stalled_with_render_to_fall_back_on",
+                            phase=phase.name, session_id=str(session_id),
+                        )
+                        yield _event("thought", phase.label, {
+                            "content": (
+                                "I could not make that change to the finished "
+                                "deck, so it is as it was."
+                                if (self.working_state.amending and phase.name == "change"
+                                    and not self.working_state.amend_edited)
+                                else
+                                "I made the change, but could not correct what "
+                                "the check found after it, so I'm handing the "
+                                "deck over with that noted."
+                                if self.working_state.amending and phase.name == "change"
+                                else
+                                "The revision after validation is not "
+                                "converging, so I'm stopping here and handing "
+                                "over the deck as it last rendered rather "
+                                "than losing the work."
+                            ),
+                            "timestamp": _iso_now(),
+                        }, step=phase.name)
+                        # The normal end of a run clears this from inside the
+                        # validate handler, the moment validation settles.
+                        # This run never gets there - it is leaving mid
+                        # redraft - so nothing else will clear it, and a
+                        # resume would otherwise pick the stalled state back
+                        # up and try the same unconverging fix again.
+                        await self._save_deck_snapshot(session_id)
+                        await self._clear_working_state(session_id)
+                        self.termination = trace.STALLED_WITH_DECK
+                        break
+                    self.termination = trace.STALLED
                     yield _event("error", phase.label, {
                         "message": (
                             f"The run could not get past the {phase.name} step. "
@@ -1692,14 +2606,317 @@ class AgentLoop:
                     }, step=phase.name)
                     return
 
-        # Every phase is finished, so the deck is rendered and checked. The
-        # closing word is the model's - it is the only part of the ending that
-        # is not mechanical.
+        # Every phase is finished, so the deck is rendered and checked, and
+        # this is where the snapshot a later message amends is written - not
+        # where validation settles, which a run ending on a change declined
+        # in words never reaches; the next message then amended the deck as
+        # it was before this run.
+        await self._save_deck_snapshot(session_id)
+        await self._clear_working_state(session_id)
+        # The closing word is the model's - it is the only part of the ending
+        # that is not mechanical.
         for preview_event in self._flush_slide_previews():
             yield preview_event
         async for event in self._closing_message(context, chat_messages):
             yield event
+    # ── Tracing ───────────────────────────────────────────────────────────
+
+    def _phase_outcome(self, name: str) -> dict:
+        """What a phase visit left behind that the trace should keep.
+
+        For validation this is the convergence series: blocking findings per
+        attempt, which is how a run shows it improved, stalled or gave up.
+        """
+        ws = self.working_state
+        if name == "validate":
+            return {
+                "attempt": ws.validation_attempts,
+                "issues": len(ws.validation_issues or []),
+                "clean": bool(ws.validation_clean),
+                "atCap": bool(ws.at_validation_cap),
+            }
+        if name == "draft":
+            return {"slidesDrafted": len(ws.accumulated_slides),
+                    "revising": list(ws.slides_needing_revision or [])}
+        if name == "research":
+            return {"searches": ws.web_search_calls, "sources": len(ws.researched_urls)}
+        if name == "plan":
+            return {"plannedSlides": int((ws.presentation_structure or {}).get("totalSlides") or 0)}
+        return {}
+
+    def _record_skipped_phases(self) -> None:
+        """Say why each phase that never ran did not run."""
+        for phase in pipeline.PIPELINE:
+            if phase.name in self._phase_visits:
+                continue
+            try:
+                applies = phase.applies(self)
+                reason = "already satisfied" if applies else "does not apply to this run"
+            except Exception:  # noqa: BLE001 - a partial run may lack what a predicate reads
+                reason = "not reached"
+            if self.termination != trace.COMPLETE and reason == "already satisfied":
+                reason = "not reached"
+            trace.event("phase", phase.name, reason=reason, status="skipped")
+
     # ── The phases the loop drives itself ─────────────────────────────────
+
+    def _read_the_arc(self, structure: dict) -> None:
+        """Read the outline as an argument and record where it breaks.
+
+        `app/titles.py` has always stated the property - a reader who reads
+        only the headlines has read the argument - and nothing enforced it, so
+        a deck could pass every per-page check and still be "Market Analysis
+        Presentation" followed by "Key Aspects of the Market".
+
+        The shape of an argument, not its truth. Whether a deck is right is
+        not something code decides, and a number pretending otherwise is a
+        number people would quote.
+        """
+        from app import narrative
+
+        slides = (structure or {}).get("slides") or []
+        if not slides:
+            return
+        report = narrative.read_arc(slides)
+        self.working_state.arc = report.to_dict()
+        if report.argues:
+            return
+        logger.info(
+            "outline_does_not_argue",
+            claim_share=round(report.claim_share, 3),
+            breaks=[b.describe() for b in report.breaks[:5]],
+        )
+
+    def _ground_the_deck(self) -> None:
+        """Tie every figure the deck states to the span it came from.
+
+        In code, before the render, and not offered as a tool. The check this
+        follows was a tool the model could decline to call and never did, so
+        density, title-register and apparatus checking were all inert in
+        practice.
+
+        A figure with nothing behind it is reported rather than removed. The
+        deck is the user's and the copy is theirs to keep; what they should
+        not have is a page asserting a measurement while the run has no record
+        of where it came from.
+        """
+        from app.grounding.check import ground
+
+        slides = self.working_state.accumulated_slides
+        if not slides:
+            return
+        evidence = self._evidence()
+        claims, gaps = ground(slides, evidence)
+        self.working_state.unsupported_figures = [g.describe() for g in gaps]
+        logger.info(
+            "deck_grounded",
+            spans=len(evidence.spans),
+            claims=len(claims),
+            unsupported=len(gaps),
+            examples=[g.describe() for g in gaps[:3]],
+        )
+
+    def _evidence(self):
+        """Every span this run has to support its claims with."""
+        from app.grounding.claim import Evidence
+
+        evidence = Evidence.from_research(run_context.get_research_findings())
+        for source in self.working_state.document_texts:
+            evidence = evidence + Evidence.from_document(
+                source.get("text") or "",
+                source_id=source.get("id") or "",
+                title=source.get("title") or "",
+            )
+        return evidence
+
+    def _log_usage(self, session_id: uuid.UUID) -> None:
+        """What this run spent, per model.
+
+        Counted rather than priced. A token count is a fact the provider
+        returned; a price is a number that changes without warning and would
+        be stale in the repository within a month, so the cost of a run is a
+        multiplication anyone can do against whatever the current rates are.
+        """
+        spent = usage.current()
+        if spent is None or not spent.by_model:
+            return
+        logger.info(
+            "run_usage",
+            session_id=str(session_id),
+            calls=spent.calls,
+            total_tokens=spent.total_tokens,
+            models=spent.to_dict()["models"],
+        )
+
+    def _resolve_pack(self, structure: dict, context: dict) -> None:
+        """Put this run on a design language pack, when it should be on one.
+
+        A run with an uploaded template is not: that customer was promised
+        their own template, and the XML-clone renderer is what keeps that
+        promise. A run without one used to fall through to eight hardcoded
+        Office layouts chosen by substring match, which is why every deck
+        with no template looked identical. It composes against a pack
+        instead.
+
+        Chosen here rather than at the design pause because the choice is
+        measured against the deck's own material, and the material is what
+        the plan describes.
+        """
+        from app.config import settings
+
+        if not settings.design_language_enabled:
+            return
+        design_system = context.get("design_system") or {}
+        if str(design_system.get("sourceType") or "default") != "default":
+            return
+        try:
+            from app.design import run as design_run
+
+            authored = self._authored_pack()
+            if authored is not None:
+                # The user chose a design, not a shape of deck. When the
+                # direction they picked carries a language, that language is
+                # the pack - deriving one from the plan instead would compose
+                # the deck in a design nobody was shown.
+                if (self.working_state.pack_id != authored.id
+                        or self._pack_token is None):
+                    self.working_state.pack_id = authored.id
+                    self._install_pack(authored, design_system)
+                    logger.info("authored_pack_installed", pack=authored.id,
+                                archetypes=len(authored.archetypes))
+                return
+
+            if self.working_state.pack_id:
+                # A resumed run already chose; it just has to be reinstalled,
+                # because a ContextVar does not survive the process.
+                if self._pack_token is None:
+                    self._install_pack(
+                        design_run.load(self.working_state.pack_id),
+                        design_system,
+                    )
+                return
+            pack = design_run.for_plan(structure)
+        except Exception as exc:   # a pack must never fail a run
+            logger.warning("pack_selection_failed", error=str(exc))
+            return
+        if pack is None:
+            return
+        self.working_state.pack_id = pack.id
+        self._install_pack(pack, design_system)
+        logger.info("pack_selected", pack=pack.id,
+                    archetypes=len(pack.archetypes))
+
+    # How much of a script goes in one `code_delta`. Small enough that the box
+    # fills visibly, large enough that a 200-line script is not 200 events on
+    # a Redis channel the browser is also using for everything else.
+    CODE_CHUNK_CHARS = 240
+
+    def _code_events(self, fn_args: dict, call_id: str,
+                     phase: str, step: str | None):
+        """The script, as the events that draw it into the code box.
+
+        `code_delta` appends, `code_ready` is terminal and carries the whole
+        source. Both, rather than either alone: the orchestrator persists the
+        stream and replays it after a reload, so a subscriber that connected
+        halfway through has seen some deltas and not others, and only an
+        event carrying the finished source puts every one of them in the same
+        state. `seq` is what lets the store drop a delta it already has -
+        without it a replay would append the script to itself.
+
+        `previous` is the script this one replaces, when the model is fixing
+        a script that failed. The box renders the diff rather than a second
+        wall of code, which is the difference between seeing the fix and
+        reading the whole thing again.
+        """
+        source = str((fn_args or {}).get("code") or "")
+        if not source:
+            return
+
+        step_id = f"{call_id}"
+        for index in range(0, len(source), self.CODE_CHUNK_CHARS):
+            yield _event("code_delta", phase, {
+                "stepId": step_id,
+                "seq": index // self.CODE_CHUNK_CHARS,
+                "text": source[index:index + self.CODE_CHUNK_CHARS],
+                "timestamp": _iso_now(),
+            }, step=step)
+
+        previous = self.working_state.last_code_attempt
+        yield _event("code_ready", phase, {
+            "stepId": step_id,
+            "source": source,
+            # Outcome is settled by the tool result, which has not happened
+            # yet - so this says what is true now: it is about to run. The
+            # next attempt's `previous` and `reason` are what report how it
+            # went, which is where a reader needs them.
+            "outcome": "ran",
+            **({"previous": previous["source"],
+                "reason": previous["reason"]} if previous else {}),
+            "timestamp": _iso_now(),
+        }, step=step)
+
+    def _remember_code_attempt(self, fn_args: dict, tool_result) -> None:
+        """Keep a failed script so the next attempt can be shown as a diff.
+
+        Only a failure is kept. A script that ran is not something the next
+        one is fixing, and carrying it forward would make an unrelated later
+        edit render as a diff against it.
+        """
+        if tool_result.success:
+            self.working_state.last_code_attempt = None
+            return
+        data = tool_result.data or {}
+        self.working_state.last_code_attempt = {
+            "source": str(data.get("source") or (fn_args or {}).get("code") or ""),
+            "reason": str(data.get("reason") or tool_result.error or ""),
+        }
+
+    @property
+    def compile_concurrency(self) -> int:
+        """How many slides compile asks for at once (#323)."""
+        from app.config import settings
+
+        return int(settings.compile_concurrency)
+
+    @property
+    def code_amendment_enabled(self) -> bool:
+        """Whether this run may have the agent write and run its own code."""
+        from app.config import settings
+
+        return bool(settings.code_amendment_enabled)
+
+    def _authored_pack(self):
+        """The pack of the design language the user chose, if they chose one.
+
+        Derived from the chosen direction rather than loaded by id, because
+        an authored language has no file on disk - it was invented for this
+        deck. `chosen_direction` is already persisted across the pause, so
+        the language rides through a resume with it and the pack is rebuilt
+        from the same dict either side.
+        """
+        direction = self.working_state.chosen_direction or {}
+        payload = direction.get("language")
+        if not isinstance(payload, dict) or not payload:
+            return None
+        try:
+            from app.design.authored import Language, to_pack
+            from app.design.vocabulary import ensure
+
+            fmt = deck_format.by_id(direction.get("format"))
+            return ensure(to_pack(Language(**payload), fmt.canvas,
+                                  floor_pt=fmt.floor_pt(fmt.canvas)))
+        except Exception as exc:   # a pack must never fail a run
+            logger.warning("authored_pack_failed", error=str(exc))
+            return None
+
+    def _install_pack(self, pack, design_system: dict | None) -> None:
+        """Make the pack, wearing the user's chosen colours, visible to tools."""
+        from app.design import run as design_run
+
+        dressed = design_run.overlay(pack, design_system)
+        if self._pack_token is not None:
+            run_context.reset_pack(self._pack_token)
+        self._pack_token = run_context.set_pack(dressed)
 
     async def _ensure_design_system(
         self, context: dict, session_id: uuid.UUID
@@ -1768,6 +2985,18 @@ class AgentLoop:
         brief.setdefault("searchQueries", [])
         brief.setdefault("needsResearch", False)
         self.working_state.brief = brief
+
+        # A run that skips the consultation entirely (full autonomy) never
+        # reaches the format question, and the boardroom default would then
+        # be silent guesswork rather than a read of what was actually asked
+        # for. If the brief itself names a format - "a pitch deck for
+        # investors", "make me a poster" - that is worth acting on even
+        # though nobody was asked. Only applied while nothing more specific
+        # has been resolved yet, so a later, explicit answer always wins.
+        if self.working_state.deck_format == deck_format.DEFAULT_FORMAT:
+            inferred = deck_format.resolve_from_text(str(brief.get("brief") or ""))
+            if inferred:
+                self.working_state.deck_format = inferred
 
         summary = str(brief.get("brief") or "").strip()
         if summary:
@@ -1839,7 +3068,14 @@ class AgentLoop:
                 yield item
             return
 
-        questions: list[dict] = []
+        # What kind of presentation this is - reserved ahead of the
+        # ambiguity truncation below, because it decides the design pause
+        # that follows: an authoring prompt, a canvas and a type floor all
+        # read `working_state.deck_format`, and an ambiguity crowding this
+        # question out would leave every run defaulting to a boardroom deck
+        # by starvation rather than by choice. Asked once, like every other
+        # question here - this phase does not run again once answered.
+        questions: list[dict] = [dict(deck_format.QUESTION)]
 
         if self._can_offer_research():
             figures = [
@@ -1857,11 +3093,13 @@ class AgentLoop:
             if len(questions) >= MAX_CONSULT_QUESTIONS:
                 break
 
-        if not questions:
-            # Intake found nothing to ask, and the run is still going to ask:
-            # the consultation is not skipped because a model could not think
-            # of a question, only because the user said to skip it. This is
-            # the floor, not the expected case.
+        if len(questions) == 1:
+            # The format question always fires, so "no questions" no longer
+            # happens - but a pause carrying only it wastes the round trip an
+            # intake with nothing to ask used to spend on this instead:
+            # intake found nothing to ask, and the run is still going to ask,
+            # because the consultation is not skipped for want of a question,
+            # only because the user said to skip it.
             questions.append(dict(FALLBACK_QUESTION))
 
         async for item in self._ask_and_pause(
@@ -1920,6 +3158,16 @@ class AgentLoop:
         An uploaded template is left exactly as it is: the user already chose a
         design by attaching one, and replacing it would be the run overruling
         the clearest instruction it has.
+
+        Picks from the enum's built-in directions rather than authoring a
+        language - the same fallback this took before formats existed. That
+        means `working_state.deck_format` (inferred from the brief, or
+        default) shapes the plan and the per-slide budget for a run built
+        this way, but not the canvas or the ramp: the enum path composes on
+        the fixed 16:9 canvas regardless of format, so a fully autonomous
+        "make me a poster" run gets a boardroom-shaped deck about a poster's
+        subject rather than an actual poster. Extending the enum path to
+        other canvases is out of scope here - see issue #285.
         """
         from app import directions as direction_model
 
@@ -2026,10 +3274,42 @@ class AgentLoop:
         ):
             yield item
 
+    async def _phase_compile(
+        self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
+    ) -> AsyncIterator[tuple[str, object]]:
+        """Write every outstanding slide at once, one answer each (#323)."""
+        from app.agent import compile as slide_compile
+
+        count = len(slide_compile.outstanding(self))
+        revising = bool(self.working_state.revision_queue)
+        yield "event", _event("thought", "content_generation", {
+            "content": (
+                f"Revising {count} slide{'s' if count != 1 else ''} at once."
+                if revising else
+                f"Writing all {count} slide{'s' if count != 1 else ''} at once."
+            ),
+            "timestamp": _iso_now(),
+        }, step="compile")
+        async for item in slide_compile.compile_all(
+            self, context, chat_messages, session_id,
+            pipeline.PHASES_BY_NAME["compile"],
+        ):
+            yield item
+
     async def _phase_render(
         self, context: dict, chat_messages: list[dict], session_id: uuid.UUID
     ) -> AsyncIterator[tuple[str, object]]:
         """Render the deck as it currently stands."""
+        self._ground_the_deck()
+        # What a previous pass placed and validation disliked. Empty on a
+        # first render, which is every render until a layout verdict comes
+        # back - so this costs an ordinary run nothing.
+        run_context.set_arrangements_to_avoid(
+            self.working_state.arrangements_to_avoid())
+        # Whether type may go below the readable floor to keep the count the
+        # user asked for, or must gain pages instead (#368).
+        run_context.set_page_count_fixed(
+            bool(int((self.working_state.brief or {}).get("slideCount") or 0)))
         structure = self.working_state.presentation_structure or {}
         tool_result = None
         async for kind, payload in self._call_tool(
@@ -2161,7 +3441,9 @@ class AgentLoop:
         # The phase's declared toolset, plus whatever this workspace's MCP
         # servers said they belong in. Added rather than merged into the phase
         # table because the second half is not known until the run starts.
-        offered = phase.tools | self.mcp_tools_by_phase.get(phase.name, frozenset())
+        offered = (phase.tools
+                   | self.mcp_tools_by_phase.get(phase.name, frozenset())
+                   ) - self._withheld_tools()
         schemas = [
             schema for schema in self.registry.get_function_schemas()
             if _schema_name(schema) in offered
@@ -2216,6 +3498,14 @@ class AgentLoop:
                     "timestamp": _iso_now(),
                 }, step=phase.name)
 
+            if (not tool_calls and phase.on_decline is not None
+                    and (assistant_message.get("content") or "").strip()):
+                # A phase that may be declined: the model said, in words, that
+                # nothing should be done. That closes it - nudging a model to
+                # call a tool it has decided not to call only costs turns and
+                # ends the run as stalled.
+                phase.on_decline(self)
+                continue
             if not tool_calls:
                 # Nothing was called and the phase is unfinished. Say what is
                 # outstanding and give it another turn; the walker's stall
@@ -2298,15 +3588,52 @@ class AgentLoop:
             issue_count = len(ws.validation_issues)
             prompt += (
                 "\n\n## Closing note - unresolved validation issue\n"
-                f"After {ws.validation_attempts} attempt"
-                + ("" if ws.validation_attempts == 1 else "s")
-                + f", validation still found {issue_count} layout issue"
+                + (f"After {ws.validation_attempts} attempt"
+                   + ("" if ws.validation_attempts == 1 else "s") + ", validation"
+                   if ws.validation_attempts else "Validation")
+                + f" still found {issue_count} layout issue"
                 + ("" if issue_count == 1 else "s")
                 + " that could not be automatically fixed:\n"
                 + self._describe_validation_issues()
                 + "\nThe deck is still being handed over as-is. Your closing summary MUST "
                 "say so plainly - name the affected slide(s) and suggest reviewing them "
                 "manually - rather than describing the deck as simply finished or ready."
+            )
+            if ws.amending and not ws.new_since_handover(ws.validation_issues):
+                prompt += (
+                    "\nEvery one of these was already on the deck before the user's "
+                    "latest request, and the change did not add to them; say that, so "
+                    "the user does not read them as something the change broke."
+                )
+        if ws.below_floor:
+            # The type-size policy's last clause: type went below the readable
+            # floor only because the page count was fixed, and the user is
+            # told where and why (#368).
+            count = int((ws.brief or {}).get("slideCount") or 0)
+            listed = "; ".join(f"slide {i + 1} at {pt:.1f}pt"
+                               for i, pt in sorted(ws.below_floor.items()))
+            prompt += (
+                "\n\n## Closing note - type set below the readable size\n"
+                f"To keep the deck to the {count} slides the user asked for, some "
+                f"copy is set smaller than the usual floor of about 12pt: {listed}. "
+                "The material on those slides did not fit at a readable size in "
+                "that many pages. Tell the user which slides, and that adding a "
+                "slide or shortening those slides' copy would set them at the "
+                "usual size."
+            )
+        if ws.amending and not ws.amend_done and not ws.amend_edited:
+            # The change step ran out of turns. Its directive is still the
+            # last thing the prompt says, and without this the summary read
+            # as though the change had been made (probe-progress-bar, #376).
+            refused = (ws.last_code_attempt or {}).get("reason", "").strip()
+            prompt += (
+                "\n\n## Closing note - the change was not made\n"
+                f"The user's request ({ws.amend_request!r}) could not be made, and "
+                "the deck is exactly as it was. The step above has ended and there "
+                "is nothing left to call."
+                + (f" The last attempt was refused: {refused[:400]}" if refused else "")
+                + "\nSay plainly that the change was not made and why, without "
+                "describing it as done."
             )
         async for kind, payload in self._ask_model(
             prompt, chat_messages, phase_label="complete"
@@ -2338,6 +3665,7 @@ class AgentLoop:
             ws.rendered_serial,
             ws.validation_attempts,
             ws.validation_failures,
+            ws.code_edits_applied,
         )
 
     async def _run_phase(
@@ -2386,6 +3714,7 @@ class AgentLoop:
             session_id=session_id,
             current_phase=phase.label,
             step=phase.name,
+            chosen_by="loop",
         ):
             yield kind, payload
 
@@ -2438,6 +3767,85 @@ class AgentLoop:
         """Whether intake judged this deck to stand on facts worth looking up."""
         return bool((self.working_state.brief or {}).get("needsResearch"))
 
+    def _attach_visual(self, fn_name: str, tool_result) -> None:
+        """Put a built block on the slide it names.
+
+        A method rather than an inline branch so a test can drive every
+        builder through the same code the run does. Both figure tools built
+        this session returned their block under "blocks" and were attached by
+        nothing: each reported success, the model moved on satisfied, and the
+        figure existed only in the tool's own return value. A test asserting
+        the tool's output cannot see that - only one that goes through here
+        can.
+        """
+        if fn_name not in BUILD_VISUAL_TOOLS and fn_name not in BLOCK_BUILDER_TOOLS \
+                and fn_name != "generate_image":
+            return
+        if not tool_result.data:
+            return
+        target = tool_result.data.get("slideIndex")
+        block = tool_result.data.get("content")
+        if target is None or not block:
+            return
+        self.working_state.prepare_visual(target, block)
+
+    def _withheld_tools(self) -> frozenset[str]:
+        """Tools this run has, and does not offer.
+
+        One predicate, read by the toolset *and* by every piece of prose that
+        names a tool. Keeping them apart is what broke every template-less
+        run: the geometry tools were withheld from the drafting phase, the
+        instruction telling the model to call them was not, and a model told
+        to call a tool it cannot see calls something else until its turns run
+        out. `_build_system_prompt` already states the principle for document
+        and image tools - "a tool list that names a tool the run has withheld
+        is the prompt and the loop disagreeing, which the model resolves by
+        trying it anyway" - and this makes it one rule instead of three.
+        """
+        withheld = set()
+        if self.working_state.pack_id:
+            # On a design language the page is composed in code, after the
+            # material exists. There is no layout to select and no region to
+            # compose, so offering either would put two systems in charge of
+            # the same decision.
+            withheld |= pipeline.TEMPLATE_GEOMETRY_TOOLS
+        if not self.working_state.amending:
+            # It sends a finished deck's slides back for a user's request; a
+            # run that is not amending has no finished deck to send.
+            withheld.add("revise_slides")
+        if not self.code_amendment_enabled:
+            # The container hardening this depends on is an operator's
+            # decision, not a default - see edit_deck_with_code's own
+            # docstring. `compute_visual_with_code` is its draft-time half
+            # (#283) and sits behind the same flag; `edit_deck_with_code`
+            # itself now rides in `SLIDE_TOOLS` too (issue #283 follow-up:
+            # "use it whenever it seems reasonable", not only as the
+            # `amend` phase's last resort), so it needs the same guard here
+            # that it always needed there.
+            withheld.add("compute_visual_with_code")
+            withheld.add("edit_deck_with_code")
+        elif not self.working_state.has_called_finalize:
+            # It edits a rendered file. Offering it before one exists is
+            # offering a tool that can only ever answer "there is no deck
+            # yet" - which costs a turn for nothing and is exactly the kind
+            # of dead call `_withheld_tools` exists to prevent, the same
+            # reasoning `TEMPLATE_GEOMETRY_TOOLS` already gets above.
+            withheld.add("edit_deck_with_code")
+        elif self._render_will_follow():
+            # A script edits the rendered file; a render rebuilds it from the
+            # slides. Offered while another slide of the round is still to be
+            # redrafted - or after one already was - the script's fix would be
+            # overwritten by the render that redraft brings, and its slide,
+            # already taken off the round, would ship unfixed.
+            withheld.add("edit_deck_with_code")
+        return frozenset(withheld)
+
+    def _render_will_follow(self) -> bool:
+        ws = self.working_state
+        redrafted_since_validation = (ws.validated_serial >= 0
+                                      and ws.design_serial != ws.validated_serial)
+        return len(ws.revision_queue) > 1 or redrafted_since_validation
+
     def slide_directive(self) -> str:
         """What to do with the one slide the drafting phase is currently on."""
         from app.agent.pipeline import _slides_outstanding
@@ -2445,30 +3853,275 @@ class AgentLoop:
         outstanding = _slides_outstanding(self)
         if not outstanding:
             return "Every slide is drafted."
-        index = outstanding[0]
+        return self.slide_directive_for(outstanding[0])
+
+    def slide_directive_for(self, index: int, *, compiling: bool = False) -> str:
+        """What to do with one slide, in drafting's words or compile's.
+
+        Drafting is a sequence of calls ending in design_slide_content;
+        compile (#323) is one answer ending in write_slide, so the same
+        instruction names the step that answer ends with.
+        """
+        write = "write it with write_slide" if compiling else (
+            "call design_slide_content for this slide")
         plan = (self.working_state.presentation_structure or {}).get("slides") or []
         planned = plan[index] if index < len(plan) else {}
         title = planned.get("title") or planned.get("heading") or ""
-        revising = index in self.working_state.slides_needing_revision
+        revising = index in self.working_state.revision_queue
 
+        unfinished = self.working_state.compile_failures.get(index)
+        if unfinished and not compiling:
+            return (
+                f"Finish slide {index + 1}"
+                + (f' ("{title}")' if title else "")
+                + ". It was written in one answer, and this did not go through:\n"
+                + "\n".join(f"  - {f}" for f in unfinished)
+                + "\nFix that - rebuild the exhibit it needs with the build_* tool, "
+                f"or write the copy without it - then {write}."
+                + self._attached_exhibits_directive(index)
+                + self._exhibit_capacity_directive()
+                + self._headline_capacity_directive()
+            )
         if revising:
+            # Named only when it is actually offered - see the same rule
+            # below for select_layout. A positioning complaint (an overlap,
+            # something that needs to move rather than be reworded) is
+            # exactly what edit_deck_with_code exists for; naming it only
+            # when the tool is reachable keeps this instruction honest.
+            code_option = (
+                " If what is wrong is where something sits rather than what "
+                "it says, edit_deck_with_code can fix that directly on the "
+                "rendered slide instead of a full redraft."
+                if not compiling
+                and "edit_deck_with_code" not in self._withheld_tools() else ""
+            )
+            asked = [i for i in self.working_state.validation_issues
+                     if i.get("slideIndex") == index and i.get("type") == "user_request"]
+            if asked:
+                return (
+                    f"The user asked for a change to slide {index + 1}"
+                    + (f' ("{title}")' if title else "")
+                    + f": {asked[0].get('detail')!r}\n\nRedraft this slide so "
+                    f"it does that and keeps everything else about it, then {write}."
+                    + self._attached_exhibits_directive(index)
+                    + self._exhibit_capacity_directive()
+                    + self._headline_capacity_directive()
+                )
             return (
                 f"Revise slide {index + 1}"
                 + (f' ("{title}")' if title else "")
-                + " - it is the only slide being changed; every other slide is carried "
-                "over unchanged. Validation reported:\n"
-                + self._describe_validation_issues()
+                + (" - the slides this round revises are rewritten together, and "
+                   if compiling else
+                   " - the slides this round revises are redrafted one at a time, and ")
+                + "every slide validation did not flag is carried over unchanged. "
+                "Validation reported, for this slide:\n"
+                + self._describe_validation_issues(slide_index=index)
                 + "\nShorten the copy, give an oversized visual a smaller region, or move "
-                "it onto its own slide, then call design_slide_content for this slide."
+                f"it onto its own slide, then {write}."
+                + self._attached_exhibits_directive(index)
+                + self._exhibit_capacity_directive()
+                + self._headline_capacity_directive()
+                + code_option
+            )
+        # Named only when it is actually offered. This instruction reaches the
+        # model twice a turn - as the `## Next Step` block, and again as the
+        # nudge when a turn produced no tool call - so naming a withheld tool
+        # here does not merely mislead once, it re-issues the impossible
+        # instruction every time the model fails to follow it.
+        if compiling:
+            opening = (
+                ". In one answer, call any build_* tool its point needs (a "
+                "chart, table or metric row for figures; a block for content "
+                "with a shape), then write_slide with its copy. This slide only."
+            )
+        else:
+            opening = (
+                ". Call select_layout for slide_index=" + f"{index}, then any"
+                if "select_layout" not in self._withheld_tools()
+                else ". Call any"
+            ) + (
+                " build_* tool its point needs (a chart, table or metric "
+                "row for figures; a block for content with a shape), then "
+                f"design_slide_content for slide_index={index}. This slide only."
             )
         return (
             f"Draft slide {index + 1} of {len(plan) or index + 1}"
             + (f': "{title}"' if title else "")
-            + ". Call select_layout for slide_index="
-            + f"{index}, then any build_* tool its point needs (a chart, table or metric "
-            "row for figures; a block for content with a shape), then "
-            f"design_slide_content for slide_index={index}. This slide only."
+            + opening
+            + self._content_type_directive(planned, compiling=compiling)
+            + self._exhibit_capacity_directive()
+            + self._headline_capacity_directive()
+            + self._format_directive()
             + self._structure_directive()
+            + self._arc_directive(index)
+        )
+
+    def _attached_exhibits_directive(self, index: int) -> str:
+        """The exhibits a slide being revised already carries, by slot.
+
+        A revising model that cannot see what the page holds rebuilds its
+        table under a new name, and the page gains a second table instead of
+        a better one. `prepare_visual` makes that rebuild a replacement; this
+        tells the model so, and gives it the names to keep another exhibit on
+        a page that carries several.
+        """
+        attached = self.working_state.prepared_visuals.get(index) or []
+        if not attached:
+            return ""
+        lines = "\n".join(
+            f"- {block.get('type')}"
+            + (f' (slot "{block["slot"]}")' if block.get("slot") else "")
+            for block in attached
+        )
+        return (
+            "\nThis slide already carries:\n" + lines
+            + "\nRebuilding one of these replaces it rather than adding "
+            "another; to fix one of several of a kind, pass its slot."
+        )
+
+    def _exhibit_capacity_directive(self) -> str:
+        """How many exhibits a page of this deck's design language can hold.
+
+        Every arrangement in most packs has one exhibit slot. A slide drafted
+        with a diagram and a table had nowhere to go: it used to take the
+        whole deck down to the stock renderer (#351), and now it is split onto
+        a continuation page the plan never counted.
+        """
+        from app.design import run as design_run
+
+        pack = run_context.get_pack()
+        if pack is None:
+            return ""
+        capacity = design_run.exhibits_per_page(pack)
+        if capacity < 1:
+            return ""
+        most = "one chart, table, diagram or image" if capacity == 1 else (
+            f"{capacity} charts, tables, diagrams or images, counted together")
+        return (
+            f"\nA page in this deck's design holds at most {most}; build no "
+            "more than that for this slide. Material that needs more is more "
+            "than one slide."
+        )
+
+    def _headline_capacity_directive(self) -> str:
+        """How long a headline this deck's design can set at headline size.
+
+        A headline that overran its two lines was stepped down the ramp by
+        repair, and then every content headline was set at that smaller rung
+        so the deck keeps one voice (#357) - so one long headline shrinks all
+        of them. Stated here, it is written to fit instead.
+        """
+        from app.design import run as design_run
+
+        pack = run_context.get_pack()
+        if pack is None:
+            return ""
+        capacity = design_run.headline_capacity(pack)
+        if capacity < 20:
+            return ""
+        return (
+            f"\nA headline in this deck's design fits about {capacity} "
+            "characters at full size; keep it within that, or every headline "
+            "set at that size is made smaller to match."
+        )
+
+    def _content_type_directive(self, planned: dict, *, compiling: bool = False) -> str:
+        """What the plan already decided this slide needs, restated as an
+        instruction rather than left as a field the drafting turn never reads.
+
+        plan_presentation_structure reasons about whether a slide's key
+        points are chart or table material, or whether a page needs several
+        exhibits, and records the answer as `contentType`/`exhibitPlan` on
+        the plan. Until this, that reasoning went nowhere: the turn that
+        actually drafts the slide was never told what the plan had already
+        worked out, and had to notice the same thing again from a bare title
+        and key points with only a generic "a chart, table or metric row for
+        figures" aside - which a run stating "12.1 billion hours of Netflix
+        viewing" as a bullet, never as a chart, shows it does not reliably do.
+        """
+        # Where the exhibit goes in the order of work: before the copy's own
+        # call when drafting, beside it in the one answer when compiling.
+        then = " in the same answer as write_slide" if compiling else (
+            " before design_slide_content")
+        content_type = str(planned.get("contentType") or "").strip().lower()
+        if content_type == "chart":
+            return (
+                "\nThe plan calls for this to be a chart slide - its key "
+                "points are numbers that tell a story a reader would rather "
+                f"see than read. Call build_chart for this slide{then}; "
+                "do not write the figures as bullets "
+                "instead of building it."
+            )
+        if content_type == "table":
+            return (
+                "\nThe plan calls for this to be a table slide - its key "
+                "points are structured rows and columns. Call build_table "
+                f"for this slide{then}."
+            )
+        if content_type == "dashboard":
+            questions = [
+                str(q).strip() for q in (planned.get("exhibitPlan") or [])
+                if str(q or "").strip()
+            ]
+            listed = (
+                "\n".join(f"  {i}. {q}" for i, q in enumerate(questions, start=1))
+                if questions else "  (no exhibit plan was recorded - use your "
+                "judgment on what 2-4 exhibits this page needs)"
+            )
+            return (
+                "\nThe plan calls for this to be a dashboard page carrying "
+                "several exhibits, one answering each of these questions:\n"
+                f"{listed}\nBuild one exhibit per question - build_chart, "
+                "build_table, build_key_metrics or build_stat_callouts, "
+                f"whichever fits that question -{then}. "
+                "A dashboard page with only prose or only one exhibit has not "
+                "done what the plan asked."
+            )
+        if content_type == "image":
+            return (
+                "\nThe plan calls for this to be an image slide - call "
+                "select_source_image (or generate_image, if available) for "
+                f"this slide{then}."
+            )
+        return ""
+
+    def _format_directive(self) -> str:
+        """A standing reminder of the deck's own register, restated on every
+        drafting turn rather than said once at planning and forgotten.
+
+        `deck_format`'s vocabulary is folded into the planning prompt, but
+        planning happens once and drafting happens once per slide, many
+        turns later - and a plain "content" slide (no chart, no table, no
+        exhibit plan attached to it) is exactly the case
+        `_content_type_directive` says nothing about, which is most of a
+        deck. Without this, a slide the plan did not single out for a
+        specific content type had nothing at draft time distinguishing a
+        boardroom page from an academic one.
+        """
+        fmt = deck_format.by_id(self.working_state.deck_format)
+        return f"\nThis deck's pages read as: {fmt.vocabulary}."
+
+    def _arc_directive(self, index: int) -> str:
+        """What the arc check found wrong with *this* page, if anything.
+
+        Named per page rather than reported as a grade, because a grade is not
+        something a model can act on - "your deck does not argue anything" has
+        no next move in it, and "slide 4 ends on a topic label where a
+        position belongs" has exactly one.
+        """
+        arc = self.working_state.arc or {}
+        mine = [b for b in arc.get("breaks") or []
+                if b.get("slideIndex") == index]
+        if not mine:
+            return ""
+        lines = "\n".join(
+            f"- {b.get('observed')}; expected {b.get('expected')}"
+            for b in mine
+        )
+        return (
+            "\nThe outline check flagged this page's headline:\n" + lines
+            + "\nWrite a headline that states what this page found, so a "
+              "reader who reads only the headlines has read the argument."
         )
 
     def _structure_directive(self) -> str:
@@ -2574,7 +4227,10 @@ class AgentLoop:
         is told to say on the slide that the figures are unverified rather than
         chart them as though they were not.
         """
-        config, reason = ai_settings.resolve_search_config(self._settings_row)
+        if self._search_override is not None:
+            config, reason = self._search_override, ""
+        else:
+            config, reason = ai_settings.resolve_search_config(self._settings_row)
         if config is None:
             logger.info("deep_research_unavailable", reason=reason)
             return False
@@ -2619,16 +4275,28 @@ class AgentLoop:
         if fn_name == "plan_presentation_structure" and ws.accumulated_slides:
             return (
                 "Presentation structure cannot be replanned - slide content has "
-                "already been designed using the current structure. If the "
-                "structure genuinely needs to change, ask the user with "
-                "ask_user_question before restructuring; otherwise continue "
-                "designing the remaining slides in the existing plan."
+                "already been designed using the current structure. To ADD a slide "
+                "to a deck that already exists, do not replan: call "
+                "design_slide_content with placement=\"insert\" and slide_index set "
+                "to the position the new slide should occupy, and the slides from "
+                "there on shift down to make room. If the structure genuinely needs "
+                "to change beyond that, ask the user with ask_user_question before "
+                "restructuring; otherwise continue designing the remaining slides in "
+                "the existing plan."
             )
 
         # The backstop for a run with nothing behind its figures: the deck still
         # gets built, but a number nobody can check does not get an axis and a
         # legend. Text can be hedged on the slide; a chart cannot.
-        if fn_name in BUILD_VISUAL_TOOLS and not self._has_grounding():
+        #
+        # A diagram is only caught by this when it actually carries figures.
+        # "Request goes to the load balancer, then the application server,
+        # then the database" states no measurement, and it is usually the
+        # user's own architecture described in their own brief - so blocking
+        # it left process and architecture decks, the ones that most need a
+        # diagram and have no numbers at all, falling back to bullet lists.
+        if (fn_name in BUILD_VISUAL_TOOLS and not self._has_grounding()
+                and _visual_asserts_figures(fn_name, fn_args)):
             return (
                 "There is no source behind this figure - no research was run and no "
                 "document was uploaded, so any number here would come from memory. "
@@ -2673,7 +4341,17 @@ class AgentLoop:
                     "slide is carried over unchanged automatically."
                 )
 
-            if slide_index is not None and slide_index not in ws.selected_layouts:
+            # A run composing against a design language pack has no layout to
+            # select: which archetype carries a page is decided in code, after
+            # the material for it exists, and `select_layout` is not even
+            # offered. Demanding one here left the model with a precondition
+            # it could not satisfy, and the draft phase span on
+            # `select_source_image` until it ran out of turns.
+            if (
+                not ws.pack_id
+                and slide_index is not None
+                and slide_index not in ws.selected_layouts
+            ):
                 return (
                     f"No layout has been selected for slide {slide_index} yet. Call "
                     f"select_layout for slide_index={slide_index} first - its result "
@@ -2723,6 +4401,10 @@ class AgentLoop:
                     "validate_rendered_output checks the actual rendered .pptx file, which "
                     "does not exist yet. Call finalize_and_render_pptx first."
                 )
+            # A script changed the file since the last check: one more look,
+            # whatever the budget, so what is handed over has been seen.
+            if ws.edited_since_validation:
+                return None
             if ws.validation_attempts >= ws.MAX_VALIDATION_ATTEMPTS:
                 return (
                     f"Validation retry limit reached ({ws.MAX_VALIDATION_ATTEMPTS} attempts). "
@@ -2840,6 +4522,53 @@ class AgentLoop:
         session_id: uuid.UUID,
         current_phase: str,
         step: str | None = None,
+        chosen_by: str = "model",
+    ) -> AsyncIterator[tuple[str, object]]:
+        """Dispatch one tool call inside its own trace span."""
+        if chosen_by == "model":
+            # Copy already written is compile's to hand over (#323); a model
+            # passing it would skip the call that writes the copy.
+            fn_args.pop("written", None)
+        with trace.span(
+            "tool", fn_name,
+            reason=("written by the model in its compile answer"
+                    if chosen_by == "compile" else f"called by the {chosen_by}"),
+            step=step,
+            callId=call_id,
+        ) as tool_span:
+            async for kind, payload in self._dispatch_tool_body(
+                fn_name, fn_args, call_id,
+                context=context, session_id=session_id,
+                current_phase=current_phase, step=step,
+            ):
+                if kind == "result" and tool_span is not None:
+                    tool_span.set(success=bool(payload.success))
+                    if isinstance(payload.data, dict) and "changed" in payload.data:
+                        # A script that only read the deck left the file as
+                        # validation saw it; a check of what shipped needs
+                        # to tell the two apart.
+                        tool_span.set(changed=bool(payload.data["changed"]))
+                    if isinstance(payload.data, dict) and payload.data.get("renderPath"):
+                        tool_span.set(renderPath=payload.data["renderPath"],
+                                      plainPages=payload.data.get("plainPages") or [],
+                                      belowFloorPages=(payload.data.get("belowFloor")
+                                                       or {}).get("pages") or [])
+                    if not payload.success:
+                        tool_span.status = (
+                            "rejected" if payload.rejected else "failed")
+                        tool_span.error = str(payload.error or "")[:2000]
+                yield kind, payload
+
+    async def _dispatch_tool_body(
+        self,
+        fn_name: str,
+        fn_args: dict,
+        call_id: str,
+        *,
+        context: dict,
+        session_id: uuid.UUID,
+        current_phase: str,
+        step: str | None = None,
     ) -> AsyncIterator[tuple[str, object]]:
         """Run one tool call and record everything it changes about the run.
 
@@ -2869,6 +4598,12 @@ class AgentLoop:
             # knows, and the second of which is the first direction.
             fn_args["session_id"] = str(session_id)
             fn_args["design_system"] = design_system
+            # What kind of presentation this is - resolved once, from the
+            # user's own words, at the hub near user_confirmed_autonomy. The
+            # tool falls back to re-reading `answers` itself when this is not
+            # supplied (a test, an offline harness), but the loop is the
+            # authoritative source whenever it can be.
+            fn_args["deck_format"] = self.working_state.deck_format
             # Everything the user has already told us, so all three
             # directions respect it. Passed rather than trusted to the
             # model's own summary: the answers are on the working
@@ -2889,11 +4624,13 @@ class AgentLoop:
                 _project_design_system(fn_name, design_system)
             )
             fn_args["detail_level"] = self.detail_level
+            fn_args["deck_format"] = self.working_state.deck_format
         elif fn_name == "design_slide_content":
             fn_args["design_system_context"] = json.dumps(
                 _project_design_system(fn_name, design_system)
             )
             fn_args["detail_level"] = self.detail_level
+            fn_args["deck_format"] = self.working_state.deck_format
             slide_index = fn_args.get("slide_index")
             if slide_index in self.working_state.selected_layouts:
                 fn_args["layout_info"] = json.dumps(
@@ -2989,6 +4726,17 @@ class AgentLoop:
             } if is_revision else {}),
         }, step=step)
 
+        # The code the model wrote, into the box that shows it - before the
+        # sandbox runs it, so a reader watches the script appear rather than
+        # being handed a log entry after the fact.
+        #
+        # After the `tool_call` event, not before, because these carry the
+        # same id: the interface hangs the code box on that call's own step,
+        # and a code event arriving first would have nothing to hang on.
+        if fn_name == "edit_deck_with_code":
+            for event in self._code_events(fn_args, call_id, current_phase, step):
+                yield "event", event
+
         # Execute tool
         tool_start = time.time()
         tool_result = None
@@ -3036,7 +4784,8 @@ class AgentLoop:
             # Tools make their own LLM calls, so a rate limit can strike
             # inside one - narrate those waits the same way.
             async for kind, payload in self._with_retry_notices(
-                self._execute_tool(fn_name, fn_args), current_phase
+                self._execute_tool(fn_name, _tool_arguments(fn_name, fn_args)),
+                current_phase,
             ):
                 if kind == "event":
                     yield "event", payload
@@ -3086,6 +4835,34 @@ class AgentLoop:
         if fn_name == "finalize_and_render_pptx" and tool_result.success:
             self.working_state.has_called_finalize = True
             self.working_state.last_rendered_path = tool_result.data.get("filePath")
+            self.working_state.below_floor = {
+                int(k): float(v) for k, v in
+                ((tool_result.data.get("belowFloor") or {}).get("slides") or {}).items()}
+            self.working_state.placed_arrangements = {
+                int(index): list(archetypes) for index, archetypes in
+                (tool_result.data.get("placedArrangements") or {}).items()}
+            self.working_state.layout_exhausted = {
+                int(index) for index in
+                tool_result.data.get("unmovableSlides") or []}
+            self.working_state.copy_over_budget = {
+                int(index): [dict(field) for field in fields] for index, fields in
+                (tool_result.data.get("copyOverBudget") or {}).items()}
+            # Visible to the tools as well as to the loop, so a tool that
+            # edits the deck edits the same file the download and the vision
+            # check read rather than a copy of it.
+            self._rendered_path_token = run_context.set_rendered_path(
+                self.working_state.last_rendered_path)
+            if self.working_state.code_edit_log and self.working_state.last_rendered_path:
+                # The render rebuilt the file from the slides, so every edit a
+                # script made earlier is gone from it. Put them back.
+                from app.agent.tools import edit_deck_with_code as _edits
+
+                problems = await asyncio.to_thread(
+                    _edits.replay, self.working_state.last_rendered_path,
+                    self.working_state.code_edit_log)
+                logger.info("code_edits_replayed",
+                            edits=len(self.working_state.code_edit_log),
+                            problems=problems)
             preview_urls = tool_result.data.get("previewUrls", [])
 
             # Preview page N is the Nth slide of the RENDERED deck, so
@@ -3093,6 +4870,12 @@ class AgentLoop:
             # renderer was given - not the order the slides happened to
             # be designed in.
             rendered_order = self.working_state.ordered_slides()
+            # The renderer appends pages the agent never designed - today the
+            # Sources appendix - so ordered_slides() runs out before the
+            # previews do. renderedOutline covers every page of the file, and
+            # carries the headline the UI needs to label a page it has no
+            # design record for.
+            outline = tool_result.data.get("renderedOutline") or []
             self.working_state.pending_slide_previews = [
                 {
                     "slideIndex": slide_idx,
@@ -3100,6 +4883,16 @@ class AgentLoop:
                         rendered_order[slide_idx]
                         if slide_idx < len(rendered_order)
                         else None
+                    ),
+                    "slideTitle": (
+                        outline[slide_idx].get("title")
+                        if slide_idx < len(outline) and isinstance(outline[slide_idx], dict)
+                        else None
+                    ),
+                    "injected": bool(
+                        outline[slide_idx].get("injected")
+                        if slide_idx < len(outline) and isinstance(outline[slide_idx], dict)
+                        else slide_idx >= len(rendered_order)
                     ),
                     "previewUrl": preview_url,
                 }
@@ -3109,6 +4902,8 @@ class AgentLoop:
             # attempt, so the fresh set must be publishable again.
             self.working_state.previews_published = False
             self.working_state.pending_render_result = dict(tool_result.data or {})
+            if self.working_state.code_edit_log:
+                await self._refresh_previews(session_id)
 
             # Working state is now cleared once validate_rendered_output
             # has actually run (or hit its retry cap) below, not here -
@@ -3120,6 +4915,7 @@ class AgentLoop:
             # or blocked by the retry cap below, must not count as an
             # attempt or be mistaken for "validation done".
             self.working_state.has_called_validate = True
+            self.working_state.edited_since_validation = False
 
             if tool_result.success:
                 # Only a completed check spends the revision budget. A
@@ -3129,18 +4925,65 @@ class AgentLoop:
                 # deck, and burning an attempt on it used to push a
                 # still-broken deck to the cap and out the door.
                 self.working_state.validation_attempts += 1
-                issues = (tool_result.data or {}).get("issues", [])
+                issues = list((tool_result.data or {}).get("issues", []))
+                issues.extend(self.working_state.copy_findings())
                 self.working_state.validation_issues = issues
                 self.working_state.validation_clean = not issues
-                self.working_state.slides_needing_revision = (
-                    self.working_state.compute_slides_needing_revision(issues)
-                )
-                self.working_state.validated_serial = self.working_state.design_serial
                 at_cap = (
                     self.working_state.validation_attempts
                     >= self.working_state.MAX_VALIDATION_ATTEMPTS
                 )
-                validation_done = not issues or at_cap
+                # During an amendment, what the change's script left goes
+                # back to the change step, once; the ladder would re-place
+                # or redraft pages the user never asked to change.
+                state = self.working_state
+                caused = state.caused_by_change(issues)
+                if (caused and not at_cap
+                        and state.change_fix_rounds < state.CHANGE_FIX_ROUNDS):
+                    state.change_findings = caused
+                    state.change_fix_rounds += 1
+                    state.amend_done = False
+                # Only what the deck did not already carry, and the change
+                # did not cause, is acted on here. The rest is still
+                # reported in the closing message.
+                issues = self.working_state.actionable(issues)
+                # A layout verdict is answered by placing the page again, not
+                # by rewriting it. Redrafting a slide to move a frame down
+                # throws away copy nobody complained about and brings back
+                # different copy, which is how a page that had one thing wrong
+                # comes back with three.
+                # At the cap nothing is scheduled: no re-placement, no redraft.
+                # Anything done now would be rendered and shipped without a
+                # validation after it.
+                relayout = {} if at_cap else self.working_state.layout_revision_for(issues)
+                placed = self.working_state.placed_arrangements
+                for index in relayout:
+                    used = placed.get(index) or []
+                    self.working_state.record_layout_revision(
+                        index, used[0] if used else "")
+                if relayout:
+                    # The deck has to be laid out and rendered again, and
+                    # `render_is_current` reads the design serial - so bumping
+                    # it is what walks the run back to `render` without
+                    # touching a single slide's words.
+                    self.working_state.design_serial += 1
+                    logger.info("layout_revision_requested",
+                                slides=sorted(relayout),
+                                rungs=sorted(set(relayout.values())))
+                self.working_state.slides_needing_revision = (
+                    self.working_state.compute_slides_needing_revision(
+                        [i for i in issues
+                         if i.get("slideIndex") not in relayout])
+                )
+                self.working_state.validated_serial = self.working_state.design_serial
+                # A change sent back to correct its edit is not done either.
+                validation_done = ((not issues or at_cap)
+                                   and not (state.amending and not state.amend_done))
+                self.working_state.revision_queue = (
+                    [] if validation_done
+                    else self.working_state.revision_round(issues, exclude=relayout))
+                self.working_state.compile_tried = set()
+                self.working_state.compile_failures = {}
             else:
                 self.working_state.validation_failures += 1
                 validation_done = (
@@ -3152,7 +4995,9 @@ class AgentLoop:
                 # slides are genuinely final - publish their previews.
                 for preview_event in self._flush_slide_previews():
                     yield "event", preview_event
-                await self._clear_working_state(session_id)
+                # The snapshot is written, and the working state cleared,
+                # once the run ends (see `run`): the amend backstop may still
+                # edit the deck after this.
 
 
         # Record completed tool for context preservation
@@ -3188,10 +5033,26 @@ class AgentLoop:
                         )
                         structure["deviations"] = deviations
                     self.working_state.presentation_structure = structure
+                    self._resolve_pack(structure, context)
+                    self._read_the_arc(structure)
 
             if fn_name == "design_slide_content":
                 if tool_result.data and "slideIndex" in tool_result.data:
-                    self.working_state.resolve_and_add_slide(tool_result.data)
+                    # "insert" is how a follow-up turn adds a slide between two
+                    # existing ones. Without it every design lands via
+                    # replace-or-append, so "add a slide after slide 2"
+                    # overwrote slide 2 instead of pushing it to 3.
+                    inserting = str(fn_args.get("placement") or "").strip().lower() == "insert"
+                    self.working_state.resolve_and_add_slide(
+                        tool_result.data, insert=inserting
+                    )
+                    redrafted = tool_result.data.get("slideIndex")
+                    if redrafted in self.working_state.revision_queue:
+                        self.working_state.revision_queue.remove(redrafted)
+                    if fn_args.get("written") is None:
+                        # The drafting conversation rewrote it, so what
+                        # compile could not finish on it is answered.
+                        self.working_state.compile_failures.pop(redrafted, None)
 
             # Recorded by slide_index so design_slide_content's
             # layout_info can be auto-supplied later (see the
@@ -3277,6 +5138,18 @@ class AgentLoop:
             # Catalog embedded images extracted from the user's own
             # documents (PDF/DOCX) - see analyze_document. Reused,
             # never generated.
+            if fn_name == "analyze_document" and tool_result.data:
+                source_text = tool_result.data.get("sourceText") or ""
+                if source_text:
+                    # Kept so a figure can be traced to an offset inside the
+                    # document rather than merely to the file it came from.
+                    self.working_state.document_texts.append({
+                        "id": tool_result.data.get("document_path") or "",
+                        "title": os.path.basename(
+                            tool_result.data.get("document_path") or ""),
+                        "text": source_text,
+                    })
+
             if fn_name == "analyze_document" and tool_result.data and tool_result.data.get("images"):
                 image_catalog = context.setdefault("imageCatalog", [])
                 image_catalog.extend(tool_result.data["images"])
@@ -3285,27 +5158,107 @@ class AgentLoop:
 
             # Charts/tables/metric rows are attached to their slide
             # here rather than handed back for the model to re-state.
-            if (fn_name in BUILD_VISUAL_TOOLS
-                    or fn_name in BLOCK_BUILDER_TOOLS
-                    or fn_name == "generate_image") and tool_result.data:
-                target = tool_result.data.get("slideIndex")
-                block = tool_result.data.get("content")
-                if target is not None and block:
-                    slots = self.working_state.prepared_visuals.setdefault(target, [])
-                    # One block per type, per region, *per slot*: rebuilding
-                    # the stat callouts in the right rail must not discard the
-                    # ones in the left, and a dashboard's bridge chart must not
-                    # discard the mix chart beside it. Region alone was enough
-                    # while a slide carried one chart; on a page with no region
-                    # tree two charts both bind to the same nothing, and the
-                    # second silently replaced the first - the tool reported
-                    # success and the exhibit never reached the page.
-                    key = slot_key(block)
-                    slots[:] = [
-                        existing for existing in slots
-                        if slot_key(existing) != key
-                    ]
-                    slots.append(block)
+            self._attach_visual(fn_name, tool_result)
+
+            if fn_name == "revise_slides" and tool_result.success:
+                ws = self.working_state
+                data = tool_result.data or {}
+                total = len(ws.accumulated_slides) or int(
+                    (ws.presentation_structure or {}).get("totalSlides") or 0)
+                indices = [i for i in data.get("slideIndices", []) if i < total]
+                if indices:
+                    ws.validation_issues = [
+                        {"slideIndex": i, "type": "user_request", "fix": "redraft",
+                         "detail": data.get("instruction", "")} for i in indices]
+                    ws.revision_queue = list(indices)
+                    ws.compile_tried = set()
+                    ws.compile_failures = {}
+                    ws.slides_needing_revision = list(indices)
+                    ws.amend_redrafted |= set(indices)
+                    ws.design_serial += 1
+                    ws.amend_done = True
+            if fn_name == "edit_deck_with_code":
+                self._remember_code_attempt(fn_args, tool_result)
+                # A script that only looked at the deck changed nothing: it is
+                # not an edit, does not close the phase and is not replayed.
+                if tool_result.success and (tool_result.data or {}).get("changed", True):
+                    # Counted in every phase, so a mid-draft fix registers as
+                    # progress even though it moves none of the other fields
+                    # `_progress_marker` watches.
+                    self.working_state.code_edits_applied += 1
+                    self.working_state.edited_since_validation = True
+                    # The file changed without a render, in whichever phase,
+                    # so every copy budget measured before it is stale; the
+                    # next render measures afresh.
+                    self.working_state.copy_over_budget = {}
+                    # `code_amendment_done` closes the `amend` phase
+                    # specifically - scoped to it, or a fix applied earlier
+                    # while drafting would mark that later, unrelated
+                    # backstop phase as already finished before it ever ran.
+                    # `step` carries the pipeline phase's own name ("draft",
+                    # "amend"); `current_phase` here is that phase's SSE
+                    # label ("content_generation", "validation"), which
+                    # `validate` and `amend` share - not unique enough to
+                    # tell them apart.
+                    # Only the user's requested change is replayed after a
+                    # render. A repair a script made to a flagged slide
+                    # belongs to the slide as it then was, and would be run
+                    # again on one that has since been rewritten.
+                    if step == "change":
+                        self.working_state.code_edit_log.append({
+                            "source": str((tool_result.data or {}).get("source") or ""),
+                            "intent": str(fn_args.get("intent") or ""),
+                            "slide_index": fn_args.get("slide_index"),
+                        })
+                    await self._refresh_previews(session_id)
+                    if step == "change":
+                        self.working_state.amend_done = True
+                        self.working_state.amend_edited = True
+                        self.working_state.change_findings = []
+                    if step == "amend":
+                        # One pass. A script that did not fix the deck is
+                        # unlikely to be fixed by another script, and the run
+                        # has to end - so a success closes the phase and a
+                        # failure spends one of its four turns.
+                        self.working_state.code_amendment_done = True
+                    elif step == "draft":
+                        # Editing the rendered file directly does not touch
+                        # `design_serial`, so unlike a redraft it cannot rely
+                        # on `render`/`validate` being walked back into to
+                        # confirm it. Nothing else will ever drop this slide
+                        # from `slides_needing_revision` - only a fresh
+                        # `validate_rendered_output` call recomputes that
+                        # list, and that call is only reachable once `draft`
+                        # reports itself done. So a fix aimed at the slide
+                        # actually flagged clears the flag itself, which lets
+                        # the walker move on to `validate` and check the
+                        # edited file for real; a script that missed and gets
+                        # flagged again there costs one revision pass, not an
+                        # unresolvable one.
+                        #
+                        # Both lists, not just the first: `_slides_outstanding`
+                        # reads an *empty* `slides_needing_revision` as "no
+                        # restriction - revise the whole deck" (the
+                        # FULL_REWRITE_ISSUE_RATIO case), which is exactly
+                        # backwards for "the one flagged slide is resolved".
+                        # `validation_issues` has to drop to empty alongside it
+                        # so that reading is never reached, and so
+                        # `_validation_settled` still calls the deck unsettled
+                        # - not clean - which is what sends the walker back
+                        # into `validate` to actually check the edited file
+                        # rather than taking the fix on faith.
+                        target = fn_args.get("slide_index")
+                        if target in self.working_state.revision_queue:
+                            self.working_state.revision_queue.remove(target)
+                        if target in self.working_state.slides_needing_revision:
+                            self.working_state.slides_needing_revision = [
+                                i for i in self.working_state.slides_needing_revision
+                                if i != target
+                            ]
+                            self.working_state.validation_issues = [
+                                issue for issue in self.working_state.validation_issues
+                                if issue.get("slideIndex") != target
+                            ]
 
             # compose_slide_regions resolves geometry rather than content,
             # so it attaches to the slide's own regions list. Recomposing
@@ -3550,9 +5503,26 @@ class AgentLoop:
         The card sends the direction's name *and* its id, so the id is what
         this matches on and the name is only the fallback - two directions can
         be named similarly, and a user typing a reply of their own will send
-        neither. A reply that matches nothing leaves the run on whatever
-        design system it already had, which is the safe direction: an
-        unrecognised answer must not silently pick one.
+        neither.
+
+        A reply that names none of them used to resolve to nothing, on the
+        principle that an unrecognised answer must not silently pick one. The
+        principle is right; the outcome was not. The guard on
+        ``finalize_and_render_pptx`` refuses unless a direction was chosen, a
+        template was supplied, or autonomy was recorded - so a user who
+        answered the question in their own words ("Yes, proceed with your
+        recommendation") wedged the run: the guard told the model to ask a
+        question it had already asked and had answered, and nothing could
+        satisfy it. Three finished slides were binned and the user was told
+        nothing was generated.
+
+        So a reply that names no direction is read as deferring the choice.
+        The guard exists so nobody is surprised by a look they were never
+        asked about, and once they have been asked and have replied that
+        condition is met, whatever words they used. What answers the original
+        principle is that the pick is no longer *silent*: ``direction_deferred``
+        is set, and the caller says out loud which direction it used and that
+        it chose on the user's behalf.
         """
         ws = self.working_state
         if not ws.offered_directions or ws.chosen_direction is not None:
@@ -3574,7 +5544,33 @@ class AgentLoop:
             name = str(direction.get("name") or "").strip().lower()
             if name and name in said:
                 return direction
+
+        # Answered, but not with a direction. Only once there is a reply that
+        # arrived *after* the offer - before that the run is still waiting,
+        # and defaulting then would pick a look nobody had seen.
+        if self._replied_since_directions_were_offered(chat_messages):
+            ws.direction_deferred = True
+            return offered[0]
         return None
+
+    def _replied_since_directions_were_offered(self, chat_messages: list[dict]) -> bool:
+        """Whether the user has said anything since the directions went out.
+
+        The run pauses on that question and only resumes when a message
+        arrives, so with directions offered and none chosen, a user message at
+        the end of the transcript is the answer to it.
+        """
+        for message in reversed(chat_messages):
+            role = message.get("role")
+            if role == "user":
+                return bool(str(message.get("content") or "").strip())
+            if role == "assistant":
+                # The newest turn is the agent's, so the question is still
+                # outstanding. Walking past it would find the brief that
+                # started the run and read it as an answer to a question it
+                # predates.
+                return False
+        return False
 
     def _apply_colour_choice(
         self, chosen: dict, chat_messages: list[dict]
@@ -3815,8 +5811,14 @@ class AgentLoop:
             "",
             "## Templates & Design System",
             "",
-            "- If the user uploaded a template, its design system is already in your context below - use it directly and do NOT call extract_template_design_system.",
-            "- If the user has NO template or asks for a 'default' template, call extract_template_design_system with NO template_path (or template_path='default'). It returns a built-in default design system. NEVER invent a filename like 'default_template.pptx' - it does not exist and will fail.",
+            # The loop loads the design system itself, in `_ensure_design_system`,
+            # and `extract_template_design_system` is in no phase's toolset - so
+            # this used to instruct the model to call a tool it has never been
+            # offered on any run. Same defect as the geometry tools, found by
+            # the same invariant.
+            "- The deck's design system is already in your context below, whether "
+            "it came from an uploaded template or from the built-in default. Use it "
+            "directly. You do not load it and there is no tool for you to call.",
             "- Do NOT ask the user to upload a template if they already said to use a default. Proceed with the built-in default.",
             "",
             "## Presentation Detail Level",
@@ -3885,22 +5887,7 @@ class AgentLoop:
                 "",
             ])
         else:
-            prompt_parts.extend([
-                "## Sourcing Content (Deep Thinking is OFF)",
-                "",
-                "- You have no web access on this run, and no research pass runs before you write. Everything on the deck has to come from the user's documents, the conversation, or what you already know - there is no fourth source, and inventing one is not an option this run has.",
-                "- A NAMED, SPECIFIC claim - a company, a person, a product, a dollar figure, a percentage, a date, a statistic - stated as plain fact is a claim you are telling the user is true. If it is not in the user's documents or the conversation, and you are not genuinely certain of it, you have exactly two options: qualify it in the text itself ('a figure on the order of...', 'this varies by source, but a commonly cited estimate is...', 'exact figures were not available; directionally...'), or leave it out and write the point qualitatively instead. There is no third option where you state a specific number or a specific name with no source and no hedge, because the sentence that resulted is indistinguishable from a properly sourced one to the person reading it - the same sentence you would use if you actually knew it.",
-                "- Concretely: 'partnerships with SolarCo and WindTech' invents companies that do not exist. '40% North America, 30% Europe, 30% Asia' invents a distribution nobody gave you. '$10 million' invents a figure with no source, then reused as a different slide's total. Every one of those reads as sourced, and not a single one actually was. This is not a hypothetical - it is what an unqualified run of this exact prompt has actually produced.",
-                "- This applies with full force to build_chart, build_table and "
-                "build_key_metrics. A chart is a stronger claim than a sentence, not a "
-                "weaker one - it tells the reader these numbers were measured, not typed. "
-                "Only build a visual from figures present in the user's documents, the "
-                "conversation, or facts you are genuinely confident of. If a slide's point "
-                "is numeric but you do not have real numbers for it, do not invent placeholder "
-                "ones to fill the chart shape - write the point as prose, qualified, or say "
-                "on the slide and in its notes that the figures were not available.",
-                "",
-            ])
+            prompt_parts.extend(_UNSOURCED_RULES)
 
         research_tool = ["web_search — Search the web for real facts and return cited sources"] \
             if self.mode == MODE_DEEP else []
@@ -3921,7 +5908,6 @@ class AgentLoop:
         ] if self.image_connection is not None else []
         tool_lines = [
             *document_tools,
-            "extract_template_design_system — Parse a template's design system, or get the built-in default (omit template_path). Call it once; if a design system is already in your context below, it is already loaded",
             *research_tool,
             "propose_design_directions — Author three whole design systems for this deck and "
             "render them as specimen slides for the user to choose between (pauses the "
@@ -3940,6 +5926,7 @@ class AgentLoop:
             "much, a diagram shows how it fits together",
             "build_table — Build a validated table for a slide from typed columns and rows",
             "build_key_metrics — Build a row of 2-4 headline figures for a slide",
+            "compute_visual_with_code — Write a short script to compute and draw one figure none of the build_* tools can express. Checked before it runs and before its output is attached; use a build_* tool instead whenever one has the shape",
             "design_slide_content — Generate a slide's title and copy (visuals come from the build_* tools)",
             "validate_slide_json — Validate slide JSON against the schema before rendering",
             "select_source_image — Reuse a confidently-matching image already extracted from the user's own source material (never generates new images)",
@@ -3947,56 +5934,21 @@ class AgentLoop:
             "suggested answers (pauses the workflow until they reply)",
             "finalize_and_render_pptx — Render the final PPTX file",
             "validate_rendered_output — Check the ACTUAL rendered output: overflow/overlap in the real geometry, plus placeholder copy, repeated points, bullets restating a chart, and package integrity (MUST be called after finalize_and_render_pptx, and is the true last step)",
+            "revise_slides — Send slides of a finished deck back to be redrafted with the user's request as the instruction (changes to what a slide says or shows)",
+            "edit_deck_with_code — Write a short script that opens the already-rendered deck with python-pptx and fixes one precise thing (an overlap, a shape's position, a slide that needs moving) - only once finalize_and_render_pptx has produced a file to edit. Checked before it runs and before its edit is kept. Prefer design_slide_content for an ordinary content fix; reach for this when the fix is about WHERE something sits rather than what it says",
         ]
-        prompt_parts.extend([
-            "## Building Visuals",
-            "",
-            "- Charts, tables and metric rows are built with the build_* tools, not "
-            "written as JSON inside design_slide_content. Each one validates what you "
-            "give it (series lengths against categories, plain numbers, rows against "
-            "columns) and tells you exactly what is wrong if it does not fit, so a "
-            "malformed visual is caught where you stated it rather than silently "
-            "dropped at render time.",
-            "- Call build_chart/build_table/build_key_metrics with the slide_index "
-            "BEFORE calling design_slide_content for that slide.",
-            "- A slide showing ONE thing needs no regions: build the exhibit and "
-            "let it take the page. A slide with two or more genuinely different "
-            "things to show, and no template composition that fits, is composed "
-            "first with compose_slide_regions and then each exhibit is built with "
-            "the region_id it belongs in. Give two exhibits of the same type "
-            "different slot names so both survive.",
-            "- Composing a page is not a reason to fill it. Four exhibits "
-            "answering the same question read worse than one answering it once, "
-            "and an exhibit built from figures the material does not have is the "
-            "worst outcome available. Compose because the content needs the room.",
-            "- Units belong in the series name or the axis title, never inside the "
-            "numbers: \"Revenue (US$ billions)\" with values [29.1, 32.3], not "
-            "[\"29.1B\", \"32.3B\"].",
-            "- Pick the chart type by the question the slide asks, not by habit. "
-            "A bar chart is the answer to \"how do these compare\" and to nothing "
-            "else, and a deck whose every exhibit is a bar chart has asked one "
-            "question of everything: "
-            "line for change over time; bar for comparison across categories, or "
-            "barh when the category names are long; stacked for what a total is "
-            "made of; stacked100 for what changed underneath a total that barely "
-            "moved; waterfall for where the movement between two totals came from "
-            "(the revenue or cost bridge); slope for who moved up and who moved "
-            "down between two dates; dumbbell for the size of a gap - plan against "
-            "actual, us against peers; bullet for whether a measure is hitting its "
-            "target; heatmap for the hot spots in a dense matrix; combo for a "
-            "volume and a rate that only mean something together; donut or pie for "
-            "parts of one whole; scatter for a relationship between two measures.",
-            "- Do not state a second axis, a target or a waterfall subtotal by "
-            "leaving it to be worked out from the numbers. Say which series is the "
-            "rate, what each target is, which bars are totals. A chart that "
-            "guesses is wrong in a way that looks fine.",
-            "- A visual REPLACES the prose it shows. Once a chart is attached, the "
-            "slide's bullets should interpret it, not repeat its figures.",
-            "- Only ever chart or tabulate figures that genuinely appear in the source "
-            "material, the research results or the conversation. Never invent, "
-            "estimate or round-trip a number you are not sure of.",
-            "",
-        ])
+        # Same rule as document_tools and image_tools above, applied to the
+        # whole list rather than to the two entries that happened to need it.
+        # A line's first word is its tool name, so a withheld tool drops out
+        # wherever it is described without every describing site having to
+        # know the rule.
+        withheld = self._withheld_tools()
+        tool_lines = [
+            line for line in tool_lines
+            if line.split(" ", 1)[0] not in withheld
+        ]
+
+        prompt_parts.extend(self._visuals_lines(withheld))
         prompt_parts.append("## Tools")
         prompt_parts.append(
             "What each tool does. You are only offered the ones the current step needs, "
@@ -4028,23 +5980,7 @@ class AgentLoop:
             )
             prompt_parts.append("")
 
-        if context.get("research"):
-            findings = context["research"]
-            distinct_sources = len({r.get("url") for r in findings if r.get("url")})
-            prompt_parts.append("## Research Findings (from web_search)")
-            prompt_parts.append(
-                f"{len(findings)} findings from {distinct_sources} distinct sources. Base your "
-                "factual content on them, and prefer a figure that appears in more than one of "
-                "them over one that appears in only a single source. Do NOT call web_search "
-                "again for topics already covered below. These sources are shown to the user "
-                "as citations."
-            )
-            for idx, r in enumerate(findings, 1):
-                snippet = (r.get("snippet") or "")[:RESEARCH_SNIPPET_CHARS]
-                prompt_parts.append(
-                    f"{idx}. [{r.get('title', '')}]({r.get('url', '')}) - {snippet}"
-                )
-            prompt_parts.append("")
+        prompt_parts.extend(self._research_lines(context))
 
         prompt_parts.extend([
             "",
@@ -4063,6 +5999,105 @@ class AgentLoop:
         ])
 
         return "\n".join(prompt_parts)
+
+    def _visuals_lines(self, withheld: frozenset[str], *, compiling: bool = False) -> list[str]:
+        """How exhibits are built, for the drafting prompt and for compile.
+
+        Compile (#323) writes a slide's exhibits and its copy in one answer,
+        so the order it is told is that answer's, not a sequence of calls.
+        """
+        copy_step = "the slide" if compiling else "design_slide_content"
+        order = (
+            "- Put a slide's build_chart/build_table/build_key_metrics calls in "
+            "the same answer as its write_slide call."
+            if compiling else
+            "- Call build_chart/build_table/build_key_metrics with the slide_index "
+            "BEFORE calling design_slide_content for that slide."
+        )
+        # `compose_slide_regions` divides a page only when the run is choosing
+        # its own geometry. On a design language the archetype already says
+        # where the exhibits go, so the model is told the truth about that
+        # instead of being pointed at a tool it does not have.
+        composition_advice = (
+            "- A slide showing ONE thing needs no regions: build the exhibit and "
+            "let it take the page. A slide with two or more genuinely different "
+            "things to show, and no template composition that fits, is composed "
+            "first with compose_slide_regions and then each exhibit is built with "
+            "the region_id it belongs in. Give two exhibits of the same type "
+            "different slot names so both survive."
+            if "compose_slide_regions" not in withheld else
+            "- You do not place exhibits on this run. Build what the slide's "
+            "point needs and the design language puts it where its own page "
+            "vocabulary says it goes. A slide with two genuinely different "
+            "things to show gets both built; give two exhibits of the same "
+            "type different slot names so both survive."
+        )
+        return [
+            "## Building Visuals",
+            "",
+            "- Charts, tables and metric rows are built with the build_* tools, not "
+            f"written as JSON inside {copy_step}. Each one validates what you "
+            "give it (series lengths against categories, plain numbers, rows against "
+            "columns) and tells you exactly what is wrong if it does not fit, so a "
+            "malformed visual is caught where you stated it rather than silently "
+            "dropped at render time.",
+            order,
+            composition_advice,
+            "- Composing a page is not a reason to fill it. Four exhibits "
+            "answering the same question read worse than one answering it once, "
+            "and an exhibit built from figures the material does not have is the "
+            "worst outcome available. Compose because the content needs the room.",
+            "- Units belong in the series name or the axis title, never inside the "
+            "numbers: \"Revenue (US$ billions)\" with values [29.1, 32.3], not "
+            "[\"29.1B\", \"32.3B\"].",
+            "- Pick the chart type by the question the slide asks, not by habit. "
+            "A bar chart is the answer to \"how do these compare\" and to nothing "
+            "else, and a deck whose every exhibit is a bar chart has asked one "
+            "question of everything: "
+            "line for change over time; bar for comparison across categories, or "
+            "barh when the category names are long; stacked for what a total is "
+            "made of; stacked100 for what changed underneath a total that barely "
+            "moved; waterfall for where the movement between two totals came from "
+            "(the revenue or cost bridge); slope for who moved up and who moved "
+            "down between two dates; dumbbell for the size of a gap - plan against "
+            "actual, us against peers; bullet for whether a measure is hitting its "
+            "target; heatmap for the hot spots in a dense matrix; combo for a "
+            "volume and a rate that only mean something together; donut or pie for "
+            "parts of one whole; scatter for a relationship between two measures.",
+            "- Do not state a second axis, a target or a waterfall subtotal by "
+            "leaving it to be worked out from the numbers. Say which series is the "
+            "rate, what each target is, which bars are totals. A chart that "
+            "guesses is wrong in a way that looks fine.",
+            "- A visual REPLACES the prose it shows. Once a chart is attached, the "
+            "slide's bullets should interpret it, not repeat its figures.",
+            "- Only ever chart or tabulate figures that genuinely appear in the source "
+            "material, the research results or the conversation. Never invent, "
+            "estimate or round-trip a number you are not sure of.",
+            "",
+        ]
+
+    def _research_lines(self, context: dict) -> list[str]:
+        """The run's research findings, numbered, for any prompt that writes copy."""
+        if not context.get("research"):
+            return []
+        prompt_parts: list[str] = []
+        findings = context["research"]
+        distinct_sources = len({r.get("url") for r in findings if r.get("url")})
+        prompt_parts.append("## Research Findings (from web_search)")
+        prompt_parts.append(
+            f"{len(findings)} findings from {distinct_sources} distinct sources. Base your "
+            "factual content on them, and prefer a figure that appears in more than one of "
+            "them over one that appears in only a single source. Do NOT call web_search "
+            "again for topics already covered below. These sources are shown to the user "
+            "as citations."
+        )
+        for idx, r in enumerate(findings, 1):
+            snippet = (r.get("snippet") or "")[:RESEARCH_SNIPPET_CHARS]
+            prompt_parts.append(
+                f"{idx}. [{r.get('title', '')}]({r.get('url', '')}) - {snippet}"
+            )
+        prompt_parts.append("")
+        return prompt_parts
 
     def _revision_context(self, fn_name: str, fn_args: dict) -> tuple[bool, str, str]:
         """Whether this design_slide_content call is fixing a flagged slide,
@@ -4091,9 +6126,13 @@ class AgentLoop:
         revisit_kind = "error" if reasons else "adjustment"
         return True, "; ".join(dict.fromkeys(r for r in reasons if r)), revisit_kind
 
-    def _describe_validation_issues(self, limit: int = 8) -> str:
-        """Render the last validation run's issues as a slide-numbered list."""
+    def _describe_validation_issues(self, limit: int = 8, slide_index: int | None = None) -> str:
+        """Render the last validation run's issues as a slide-numbered list,
+        or only those on one slide and the deck-wide ones."""
         issues = self.working_state.validation_issues
+        if slide_index is not None:
+            issues = [i for i in issues
+                      if i.get("slideIndex") in (slide_index, None)]
         if not issues:
             return "  (no specific issues recorded)"
 
@@ -4105,6 +6144,86 @@ class AgentLoop:
         if len(issues) > limit:
             lines.append(f"  - ...and {len(issues) - limit} more")
         return "\n".join(lines)
+
+    def asset_directive(self) -> str:
+        """What the model is told about the pictures a script can open."""
+        notes = getattr(self, "asset_notes", {})
+        if not notes:
+            return (" The user has supplied no pictures, and a script has no "
+                    "network: if the request needs a picture you do not have, "
+                    "draw a plain stand-in from shapes and say in your reply "
+                    "that it is a stand-in they can replace with their own.")
+        listing = "; ".join(f"{name} ({note})" if note else name
+                            for name, note in notes.items())
+        return (" Pictures the user supplied sit beside the deck: " + listing + ".")
+
+    def _install_assets(self, catalog: list) -> None:
+        """Make the user's pictures readable to a script, under plain names.
+
+        The model is told the names and what each shows; the bytes never pass
+        through it.
+        """
+        import base64
+
+        from app.agent.sandbox import runner
+
+        assets: dict[str, bytes] = {}
+        self.asset_notes: dict[str, str] = {}
+        for entry in catalog:
+            try:
+                encoded = str(entry.get("data") or "")
+                # Catalog entries are data URIs: the prefix is not payload.
+                encoded = encoded.split("base64,", 1)[-1]
+                data = base64.b64decode(encoded)
+            except Exception:  # noqa: BLE001
+                continue
+            if len(assets) >= runner.MAX_ASSETS or len(data) > runner.ASSET_BYTES:
+                continue
+            if data[:8].startswith(b"\x89PNG"):
+                ext = "png"
+            elif data[:3] == b"\xff\xd8\xff":
+                ext = "jpg"
+            elif data[:4] == b"GIF8":
+                ext = "gif"
+            else:
+                continue
+            name = f"picture_{len(assets) + 1}.{ext}"
+            assets[name] = data
+            self.asset_notes[name] = str(entry.get("context") or "")[:160]
+        run_context.set_assets(assets)
+
+    async def _refresh_previews(self, session_id: uuid.UUID) -> None:
+        """Draw the staged previews again from the file as it now is.
+
+        A script edits the rendered file after the previews were drawn from
+        it, so without this the page the user is shown lacks the very change
+        they asked for (#376).
+        """
+        from app.renderer.preview_generator import PreviewGenerator
+
+        path = self.working_state.last_rendered_path
+        staged = self.working_state.pending_slide_previews
+        if not path or not os.path.exists(path):
+            return
+        try:
+            urls = await asyncio.to_thread(
+                PreviewGenerator().generate_previews, path, str(session_id))
+        except Exception as e:  # noqa: BLE001 - stale previews beat a failed run
+            logger.error("preview_refresh_failed", error=str(e))
+            return
+        if not staged:
+            # An amendment never renders, so nothing was staged for it: the
+            # pages of the edited file are the previews to publish.
+            self.working_state.pending_slide_previews = [
+                {"slideIndex": i, "slideData": None, "slideTitle": None,
+                 "injected": False, "previewUrl": url}
+                for i, url in enumerate(urls)]
+            self.working_state.previews_published = False
+        for preview, url in zip(staged, urls):
+            preview["previewUrl"] = url
+        result = self.working_state.pending_render_result
+        if result is not None:
+            result["previewUrls"] = list(urls)
 
     def _flush_slide_previews(self) -> list[dict]:
         """

@@ -364,3 +364,79 @@ def _short(value: Any) -> str:
 
 def _slug(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in name.lower()).strip("-")
+
+
+@dataclass
+class LibraryResult:
+    """A deck scored against every exemplar, best first.
+
+    Reported as a spread rather than a single number on purpose. One reference
+    cannot represent "publication grade" - three excellent decks disagree by
+    3x on words per page - so the useful question is "how close is this to the
+    nearest thing we consider excellent", and the answer is more honest when
+    the distance to the others is visible beside it.
+    """
+
+    cards: list[Scorecard]
+
+    @property
+    def best(self) -> Optional[Scorecard]:
+        return self.cards[0] if self.cards else None
+
+    def card_for(self, reference: str) -> Optional[Scorecard]:
+        """The card for one named exemplar, whether or not it is the nearest.
+
+        The nearest exemplar answers "what does this deck resemble". A run
+        aimed at a register needs the other question - "how close did it get
+        to the one it was aiming at" - and those are different cards whenever
+        the deck drifts, which is exactly when the answer matters.
+        """
+        for card in self.cards:
+            if card.reference == reference:
+                return card
+        return None
+
+    def to_markdown(self, target: Optional[str] = None) -> str:
+        if not self.cards:
+            return "No exemplar profiles are available to score against.\n"
+        lines = [
+            f"# {self.cards[0].deck} vs the exemplar library",
+            "",
+            "| exemplar | style | substance |",
+            "| --- | --- | --- |",
+        ]
+        for card in self.cards:
+            mark = " (aimed at)" if target and card.reference == target else ""
+            lines.append(
+                f"| {card.reference}{mark} | {_format(card.style_score)} "
+                f"| {_format(card.substance_score)} |"
+            )
+        aimed = self.card_for(target) if target else None
+        if aimed is not None:
+            lines += ["", "## The register this run aimed at", ""]
+            if aimed is not self.cards[0]:
+                lines += [
+                    f"The deck is nearer `{self.cards[0].reference}` than the "
+                    f"`{target}` it was aimed at. That drift is the finding.",
+                    "",
+                ]
+            lines.append(aimed.to_markdown())
+        else:
+            lines += ["", "## Nearest exemplar", "", self.cards[0].to_markdown()]
+        return "\n".join(lines) + "\n"
+
+
+def score_library(generated: DeckProfile,
+                  library: dict[str, DeckProfile]) -> LibraryResult:
+    """Score one deck against every exemplar, nearest first.
+
+    Nearest by *style*: substance is about whether there is anything in the
+    deck, which is a property of the deck alone and not of which publication
+    it happens to resemble. Ranking on a blend of the two would let a deck
+    with more filler look closer to an exemplar it is nothing like.
+    """
+    cards = [score(generated, profile) for profile in library.values()]
+    for card, name in zip(cards, library):
+        card.reference = name
+    cards.sort(key=lambda card: (card.style_score is None, -(card.style_score or 0.0)))
+    return LibraryResult(cards=cards)

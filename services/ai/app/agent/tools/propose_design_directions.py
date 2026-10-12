@@ -47,6 +47,7 @@ import re
 import time
 
 from app import colors, directions as direction_model
+from app.design import deck_format as deck_format_module
 from app.agent.registry import ToolParameter, ToolRegistry, ToolResult
 from app.agent.run_context import require_chat_provider
 from app.agent.tools._json_extract import extract_json_object
@@ -127,6 +128,16 @@ class ProposeDesignDirectionsTool:
                     required=False,
                     description="Session the specimen previews belong to.",
                 ),
+                ToolParameter(
+                    name="deck_format",
+                    type="string",
+                    required=False,
+                    description=(
+                        "What kind of presentation this is (boardroom, pitch, "
+                        "academic, dashboard, poster). Supplied automatically from "
+                        "the consultation; you do not need to pass this."
+                    ),
+                ),
             ],
         )
 
@@ -138,15 +149,40 @@ class ProposeDesignDirectionsTool:
         brand_color: str = "",
         session_id: str = "",
         design_system: dict | None = None,
+        deck_format: str = "",
     ) -> ToolResult:
         start = time.time()
         try:
             brand_hex = _brand_hex(brand_color, answers)
             uploaded = design_system if _is_real_template(design_system) else None
+            # The loop passes this explicitly (see loop._dispatch_tool); a
+            # caller that does not - a test, an offline harness - falls back
+            # to reading the same answer text everything else here already
+            # reads, so the tool is not left guessing "boardroom" when the
+            # consultation plainly said otherwise.
+            fmt = deck_format_module.by_id(
+                deck_format or deck_format_module.resolve_from_text(answers))
 
             proposed, content, palettes, problems = await cls._author(
                 brief, answers, brand_hex, uploaded
             )
+
+            # The design the agent reasoned out for *this* deck, ahead of the
+            # enum. A direction on the enum is a pick from sixteen cells, so
+            # deck after deck could only look the same; a language is measure,
+            # ramp, colour roles and page vocabulary decided from the subject.
+            # It leads, and the enum stays behind it - a run that could not
+            # author three usable languages still gets three directions.
+            if uploaded is None:
+                languages, language_problems = await cls._author_languages(
+                    brief, answers, brand_hex, fmt)
+                if languages:
+                    taken = {d["id"] for d in languages}
+                    proposed = languages + [
+                        d for d in proposed if d.get("id") not in taken
+                    ]
+                elif language_problems:
+                    problems = list(problems) + [language_problems]
             wanted = (direction_model.DIRECTION_COUNT - 1) if uploaded \
                 else direction_model.DIRECTION_COUNT
             # Topped up, not replaced. A set used to be discarded whole when
@@ -236,6 +272,80 @@ class ProposeDesignDirectionsTool:
             logger.error("design_directions_failed", error=str(e))
             return ToolResult(success=False, error=str(e),
                               duration_ms=int((time.time() - start) * 1000))
+
+    @classmethod
+    async def _author_languages(
+        cls, brief: str, answers: str, brand_hex: str | None,
+        fmt: deck_format_module.DeckFormat | None = None,
+    ) -> tuple[list[dict], str]:
+        """The design languages this deck is offered, as direction dicts.
+
+        The language itself rides along under ``language``, as the dict its
+        model dumps to. That is deliberately not a side channel: the chosen
+        direction is already persisted whole across the pause, so a language
+        carried inside it is persisted and resumed with no new machinery -
+        and a resume that lost the design would have to fall back to a pack
+        chosen off disk, which an authored language does not have.
+
+        ``format`` rides along too, for the same reason: the canvas and the
+        type floor a preview was drawn against have to be the same ones the
+        deck renders against, and a resume that reconstructs the pack from
+        scratch (see ``AgentLoop._chosen_pack`` and ``specimen._pack_for``)
+        has only this dict to read them from.
+        """
+        from app.design import author_run
+        from app.design.authored import to_pack
+        from app.design.authored_system import readable, system_for
+
+        fmt = fmt or deck_format_module.by_id(None)
+        try:
+            llm = require_chat_provider()
+        except Exception as exc:
+            return [], f"no model was available to design with ({exc})"
+
+        canvas = fmt.canvas
+        floor_pt = fmt.floor_pt(canvas)
+        languages, why = await author_run.author(
+            llm, brief, canvas, answers=answers, fmt=fmt)
+        if not languages:
+            return [], why or "no design language could be authored"
+
+        out: list[dict] = []
+        for language, described in zip(languages,
+                                       author_run.describe(languages)):
+            # The floor before the preview, not after the choice: a language
+            # whose copy cannot be read on its own ground is not a language
+            # the user should be shown, and repairing it here means what they
+            # pick is what they saw.
+            language = readable(language)
+            system = system_for(language)
+            if brand_hex:
+                # A colour the user has already settled wins over the one the
+                # language proposed, exactly as it does for a direction spec.
+                # Applied to the language rather than to the system, so the
+                # pack composes in it too.
+                language = readable(language.model_copy(
+                    update={"accent": brand_hex}))
+                system = system_for(language)
+            try:
+                to_pack(language, canvas, floor_pt=floor_pt)
+            except Exception as exc:   # already gated in author_run
+                logger.warning("authored_language_dropped",
+                               name=language.name, error=str(exc))
+                continue
+            out.append({
+                **described,
+                "designSystem": system,
+                "language": language.model_dump(mode="json"),
+                "format": fmt.id,
+                "previewUrls": [],
+            })
+        if not out:
+            return [], "no authored language could be derived into a pack"
+        # `why` is carried even when the set is usable: a set of two where
+        # three were asked for has a reason, and a reason that is thrown away
+        # because something survived is a reason nobody ever reads.
+        return out, why
 
     @classmethod
     async def _author(

@@ -101,6 +101,34 @@ LibreOffice headless (PPTX -> PDF) and PyMuPDF (PDF -> PNG at 2x). The shared `@
 package (TypeScript + Pydantic mirror) is the contract between the agent loop, the renderer, and the
 frontend.
 
+### How a design and a layout are chosen
+
+![How a deck's design language and each page's layout are chosen](docs/diagrams/design-selection.png)
+
+No model ever emits a coordinate.
+That constraint is what the whole selection path is built around: a model asked for rectangles invents them, and the failures that follow are invisible until someone looks at the rendered page.
+
+**Stage I settles one design language for the deck.**
+Intake reads the request into a brief, and the user is asked what kind of presentation this is - a pitch, a boardroom deck, an academic talk, a dashboard, a conference poster.
+That answer is a typed value, not a line of prose: it sets the canvas, the type floor and the page vocabulary everything downstream derives from.
+If a branded template was uploaded, its own measured design system is used and the rest of the stage is skipped - the user already chose a design by attaching one.
+Otherwise a model authors three design languages for this deck (`services/ai/app/design/authoring.py`), stating the measure, the type ramp, the colour roles and the kinds of page the deck needs, and nothing else.
+`to_pack` (`services/ai/app/design/authored.py`) derives the geometry from those decisions - the grid, the ramp in points, and archetypes whose slots have capacities measured at the real font.
+Deterministic gates reject a language that fails WCAG AA, falls below the canvas-relative legibility floor, or will not derive into a usable pack at all, and a rejected set is re-authored with the reason it failed rather than simply re-asked.
+Each surviving language renders a three-slide specimen deck carrying identical copy, so what the user compares is design rather than wording.
+
+**Stage II decides each page's layout from that page's own material.**
+A designed slide is read into a material shape - what kind of page it is, how many items it carries, how many characters each holds, and the natural aspect ratio of any exhibit.
+Every archetype in the pack is then tried (`services/ai/app/design/select.py`): its slots are bound to the material by an exact assignment, and the binding is costed on slot mismatch, capacity strain, exhibit aspect, density deviation, reading order and overflow.
+An archetype that leaves a required slot unfilled, or cannot carry every item, is rejected outright rather than costed - losing content is not a cheaper option, it is not an option, and a page no archetype can hold is split and tried again.
+The cheapest surviving archetype wins, ties breaking toward the page the publication uses more often.
+The page is then built, repaired against its own findings by a monotone patch loop that can only improve a page or leave it alone (`services/ai/app/design/repair.py`), and rendered.
+
+**Validation can send a page back, at most twice.**
+`validate_rendered_output` converts the deck through LibreOffice and inspects the real rendered geometry, and a vision pass judges each page's arrangement as well as its overflow and contrast.
+When it finds something wrong it names the smallest fix that would work: nudge a frame, place the page again on a different arrangement, or send the slide back to be rewritten.
+Each attempt is kept only if the page's score actually falls, so a bounded loop cannot end on its worst try.
+
 ## Quick Start
 
 ### Prerequisites

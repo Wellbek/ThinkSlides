@@ -1,0 +1,19 @@
+id: consulting-cloud-cost
+category: consulting
+prompt: |
+  Five slides for a CFO on where a SaaS company's cloud bill typically
+  goes and the levers that reduce it: commitment discounts, rightsizing,
+  storage tiering and architectural changes. Make it decision-oriented.
+slides: 5
+mode: simple
+detail: concise
+answers:
+  - first
+  - first
+  - Go ahead as planned
+checklist:
+  - The deck has exactly 5 slides
+  - Each lever is described with its trade-off (commitment risk, engineering effort)
+  - No savings percentage is presented as measured without a source
+  - One slide orders the levers by effort and impact
+  - Titles state a finding rather than a topic

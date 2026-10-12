@@ -31,10 +31,30 @@ _EXEMPT = {
     # The transport layer. It forwards whatever it is handed and composes no
     # prompt of its own.
     "llm/provider.py": "builds no prompt",
+    # Wraps a provider to time and trace each call; forwards the messages it
+    # was handed untouched.
+    "llm/traced.py": "tracing wrapper, builds no prompt",
+    # Hands the loop's own requests to a Claude Code session, or records and
+    # replays a real provider's answers; composes no prompt of its own.
+    "research/exchange.py": "forwards and records prompts others built",
+    # Meters a live run's spend around the provider's own calls.
+    "research/budget.py": "spend meter around prompts others built",
     # "Reply with exactly: OK" - a connectivity probe whose entire point is a
     # fixed, minimal answer. A date paragraph would both cost tokens on every
     # click of "Test model" and give the model something else to reply with.
     "api/settings.py": "fixed-answer credential probe, generates no content",
+    # The visual judge grades craft from rendered pixels - hierarchy,
+    # composition, whether a chart is labelled. It writes no content and
+    # reasons about nothing time-bound, so there is no year for it to get
+    # wrong. It is also an eval-harness call rather than part of a run, so a
+    # date paragraph would only add tokens to a call made many times over an
+    # iteration.
+    "eval/visual_judge.py": "grades rendered pages, generates no content",
+    # It sends the prompt but does not write it: `design/authoring.py` builds
+    # it, and that module does state the date. Exempt because this check reads
+    # one file at a time and cannot see through the call, not because the
+    # prompt is dateless.
+    "design/author_run.py": "sends the prompt design/authoring.py builds",
 }
 
 

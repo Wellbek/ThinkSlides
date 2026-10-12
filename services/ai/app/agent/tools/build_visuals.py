@@ -634,8 +634,11 @@ class BuildChartTool:
 
     @staticmethod
     def _error(message: str, start: float) -> ToolResult:
+        # A refusal of the arguments, with what to change: a verdict on the
+        # model's input, not the tool breaking (#345).
         return ToolResult(
-            success=False, error=message, duration_ms=int((time.time() - start) * 1000)
+            success=False, rejected=True, error=message,
+            duration_ms=int((time.time() - start) * 1000)
         )
 
 
@@ -785,8 +788,11 @@ class BuildTableTool:
 
     @staticmethod
     def _error(message: str, start: float) -> ToolResult:
+        # A refusal of the arguments, with what to change: a verdict on the
+        # model's input, not the tool breaking (#345).
         return ToolResult(
-            success=False, error=message, duration_ms=int((time.time() - start) * 1000)
+            success=False, rejected=True, error=message,
+            duration_ms=int((time.time() - start) * 1000)
         )
 
 
@@ -889,8 +895,11 @@ class BuildKeyMetricsTool:
 
     @staticmethod
     def _error(message: str, start: float) -> ToolResult:
+        # A refusal of the arguments, with what to change: a verdict on the
+        # model's input, not the tool breaking (#345).
         return ToolResult(
-            success=False, error=message, duration_ms=int((time.time() - start) * 1000)
+            success=False, rejected=True, error=message,
+            duration_ms=int((time.time() - start) * 1000)
         )
 
 
@@ -1084,8 +1093,11 @@ class BuildChartGridTool:
 
     @staticmethod
     def _error(message: str, start: float) -> ToolResult:
+        # A refusal of the arguments, with what to change: a verdict on the
+        # model's input, not the tool breaking (#345).
         return ToolResult(
-            success=False, error=message, duration_ms=int((time.time() - start) * 1000)
+            success=False, rejected=True, error=message,
+            duration_ms=int((time.time() - start) * 1000)
         )
 
 
@@ -1139,4 +1151,5 @@ async def _route_to_figure_provider(chart: dict, renderer: str) -> str:
 
 
 BUILD_VISUAL_TOOLS = ("build_chart", "build_chart_grid", "build_table",
-                      "build_key_metrics", "build_diagram")
+                      "build_key_metrics", "build_diagram", "draw_svg",
+                      "build_mermaid", "compute_visual_with_code")

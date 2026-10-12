@@ -1,0 +1,23 @@
+{
+  "search": "tavily",
+  "task": "probe-rotate-exhibit",
+  "category": "probes",
+  "mode": "claude-code",
+  "taskFile": "/home/louis/GitHub_Repos/ThinkSlides/benchmark/tasks/probes/rotate-exhibit.yaml",
+  "commit": "5d31199",
+  "startedAt": "2026-10-04T16:09:27.576703",
+  "replayOf": null,
+  "model": null,
+  "maxCostUsd": null,
+  "sessionId": "ea91bd4c-1f12-4a5b-ac01-9975a92125b6",
+  "finishedAt": "2026-10-04T16:10:18.397411",
+  "parts": 5,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 3,
+  "stages": [
+    "stage-4.pptx",
+    "stage-5.pptx"
+  ],
+  "errors": []
+}

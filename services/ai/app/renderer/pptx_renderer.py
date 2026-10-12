@@ -31,6 +31,7 @@ from app.renderer.regions import RegionTree
 from app.renderer.blocks import BLOCK_TYPES, BlockCompiler
 from app.renderer.chrome import ChromeSpec, compile_chrome
 from app.renderer import apparatus as apparatus_markers
+from app.renderer import emphasis
 from app.renderer.apparatus import (
     ApparatusTokens, SlideApparatus, compile_apparatus, content_ceiling,
 )
@@ -38,7 +39,7 @@ from app.renderer import primitives as prim
 from app.renderer.typography import TypeScale
 from app.renderer.default_template import get_default_template_path, _hex_to_rgbcolor
 from app.renderer import text_fit
-from app.renderer import table_layout
+from app.renderer import native_table
 from app.renderer import table_style
 from app.renderer import chart_renderer
 from app.renderer import composition
@@ -142,6 +143,12 @@ OBJECT_CONTENT_TYPES = frozenset({"image", "table", "chart", "metrics"})
 # composition put the title inside, and the band's bottom-anchoring rule does
 # not apply to it. The stock title band is 1.1in on a 7.5in canvas.
 TITLE_BAND_MAX_IN = 2.4
+
+
+# How far under a wrapped title the accent rule sits when it has to move. A
+# rule is a device for separating the title from the page, so it belongs close
+# to what it separates.
+RULE_CLEARANCE_IN = 0.12
 
 
 @dataclass
@@ -729,9 +736,13 @@ class PPTXRenderer:
             entry = deck_theme.layout_entry(catalog, layout_id)
 
         role = (entry or {}).get("role", deck_theme.ROLE_CONTENT)
-        # A deck that opens on a content slide has no cover; force the first
-        # slide to read as one so the light/dark rhythm always starts right.
-        if index == 0 and role == deck_theme.ROLE_CONTENT and total > 1:
+        # A deck that opens on a content slide with nothing said about it has
+        # no cover; the first slide is styled as one so the light/dark rhythm
+        # starts right. A slide the plan made content stays content: a short
+        # deck opens on its first claim rather than spending a page (#347).
+        declared = str(slide_data.get("role") or slide_data.get("contentType") or "")
+        if (index == 0 and role == deck_theme.ROLE_CONTENT and total > 1
+                and not declared):
             role = deck_theme.ROLE_COVER
         style = self._theme.style_for(role)
 
@@ -813,7 +824,9 @@ class PPTXRenderer:
         # knows about compositions is #126; until then a composed slide is
         # left to its own structure rather than having a bar drawn through it.
         if plan.accent_rule is not None and plan.regions is None:
-            self._add_accent_rule(slide, plan.accent_rule, plan.style.accent_color)
+            placed = self._rule_under_title(slide, plan)
+            if placed is not None:
+                self._add_accent_rule(slide, placed, plan.style.accent_color)
 
         # Chrome is declared by the design system rather than hardcoded here,
         # so a design direction can move it, drop it, or vary it by slide
@@ -897,6 +910,56 @@ class PPTXRenderer:
                     and rect.top <= y <= rect.top + rect.height):
                 found = region.ground
         return found
+
+    def _rule_under_title(self, slide, plan: "SlidePlan"):
+        """The accent rule, moved under the title that actually rendered.
+
+        The catalog puts it at a fixed height down the page, under where a
+        catalog layout *would* put a one-line title. A title that wraps to two
+        lines runs straight past it, and the rule is then drawn through
+        whatever is beneath - on one real deck, a line through the middle of
+        `$1,404 billion`.
+
+        Read off the rendered shapes rather than re-measured: this runs after
+        the content is on the slide, so what the title actually did is a fact
+        rather than an estimate.
+
+        Returns None when there is nowhere for the rule to go. Chrome that
+        cannot be placed is not drawn: a rule is a device for separating the
+        title from the page, and one struck through the page is worse than
+        none at all.
+        """
+        rule = plan.accent_rule
+        bottom = self._rendered_title_bottom(slide, plan)
+        if bottom is None or bottom <= rule.top:
+            return rule
+        moved = PositionConfig(left=rule.left, top=bottom + RULE_CLEARANCE_IN,
+                               width=rule.width, height=rule.height)
+        for region in plan.body_regions or ():
+            if moved.top + moved.height > region.top:
+                return None
+        if moved.top + moved.height > LayoutEngine.SLIDE_HEIGHT:
+            return None
+        return moved
+
+    @staticmethod
+    def _rendered_title_bottom(slide, plan: "SlidePlan"):
+        """Where the title actually ended, in inches, or None if it is absent."""
+        region = plan.title_region
+        if region is None:
+            return None
+        lowest = None
+        for shape in slide.shapes:
+            if shape.top is None or shape.height is None:
+                continue
+            top = emu_to_inches(shape.top)
+            # A shape that starts in the title's band is the title or part of
+            # it; anything starting below it is content.
+            if top < region.top - 0.05 or top > region.top + region.height:
+                continue
+            bottom = top + emu_to_inches(shape.height)
+            lowest = bottom if lowest is None else max(lowest, bottom)
+        return lowest
 
     @staticmethod
     def _add_accent_rule(slide, region: PositionConfig, color_hex: str) -> None:
@@ -1592,7 +1655,13 @@ class PPTXRenderer:
                 p.space_before = Pt(balance.paragraph_gap_pt)
 
             run = p.add_run()
-            run.text = apparatus_markers.strip_markers(run_data.get("text", ""))
+            # Markdown emphasis is resolved rather than rendered. A model
+            # asked for prose writes markdown sooner or later, and a real deck
+            # shipped `*Cars 2* leads in worldwide earnings` - asterisks and
+            # all - on a slide a customer opened.
+            written = emphasis.read(
+                apparatus_markers.strip_markers(run_data.get("text", "")))
+            run.text = written.text
 
             # A run may carry a URL (citation markers and the reference list -
             # see renderer/citations.py). Set before the colour below, because
@@ -1607,8 +1676,10 @@ class PPTXRenderer:
             )
             run.font.name = style.font_name
             run.font.size = font_size
-            run.font.bold = style.bold or run_data.get("bold", False)
-            run.font.italic = style.italic or run_data.get("italic", False)
+            run.font.bold = (style.bold or run_data.get("bold", False)
+                             or written.bold)
+            run.font.italic = (style.italic or run_data.get("italic", False)
+                               or written.italic)
             run.font.underline = style.underline or run_data.get("underline", False)
             self._apply_text_color(run, is_title)
             _clear_text_transform(run)
@@ -1625,6 +1696,11 @@ class PPTXRenderer:
                     marker.hyperlink.address = str(citation["link"])
                 marker.font.name = style.font_name
                 marker.font.size = font_size
+                # A reference marker is apparatus, not a link a reader clicks.
+                # Left to a renderer's own hyperlink styling it comes out blue
+                # and underlined, which on a dark ground is unreadable and
+                # reads as a broken link rather than as a footnote.
+                marker.font.underline = False
                 self._apply_text_color(marker, is_title)
                 _clear_text_transform(marker)
 
@@ -1846,174 +1922,12 @@ class PPTXRenderer:
     def _add_table(self, slide, table_data: dict, pos: PositionConfig) -> None:
         """Add a native, design-system-styled table, laid out from its content.
 
-        Columns are sized to what they hold, figures are right-aligned,
-        rows take the height their text needs, and the whole table is
-        centred in its band. Splitting the band equally per row - the
-        previous behaviour - stretched a four-row table across four inches
-        and produced visibly uneven rows, because LibreOffice enforces its
-        own minimum row height and then distributes the surplus unevenly.
+        Drawn by `native_table`, which the composed path uses too, so a table
+        is the same editable object whichever path drew it.
         """
-        rows_data = table_data.get("rows", [])
-        if not rows_data:
-            return
-        n_rows = len(rows_data)
-        n_cols = max((len(r) for r in rows_data), default=0)
-        if n_cols == 0:
-            return
-
-        header_row = bool(table_data.get("headerRow"))
-        layout = table_layout.plan_table(
-            [[str(c) for c in row] for row in rows_data],
-            has_header=header_row,
-            region_width_in=pos.width,
-            region_height_in=pos.height,
-        )
-        if layout is None:
-            return
-
-        # Sit the table in its band rather than filling it: a short table
-        # stretched to a tall region is what left a dead strip above and
-        # below with rows an inch apart. Optically centred (a third of the
-        # surplus above, two thirds below) rather than mathematically, so it
-        # reads as hanging from the title instead of floating mid-slide.
-        top = pos.top + max(0.0, (pos.height - layout.height_in)) / 3.0
-
-        graphic_frame = slide.shapes.add_table(
-            n_rows, n_cols,
-            Inches(pos.left), Inches(top),
-            Inches(pos.width), Inches(layout.height_in),
-        )
-        table = graphic_frame.table
-        style = table_style.resolve_table_style(self.design_system)
-
-        for index, fraction in enumerate(layout.col_fractions):
-            table.columns[index].width = Inches(pos.width * fraction)
-        for index, height in enumerate(layout.row_heights_in):
-            table.rows[index].height = Inches(height)
-
-        # python-pptx applies a banded PowerPoint table style by default,
-        # which paints its own accent1 header over the fills set below.
-        table.first_row = header_row
-        table.horz_banding = False
-
-        if style.treatment == "hairline":
-            self._rule_table_rows(slide, layout, style, header_row,
-                                  PositionConfig(left=pos.left, top=top,
-                                                 width=pos.width,
-                                                 height=layout.height_in))
-
-        header_rgb = _hex_to_rgbcolor(style.header_bg)
-        header_fg_rgb = _hex_to_rgbcolor(style.header_fg)
-        band_rgb = _hex_to_rgbcolor(style.band_bg)
-        row_rgb = _hex_to_rgbcolor(style.row_bg)
-        body_fg_rgb = _hex_to_rgbcolor(deck_theme.BODY_ON_LIGHT)
-
-        for r_idx, row in enumerate(rows_data):
-            is_header = header_row and r_idx == 0
-            is_total = r_idx == layout.total_row_index
-            for c_idx in range(n_cols):
-                cell = table.cell(r_idx, c_idx)
-                raw_cell = str(row[c_idx]) if c_idx < len(row) else ""
-                cell.text = apparatus_markers.strip_markers(raw_cell)
-                cell.vertical_anchor = MSO_ANCHOR.MIDDLE
-                if style.treatment == "hairline":
-                    # Rows separated by rules on the slide's own ground rather
-                    # than banded blocks of colour. Reference pages 12 and 40
-                    # are hairline tables, and rendering them as filled bands
-                    # is most of why a generated table does not look like the
-                    # template it came from.
-                    cell.fill.background()
-                    if is_header and style.header_filled:
-                        cell.fill.solid()
-                        cell.fill.fore_color.rgb = header_rgb
-                else:
-                    cell.fill.solid()
-                    if is_header:
-                        cell.fill.fore_color.rgb = header_rgb
-                    elif is_total:
-                        # A summary row reads as part of the data unless it is
-                        # set apart; a tint of the header does that without
-                        # introducing another colour.
-                        cell.fill.fore_color.rgb = _hex_to_rgbcolor(
-                            colors.mix(style.band_bg, style.header_bg, 0.22)
-                        )
-                    elif r_idx % 2 == 1:
-                        cell.fill.fore_color.rgb = band_rgb
-                    else:
-                        cell.fill.fore_color.rgb = row_rgb
-
-                # Figures right-align so their digits line up and can be
-                # compared down the column; prose stays left.
-                alignment = (
-                    PP_ALIGN.RIGHT if c_idx in layout.numeric_columns else PP_ALIGN.LEFT
-                )
-                for paragraph in cell.text_frame.paragraphs:
-                    paragraph.alignment = alignment
-                    for run in paragraph.runs:
-                        run.font.size = Pt(
-                            layout.header_pt if is_header else layout.body_pt
-                        )
-                        run.font.bold = is_header or is_total
-                        run.font.name = style.font_name
-                        run.font.color.rgb = (
-                            header_fg_rgb
-                            if is_header and style.header_filled
-                            else body_fg_rgb
-                        )
-                    if apparatus_markers.has_marker(raw_cell) and paragraph.runs:
-                        self._mark_cell(paragraph, raw_cell, style.font_name,
-                                        Pt(layout.header_pt if is_header
-                                           else layout.body_pt),
-                                        header_fg_rgb if is_header else body_fg_rgb,
-                                        is_header or is_total)
-
-    @staticmethod
-    def _mark_cell(paragraph, text: str, font_name: str, size, color_rgb,
-                   bold: bool) -> None:
-        """Set a table cell's footnote markers as real superscripts."""
-        parts = apparatus_markers.split_markers(text)
-        if not parts:
-            return
-        first = paragraph.runs[0]
-        first.text = parts[0][0]
-        if parts[0][1] is not None:
-            apparatus_markers.apply_superscript(first)
-        for part_text, marker in parts[1:]:
-            run = paragraph.add_run()
-            run.text = part_text
-            run.font.name = font_name
-            run.font.size = size
-            run.font.bold = bold
-            run.font.color.rgb = color_rgb
-            if marker is not None:
-                apparatus_markers.apply_superscript(run)
-
-    def _rule_table_rows(self, slide, layout, style, header_row: bool,
-                         pos: PositionConfig) -> None:
-        """
-        Draw a hairline table's own rules.
-
-        python-pptx has no cell-border API, so the rules are marks: a heavier
-        one under the header, a light one under every other row. Drawn through
-        the primitive layer like everything else, which is also what keeps
-        them measured and addressable.
-        """
-        rule_hex = style.border
-        top = pos.top
-        marks = []
-        for index, height in enumerate(layout.row_heights_in):
-            top += height
-            if index == len(layout.row_heights_in) - 1:
-                break
-            weight = (style.header_rule_weight_pt
-                      if header_row and index == 0 else style.rule_weight_pt)
-            marks.append(prim.Primitive(
-                id=f"s{self._slide_number}-table-rule-{index}", kind="rect",
-                box=PositionConfig(left=pos.left, top=top, width=pos.width,
-                                   height=max(0.008, weight / 72.0)),
-                fill=rule_hex,
-            ))
-        prim.paint_all(slide, marks, self._paint_context())
+        native_table.add_native_table(
+            slide, table_data, pos, self.design_system, self._paint_context(),
+            id_prefix=f"s{self._slide_number}", placement="optical")
 
     def _add_text_box(
         self,

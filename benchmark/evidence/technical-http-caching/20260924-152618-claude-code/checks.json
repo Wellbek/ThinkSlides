@@ -1,0 +1,87 @@
+{
+  "task": "technical-http-caching",
+  "run": "20260924-152618-claude-code",
+  "mode": "claude-code",
+  "model": null,
+  "commit": "0a3e8f7",
+  "passed": 6,
+  "decided": 9,
+  "blockingFailures": [],
+  "checks": [
+    {
+      "name": "delivered",
+      "passed": true,
+      "detail": "deck: deck.pptx",
+      "blocking": true
+    },
+    {
+      "name": "terminated_cleanly",
+      "passed": true,
+      "detail": "termination: complete",
+      "blocking": false
+    },
+    {
+      "name": "slide_count",
+      "passed": true,
+      "detail": "3 pages, task asks for 3",
+      "blocking": true
+    },
+    {
+      "name": "text_within_the_page",
+      "passed": true,
+      "detail": "no overflow or overlap in the rendered geometry",
+      "blocking": true
+    },
+    {
+      "name": "headlines_within_the_ramp",
+      "passed": true,
+      "detail": "every content headline at or below 48pt",
+      "blocking": false
+    },
+    {
+      "name": "body_legible",
+      "passed": true,
+      "detail": "all body copy at 14pt or larger",
+      "blocking": false
+    },
+    {
+      "name": "validation_converged",
+      "passed": false,
+      "detail": "3 round(s), 3 issue(s) left",
+      "blocking": false
+    },
+    {
+      "name": "shipped_what_was_validated",
+      "passed": false,
+      "detail": "the last render came after the last validation (#299)",
+      "blocking": false
+    },
+    {
+      "name": "no_failed_tool_calls",
+      "passed": false,
+      "detail": "build_mermaid x1, build_table x4",
+      "blocking": false
+    }
+  ],
+  "metrics": {
+    "modelCalls": 26,
+    "inputTokens": 152752,
+    "cachedInputTokens": 0,
+    "outputTokens": 7152,
+    "tokensEstimated": true,
+    "costUsd": null,
+    "runSeconds": 617.7,
+    "validationRounds": 3,
+    "pages": 3,
+    "wordsPerPage": [
+      87,
+      86,
+      110
+    ],
+    "inkCoverage": [
+      0.398,
+      0.351,
+      0.514
+    ]
+  }
+}

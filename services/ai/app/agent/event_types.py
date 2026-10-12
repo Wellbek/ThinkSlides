@@ -31,6 +31,13 @@ CLIENT_EVENT_TYPES = frozenset({
     "connection_degraded",
     "timer_update",
     "session_title_updated",
+    # The agent writing a script, and the script it settled on. Two events
+    # rather than one because this is the first thing in the system that
+    # *streams*: `code_delta` appends as the model writes, `code_ready` is
+    # terminal and carries the whole source, so a late subscriber and a
+    # replay both land in the same state regardless of which deltas they saw.
+    "code_delta",
+    "code_ready",
     "done",
 })
 

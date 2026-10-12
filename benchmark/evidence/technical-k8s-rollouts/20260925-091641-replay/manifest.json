@@ -1,0 +1,19 @@
+{
+  "search": "tavily",
+  "task": "technical-k8s-rollouts",
+  "category": "technical",
+  "mode": "replay",
+  "taskFile": "benchmark/tasks/technical/kubernetes-rollouts.yaml",
+  "commit": "d4bb540-dirty",
+  "startedAt": "2026-09-25T09:16:41.479693",
+  "replayOf": "../../benchmark/runs/technical-k8s-rollouts/20260924-203834-live/cassette.jsonl",
+  "model": null,
+  "maxCostUsd": null,
+  "sessionId": "1eb9d716-96ff-48f4-824d-20f9bbc0d14e",
+  "finishedAt": "2026-09-25T09:16:57.688298",
+  "parts": 4,
+  "termination": "complete",
+  "deck": "deck.pptx",
+  "pages": 8,
+  "errors": []
+}

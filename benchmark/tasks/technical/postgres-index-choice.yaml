@@ -1,0 +1,21 @@
+id: technical-postgres-indexes
+category: technical
+prompt: |
+  Four slides for application developers on choosing a Postgres index:
+  B-tree, GIN, BRIN and partial indexes - what each is for, and a way to
+  decide between them for a given query.
+slides: 4
+mode: simple
+detail: concise
+answers:
+  - first
+  - first
+  - Go ahead as planned
+checklist:
+  - The deck has exactly 4 slides
+  - B-tree is tied to equality and range lookups and ordering
+  - GIN is tied to containment on arrays, jsonb or full-text search
+  - BRIN is tied to very large tables whose values correlate with physical order
+  - Partial indexes are explained with a WHERE clause example
+  - One slide gives a decision path or comparison table across the four
+  - No performance number is stated without a source

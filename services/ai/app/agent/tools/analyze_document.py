@@ -126,6 +126,13 @@ class AnalyzeDocumentTool:
                     "truncated": truncated,
                     "condensed": condensed,
                     "content": summary_text,
+                    # The document as extracted, not the condensed summary the
+                    # model reads. A figure on a slide has to be traceable to
+                    # an offset inside the source rather than merely to the
+                    # file it was in, and the summary is a paraphrase - the
+                    # sentence a reader would go looking for is not in it.
+                    # Stripped before this payload reaches the model.
+                    "sourceText": content,
                     "analysis_type": analysis_type,
                     "detail_level": detail_level,
                     "images": images,

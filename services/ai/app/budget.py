@@ -38,6 +38,7 @@ and checks the two agree.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -133,6 +134,28 @@ MAX_BLOCKS = 18
 # purpose. The reference's own dashboard pages reach the mid twenties.
 MAX_BLOCKS_BY_ARCHETYPE: dict[str, int] = {DASHBOARD: 26}
 
+# How a deck's *format* - not a slide's archetype - moves the budget. Most
+# formats carry as much as today's default and are left at 1.0: the format
+# already earns its keep through the page vocabulary it asks
+# `plan_presentation_structure` for, and scaling the per-slide numbers on top
+# of that would double-count it.
+#
+# The two that get a real number both break that default in a way nothing
+# else already captures. A pitch slide is read across a room in the seconds
+# it is on screen - "one claim a page" means the ordinary target is still too
+# much, not merely differently shaped. A poster page is not a slide at all:
+# it is the whole deck's material on one sheet, and MAX_BLOCKS was
+# calibrated against the reference's densest single *slide*, reaching 17 -
+# a poster page routinely carries several times that.
+FORMAT_BUDGET_SCALE: dict[str, float] = {
+    "pitch": 0.55,
+    "poster": 3.2,
+}
+
+
+def _format_scale(format_id: str) -> float:
+    return FORMAT_BUDGET_SCALE.get(str(format_id or "").strip().lower(), 1.0)
+
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'%$.,-]*")
 
 
@@ -163,17 +186,24 @@ class SlideBudget:
         return self.ON
 
     def describe(self) -> str:
-        """The budget, in the terms whoever writes the slide works in."""
+        """The budget, in the terms whoever writes the slide works in.
+
+        The limits are fractional, so a floor is stated rounded up and a
+        ceiling rounded down: the count stated is one the slide can meet.
+        Rounded to nearest, a floor of 4.4 read "at least 4" to a slide
+        refused for carrying 4 (technical-http-caching, 2026-10-12).
+        """
         if self.archetype in (COVER, DIVIDER):
             return (
                 f"This is a {self.archetype}: it carries its headline and at "
-                f"most {self.blocks_max:.0f} other things. Do not fill it."
+                f"most {math.floor(self.blocks_max)} other things. Do not fill it."
             )
         return (
             f"Aim for about {self.blocks_target:.0f} blocks and "
             f"{self.words_target:.0f} words on this slide "
-            f"(at least {self.blocks_min:.0f} blocks and {self.words_min:.0f} "
-            f"words; no more than {self.blocks_max:.0f} blocks), at roughly "
+            f"(at least {math.ceil(self.blocks_min)} blocks and "
+            f"{math.ceil(self.words_min)} words; no more than "
+            f"{math.floor(self.blocks_max)} blocks), at roughly "
             f"{self.words_per_block:.0f} words a block"
         )
 
@@ -183,12 +213,12 @@ class SlideBudget:
         if substance.blocks < self.blocks_min:
             parts.append(
                 f"{substance.blocks} blocks where this slide should carry at "
-                f"least {self.blocks_min:.0f}"
+                f"least {math.ceil(self.blocks_min)}"
             )
         if substance.words < self.words_min:
             parts.append(
                 f"{substance.words} words where it should carry at least "
-                f"{self.words_min:.0f}"
+                f"{math.ceil(self.words_min)}"
             )
         return " and ".join(parts)
 
@@ -323,6 +353,7 @@ def budget_for(
     design_system: Optional[dict],
     archetype: str = CONTENT,
     material: float = 1.0,
+    format_id: str = "",
 ) -> SlideBudget:
     """
     The budget for one slide of one kind, given what it has to work with.
@@ -331,17 +362,26 @@ def budget_for(
     pages carry. It is the whole guard against this becoming a filler quota:
     the deck is asked to be as dense as its template *where the material goes
     that far*, and no denser.
+
+    ``format_id`` scales the result again, afterward, for the two formats
+    whose numbers genuinely differ from a boardroom deck's rather than only
+    their page vocabulary - see ``FORMAT_BUDGET_SCALE``.
     """
     profile = DensityProfile.from_dict((design_system or {}).get("density"))
     kind = archetype if archetype in ARCHETYPES else CONTENT
     block_share, word_share = ARCHETYPE_SHARE[kind]
-    ceiling = MAX_BLOCKS_BY_ARCHETYPE.get(kind, MAX_BLOCKS)
+    scale = _format_scale(format_id)
+    ceiling = max(2, round(MAX_BLOCKS_BY_ARCHETYPE.get(kind, MAX_BLOCKS) * scale))
 
     material = max(0.0, min(1.0, float(material)))
     reach = THIN_FLOOR + (1.0 - THIN_FLOOR) * material
 
-    blocks = min(ceiling, max(1.0, profile.blocks_median * block_share * reach))
-    words = max(6.0, profile.words_median * word_share * reach)
+    # The floor constants scale too, not only the measured target: a design
+    # system with no density profile of its own (material_score's median
+    # comes back zero) must not fall through the scale entirely and leave a
+    # poster with the same six-word minimum a boardroom slide has.
+    blocks = min(ceiling, max(1.0 * scale, profile.blocks_median * block_share * reach * scale))
+    words = max(6.0 * scale, profile.words_median * word_share * reach * scale)
     per_block = profile.words_per_block_median or (words / blocks if blocks else 0.0)
 
     return SlideBudget(

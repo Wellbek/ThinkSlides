@@ -1,0 +1,212 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 810" width="1020" height="810" role="img" aria-labelledby="ttl desc">
+<title id="ttl">How ThinkSlides chooses a deck's design language and each page's layout</title>
+<desc id="desc">A two-stage conditional flow chart. Stage I settles one design language for the whole deck, either from an uploaded template or by authoring three languages and letting the user choose. Stage II decides each page's layout by binding that page's material to every archetype in the pack and taking the cheapest that carries all of it, and a bounded revision ladder when validation judges the arrangement wrong.</desc>
+
+<defs>
+  <marker id="a" viewBox="0 0 10 10" refX="9.4" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M0 0.6 L10 5 L0 9.4 z" fill="#000"/>
+  </marker>
+  <style>
+    .f    { font-family:"Times New Roman","Nimbus Roman","Liberation Serif",Times,serif; }
+    .box  { fill:#fff; stroke:#000; stroke-width:1; }
+    .term { fill:#f1f1f1; stroke:#000; stroke-width:1; }
+    .dia  { fill:#fff; stroke:#000; stroke-width:1; }
+    .n    { font-size:12.5px; fill:#000; text-anchor:middle; }
+    .ns   { font-size:10.5px; fill:#333; text-anchor:middle; font-style:italic; }
+    .e    { font-size:10px;   fill:#000; text-anchor:middle; }
+    .num  { font-size:9px;    fill:#000; text-anchor:start; font-weight:bold; }
+    .band { font-size:12.5px; fill:#000; font-variant:small-caps; letter-spacing:.06em; }
+    .rule { stroke:#000; stroke-width:.9; }
+    .ln   { stroke:#000; stroke-width:.9; fill:none; }
+    .cap  { font-size:11.5px; fill:#000; }
+    .capb { font-size:11.5px; fill:#000; font-weight:bold; }
+  </style>
+</defs>
+
+<rect x="0" y="0" width="1020" height="810" fill="#ffffff"/>
+
+<!-- ═══════════════ STAGE I ═══════════════ -->
+<g class="f">
+  <text class="band" x="26" y="36">Stage I.  The design language — settled once, for the whole deck</text>
+  <line class="rule" x1="26" y1="44" x2="994" y2="44"/>
+
+  <g id="s1"><title>The user's request enters the run</title>
+    <rect class="term" x="26" y="76" width="106" height="40" rx="20"/>
+    <text class="n" x="79" y="101">request</text>
+  </g>
+  <line class="ln" x1="132" y1="96" x2="164" y2="96" marker-end="url(#a)"/>
+
+  <g id="s2"><title>Intake reads the request into a brief: what the deck is about, and who for</title>
+    <rect class="box" x="168" y="72" width="120" height="48"/>
+    <text class="num" x="173" y="84">1</text>
+    <text class="n" x="228" y="98">intake brief</text>
+    <text class="ns" x="228" y="112">topic · audience</text>
+  </g>
+  <line class="ln" x1="288" y1="96" x2="322" y2="96" marker-end="url(#a)"/>
+
+  <g id="s3"><title>The user is asked what kind of presentation this is, before any design is offered</title>
+    <path class="dia" d="M400 62 L472 96 L400 130 L328 96 z"/>
+    <text class="n" x="400" y="99">format?</text>
+  </g>
+  <text class="ns" x="400" y="152">pitch · boardroom · academic · dashboard · poster</text>
+  <text class="ns" x="400" y="165">sets the canvas, the type floor, the page vocabulary</text>
+  <line class="ln" x1="472" y1="96" x2="512" y2="96" marker-end="url(#a)"/>
+
+  <g id="s4"><title>Has the user attached a branded template? If so they have already chosen a design</title>
+    <path class="dia" d="M596 54 L678 96 L596 138 L514 96 z"/>
+    <text class="n" x="596" y="92">template</text>
+    <text class="n" x="596" y="107">uploaded?</text>
+  </g>
+
+  <line class="ln" x1="678" y1="96" x2="714" y2="96" marker-end="url(#a)"/>
+  <text class="e" x="696" y="89">yes</text>
+  <g id="s5"><title>The template's own measured design system is used unchanged</title>
+    <rect class="box" x="718" y="70" width="164" height="52"/>
+    <text class="num" x="723" y="82">2a</text>
+    <text class="n" x="800" y="96">template design system</text>
+    <text class="ns" x="800" y="112">measured, not authored</text>
+  </g>
+
+  <path class="ln" d="M596 138 L596 182" marker-end="url(#a)"/>
+  <text class="e" x="608" y="164">no</text>
+
+  <g id="s6"><title>A model authors three design languages for this deck: the measure, the type ramp, the colour roles and the kinds of page it needs</title>
+    <rect class="box" x="476" y="184" width="252" height="62"/>
+    <text class="num" x="481" y="196">2b</text>
+    <text class="n" x="602" y="210">author 3 design languages</text>
+    <text class="ns" x="602" y="226">measure · ramp · colour roles · page kinds</text>
+    <text class="ns" x="602" y="239">the model never emits geometry</text>
+  </g>
+  <path class="ln" d="M602 246 L602 282" marker-end="url(#a)"/>
+
+  <g id="s7"><title>to_pack derives the geometry from those decisions: a grid, a ramp in points, and archetypes whose slots have measured capacity</title>
+    <rect class="box" x="476" y="284" width="252" height="62"/>
+    <text class="num" x="481" y="296">3</text>
+    <text class="n" x="602" y="310">derive a pack</text>
+    <text class="ns" x="602" y="326">grid · ramp · archetypes · slot capacity</text>
+    <text class="ns" x="602" y="339">geometry is computed, never asserted</text>
+  </g>
+  <path class="ln" d="M476 315 L400 315" marker-end="url(#a)"/>
+
+  <g id="s8"><title>Deterministic gates: contrast, the legibility floor, and whether the language derives into a usable pack at all</title>
+    <path class="dia" d="M320 273 L396 315 L320 357 L244 315 z"/>
+    <text class="n" x="320" y="311">gates</text>
+    <text class="n" x="320" y="326">pass?</text>
+  </g>
+  <text class="ns" x="320" y="378">WCAG AA · legibility floor · derivable</text>
+
+  <path class="ln" d="M320 273 L320 215 L472 215" marker-end="url(#a)"/>
+  <text class="e" x="396" y="209">no — retry, stating the reason it failed</text>
+
+  <path class="ln" d="M244 315 L168 315" marker-end="url(#a)"/>
+  <text class="e" x="206" y="309">yes</text>
+  <g id="s9"><title>Each surviving language renders a three-slide specimen deck, all three carrying the same copy so the comparison is of design alone</title>
+    <rect class="box" x="26" y="288" width="140" height="54"/>
+    <text class="num" x="31" y="300">4</text>
+    <text class="n" x="96" y="314">specimen decks</text>
+    <text class="ns" x="96" y="330">3 slides, same copy</text>
+  </g>
+  <path class="ln" d="M96 342 L96 374" marker-end="url(#a)"/>
+  <g id="s10"><title>The user picks one direction, and a colour, in a single pause</title>
+    <rect class="term" x="26" y="376" width="140" height="44" rx="22"/>
+    <text class="n" x="96" y="395">user chooses</text>
+    <text class="ns" x="96" y="410">direction + colour</text>
+  </g>
+
+</g>
+
+<line class="rule" x1="26" y1="452" x2="994" y2="452" stroke-dasharray="2 3" stroke-width=".6"/>
+
+<!-- ═══════════════ STAGE II ═══════════════ -->
+<g class="f">
+  <text class="band" x="26" y="484">Stage II.  The page layout — decided per page, from that page's own material</text>
+  <line class="rule" x1="26" y1="492" x2="994" y2="492"/>
+
+  <g id="t1"><title>One designed slide: its heading, its paragraphs, its charts and tables</title>
+    <rect class="term" x="26" y="538" width="112" height="44" rx="22"/>
+    <text class="n" x="82" y="557">a slide</text>
+    <text class="ns" x="82" y="572">as designed</text>
+  </g>
+  <line class="ln" x1="138" y1="560" x2="170" y2="560" marker-end="url(#a)"/>
+
+  <g id="t2"><title>The slide is read into a material shape: what kind of page it is, and how much of what kind of material it carries</title>
+    <rect class="box" x="174" y="530" width="154" height="60"/>
+    <text class="num" x="179" y="542">5</text>
+    <text class="n" x="251" y="556">material shape</text>
+    <text class="ns" x="251" y="571">role · items · characters</text>
+    <text class="ns" x="251" y="584">exhibits and their aspect</text>
+  </g>
+  <line class="ln" x1="328" y1="560" x2="358" y2="560" marker-end="url(#a)"/>
+
+  <g id="t3"><title>Every archetype in the pack is tried: its slots are bound to the material by an exact assignment, and the binding is costed</title>
+    <rect class="box" x="362" y="523" width="180" height="74"/>
+    <text class="num" x="367" y="535">6</text>
+    <text class="n" x="452" y="549">for every archetype</text>
+    <text class="ns" x="452" y="564">bind material to slots by</text>
+    <text class="ns" x="452" y="577">exact assignment, then cost it</text>
+    <text class="ns" x="452" y="590">slot · capacity · aspect · density</text>
+  </g>
+  <line class="ln" x1="542" y1="560" x2="572" y2="560" marker-end="url(#a)"/>
+
+  <g id="t4"><title>An archetype missing a required slot, or unable to carry every item, is rejected outright rather than costed</title>
+    <path class="dia" d="M656 514 L738 560 L656 606 L574 560 z"/>
+    <text class="n" x="656" y="556">carries it</text>
+    <text class="n" x="656" y="571">all?</text>
+  </g>
+  <text class="ns" x="656" y="626">an unfilled required slot, or an unplaced item,</text>
+  <text class="ns" x="656" y="639">is a rejection rather than a cost</text>
+
+  <path class="ln" d="M656 514 L656 506 L452 506 L452 523" marker-end="url(#a)"/>
+  <text class="e" x="554" y="502">none fit — split the page and try again</text>
+
+  <line class="ln" x1="738" y1="560" x2="772" y2="560" marker-end="url(#a)"/>
+  <text class="e" x="755" y="553">yes</text>
+
+  <g id="t5"><title>The cheapest archetype wins; ties break toward the page the publication uses more often</title>
+    <rect class="box" x="776" y="530" width="160" height="60"/>
+    <text class="num" x="781" y="542">7</text>
+    <text class="n" x="856" y="556">lowest cost wins</text>
+    <text class="ns" x="856" y="571">ties break toward the</text>
+    <text class="ns" x="856" y="584">more frequent page</text>
+  </g>
+  <path class="ln" d="M856 590 L856 664" marker-end="url(#a)"/>
+
+  <g id="t6"><title>The page is built, repaired against its own findings, and rendered</title>
+    <rect class="box" x="776" y="666" width="160" height="52"/>
+    <text class="num" x="781" y="678">8</text>
+    <text class="n" x="856" y="692">build · repair</text>
+    <text class="ns" x="856" y="708">then render</text>
+  </g>
+  <line class="ln" x1="776" y1="692" x2="726" y2="692" marker-end="url(#a)"/>
+
+  <g id="t7"><title>Validation judges the arrangement, not only overflow and contrast</title>
+    <path class="dia" d="M640 658 L722 692 L640 726 L558 692 z"/>
+    <text class="n" x="640" y="688">layout</text>
+    <text class="n" x="640" y="703">wrong?</text>
+  </g>
+
+  <line class="ln" x1="558" y1="692" x2="534" y2="692" marker-end="url(#a)"/>
+  <text class="e" x="546" y="684">yes</text>
+  <g id="t9"><title>The smallest fix that works: nudge a frame, place the page again on a different arrangement, or send the slide back to be rewritten. The model picks, and a page is revised at most twice.</title>
+    <rect class="box" x="320" y="660" width="212" height="64"/>
+    <text class="num" x="325" y="672">9</text>
+    <text class="n"  x="426" y="681">revise, smallest fix first</text>
+    <text class="ns" x="426" y="696">nudge a frame · place it again ·</text>
+    <text class="ns" x="426" y="709">redraft the slide</text>
+    <text class="ns" x="426" y="722">at most twice, never worse</text>
+  </g>
+  <path class="ln" d="M426 660 L426 599" marker-end="url(#a)"/>
+
+  <path class="ln" d="M640 726 L640 752 L170 752" marker-end="url(#a)"/>
+  <text class="e" x="654" y="742">no</text>
+  <g id="t8"><title>The page is finished</title>
+    <rect class="term" x="26" y="730" width="140" height="44" rx="22"/>
+    <text class="n" x="96" y="757">page is done</text>
+  </g>
+</g>
+
+<!-- ═══════════════ CAPTION ═══════════════ -->
+<g class="f">
+  <text class="cap" x="510" y="794" style="text-anchor:middle">How a deck's design language, and then each page's layout, is chosen. No model emits a coordinate at any step.</text>
+</g>
+</svg>

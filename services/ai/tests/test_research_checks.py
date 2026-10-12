@@ -1,0 +1,226 @@
+"""
+A finished run is checked by machine, not by reading its pages.
+
+Each check reads only what the run left behind, so a run can be re-checked
+after the checks change without spending anything to run it again.
+"""
+
+import json
+
+import pytest
+
+from app.research.checks import check_run, render
+from app.research.task import Task
+
+TASK = Task(id="t", category="technical", prompt="Three slides.", slides=3)
+
+
+def _span(kind, name, *, status="ok", started="2026-09-24T10:00:00", attrs=None, usage=None,
+          duration=1000):
+    return {"kind": kind, "name": name, "status": status, "startedAt": started,
+            "durationMs": duration, "attrs": attrs or {},
+            "usage": usage or {"inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 0}}
+
+
+def _run(tmp_path, *, manifest=None, spans=()):
+    (tmp_path / "manifest.json").write_text(json.dumps(
+        {"deck": "deck.pptx", "pages": 3, "termination": "complete", "mode": "live",
+         **(manifest or {})}))
+    (tmp_path / "trace-0.jsonl").write_text("\n".join(json.dumps(s) for s in spans))
+    return tmp_path
+
+
+def _by_name(result):
+    return {c["name"]: c for c in result["checks"]}
+
+
+class TestWhatTheRunSaysAboutItself:
+    def test_the_wrong_number_of_slides_is_a_blocking_failure(self, tmp_path):
+        result = check_run(_run(tmp_path, manifest={"pages": 5}), TASK)
+        assert _by_name(result)["slide_count"]["passed"] is False
+        assert "slide_count" in result["blockingFailures"]
+
+    def test_a_render_after_the_last_validation_is_caught(self, tmp_path):
+        """The deck that shipped must be the one validation saw (#299)."""
+        spans = [
+            _span("phase", "render", started="2026-09-24T10:00:01"),
+            _span("phase", "validate", started="2026-09-24T10:00:02",
+                  attrs={"clean": False, "issues": 2}),
+            _span("phase", "render", started="2026-09-24T10:00:03"),
+        ]
+        checks = _by_name(check_run(_run(tmp_path, spans=spans), TASK))
+        assert checks["shipped_what_was_validated"]["passed"] is False
+        assert checks["validation_converged"]["passed"] is False
+        assert "1 round(s), 2 issue(s) left" in checks["validation_converged"]["detail"]
+
+    def test_a_script_that_only_read_the_deck_changed_nothing(self, tmp_path):
+        """probe-rotate-exhibit (2026-10-04): a read-only script after the
+        last validation was counted as a change to what shipped."""
+        spans = [
+            _span("phase", "validate", started="2026-09-24T10:00:02",
+                  attrs={"clean": False, "issues": 2}),
+            _span("tool", "edit_deck_with_code", started="2026-09-24T10:00:03",
+                  attrs={"changed": False}),
+        ]
+        checks = _by_name(check_run(_run(tmp_path, spans=spans), TASK))
+        assert checks["shipped_what_was_validated"]["passed"] is True
+
+    def test_a_script_that_edited_the_deck_after_it_is_caught(self, tmp_path):
+        spans = [
+            _span("phase", "validate", started="2026-09-24T10:00:02",
+                  attrs={"clean": True, "issues": 0}),
+            _span("tool", "edit_deck_with_code", started="2026-09-24T10:00:03",
+                  attrs={"changed": True}),
+        ]
+        checks = _by_name(check_run(_run(tmp_path, spans=spans), TASK))
+        assert checks["shipped_what_was_validated"]["passed"] is False
+
+    def test_failed_tool_calls_are_named_and_counted(self, tmp_path):
+        spans = [_span("tool", "build_table", status="failed")] * 2 + [_span("tool", "build_chart")]
+        detail = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["no_failed_tool_calls"]["detail"]
+        assert detail == "build_table x2"
+
+    def test_spend_and_tokens_are_summed_from_the_model_calls(self, tmp_path):
+        spans = [
+            _span("run", "run", duration=90_000),
+            _span("llm", "chat", usage={"inputTokens": 1000, "cachedInputTokens": 400, "outputTokens": 50}),
+            _span("llm", "chat", usage={"inputTokens": 500, "cachedInputTokens": 0, "outputTokens": 20}),
+        ]
+        metrics = check_run(_run(tmp_path, manifest={"spend": {"costUsd": 0.012}}, spans=spans),
+                            TASK)["metrics"]
+        assert (metrics["modelCalls"], metrics["inputTokens"], metrics["cachedInputTokens"]) == (2, 1500, 400)
+        assert metrics["costUsd"] == 0.012 and metrics["runSeconds"] == 90.0
+
+    def test_a_run_without_a_deck_cannot_be_checked_for_geometry(self, tmp_path):
+        result = check_run(_run(tmp_path, manifest={"deck": None, "pages": 0,
+                                                    "termination": "stalled"}), TASK)
+        checks = _by_name(result)
+        assert checks["delivered"]["passed"] is False
+        assert checks["text_within_the_page"]["passed"] is None
+        assert result["decided"] == len(result["checks"]) - 1
+
+    def test_the_result_is_written_next_to_the_run(self, tmp_path):
+        check_run(_run(tmp_path), TASK)
+        assert json.loads((tmp_path / "checks.json").read_text())["task"] == "t"
+        assert "checks passed" in render(json.loads((tmp_path / "checks.json").read_text()))
+
+
+class TestWhatTheRenderedPagesSay:
+    @pytest.fixture
+    def deck_pdf(self, tmp_path):
+        import fitz
+
+        doc = fitz.open()
+        for body in (18, 18, 10):   # the last page's body is caption-sized
+            page = doc.new_page(width=960, height=540)
+            page.insert_text((60, 90), "A headline that states the finding", fontsize=36)
+            y = 160
+            for _ in range(6):
+                page.insert_text((60, y), "Body copy that carries the page's argument, set at one size.",
+                                 fontsize=body)
+                y += body * 2
+        (tmp_path / "png" / "pages").mkdir(parents=True)
+        doc.save(str(tmp_path / "png" / "pages" / "deck.pdf"))
+        return tmp_path
+
+    def test_caption_sized_body_copy_is_flagged_by_page(self, deck_pdf):
+        checks = _by_name(check_run(_run(deck_pdf), TASK))
+        assert checks["body_legible"]["passed"] is False
+        assert checks["body_legible"]["detail"].startswith("page 3: 10")
+        assert checks["headlines_within_the_ramp"]["passed"] is True
+        assert checks["text_within_the_page"]["passed"] is True
+
+    def test_a_page_set_small_to_keep_a_fixed_count_passes_when_reported(self, deck_pdf):
+        """#368: below the floor only when the page count is fixed, and then
+        the user is told; the render records which pages."""
+        render = _span("tool", "finalize_and_render_pptx", started="2026-09-24T10:00:01",
+                       attrs={"renderPath": "composed", "belowFloorPages": [3]})
+        checks = _by_name(check_run(_run(deck_pdf, spans=[render]), TASK))
+        assert checks["body_legible"]["passed"] is True
+        assert "page 3" in checks["body_legible"]["detail"]
+        assert "page count fixed, reported" in checks["body_legible"]["detail"]
+
+    def test_the_floor_is_twelve_points(self):
+        from app.research.checks import MIN_BODY_PT
+
+        assert MIN_BODY_PT == 12.0
+
+
+class TestReviewedGaps:
+    def test_a_tool_that_raised_or_never_finished_counts_as_failed(self, tmp_path):
+        spans = [_span("tool", "build_table", status="error"),
+                 _span("tool", "render", status="unfinished")]
+        check = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["no_failed_tool_calls"]
+        assert check["passed"] is False and "build_table x1" in check["detail"]
+
+    def test_a_rejected_draft_is_a_verdict_not_a_failure(self, tmp_path):
+        """A validator turning a draft down is the tool doing its job (#345)."""
+        spans = [_span("tool", "validate_slide_json", status="rejected")] * 3 + [
+            _span("tool", "validate_slide_json")]
+        result = check_run(_run(tmp_path, spans=spans), TASK)
+        check = _by_name(result)["no_failed_tool_calls"]
+        assert check["passed"] is True and check["detail"] == "none failed"
+        assert result["metrics"]["draftsRejected"] == 3
+        assert "3 draft(s) rejected by validation" in render(result)
+
+    def test_a_deck_that_fell_out_of_its_design_is_caught(self, tmp_path):
+        """It renders and passes every geometry check regardless (#351)."""
+        spans = [
+            _span("tool", "finalize_and_render_pptx", attrs={"renderPath": "composed"}),
+            _span("tool", "finalize_and_render_pptx", attrs={"renderPath": "fallback"}),
+        ]
+        check = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["rendered_in_its_design"]
+        assert check["passed"] is False and check["detail"] == "last render: fallback"
+
+    def test_a_page_on_the_plain_fallback_is_named(self, tmp_path):
+        spans = [_span("tool", "finalize_and_render_pptx",
+                       attrs={"renderPath": "composed", "plainPages": [3]})]
+        check = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["rendered_in_its_design"]
+        assert check["passed"] is True
+        assert check["detail"] == "last render: composed; slide(s) 4 on the plain page"
+
+    def test_a_script_edit_after_validation_is_an_unvalidated_deck(self, tmp_path):
+        spans = [
+            _span("phase", "validate", started="2026-09-24T10:00:02", attrs={"clean": False}),
+            _span("tool", "edit_deck_with_code", started="2026-09-24T10:00:05"),
+        ]
+        check = _by_name(check_run(_run(tmp_path, spans=spans), TASK))["shipped_what_was_validated"]
+        assert check["passed"] is False and "edit_deck_with_code" in check["detail"]
+
+    def test_a_run_without_its_task_file_says_so(self, tmp_path):
+        with pytest.raises(ValueError, match="pass the task explicitly"):
+            check_run(_run(tmp_path, manifest={"taskFile": None}))
+
+
+class TestAWatermarkIsNotDamage:
+    """The run's own validation ignores a shape a script set behind the copy
+    and named `ts-background-*`; the benchmark check counted it as overlap
+    and failed every watermarked deck (#376, probe-watermark)."""
+
+    def _run_with_mark(self, tmp_path, name):
+        import fitz
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        doc = fitz.open()
+        page = doc.new_page(width=960, height=540)
+        page.insert_text((60, 200), "A headline that states the finding", fontsize=36)
+        page.insert_text((120, 210), "DRAFT", fontsize=120)
+        (tmp_path / "png" / "pages").mkdir(parents=True)
+        doc.save(str(tmp_path / "png" / "pages" / "deck.pdf"))
+
+        deck = Presentation()
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        mark = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(2))
+        mark.name = name
+        mark.text_frame.text = "DRAFT"
+        deck.save(str(tmp_path / "deck.pptx"))
+        return _run(tmp_path, manifest={"pages": 1})
+
+    def test_a_mark_named_as_background_is_not_counted(self, tmp_path):
+        run = self._run_with_mark(tmp_path, "ts-background-draft-watermark")
+        assert _by_name(check_run(run, TASK))["text_within_the_page"]["passed"] is True
+
+    def test_an_unnamed_mark_still_is(self, tmp_path):
+        run = self._run_with_mark(tmp_path, "TextBox 1")
+        assert _by_name(check_run(run, TASK))["text_within_the_page"]["passed"] is False

@@ -22,6 +22,8 @@ page.
 
 from __future__ import annotations
 
+import re
+
 from app.agent.registry import ToolParameter
 
 
@@ -49,8 +51,10 @@ def slot_param(examples: str) -> ToolParameter:
         description=(
             "A short id distinguishing this from another of the same type on "
             f"the same slide, e.g. {examples}. Rebuilding the same slot "
-            "replaces that one; a different slot adds one. Omit when the "
-            "slide carries only one."
+            "replaces that one; a different slot adds one while a slide is "
+            "first drafted. When revising a slide, a block of a type it "
+            "already carries replaces the earlier one unless its slot names "
+            "another. Omit when the slide carries only one."
         ),
     )
 
@@ -73,5 +77,13 @@ def slot_key(block: dict) -> tuple:
     key to drop the inline content a model wrote in favour of the validated
     block. The two disagreeing is how a slide ends up carrying an exhibit
     twice, so they read it from here.
+
+    The slot is compared loosely - case and separators aside - because a model
+    restating a name turns after it first wrote it does not restate it
+    exactly: a revision rebuilt "decision-matrix" as "decision_matrix" and the
+    page shipped both tables.
     """
-    return (block.get("type"), block.get("regionId"), block.get("slot"))
+    raw = str(block.get("slot") or "").strip()
+    # Separators only: a slot named in Chinese or Cyrillic is still a name.
+    slot = re.sub(r"[\W_]+", "", raw.casefold()) or raw
+    return (block.get("type"), block.get("regionId"), slot or None)

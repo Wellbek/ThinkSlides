@@ -5,8 +5,12 @@ import { useChatStore } from "@/stores/chat-store";
 import { QuestionCard } from "./QuestionCard";
 import { MarkdownText } from "./MarkdownText";
 import { buildDownloadUrl, formatFileSize } from "@/lib/download";
-import { ChevronDown, Download, ExternalLink, Globe } from "lucide-react";
+import { CodeBox } from "./CodeBox";
+import { BookOpen, CheckCheck, ChevronDown, Code2, Download, ExternalLink, Globe, LayoutTemplate, LoaderCircle, Pencil } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import type { CodeDeltaEvent, CodeReadyEvent } from "@thinkslides/schemas";
 import type { AgentEvent, SourceInfo } from "@thinkslides/schemas";
+import { UserAvatar } from "./UserAvatar";
 
 // ──────────────────────────────────────────────
 // The phase timeline groups the flat event stream into the five things a
@@ -73,6 +77,75 @@ const STEP_ORDER: Record<string, number> = Object.fromEntries(
  *  containing nothing else did not redo any work, whatever its step rank
  *  says, so it is not a revisit and must not be dressed as one. */
 const PAUSING_TOOLS = new Set(["ask_user_question", "propose_design_directions"]);
+
+/** The kinds of work a phase can contain, for the stack of glyphs a
+ *  collapsed phase shows instead of its rows. Deliberately four: the point
+ *  is a glanceable sense of what the phase did, and a stack with one circle
+ *  per tool would be confetti.
+ *
+ *  Keyed on the tool rather than on the step, because a step is already the
+ *  phase - deriving from it would give every block a stack of one - and
+ *  because the tool is what the row itself is about. Anything unlisted falls
+ *  back to the block's own group via `GROUP_TO_KIND`, so a tool added later
+ *  gets a sensible glyph rather than none. */
+type WorkKind = "research" | "design" | "draft" | "check" | "code";
+
+const TOOL_KIND: Record<string, WorkKind> = {
+  analyze_document: "research",
+  extract_key_data: "research",
+  web_search: "research",
+  select_source_image: "research",
+
+  extract_template_design_system: "design",
+  propose_design_directions: "design",
+  plan_presentation_structure: "design",
+  select_layout: "design",
+  compose_slide_regions: "design",
+
+  design_slide_content: "draft",
+  build_chart: "draft",
+  build_chart_grid: "draft",
+  build_table: "draft",
+  build_key_metrics: "draft",
+  build_stat_callouts: "draft",
+  build_icon_cards: "draft",
+  build_accent_cards: "draft",
+  build_row_bands: "draft",
+  build_banner: "draft",
+  build_legend: "draft",
+  build_image_card_row: "draft",
+  build_diagram: "draft",
+  draw_primitives: "draft",
+  generate_image: "draft",
+
+  edit_deck_with_code: "code",
+
+  validate_slide_json: "check",
+  validate_rendered_output: "check",
+  finalize_and_render_pptx: "check",
+};
+
+/** The fallback when a tool is not in the table above, so a tool added to the
+ *  backend later still gets a glyph. */
+const GROUP_TO_KIND: Record<PhaseGroupKey, WorkKind> = {
+  understand: "research",
+  research: "research",
+  design: "design",
+  draft: "draft",
+  render: "check",
+};
+
+const KIND_LABEL: Record<WorkKind, string> = {
+  research: "Research",
+  design: "Design",
+  draft: "Drafting",
+  check: "Validation",
+  code: "Code",
+};
+
+/** The order a stack is drawn in - pipeline order, so the glyphs read the
+ *  way the work happened rather than the order the tools happened to fire. */
+const KIND_ORDER: WorkKind[] = ["research", "design", "draft", "code", "check"];
 
 /** The two groups a validation-retry loop alternates between - see
  *  `currentBlock`'s reuse logic below. No other group pair loops this
@@ -179,6 +252,11 @@ function fmtDuration(ms?: number): string {
 interface SubStep {
   key: string;
   callId: string;
+  /** The script this step is running, when it is `edit_deck_with_code`.
+   *  Carried on the step rather than as a row of its own so the code box
+   *  sits with the call that ran it - the deltas and the finished source
+   *  share that call's id, which is what `stepId` is. */
+  code?: CodeDeltaEvent | CodeReadyEvent;
   toolName: string;
   args: Record<string, unknown>;
   result?: unknown;
@@ -399,6 +477,18 @@ function buildPhaseBlocks(events: AgentEvent[]): { blocks: PhaseBlock[]; closing
         openSubSteps.set(ev.callId, sub);
         break;
       }
+      // The script, folded onto the step that runs it. The store has
+      // already merged the deltas into one entry per stepId and replaced
+      // them with `code_ready` when it arrived, so at most one of each
+      // reaches here per step and the last one wins - which is what makes a
+      // replayed stream show the final script rather than a doubled one.
+      case "code_delta":
+      case "code_ready": {
+        const sub = openSubSteps.get(ev.stepId)
+          ?? block.subSteps.find((s) => s.callId === ev.stepId);
+        if (sub) sub.code = ev;
+        break;
+      }
       case "tool_result": {
         const cursorKey = resolveCursorKey(block.key);
         const cursor = cursorByBlock.get(cursorKey) ?? block.startTs;
@@ -567,20 +657,38 @@ export function ActivityFeed() {
           // Check if the next message is a user message (meaning this assistant message's questions are answered)
           const isAnswered = idx < messages.length - 1 && messages[idx + 1].role === 'user';
           const userAnswer = isAnswered && messages[idx + 1].role === 'user' ? messages[idx + 1].content : undefined;
+          // The run's own elapsed time, as the backend reported it on `done`.
+          // It arrives as a system message straight after the assistant's, and
+          // it is the authoritative number: it spans the whole workflow, where
+          // the event stream of this one turn only covers the segment after
+          // the last answer.
+          const completion = messages[idx + 1]?.metadata?.type === "completion"
+            ? messages[idx + 1].metadata?.elapsedMs
+            : undefined;
 
           if (m.role === "user") {
             return (
-              <FeedItem key={m.id} dot={<span className="ws-av indigo">WK</span>} dotClass="ws-dot-user">
+              <FeedItem key={m.id} dot={<UserAvatar />} dotClass="ws-dot-user">
                 <div className="ws-feed-header"><span className="lbl">You</span><span className="ts">{fmtTime(m.created_at)}</span></div>
                 <div className="ws-feed-text">{m.content}</div>
               </FeedItem>
             );
           }
           if (m.role === "system") {
+            // A completion message is the run divider's source of truth, not a
+            // row of its own - rendering both printed the duration twice, and
+            // with two different numbers.
+            if (m.metadata?.type === "completion") return null;
             return <div key={m.id} className="ws-run-complete">{m.content}</div>;
           }
           return (
-            <AssistantTimeline key={m.id} message={m} isAnswered={isAnswered} answerText={userAnswer} />
+            <AssistantTimeline
+              key={m.id}
+              message={m}
+              isAnswered={isAnswered}
+              answerText={userAnswer}
+              elapsedMs={completion}
+            />
           );
         })}
       </div>
@@ -600,7 +708,9 @@ export function ActivityFeed() {
   );
 }
 
-function AssistantTimeline({ message, isAnswered, answerText }: { message: any; isAnswered?: boolean; answerText?: string }) {
+function AssistantTimeline({ message, isAnswered, answerText, elapsedMs }: {
+  message: any; isAnswered?: boolean; answerText?: string; elapsedMs?: number;
+}) {
   const events: AgentEvent[] = useMemo(
     () => message.agentEventStream || [],
     [message.agentEventStream]
@@ -720,7 +830,133 @@ function AssistantTimeline({ message, isAnswered, answerText }: { message: any; 
           <MarkdownText className="ws-feed-text">{finalText}</MarkdownText>
         </FeedItem>
       )}
+
+      <RunDivider
+        blocks={blocks}
+        live={isLive}
+        paused={pausedOnQuestion}
+        slideCount={finalized.length}
+        producedDeck={!!fileGenerated}
+        elapsedMs={elapsedMs}
+      />
     </>
+  );
+}
+
+/** Where one run of the agent ends and the next begins.
+ *
+ *  A session that runs the agent more than once rendered as one unbroken
+ *  column of phase blocks: the only hint that a new run had started was the
+ *  user message wedged between them, and the elapsed time TimerHeader showed
+ *  live disappeared the moment the run stopped being the active one. */
+function RunDivider({ blocks, live, paused, slideCount, producedDeck, elapsedMs }: {
+  blocks: PhaseBlock[];
+  live: boolean;
+  paused: boolean;
+  slideCount: number;
+  producedDeck: boolean;
+  elapsedMs?: number;
+}) {
+  // Only a run that actually ran the pipeline gets one. A turn that just
+  // answered a question in prose is not a workflow, and marking it as one
+  // would put a rule between every message in the session.
+  if (live || paused || !blocks.length) return null;
+
+  // The run's reported total when there is one, because it spans the whole
+  // workflow; this turn's own event span otherwise, which is what survives a
+  // reload once the live completion message is gone.
+  const span = elapsedMs && elapsedMs > 0 ? elapsedMs : runSpan(blocks);
+  // A pipeline run that finished without a deck did not succeed, whatever
+  // else it managed - saying "complete" there would be a lie the user has to
+  // scroll up to catch.
+  const failed = !producedDeck;
+  const slides = slideCount === 1 ? "1 slide" : `${slideCount} slides`;
+  const label = failed
+    ? `Run failed - no deck produced - stopped after ${fmtDuration(span)}`
+    : `Run complete - ${slides} - finished in ${fmtDuration(span)}`;
+
+  return (
+    <div className={`ws-run-divider${failed ? " failed" : ""}`} role="separator" aria-label={label}>
+      <span className="rule" />
+      <span className="txt">{label}</span>
+      <span className="rule" />
+    </div>
+  );
+}
+
+/** How long the run took, first event to last.
+ *
+ *  Deliberately measured from the events rather than read off a live ticker:
+ *  the ticker resets when the run stops being the active one, which is
+ *  exactly when this number needs to survive. */
+function runSpan(blocks: PhaseBlock[]): number {
+  const start = new Date(blocks[0].startTs).getTime();
+  let end = start;
+  for (const block of blocks) {
+    for (const ts of [block.endTs, block.cursorTs, block.startTs]) {
+      const at = ts ? new Date(ts).getTime() : NaN;
+      if (!Number.isNaN(at) && at > end) end = at;
+    }
+  }
+  return Number.isNaN(start) ? 0 : Math.max(0, end - start);
+}
+
+
+/** Which kinds of work a phase contains, in pipeline order.
+ *
+ *  Reads the substeps rather than the block's group so a merged retry block -
+ *  which spans drafting and validation - says so. */
+function kindsIn(block: PhaseBlock): WorkKind[] {
+  const present = new Set<WorkKind>();
+  for (const step of block.subSteps) {
+    present.add(TOOL_KIND[step.toolName] ?? GROUP_TO_KIND[block.group]);
+  }
+  return KIND_ORDER.filter((kind) => present.has(kind));
+}
+
+const KIND_ICON: Record<WorkKind, LucideIcon> = {
+  research: BookOpen,
+  design: LayoutTemplate,
+  draft: Pencil,
+  check: CheckCheck,
+  code: Code2,
+};
+
+/** What a completed phase shows instead of its rows: how much it did, and a
+ *  half-overlapped stack of glyphs saying what kinds of work that was.
+ *
+ *  Every phase kept all of its substeps on screen forever, so by the end of a
+ *  real run the feed was hundreds of rows deep and the finished phases -
+ *  which nobody is reading any more - crowded out the one actually running. */
+function PhaseSummary({ block, count, expanded, onToggle }: {
+  block: PhaseBlock;
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const kinds = kindsIn(block);
+  const label = `${count} step${count === 1 ? "" : "s"} completed`;
+  return (
+    <button
+      type="button"
+      className="ws-phase-summary"
+      aria-expanded={expanded}
+      onClick={onToggle}
+      title={expanded ? "Hide these steps" : "Show these steps"}
+    >
+      <span className="ws-kind-stack">
+        {kinds.map((kind) => {
+          const Icon = KIND_ICON[kind];
+          return (
+            <span key={kind} className={`ws-kind-bubble ${kind}`} title={KIND_LABEL[kind]}>
+              <Icon size={10} />
+            </span>
+          );
+        })}
+      </span>
+      <span className="ws-phase-summary-text">{label}</span>
+      <span className="ws-phase-summary-chev" aria-hidden="true"><ChevronDown size={20} /></span>
+    </button>
   );
 }
 
@@ -779,6 +1015,18 @@ function PhaseBlockItem({
 
   const revisit = revisitDetail;
 
+  // A phase folds away once it is finished and nothing about it needs
+  // reading. Deliberately not while it is running, not when it failed - its
+  // rows are the reason it failed - not when it paused on a question, and not
+  // when it was revisited, where the rows are the evidence of what changed.
+  const collapsible = !active && !failed && !block.questionEvent && !revisit && rows.length > 0;
+  // null means "nobody has touched this", so it follows the rule above and
+  // folds itself the moment the phase completes. Once the user has expressed
+  // a preference it sticks: a phase they opened must not slam shut because a
+  // later event re-rendered the feed.
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  const expanded = toggled ?? !collapsible;
+
   return (
     <FeedItem
       dot={icon}
@@ -821,7 +1069,16 @@ function PhaseBlockItem({
         </div>
       )}
 
-      {!!rows.length && (
+      {collapsible && (
+        <PhaseSummary
+          block={block}
+          count={rows.length}
+          expanded={expanded}
+          onToggle={() => setToggled(!expanded)}
+        />
+      )}
+
+      {!!rows.length && expanded && (
         <div className="ws-phase-checklist">
           {rows.map((row) => <CheckRow key={row.key} row={row} />)}
         </div>
@@ -1077,6 +1334,11 @@ interface Row {
   args?: Record<string, unknown>;
   result?: unknown;
   sources?: SourceInfo[];
+  /** The script this row's step is running, when there is one. Shown under
+   *  the row rather than behind "Raw": a script is the thing the step *is*,
+   *  and hiding it would make the most consequential tool in the set the
+   *  only one whose work you have to click to see. */
+  code?: CodeDeltaEvent | CodeReadyEvent;
 }
 
 /** Whether a step passed, as opposed to merely having run.
@@ -1114,6 +1376,7 @@ function toRow(s: SubStep): Row {
     args: s.args,
     result: s.result,
     sources: s.sources,
+    code: s.code,
   };
 }
 
@@ -1223,6 +1486,7 @@ function groupDraftRows(subSteps: SubStep[]): Row[] {
       args: last.args,
       result: last.result,
       sources: sources.length ? sources : undefined,
+      code: findLastMatch(group, (step) => !!step.code)?.code,
     });
   }
   return rows;
@@ -1279,7 +1543,13 @@ function CheckRow({ row }: { row: Row }) {
     <>
       <div className="ws-phase-check-row">
         <div className="ws-check-top">
-          <span className={`ws-check-icon ${iconClass}`}>{row.icon}</span>
+          <span className={`ws-check-icon ${iconClass}`}>
+            {/* A step still in flight spins rather than sitting as a static
+                glyph, so the row states what it is doing on its own. */}
+            {iconClass === "run"
+              ? <span className="ws-spinner"><LoaderCircle size={11} /></span>
+              : row.icon}
+          </span>
           <span className="ws-check-label">{row.label}</span>
           {!!row.sources?.length && <SourcesInline sources={row.sources} />}
           <span className="ws-spacer-sm" />
@@ -1302,6 +1572,7 @@ function CheckRow({ row }: { row: Row }) {
           )}
         </div>
         {row.note && <div className="ws-check-note">{row.note}</div>}
+        {row.code && <CodeBox event={row.code} />}
       </div>
       {open && hasRaw && (
         <div className="ws-phase-check-raw-body">

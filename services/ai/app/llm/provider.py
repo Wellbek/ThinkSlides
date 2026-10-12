@@ -24,6 +24,7 @@ from app.config import settings
 from app.llm.catalog import PROVIDERS_BY_ID
 from app.llm.openai_compat import create_with_compatible_params
 from app.llm.retry_notices import REASON_RATE_LIMIT, RetryNotice, publish_retry_notice
+from app.llm import usage
 from app.observability.logging import get_logger
 import asyncio
 import inspect
@@ -244,6 +245,10 @@ class LLMProvider(ABC):
 class ZhipuProvider(LLMProvider):
     """Zhipu GLM provider using the zhipuai SDK."""
 
+    # A class attribute so it is present on an instance built without running
+    # __init__, which is how the event-loop tests construct one.
+    base_url: str = ""
+
     def __init__(
         self,
         model: str | None = None,
@@ -256,6 +261,9 @@ class ZhipuProvider(LLMProvider):
             kwargs["base_url"] = base_url
         self.client = ZhipuAI(**kwargs)
         self.model = model or settings.zhipu_model
+        # Kept so what the adapter learns is cached per endpoint: a custom
+        # base_url may be a proxy in front of an entirely different model.
+        self.base_url = base_url or ""
 
     async def chat(
         self,
@@ -286,13 +294,27 @@ class ZhipuProvider(LLMProvider):
             # The future is built inside the lambda so each retry gets a fresh
             # one rather than re-awaiting a future that already failed.
             loop = asyncio.get_running_loop()
-            response = await _with_rate_limit_retry(
-                lambda: loop.run_in_executor(
-                    None,
-                    lambda: self.client.chat.completions.create(**kwargs),
-                ),
-                provider="zhipu",
-                model=self.model,
+
+            async def send(sent: dict[str, Any]):
+                return await _with_rate_limit_retry(
+                    lambda: loop.run_in_executor(
+                        None,
+                        lambda: self.client.chat.completions.create(**sent),
+                    ),
+                    provider="zhipu",
+                    model=self.model,
+                )
+
+            # Through the same adapter the OpenAI path uses. A user who
+            # configures a GLM model that has stopped taking one of these
+            # parameters should get a deck, not a run that fails on the
+            # parameter - and which model that is cannot be known from its
+            # name, which is the whole reason the adapter learns instead of
+            # keeping a list.
+            response = await create_with_compatible_params(
+                send, kwargs,
+                endpoint=self.base_url or "zhipu",
+                provider="zhipu", model=self.model,
             )
         except Exception as e:
             logger.error("zhipu_api_error", error=str(e), model=self.model)
@@ -325,6 +347,7 @@ class ZhipuProvider(LLMProvider):
                     },
                 })
 
+        usage.record("zhipu", self.model, response)
         logger.info(
             "llm_call_completed",
             provider="zhipu",
@@ -414,6 +437,7 @@ class AzureOpenAIProvider(LLMProvider):
                     },
                 })
 
+        usage.record("azure_openai", self.deployment, response)
         logger.info(
             "llm_call_completed",
             provider="azure_openai",
@@ -486,6 +510,7 @@ class OpenAIProvider(LLMProvider):
             raise
 
         result = _parse_openai_choice(response)
+        usage.record("openai", self.model, response)
         logger.info(
             "llm_call_completed",
             provider="openai",
@@ -546,10 +571,21 @@ class AnthropicProvider(LLMProvider):
             kwargs["tools"] = anthropic_tools_from_openai(tools)
 
         try:
-            response = await _with_rate_limit_retry(
-                lambda: self.client.messages.create(**kwargs),
-                provider="anthropic",
-                model=self.model,
+            async def send(sent: dict[str, Any]):
+                return await _with_rate_limit_retry(
+                    lambda: self.client.messages.create(**sent),
+                    provider="anthropic",
+                    model=self.model,
+                )
+
+            # Anthropic's request shape is not OpenAI's, but the adapter is
+            # not about a shape - it is about a model rejecting a parameter
+            # and saying so. A Claude model that stops taking one of these
+            # should cost a round trip, not the run.
+            response = await create_with_compatible_params(
+                send, kwargs,
+                endpoint=str(getattr(self.client, "base_url", "") or "anthropic"),
+                provider="anthropic", model=self.model,
             )
         except Exception as e:
             logger.error("anthropic_api_error", error=str(e), model=self.model)
@@ -574,6 +610,7 @@ class AnthropicProvider(LLMProvider):
             }
 
         result = anthropic_response_to_openai(response)
+        usage.record("anthropic", self.model, response)
         logger.info(
             "llm_call_completed",
             provider="anthropic",
@@ -786,10 +823,13 @@ class VisionLLMProvider:
 class ZhipuVisionProvider(VisionLLMProvider):
     """Zhipu GLM-4.6V vision provider using the zhipuai SDK."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: str, api_key: str, base_url: str | None = None) -> None:
         from zhipuai import ZhipuAI
-        self.client = ZhipuAI(api_key=settings.zhipu_api_key)
-        self.model = settings.zhipu_vision_model
+        kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = ZhipuAI(**kwargs)
+        self.model = model
 
     async def chat_with_images(
         self,
@@ -836,6 +876,7 @@ class ZhipuVisionProvider(VisionLLMProvider):
             raise
 
         duration_ms = int((time.time() - start_time) * 1000)
+        usage.record("zhipu", self.model, response)
         choice = response.choices[0] if response.choices else None
         text = choice.message.content if choice and choice.message else ""
 
@@ -845,6 +886,79 @@ class ZhipuVisionProvider(VisionLLMProvider):
             model=self.model,
             image_count=len(images),
             duration_ms=duration_ms,
+        )
+        return text
+
+
+class OpenAIVisionProvider(VisionLLMProvider):
+    """OpenAI vision provider using the openai SDK.
+
+    Also serves any OpenAI-compatible endpoint via ``base_url``, same as
+    ``OpenAIProvider``. Constructed from explicit credentials rather than from
+    the environment, because which model looks at an image is the user's
+    choice in settings like every other model in the product.
+    """
+
+    DEFAULT_ENDPOINT = OpenAIProvider.DEFAULT_ENDPOINT
+
+    def __init__(self, model: str, api_key: str, base_url: str | None = None) -> None:
+        from openai import AsyncOpenAI
+        kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": SDK_MAX_RETRIES}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = AsyncOpenAI(**kwargs)
+        self.model = model
+        self.endpoint = base_url or self.DEFAULT_ENDPOINT
+
+    async def chat_with_images(
+        self,
+        prompt: str,
+        images: list[str],
+        temperature: float = 0.4,
+        max_tokens: int = 4096,
+    ) -> str:
+        start_time = time.time()
+
+        content: list[dict] = [{"type": "text", "text": prompt}]
+        for img in images:
+            url = img if img.startswith("data:") else f"data:image/png;base64,{img}"
+            content.append({"type": "image_url", "image_url": {"url": url}})
+
+        # Same compatibility dance as the text path: current models want
+        # max_completion_tokens and reject temperature, older ones take both,
+        # and the model's name does not tell you which. See openai_compat.
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": content}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        try:
+            response = await create_with_compatible_params(
+                lambda payload: _with_rate_limit_retry(
+                    lambda: self.client.chat.completions.create(**payload),
+                    provider="openai",
+                    model=self.model,
+                ),
+                kwargs,
+                endpoint=self.endpoint,
+                provider="openai",
+                model=self.model,
+            )
+        except Exception as e:
+            logger.error("openai_vision_api_error", error=str(e), model=self.model)
+            raise
+
+        usage.record("openai", self.model, response)
+        choice = response.choices[0] if response.choices else None
+        text = (choice.message.content if choice and choice.message else "") or ""
+        logger.info(
+            "vision_llm_call_completed",
+            provider="openai",
+            model=self.model,
+            image_count=len(images),
+            duration_ms=int((time.time() - start_time) * 1000),
         )
         return text
 
@@ -907,6 +1021,7 @@ class AzureOpenAIVisionProvider(VisionLLMProvider):
             raise
 
         duration_ms = int((time.time() - start_time) * 1000)
+        usage.record("azure_openai", self.deployment, response)
         choice = response.choices[0] if response.choices else None
         text = choice.message.content if choice and choice.message else ""
 
@@ -922,50 +1037,50 @@ class AzureOpenAIVisionProvider(VisionLLMProvider):
 
 # ── Singleton instances ────────────────────────────────────────────────
 
-_provider: LLMProvider | None = None
-_tools_provider: LLMProvider | None = None
-_vision_provider: VisionLLMProvider | None = None
+# There are deliberately no process-wide provider singletons here.
+#
+# There were three - get_llm_provider, get_tools_llm_provider and
+# get_vision_llm_provider - each built from environment variables. What they
+# produced was a workspace that looked configured without ever having been:
+# generations ran on whatever key .env held, and when that key was exhausted
+# the failure named a provider the user had never chosen. Every provider is
+# now constructed from the organisation's stored settings through
+# build_chat_provider / build_vision_provider and published on the run
+# context, so a workspace with nothing configured says so instead of quietly
+# borrowing somebody else's key.
 
 
-def get_llm_provider() -> LLMProvider:
-    """Get or create the LLM provider based on configuration."""
-    global _provider
-    if _provider is None:
-        if settings.llm_provider == "azure_openai":
-            _provider = AzureOpenAIProvider()
-            logger.info("llm_provider_initialized", provider="azure_openai")
-        else:
-            _provider = ZhipuProvider()
-            logger.info("llm_provider_initialized", provider="zhipu", model=settings.zhipu_model)
-    return _provider
+def build_vision_provider(credentials: ProviderCredentials) -> VisionLLMProvider:
+    """Construct a vision provider from explicit config, bypassing the singletons.
 
+    The counterpart of ``build_chat_provider``, and it exists for the same
+    reason: which model runs is the user's choice in settings, not whatever
+    the process happened to be started with. A harness that reached for the
+    environment singleton instead ran on a provider the user had never picked,
+    and failed naming it.
 
-def get_tools_llm_provider() -> LLMProvider:
-    """Provider for lower-stakes internal tool LLM calls (planning, key-data
-    extraction). Uses the cheaper/faster flash model when available so the
-    multi-step generation completes more quickly. Slide content design still
-    uses the main provider. Falls back to the main provider on Azure or if the
-    tools model equals the main model."""
-    global _tools_provider
-    if _tools_provider is None:
-        if settings.llm_provider == "azure_openai":
-            _tools_provider = get_llm_provider()
-        elif settings.zhipu_tools_model and settings.zhipu_tools_model != settings.zhipu_model:
-            _tools_provider = ZhipuProvider(model=settings.zhipu_tools_model)
-            logger.info("tools_llm_provider_initialized", provider="zhipu", model=settings.zhipu_tools_model)
-        else:
-            _tools_provider = get_llm_provider()
-    return _tools_provider
+    Raises:
+        ValueError: If the provider id is unknown or the credentials are empty.
+    """
+    if credentials.provider not in PROVIDERS_BY_ID:
+        raise ValueError(f"Unknown LLM provider '{credentials.provider}'")
+    if not credentials.api_key:
+        raise ValueError(f"No API key configured for provider '{credentials.provider}'")
+    if not credentials.model:
+        raise ValueError(f"No model configured for provider '{credentials.provider}'")
 
-
-def get_vision_llm_provider() -> VisionLLMProvider:
-    """Get or create the vision-capable LLM provider based on configuration."""
-    global _vision_provider
-    if _vision_provider is None:
-        if settings.vision_llm_provider == "azure_openai":
-            _vision_provider = AzureOpenAIVisionProvider()
-            logger.info("vision_llm_provider_initialized", provider="azure_openai")
-        else:
-            _vision_provider = ZhipuVisionProvider()
-            logger.info("vision_llm_provider_initialized", provider="zhipu", model=settings.zhipu_vision_model)
-    return _vision_provider
+    if credentials.provider == "openai":
+        return OpenAIVisionProvider(
+            model=credentials.model,
+            api_key=credentials.api_key,
+            base_url=credentials.base_url,
+        )
+    if credentials.provider == "zhipu":
+        return ZhipuVisionProvider(
+            model=credentials.model,
+            api_key=credentials.api_key,
+            base_url=credentials.base_url,
+        )
+    raise ValueError(
+        f"'{credentials.provider}' has no vision support in this build"
+    )

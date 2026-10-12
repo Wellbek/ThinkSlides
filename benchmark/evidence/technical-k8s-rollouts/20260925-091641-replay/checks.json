@@ -1,0 +1,106 @@
+{
+  "task": "technical-k8s-rollouts",
+  "run": "20260925-091641-replay",
+  "mode": "replay",
+  "model": null,
+  "commit": "d4bb540-dirty",
+  "passed": 8,
+  "decided": 10,
+  "blockingFailures": [
+    "slide_count"
+  ],
+  "checks": [
+    {
+      "name": "delivered",
+      "passed": true,
+      "detail": "deck: deck.pptx",
+      "blocking": true
+    },
+    {
+      "name": "terminated_cleanly",
+      "passed": true,
+      "detail": "termination: complete",
+      "blocking": false
+    },
+    {
+      "name": "slide_count",
+      "passed": false,
+      "detail": "8 pages, task asks for 6",
+      "blocking": true
+    },
+    {
+      "name": "text_within_the_page",
+      "passed": true,
+      "detail": "no overflow or overlap in the rendered geometry",
+      "blocking": true
+    },
+    {
+      "name": "headlines_within_the_ramp",
+      "passed": true,
+      "detail": "every content headline at or below 48pt",
+      "blocking": false
+    },
+    {
+      "name": "body_legible",
+      "passed": false,
+      "detail": "page 7: 12.6pt, page 8: 12.6pt",
+      "blocking": false
+    },
+    {
+      "name": "rendered_in_its_design",
+      "passed": true,
+      "detail": "last render: composed",
+      "blocking": false
+    },
+    {
+      "name": "validation_converged",
+      "passed": true,
+      "detail": "1 round(s), 0 issue(s) left",
+      "blocking": false
+    },
+    {
+      "name": "shipped_what_was_validated",
+      "passed": true,
+      "detail": "the delivered file is the one validation saw",
+      "blocking": false
+    },
+    {
+      "name": "no_failed_tool_calls",
+      "passed": true,
+      "detail": "none failed",
+      "blocking": false
+    }
+  ],
+  "metrics": {
+    "modelCalls": 41,
+    "inputTokens": 0,
+    "cachedInputTokens": 0,
+    "outputTokens": 0,
+    "tokensEstimated": false,
+    "costUsd": null,
+    "runSeconds": 11.8,
+    "draftsRejected": 3,
+    "validationRounds": 1,
+    "pages": 8,
+    "wordsPerPage": [
+      29,
+      80,
+      83,
+      59,
+      71,
+      55,
+      74,
+      92
+    ],
+    "inkCoverage": [
+      0.346,
+      0.52,
+      0.409,
+      0.432,
+      0.484,
+      0.499,
+      0.48,
+      0.588
+    ]
+  }
+}

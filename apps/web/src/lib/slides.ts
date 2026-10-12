@@ -12,6 +12,14 @@
  * This module reconstructs an ordered, deduplicated slide list from those
  * tool results, merging in `previewUrl` once it becomes available so the
  * approximate live view is replaced by the true rendered output.
+ *
+ * A `slide_finalized` event can also *create* an entry rather than only
+ * decorating one. Not every page of the rendered file was designed by the
+ * agent: `finalize_and_render_pptx` appends a Sources appendix after the
+ * model is finished, and previews are rasterised from every page of the
+ * result. Those pages have no `design_slide_content` behind them, so keying
+ * the list purely on design results dropped them - the preview reported fewer
+ * pages than the file the user downloaded.
  */
 import type { ChatMessage } from "@/stores/chat-store";
 import type {
@@ -27,6 +35,9 @@ export interface PreviewSlide {
   title: string;
   contents: SlideContentItem[];
   previewUrl?: string;
+  /** Added by the renderer, not designed by the agent. Such a slide has no
+   *  `contents`, so it can only ever be shown as its rendered image. */
+  injected?: boolean;
 }
 
 interface RawSlide {
@@ -60,6 +71,9 @@ export function collectPreviewSlides(messages: ChatMessage[]): PreviewSlide[] {
   // emitted once finalize_and_render_pptx has produced the real rendered
   // output.
   const previewUrls = new Map<number, string>();
+  // The rendered pages themselves, so one with no design result behind it can
+  // still be shown. Keyed the same way, and the last render wins.
+  const rendered = new Map<number, { title: string; injected: boolean }>();
 
   for (const m of messages) {
     for (const ev of m.agentEventStream || []) {
@@ -67,6 +81,10 @@ export function collectPreviewSlides(messages: ChatMessage[]): PreviewSlide[] {
         const sf = ev as SlideFinalizedEvent;
         const url = sf.previewUrl;
         if (url) previewUrls.set(sf.slideIndex, url);
+        rendered.set(sf.slideIndex, {
+          title: (sf.slideTitle || "").trim(),
+          injected: !!sf.injected,
+        });
         continue;
       }
       if (ev.type !== "tool_result") continue;
@@ -96,7 +114,23 @@ export function collectPreviewSlides(messages: ChatMessage[]): PreviewSlide[] {
   // LibreOffice render even once it was available.
   for (const [idx, url] of previewUrls) {
     const slide = byIndex.get(idx);
-    if (slide) slide.previewUrl = url;
+    if (slide) {
+      slide.previewUrl = url;
+      continue;
+    }
+    // A rendered page the agent never designed. The image is the whole of it,
+    // so there is nothing to reconstruct - but it is genuinely in the file the
+    // user downloads, and omitting it made the preview disagree with the deck.
+    const page = rendered.get(idx);
+    byIndex.set(idx, {
+      key: `rendered-${idx}`,
+      slideIndex: idx,
+      layoutName: "",
+      title: page?.title || `Slide ${idx + 1}`,
+      contents: [],
+      previewUrl: url,
+      injected: page?.injected ?? true,
+    });
   }
 
   return Array.from(byIndex.values()).sort(

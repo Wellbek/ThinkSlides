@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 import pytest
 
 from app.renderer.chart_renderer import (
-    _waterfall_frame, render_chart_to_png, resolve_chart_type,
+    _solid_part, _waterfall_frame, render_chart_to_png, resolve_chart_type,
 )
 from app.renderer.table_style import resolve_chart_style
 
@@ -344,3 +344,185 @@ class TestTheSemanticColoursBelongToTheDeck:
 
         assert style.waterfall_rise_color == "#2E9AA6"
         assert style.waterfall_fall_color == "#C0553B"
+
+
+class TestHidingTheCategoryAxisKeepsTheCategoryNames:
+    """
+    A deck that hides its axes still has to say which bar is which.
+
+    ``chartCategoryAxis: false`` is a minimalist convention - no rule, no tick
+    marks - and it was also switching off the tick *labels*, which are the
+    only thing naming the bars. A researched three-segment forecast rendered
+    as three unlabelled rectangles under an axis titled "Market Segments":
+    every number on the page was correct and the chart said nothing.
+
+    The two axes are not symmetric. A value axis is redundant on a chart that
+    prints its values on the bars; a category axis never is.
+    """
+
+    CATEGORIES = ["IT Spending", "AI Spending", "Semiconductor Market"]
+
+    def _axes_labels(self, show_category_axis: bool) -> list[str]:
+        import matplotlib.pyplot as plt
+
+        from app.design_system import get_default_design_system
+
+        design = get_default_design_system()
+        design.setdefault("dataViz", {})["chartCategoryAxis"] = show_category_axis
+
+        drawn: list[list[str]] = []
+        original = plt.Figure.savefig
+
+        def capture(fig, *args, **kwargs):
+            for ax in fig.get_axes():
+                drawn.append([
+                    t.get_text() for t in ax.get_xticklabels() if t.get_visible()
+                ])
+            return original(fig, *args, **kwargs)
+
+        plt.Figure.savefig = capture
+        try:
+            render_chart_to_png(
+                {
+                    "chartType": "bar",
+                    "categories": self.CATEGORIES,
+                    "series": [{"name": "Growth", "values": [14.2, 47.0, 52.8]}],
+                },
+                design, 11.0, 4.0, dpi=72,
+            )
+        finally:
+            plt.Figure.savefig = original
+        return [label for group in drawn for label in group if label]
+
+    def test_the_names_are_drawn_when_the_axis_is_hidden(self):
+        labels = self._axes_labels(show_category_axis=False)
+        assert set(self.CATEGORIES) <= set(labels), labels
+
+    def test_the_names_are_drawn_when_the_axis_is_shown(self):
+        labels = self._axes_labels(show_category_axis=True)
+        assert set(self.CATEGORIES) <= set(labels), labels
+
+
+class TestABarChartOfDeclinesActuallyDrawsBars:
+    """
+    The defect (#292): a deck slide read "Broadcast-ad revenue declined by
+    12.3% in 2025" beside a chart titled "Percentage Decline" with a Year
+    axis, two category labels and *no bars at all*.
+
+    `_draw_bars_with_forecast` computed each bar's solid part as
+    `max(0.0, min(value, measured))`, which reads a negative datum as
+    arithmetic that had gone wrong and flattens it to a zero-height bar. The
+    forecast-outline loop below it then skipped the same bars, because
+    `value - base` is negative for them and its guard was `<= 0`. So neither
+    branch drew anything.
+
+    It stayed hidden because the failure is silent in every way that
+    normally catches things: a chart with no bars still returns valid PNG
+    bytes, still has a title and axes, and still attaches to its slide. So
+    these assert on the drawn artists, the way the rest of this file does.
+    """
+
+    @staticmethod
+    def _bar_heights(values):
+        captured = []
+        real = plt.subplots
+
+        def spy(*args, **kwargs):
+            fig, ax = real(*args, **kwargs)
+            captured.append(ax)
+            return fig, ax
+
+        plt.subplots = spy
+        try:
+            render_chart_to_png(
+                {"type": "bar", "title": "Percentage Decline",
+                 "xAxisTitle": "Year", "categories": ["2024", "2025"],
+                 "series": [{"name": "Decline", "values": values}]},
+                None, 6.0, 3.0, dpi=72,
+            )
+        finally:
+            plt.subplots = real
+        ax = captured[0]
+        heights = [p.get_height() for p in ax.patches]
+        plt.close("all")
+        return heights
+
+    def test_two_negative_values_draw_two_real_bars(self):
+        heights = self._bar_heights([-5.0, -12.3])
+
+        drawn = [h for h in heights if abs(h) > 0.01]
+        assert len(drawn) == 2, f"expected two bars, drew {drawn}"
+        assert sorted(drawn) == pytest.approx([-12.3, -5.0]), drawn
+
+    def test_the_bars_hang_below_the_baseline_rather_than_above_it(self):
+        """A decline drawn upwards would be a chart stating the opposite of
+        its own data - worse than drawing nothing."""
+        heights = [h for h in self._bar_heights([-5.0, -12.3])
+                   if abs(h) > 0.01]
+
+        assert all(h < 0 for h in heights), heights
+
+    def test_a_mixed_series_keeps_both_signs(self):
+        heights = [h for h in self._bar_heights([3.0, -12.3])
+                   if abs(h) > 0.01]
+
+        assert sorted(heights) == pytest.approx([-12.3, 3.0]), heights
+
+    def test_positive_bars_are_unchanged(self):
+        heights = [h for h in self._bar_heights([5.0, 12.3])
+                   if abs(h) > 0.01]
+
+        assert sorted(heights) == pytest.approx([5.0, 12.3]), heights
+
+    def test_the_value_axis_still_covers_the_data(self):
+        """The old clamp left the axis autoscaling to zero-height bars, so it
+        ran -0.05 to 0.05 - a range with no relationship to the -12.3 the
+        chart was about."""
+        captured = []
+        real = plt.subplots
+
+        def spy(*args, **kwargs):
+            fig, ax = real(*args, **kwargs)
+            captured.append(ax)
+            return fig, ax
+
+        plt.subplots = spy
+        try:
+            render_chart_to_png(
+                {"type": "bar", "categories": ["2024", "2025"],
+                 "series": [{"name": "Decline", "values": [-5.0, -12.3]}]},
+                None, 6.0, 3.0, dpi=72,
+            )
+        finally:
+            plt.subplots = real
+        low, high = captured[0].get_ylim()
+        plt.close("all")
+
+        assert low <= -12.3, f"axis bottom {low} clips the deepest bar"
+        assert high >= 0.0, f"axis top {high} hides the baseline"
+
+
+class TestTheMeasuredPortionOfABarKeepsItsSign:
+    """`_solid_part` is where #292 was fixed, and the guard it replaced was
+    there for a real reason - a stated `measured` larger than the value must
+    not push the solid part past it. Both halves are asserted, so a later
+    simplification cannot quietly drop one."""
+
+    @pytest.mark.parametrize("value,measured,expected", [
+        (10.0, 4.0, 4.0),        # positive, partly measured
+        (10.0, 99.0, 10.0),      # measured overstated -> capped at the value
+        (10.0, -3.0, 0.0),       # measured on the wrong side -> nothing solid
+        (-12.3, -5.0, -5.0),     # negative, partly measured
+        (-12.3, -99.0, -12.3),   # overstated the other way -> capped again
+        (-12.3, -12.3, -12.3),   # negative, fully measured
+        (-12.3, 7.0, 0.0),       # wrong side again, mirrored
+    ])
+    def test_it_stays_between_zero_and_the_value(self, value, measured,
+                                                 expected):
+        assert _solid_part(value, measured) == pytest.approx(expected)
+
+    def test_a_nan_value_is_not_drawn(self):
+        assert _solid_part(float("nan"), 5.0) == 0.0
+
+    def test_a_nan_measurement_is_not_drawn(self):
+        assert _solid_part(5.0, float("nan")) == 0.0

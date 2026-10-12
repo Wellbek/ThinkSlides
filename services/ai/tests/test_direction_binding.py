@@ -129,13 +129,37 @@ class TestTheChoiceGovernsTheRun:
 
         assert chosen["designSystem"]["marker"] == "clean"
 
-    def test_an_answer_matching_nothing_leaves_the_run_alone(self):
-        """An unrecognised reply must not silently pick a direction."""
+    def test_an_answer_matching_nothing_is_read_as_deferring_the_choice(self):
+        """
+        This used to resolve to None, so that an unrecognised reply could not
+        silently pick a direction. The principle stands; the outcome did not.
+        The render guard refuses unless a direction was chosen, so a user who
+        answered in their own words wedged the run and got no deck at all -
+        see #258.
+
+        The pick is no longer silent: `direction_deferred` is set and the run
+        announces which direction it used and that it chose on the user's
+        behalf. Note this reply also asks for a colour, which
+        `_apply_colour_choice` then applies to the direction picked here.
+        """
         loop = self._offered(_loop())
 
-        assert loop._resolve_direction_choice(
+        chosen = loop._resolve_direction_choice(
             [{"role": "user", "content": "actually make it purple"}]
-        ) is None
+        )
+
+        assert chosen is not None
+        assert loop.working_state.direction_deferred is True
+
+    def test_a_deferral_is_only_read_once_the_user_has_actually_replied(self):
+        """The guard still fires while the question is outstanding: defaulting
+        then would pick a look nobody has been shown the question for."""
+        loop = self._offered(_loop())
+
+        assert loop._resolve_direction_choice([
+            {"role": "user", "content": "build me a deck"},
+            {"role": "assistant", "content": "Which direction shall I use?"},
+        ]) is None
 
     def test_a_choice_already_made_is_not_remade(self):
         loop = self._offered(_loop())
@@ -309,3 +333,79 @@ class TestTheDeckKeepsTheShapeTheUserSaw:
         from app.agent.loop import _STRUCTURE_DIRECTIVE
 
         assert set(direction_model.STRUCTURES) == set(_STRUCTURE_DIRECTIVE)
+
+
+class TestTheDraftTurnHearsWhatThePlanAlreadyDecided:
+    """#289: plan_presentation_structure reasons about whether a slide's key
+    points are chart or table material, or need several exhibits, and
+    records that as `contentType`/`exhibitPlan` on the plan - and until this,
+    none of it reached the turn that actually drafts the slide, which had to
+    notice the same thing again from a bare title and generic advice, and
+    evidently often didn't."""
+
+    @staticmethod
+    def _drafting(content_type: str, **planned_overrides):
+        loop = _loop()
+        planned = {"title": "One", "contentType": content_type}
+        planned.update(planned_overrides)
+        loop.working_state.presentation_structure = {
+            "totalSlides": 1, "slides": [planned],
+        }
+        return loop
+
+    def test_a_chart_slide_is_told_to_build_one(self):
+        directive = self._drafting("chart").slide_directive()
+        assert "build_chart" in directive
+        assert "plan calls for this to be a chart" in directive
+
+    def test_a_table_slide_is_told_to_build_one(self):
+        directive = self._drafting("table").slide_directive()
+        assert "build_table" in directive
+
+    def test_an_image_slide_is_told_to_find_one(self):
+        directive = self._drafting("image").slide_directive()
+        assert "select_source_image" in directive
+
+    def test_a_dashboard_slide_is_told_to_build_one_exhibit_per_question(self):
+        directive = self._drafting(
+            "dashboard",
+            exhibitPlan=["What are the headline figures?",
+                         "Where did the movement come from?"],
+        ).slide_directive()
+        assert "What are the headline figures?" in directive
+        assert "Where did the movement come from?" in directive
+        assert "build_chart, build_table, build_key_metrics or build_stat_callouts" in directive
+
+    def test_a_dashboard_slide_with_no_recorded_plan_still_says_something(self):
+        directive = self._drafting("dashboard").slide_directive()
+        assert "no exhibit plan was recorded" in directive
+
+    def test_an_ordinary_content_slide_gets_no_content_type_push(self):
+        """The push is for the cases the plan singled out - an ordinary
+        slide is not told to build anything it wasn't planned to have."""
+        directive = self._drafting("content").slide_directive()
+        assert "build_chart" not in directive
+        assert "build_table" not in directive
+        assert "plan calls for this to be" not in directive
+
+    def test_every_draft_turn_states_the_decks_own_vocabulary(self):
+        """Most slides are not singled out by contentType, and those are
+        exactly the ones with nothing at draft time distinguishing a
+        boardroom page from an academic one - unless the format's own
+        vocabulary is restated regardless of contentType."""
+        from app.design import deck_format
+
+        loop = self._drafting("content")
+        loop.working_state.deck_format = deck_format.BOARDROOM.id
+
+        assert deck_format.BOARDROOM.vocabulary in loop.slide_directive()
+
+    def test_a_different_format_states_its_own_vocabulary_not_boardrooms(self):
+        from app.design import deck_format
+
+        loop = self._drafting("content")
+        loop.working_state.deck_format = deck_format.DASHBOARD.id
+        directive = loop.slide_directive()
+
+        assert deck_format.DASHBOARD.vocabulary in directive
+        assert deck_format.BOARDROOM.vocabulary not in directive

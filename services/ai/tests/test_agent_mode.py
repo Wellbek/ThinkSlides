@@ -220,6 +220,137 @@ def test_every_described_tool_is_one_the_run_can_actually_call():
     assert set(described) <= registered, set(described) - registered
 
 
+def _described_tools(prompt: str) -> set[str]:
+    lines = prompt.splitlines()
+    start = lines.index("## Tools") + 2
+    described = set()
+    for line in lines[start:]:
+        if not line or not line[0].isdigit():
+            break
+        described.add(line.split(". ", 1)[1].split(" \u2014")[0].strip())
+    return described
+
+
+def _drafting_loop(pack_id: str | None) -> AgentLoop:
+    """A loop sitting on the step that writes a slide.
+
+    That is the step the withheld tools were withheld from, so it is the one
+    whose prompt has to agree with its toolset.
+    """
+    # Simple mode: deep would put the research phase in front of drafting, and
+    # the step this is about is the drafting one.
+    loop = _loop(MODE_SIMPLE)
+    loop._session_has_documents = True
+    loop.working_state.pack_id = pack_id
+    loop.working_state.brief = {"brief": "a deck", "slideCount": 1}
+    loop.working_state.presentation_structure = {
+        "totalSlides": 1, "slides": [{"title": "One"}]
+    }
+    # On a design language compile asks for the slide first (#323); a slide it
+    # could not produce is what reaches the drafting conversation.
+    loop.working_state.compile_tried = {0}
+    return loop
+
+
+@pytest.mark.parametrize("pack_id", [None, "authored-abc"])
+def test_compile_names_no_tool_the_run_withholds(pack_id):
+    """The same invariant for compile's own request (#323): the prompt every
+    slide shares, the slide's request, and the tools it is offered."""
+    from app.agent import compile as slide_compile
+
+    loop = _drafting_loop(pack_id)
+    loop.context = {}
+    request = (slide_compile.system_prompt(loop, {})
+               + slide_compile.slide_request(loop, 0, {}))
+    offered = {t["function"]["name"] for t in slide_compile.offered_tools(loop)}
+
+    assert "write_slide" in request
+    for name in loop._withheld_tools():
+        assert name not in request, f"{name} is described but withheld"
+        assert name not in offered
+
+
+@pytest.mark.parametrize("pack_id", [None, "authored-abc"])
+def test_no_part_of_the_prompt_names_a_tool_the_run_withholds(pack_id):
+    """
+    The invariant the registry check was one level too high to see.
+
+    `select_layout` is registered on every run - it is withheld from the
+    *phase*, which is a layer the previous test does not reach. A run on a
+    design language composes its pages in code and is not offered the geometry
+    tools, and for a while the prompt went on naming them anyway: the tool
+    list, the `## Building Visuals` advice, and worst of all the `## Next
+    Step` directive, which is re-issued every turn the model fails to comply.
+    A model told each turn to call a tool it cannot see calls something else
+    until its turns run out, which is exactly what every template-less run
+    did.
+
+    So this checks the whole prompt, not just the numbered list - the
+    directive and the prose are where the damage actually was.
+    """
+    loop = _drafting_loop(pack_id)
+    prompt = loop._build_system_prompt({})
+
+    # The directive is the site that mattered most, so this fails loudly if the
+    # loop ever stops putting it in the prompt and the check goes vacuous.
+    assert "Draft slide 1" in prompt
+
+    withheld = loop._withheld_tools()
+    # Both sit behind CODE_AMENDMENT_ENABLED, and a drafting loop with
+    # nothing rendered yet withholds edit_deck_with_code on that ground too
+    # - it edits a file that does not exist yet at this point in a run.
+    # revise_slides sends a finished deck's slides back, so a run that is not
+    # amending one has nothing to send.
+    expected = {"compute_visual_with_code", "edit_deck_with_code", "revise_slides"}
+    if pack_id is not None:
+        expected |= {"select_layout", "compose_slide_regions"}
+    assert withheld == expected
+    for name in withheld:
+        assert name not in prompt, f"{name} is described but withheld"
+
+
+@pytest.mark.parametrize("pack_id", [None, "authored-abc"])
+def test_every_described_slide_tool_is_offered_while_drafting(pack_id):
+    """
+    Described \u2286 offered, one layer below described \u2286 registered.
+
+    Restricted to the tools the *model* chooses. Most of this pipeline is
+    loop-driven: the loop calls plan_presentation_structure and
+    finalize_and_render_pptx itself, and the tool list describes them so the
+    model understands the run it is inside rather than so it can call them.
+    The drafting set is different - those are offered, the model picks among
+    them, and a name in the prompt that is not in the offered set is a
+    instruction the model cannot carry out.
+    """
+    from app.agent import pipeline
+
+    loop = _drafting_loop(pack_id)
+    described = _described_tools(loop._build_system_prompt({}))
+    offered = pipeline.SLIDE_TOOLS - loop._withheld_tools()
+
+    assert described & pipeline.SLIDE_TOOLS
+    assert described & pipeline.SLIDE_TOOLS <= offered, (
+        (described & pipeline.SLIDE_TOOLS) - offered
+    )
+
+
+def test_the_pack_path_still_describes_the_tools_it_does_have():
+    """A filter that dropped everything would pass the two tests above."""
+    loop = _drafting_loop("authored-abc")
+    described = _described_tools(loop._build_system_prompt({}))
+
+    assert "design_slide_content" in described
+    assert "build_chart" in described
+    assert "select_layout" not in described
+
+
+def test_the_template_path_is_unchanged():
+    """The geometry tools are withheld from the design-language path only."""
+    described = _described_tools(_drafting_loop(None)._build_system_prompt({}))
+
+    assert {"select_layout", "compose_slide_regions"} <= described
+
+
 # ── Mode resolution and persistence ────────────────────────────────────
 
 
@@ -625,3 +756,60 @@ async def test_a_bad_key_is_not_retried(monkeypatch):
 
     with pytest.raises(Exception, match="invalid x-api-key"):
         await loop._chat_with_retry(messages=[], tools=None)
+
+
+@pytest.mark.asyncio
+async def test_a_simple_run_still_learns_whether_a_backend_exists(monkeypatch):
+    """
+    The offer to research has to be reachable from the mode it upgrades.
+
+    ``_can_offer_research`` requires a search config, and this used to be
+    resolved only when the mode was already Deep - so a Simple run never had
+    one, the offer was never made, and a brief that plainly stood on facts
+    ("how big the market is, who the players are") was written from memory
+    without the user ever being asked. The existing tests missed it because
+    they set ``search_config`` by hand; the defect was in the wiring between
+    this method and the gate, not in either one alone.
+    """
+    from app.ai_settings import SearchConfig
+
+    monkeypatch.setattr(
+        "app.ai_settings.resolve_search_config",
+        lambda row: (SearchConfig(backend="tavily", api_key="tvly-test"), ""),
+    )
+
+    loop = _loop(MODE_SIMPLE)
+    await loop._configure()
+
+    assert loop.mode == MODE_SIMPLE
+    assert loop.search_config is not None
+    loop.working_state.brief = {"needsResearch": True}
+    assert loop._can_offer_research() is True
+
+
+@pytest.mark.asyncio
+async def test_a_simple_run_knowing_of_a_backend_still_cannot_use_it(monkeypatch):
+    """Knowing a backend exists is not the same as being able to search with it.
+
+    web_search reads its backend off the run context, so a Simple run must
+    leave that unset however much it knows - otherwise resolving the config
+    early would hand every Simple run the tool it was told it does not have.
+    """
+    from app.agent import run_context
+    from app.ai_settings import SearchConfig
+
+    monkeypatch.setattr(
+        "app.ai_settings.resolve_search_config",
+        lambda row: (SearchConfig(backend="tavily", api_key="tvly-test"), ""),
+    )
+
+    loop = _loop(MODE_SIMPLE)
+    try:
+        await loop._configure()
+
+        assert loop.search_config is not None
+        assert run_context.get_search_config() is None
+        assert loop._search_token is None
+    finally:
+        if loop._search_token is not None:
+            run_context.reset_search_config(loop._search_token)
