@@ -247,9 +247,11 @@ class TestASurvivorIsCutToItsCopy:
         assert len(columns) == 2
         first, second = columns
         # The first column's copy is two short lines at 18pt; the figure's
-        # band was far taller than that.
+        # band was far taller than that. The second follows the copy, at the
+        # archetype's gap; where the pair sits on the page is settling's
+        # (#378), which may move them together.
         assert first.place.h < figure.place.h / 2
-        assert second.place.y < figure.place.y + figure.place.h / 2
+        assert second.place.y - (first.place.y + first.place.h) < figure.place.h / 4
 
     def test_a_page_that_kept_every_frame_is_untouched(self):
         """Only a row that lost a member is cut down."""

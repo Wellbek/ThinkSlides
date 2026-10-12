@@ -89,12 +89,29 @@ class TestAFigureDeclaresItsShapeBeforePlacement:
         assert aspect_penalty(wide, square_slot) > aspect_penalty(wide, wide_slot)
 
 
+def _settled_to_its_shape(doc, pack) -> bool:
+    """Whether settling gave the wide graph a frame of its own 7:1 shape."""
+    from app.design.geometry import resolve_page
+
+    for page in doc.pages:
+        for resolved in resolve_page(doc, page):
+            if any(getattr(item, "exhibit_kind", "") == "diagram"
+                   for item in resolved.frame.content):
+                aspect = resolved.rect.width / max(resolved.rect.height, 1e-6)
+                return abs(aspect - 640 / 90) / (640 / 90) < 0.1
+    return False
+
+
 class TestAFigureTooSmallOrTheWrongShapeIsReported:
     def test_one_of_the_two_fires_on_a_wide_graph(self, pack):
         """No pack has a slot shaped like a 7:1 graph, so the page is composed
         anyway and the figure is either tiny or badly shaped. Which of the two
-        depends on the pack; that either fires is the point."""
+        depends on the pack; that either fires is the point - unless the page
+        was settled (#378), which cuts the graph's frame to the graph's own
+        shape, so there is nothing left to report."""
         doc = run.compose(_deck(WIDE), pack)
+        if _settled_to_its_shape(doc, pack):
+            return
         found = {
             finding.property
             for page in doc.pages
@@ -105,6 +122,8 @@ class TestAFigureTooSmallOrTheWrongShapeIsReported:
 
     def test_a_finding_says_what_it_measured(self, pack):
         doc = run.compose(_deck(WIDE), pack)
+        if _settled_to_its_shape(doc, pack):
+            pytest.skip("this pack settles the graph into a frame its own shape")
         findings = [f for page in doc.pages
                     for f in diagnose(doc, page, pack)
                     if f.property.startswith("figure")]
