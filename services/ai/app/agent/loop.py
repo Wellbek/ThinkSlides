@@ -5836,8 +5836,24 @@ class AgentLoop:
             f"The {phase.name} step is running. Wait for it to finish."
         )
 
+    # Tools whose availability changes from one step of a run to the next:
+    # `revise_slides` exists only while amending, `edit_deck_with_code` only
+    # once a rendered file exists and no render is about to replace it. Every
+    # other tool is offered or withheld for the whole run, so it is described
+    # in the run-stable head of the prompt; these are described in its tail.
+    STEP_SCOPED_TOOLS = frozenset({"revise_slides", "edit_deck_with_code"})
+
     def _build_system_prompt(self, context: dict, working_state: WorkingState | None = None) -> str:
-        """Build the system prompt with embedded design system context."""
+        """Build the system prompt with embedded design system context.
+
+        Laid out for a prompt cache (#325): providers cache by prefix, so
+        everything that holds for the whole run - the rules, the tools the
+        run has, the design system - comes first, and what changes from one
+        step to the next - the step's own tools, research as it arrives, the
+        work completed, the next step - comes after it. Anything that varies
+        placed before the design system made every request's cacheable
+        prefix end there.
+        """
         import datetime
 
         # Without this the model dates the deck from its training cutoff -
@@ -6048,6 +6064,11 @@ class AgentLoop:
             line for line in tool_lines
             if line.split(" ", 1)[0] not in withheld
         ]
+        # The run's tools in the head; those offered only at some steps in
+        # the tail, so the head reads the same at every step.
+        step_lines = [line for line in tool_lines
+                      if line.split(" ", 1)[0] in self.STEP_SCOPED_TOOLS]
+        tool_lines = [line for line in tool_lines if line not in step_lines]
 
         prompt_parts.extend(self._visuals_lines(withheld))
         prompt_parts.append("## Tools")
@@ -6058,19 +6079,16 @@ class AgentLoop:
         prompt_parts.extend(f"{i}. {line}" for i, line in enumerate(tool_lines, 1))
         prompt_parts.append("")
 
-        # Add completed work summary if available (critical for issue #7)
-        if working_state and working_state.completed_tools:
-            completed_summary = working_state.get_completed_work_summary()
-            if completed_summary:
-                prompt_parts.append(completed_summary)
-
         if context.get("design_system"):
             import json as _json
             prompt_parts.append("## Design System Context")
             prompt_parts.append("The following design system was extracted from the user's template.")
             prompt_parts.append("You MUST follow these design tokens when generating content:")
             prompt_parts.append("```json")
-            prompt_parts.append(_json.dumps(context["design_system"], indent=2))
+            # Keys sorted: a design system restored from saved state comes back
+            # in another key order, and the same tokens written differently
+            # are a different prompt to a prefix cache (#325).
+            prompt_parts.append(_json.dumps(context["design_system"], indent=2, sort_keys=True))
             prompt_parts.append("```")
             prompt_parts.append("")
         else:
@@ -6081,7 +6099,20 @@ class AgentLoop:
             )
             prompt_parts.append("")
 
+        # ── From here on, what changes as the run moves. ──
         prompt_parts.extend(self._research_lines(context))
+
+        if step_lines:
+            first = len(tool_lines) + 1
+            prompt_parts.append("## Tools at this step")
+            prompt_parts.extend(f"{i}. {line}" for i, line in enumerate(step_lines, first))
+            prompt_parts.append("")
+
+        # Add completed work summary if available (critical for issue #7)
+        if working_state and working_state.completed_tools:
+            completed_summary = working_state.get_completed_work_summary()
+            if completed_summary:
+                prompt_parts.append(completed_summary)
 
         prompt_parts.extend([
             "",
