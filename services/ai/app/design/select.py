@@ -19,6 +19,8 @@ produced. Underfill is a fault too.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import math
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
@@ -685,7 +687,25 @@ def fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
 
     Returns None when the archetype cannot carry the material at all - a
     required slot left empty, or an exhibit with nowhere to go.
+
+    A pull quote is offered, not owed. When placing it leaves anything else
+    without a slot, the page is bound without it: on a heading-and-column
+    arrangement the quote took the column, the body had nowhere to go, every
+    arrangement was refused, and a page with room in its column was split in
+    two (#388).
     """
+    selection = _fit(shape, archetype, pack, previous_archetype=previous_archetype,
+                     legible=legible)
+    if selection is None and shape.quote:
+        return _fit(dataclasses.replace(shape, quote=None), archetype, pack,
+                    previous_archetype=previous_archetype, legible=legible)
+    return selection
+
+
+def _fit(shape: MaterialShape, archetype: PageArchetype, pack: Pack, *,
+         previous_archetype: Optional[str] = None,
+         legible: bool = True) -> Optional[Selection]:
+    """`fit`, with the material exactly as given."""
     if archetype.role != shape.role and shape.role in ("cover", "section",
                                                        "closing"):
         return None
