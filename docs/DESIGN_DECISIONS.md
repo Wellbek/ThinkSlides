@@ -198,6 +198,14 @@ Otherwise its cost is the sum of:
 | sequence | 2.2 | Preference for the k-th paragraph to land in the k-th text slot in reading order, so a page reads as a page rather than three fragments. Only the slots a paragraph sits in are ordered: not a headline, pull-quote, eyebrow or the apparatus. Counting an eyebrow as the first place to read sent a cover's lone subtitle into it, in small capitals above the title, instead of to the standfirst below. |
 | over the slot's `max_chars` | up to 2.0 | `min(2, (chars - max_chars) / max_chars)`: a fast character-count check alongside the typeset one. |
 | under the slot's `min_chars` | 0.3 | A slot built for more copy than it is given. |
+| body copy in a small rung | 3.0 | A body paragraph in a slot that sets text as a caption or footnote (`W_SMALL_RUNG`). Larger than the preferences it competes with, so the paragraph goes there only when no slot set at body size can take it. |
+
+**Parallel points share a rung (#371).**
+A page's paragraphs are parallel points when there are two or more and the longest is at most twice the shortest (`PARALLEL_SPREAD`).
+On an archetype with a slot set at body size, they are gathered only into such slots (`_grouped`, which sizes the groups to them), and any other rung, a standfirst, a caption or a footnote, is infeasible for them.
+Without this, on 10 of the 23 languages the evidence runs authored, one of three equal points went to a caption, footnote or standfirst slot and was set a rung apart from the other two.
+An archetype with no body-size slot keeps the cost above instead, so it stays usable.
+Slots set in a caption or footnote rung are not counted as body slots for grouping either, whenever the archetype has a slot set at body size.
 
 A required slot pulls material into itself with a bonus of 5.0, because the assignment has no concept of "this column must be used".
 The bonus applies only when the item suits the slot (no more than 1.5 times its `max_chars`); applied flatly it outweighed every other term, and a three-hundred-character paragraph won the headline slot.
@@ -556,6 +564,8 @@ The ones that report on the decisions above:
 | `PLAIN_COLUMN_SHARE` | 0.34 | `design/vocabulary.py` |
 | `MIN_SLACK` | 0.08 of the content box | `design/settle.py` |
 | `OPTICAL_SHARE` | 0.4 of the free space, above the group | `design/settle.py` |
+| `W_SMALL_RUNG` | 3.0 | `design/select.py` |
+| `PARALLEL_SPREAD` | 2.0 (longest / shortest paragraph) | `design/select.py` |
 | `CAPACITY_STARTS` | 12 starting words, fewest kept | `design/setting.py` |
 | `COVER_BASELINE`, `SECTION_BASELINE` | 0.93, 0.62 | `design/vocabulary.py` |
 | repair `MAX_ROUNDS` | 3 | `design/repair.py` |
@@ -604,5 +614,6 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #380 | `technical-http-caching/20261012-162837-claude-code` | A last-round `replace` set slide 3's five-sentence body in the `exhibit` arrangement's caption slot, 439 characters where it holds about 175, and the last line ran off the page. | A re-placement must not make the page worse; an alternative must hold the copy (section 13). |
 | #350 | `technical-http-caching/20261012-162837-claude-code` | A Mermaid sequence diagram imported with no message arrows, a black mark at its top-left and its note unboxed; on the stacked arrangement it shrank to a third of its slot. | An imported SVG's floor is its smallest label at 10pt (section 7); the import fixes themselves are in `renderer/svg/importer.py`. |
 | #378 | the eight `probe-*` decks, 2026-10-04, and `technical-http-caching/20261012-162837-claude-code` | Two sentences beside or above a one-row flow kept the archetype's full heights: the flow floated in a tall frame and the bottom third of the page was empty, on every probe deck, so `validation_converged` failed for spacing alone. | Settling short material (section 10). |
+| #371 | the 23 languages authored in `benchmark/evidence/`, composing a heading and three points of about 100 characters | On 10 of them one point was set in a caption, footnote or standfirst rung and the other two in the body. | Parallel points share a rung (section 6.3). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |
