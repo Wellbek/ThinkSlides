@@ -146,7 +146,7 @@ Each refusal names what to change, and that sentence is put into the retry promp
 5. **A deck of every page kind composes on the language's own pages.**
    A probe deck (cover, section, prose page, table page, chart page, closing) must compose and pass the geometry check without any page needing the plain fallback of section 9.
 
-Against the 28 distinct languages authored in the evidence runs, the gate refuses 5, all for check 4: their tallest figure slots are 1.0 to 1.7in tall, and the median table needs about 1.71in at 10pt.
+Against the 29 distinct languages authored in the evidence runs, the gate refuses 5, all for check 4: their tallest figure slots are 1.0 to 1.7in tall, and the median table needs about 1.71in at 10pt.
 Refusing them costs a retry, whose prompt states the height needed; accepting them would set every typical table in the deck below 10pt, which is the defect section 7 exists to prevent.
 `python -m app.research.gate_audit ../../benchmark/evidence` reproduces this, and `tests/test_gate_audit.py` pins it, so a change to the gate fails until this sentence is updated.
 
@@ -468,7 +468,8 @@ A message sent after a deck is finished is a request to change that deck, not a 
   A new message that is later than the snapshot restores it and sets `amending`; a snapshot whose file is gone is ignored and the message starts a deck as before.
 - The restored state keeps the brief, the design, the slides and the rendered file, so the intake, consultation, design, research, planning and drafting phases do not run again.
   What the last run concluded about the deck (clean, attempts, findings) is dropped, since the deck is about to change.
-- The `change` phase runs next, offers only `edit_deck_with_code`, and tells the model to make exactly the requested change and leave copy, layout and design alone.
+- The `change` phase runs next, offers `apply_deck_operation`, `revise_slides` and (when the operator enables code) `edit_deck_with_code`, and tells the model to make exactly the requested change and leave copy, layout and design alone.
+  Which tool answers which request is in "Deck-wide operations" below.
   `validate` then judges the changed deck.
   A new finding on a slide the change sent back to drafting (`revise_slides`) walks the run back through the normal revision ladder.
 - After a script edited the deck, a new finding on any other slide is that script's doing, and goes back to the `change` step, once (`CHANGE_FIX_ROUNDS`), with the finding in its directive, for one more script that corrects the first without undoing it.
@@ -490,6 +491,61 @@ A message sent after a deck is finished is a request to change that deck, not a 
 - A script edit is looked at before the deck is handed over, whatever phase made it.
   Any edit that changes the file reopens `validate` for one more check, past the revision budget if need be; at the cap that check schedules no revision, but it is what the closing message reports.
   The `amend` backstop runs only once validation has spent its budget, so before this its edit shipped unchecked and the closing message listed the findings it had just fixed as still there (`probe-watermark`, 2026-10-04).
+
+### Deck-wide operations (#376)
+
+A request about the deck as a whole rather than what one slide says - a logo in a corner, a watermark, a footer with page numbers, a QR code, a progress bar, a recolour, a link on every mention of a phrase - is a typed operation, not a script.
+The eight probes answered all of them with `edit_deck_with_code` (`benchmark/reports/2026-10-04-probes-376.md`): every edit needed two model turns reading the deck before it could choose coordinates, a recolour reached shapes but not the theme, and an edit outlived a re-render only by being run again over whatever the new composition produced, where a script that guarded itself ("the corner is taken") would skip and the change would be gone.
+
+- **The vocabulary** (`renderer/deck_ops.py`) has three kinds.
+  An *overlay* is an element (text, a picture the user supplied, a QR code, a shape, or a progress bar) with an anchor (the four corners, the four edge midpoints, the centre), a page set (`all`, `all-but-cover`, `first`, `last`, or page numbers), an optional size, opacity, rotation and link, and a layer (`front` or `watermark`).
+  A *recolour* names a colour role (`accent`, `accent_alt`) and the hex it becomes.
+  A *link* names a phrase and a URL.
+  Colours are the deck's own roles (`ink`, `muted`, `accent`, `accent_alt`, `ground`) or a hex value; text is set in the deck's body face.
+  An operation that cannot be meant (a progress bar on a side edge, a QR code as a watermark, a colour that is neither a role nor a hex value) is refused with the reason when it is offered, not when it is drawn.
+- **Recorded, then rendered.**
+  `apply_deck_operation` checks an operation and hands it back; the loop records it in the run (`deck_operations`, kept across pauses and in the deck snapshot) and bumps the design serial, so the deck is rendered again and validated.
+  The render applies every recorded operation to every file it writes, after composition and before the replay of recorded scripts.
+  There is therefore one way an operation reaches a deck, the same on the first render as on the tenth, and a re-render cannot drop one.
+  It is applied to the written file rather than inside composition so that it holds on all three render paths (composed, uploaded template, stock) and on pages the renderer appends itself, such as the Sources appendix.
+  An operation replaced under its own id, or removed by id, is gone from the next render.
+- **Placement.**
+  An overlay sits at its anchor, inset from the top or bottom edge by the smaller of `EDGE_INSET_IN` and the pack's narrowest margin, which keeps it in the margin band, clear of the grid's content by construction.
+  Across, it sits on the grid's side margin, so a footer ends where the copy ends: set `EDGE_INSET_IN` from the edge it lined up with nothing on a page whose copy starts 0.85in in (`probe-footer-not-cover/20261013-061639-claude-code`).
+  A progress bar runs flush along its edge, as long as the share of the deck reached on that page.
+  A picture is fitted inside the size asked for at its own aspect, never stretched; with no size, a picture is 0.6in high and a QR code 1.0in.
+  Text with no size is set at the pack's caption rung.
+- **Collision.**
+  On each page the overlay is tested against the page's content: every shape with text, every picture, table, chart and group, and every overlay already placed on that page by an earlier operation.
+  A shape without text (a panel, a rule) and a shape covering at least `GROUND_SHARE` of the page are grounds, not content: an overlay may sit on them, as type sits on a panel.
+  Overlap counts only past `TOLERANCE_IN`.
+  The overlay is tried at each of `SHRINK_STEPS` of its size in turn and placed at the first that covers nothing; at none, the page goes without it, and the report names the page and what it would have covered.
+  Below half its size a logo stops reading as the user's logo and a footer as text, so half is the floor rather than a smaller size that technically fits.
+  The closing message is told which pages went without and why, and to offer another position or a smaller size.
+- **Watermarks** are not collision-checked: a watermark crosses the content by definition.
+  It is drawn in front of the content, at `WATERMARK_OPACITY`, rotated by `WATERMARK_ROTATION_DEG` unless the operation says otherwise, and sized so its line runs about two thirds of the page's diagonal.
+  In front, because a watermark behind the content is hidden by any filled shape in front of it: the probe's watermark read "DRA" on the page whose diagram boxes covered the rest.
+  It is named as a background shape, so the geometry check does not count it as overlapping the copy, and the vision prompt treats a faint mark across the copy as requested.
+  Its box is sized from its text with wrapping and auto-fit both off, since LibreOffice wrapped a rotated auto-fit box to "DRAF/T" even with wrapping off.
+- **Contrast.**
+  Every overlay's colour is checked against the ground it actually lands on - the topmost solid shape without text under its centre, else the slide's background - and replaced by the deck's ink (or reversed ink, on a dark ground) when it falls short: `TEXT_CONTRAST` for text, `MARK_CONTRAST` for a bar, a rule or a shape.
+  Without it an accent progress bar on a cover painted in the accent was simply not there.
+- **A recolour** is applied to the pack and the design system before anything is drawn, so what the render paints from them is in the new colour, charts included (they reach the file as pictures, which no pass over the file can recolour).
+  The same operation then repaints, on every page, layout and master, each colour that was the role's previous value - the pack's or design system's own, and the theme slot's - and sets the theme slot (`accent1`, `accent2`), so whatever a template or a later page draws from the theme is in the new colour too.
+- **A link** splits runs at the phrase's edges, so only the phrase is linked, matched without regard to case.
+  It is underlined and carries Office's `hlinkClr` extension set to the text's own colour, so it is not drawn in the theme's hyperlink blue: on the dark cover of `probe-hyperlink-terms` that blue was the defect.
+  A phrase the deck never uses is reported, not silently a no-op.
+- **"All but the cover"** skips the pages a reader takes for a cover: on the composed path, pages set as covers, plus the first page of the slide the deck opens on when that slide is a cover by composition's own rule (`page_role`), even when composition set it on a content page for the copy it carries.
+  A short deck that opens on content (#347) has no cover, and the operation goes on every page; the report says so, and the closing message is told to tell the user, since they asked to skip a page the deck does not have.
+  On the template and stock paths it is the first slide when the slide calls itself a cover or a title page.
+- **Pictures** come from the user only.
+  An image overlay names a picture the user supplied; one that names any other is refused, and the change step is told to make the rest of the change and ask for the picture rather than draw a stand-in.
+  `probe-overlay-picture` drew a coffee cup out of ellipses and shipped it as the user's coffee cup.
+- **A failure costs one operation.**
+  A missing picture or a phrase not found is reported for that operation and the others are applied; an error inside one operation is reported for it, and the render still ships the deck.
+- **When code is still the answer.**
+  `edit_deck_with_code` stays for what the vocabulary cannot say: moving, rotating or restyling something that is already on a page.
+  The change step names it only when the operator has enabled code; otherwise a request outside the vocabulary is declined in words.
 
 ## 14. What drafting is told
 
@@ -594,6 +650,13 @@ The ones that report on the decisions above:
 | `compile_concurrency` | 6 requests at once | `config.py` |
 | `FULL_REWRITE_ISSUE_RATIO` | 0.6 | `agent/loop.py` |
 | authoring `MAX_ATTEMPTS` | 2 | `design/author_run.py` |
+| `EDGE_INSET_IN` | 0.3in, or the pack's narrowest margin if smaller | `renderer/deck_ops.py` |
+| `SHRINK_STEPS` | 1.0, 0.75, 0.5 of the size asked for | `renderer/deck_ops.py` |
+| `TOLERANCE_IN` (overlay collision) | 0.02in | `renderer/deck_ops.py` |
+| `GROUND_SHARE` | 0.9 of the page | `renderer/deck_ops.py` |
+| `WATERMARK_OPACITY`, `WATERMARK_ROTATION_DEG` | 0.15, -30 | `renderer/deck_ops.py` |
+| `TEXT_CONTRAST`, `MARK_CONTRAST` | 4.5, 3.0 | `renderer/deck_ops.py` |
+| `CHAR_EM` | 0.68 em per character, sizing a text overlay's box | `renderer/deck_ops.py` |
 
 ## 17. Evidence log
 
@@ -628,6 +691,7 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #376 | `probe-watermark/20261004-151346-claude-code` | The `amend` backstop's script moved a diagram the last validation had flagged, and the deck was handed over without being checked again, its closing message still naming the finding. | A script edit reopens validation for one more check (section 13). |
 | #376 | the nine languages authored in the `probe-*` evidence runs | Five were refused for a derived stacked page that ran a frame off the canvas, though each page as authored fitted; the refusal named a frame the model never wrote. | Unsound derived arrangements are dropped (section 3). |
 | #376 | `probe-overlay-picture/20261002-182649-claude-code` | A message after a finished deck restarted the pipeline from intake, so no edit tool was ever offered. | A later message amends the finished deck (section 13). |
+| #376 | `probe-footer-not-cover/20261013-061639-claude-code` | The footer request answered with one `apply_deck_operation` call and no reading of the deck: the footer landed on all three pages of a deck that opens on content, clear of the copy, with live page numbers, and the deck was re-rendered and validated with it. It sat 0.3in from the right edge while the copy's margin was 0.85in, and the closing message could not say why a footer meant to skip the cover was on page 1. | Deck-wide operations: side-margin alignment, the no-cover note (section 13). |
 | #323 | `technical-http-caching/20261012-162837-claude-code` | Three slides asked for at once in one answer each; two failed a check (a diagram label over 40 characters, copy under its density floor) and were fixed by their one retry; the run took 11 chat calls where the same task took 17 before. | Compile (section 14). |
 | #380 | `technical-http-caching/20261012-162837-claude-code` | A last-round `replace` set slide 3's five-sentence body in the `exhibit` arrangement's caption slot, 439 characters where it holds about 175, and the last line ran off the page. | A re-placement must not make the page worse; an alternative must hold the copy (section 13). |
 | #350 | `technical-http-caching/20261012-162837-claude-code` | A Mermaid sequence diagram imported with no message arrows, a black mark at its top-left and its note unboxed; on the stacked arrangement it shrank to a third of its slot. | An imported SVG's floor is its smallest label at 10pt (section 7); the import fixes themselves are in `renderer/svg/importer.py`. |
