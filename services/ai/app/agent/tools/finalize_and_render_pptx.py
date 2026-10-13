@@ -592,6 +592,8 @@ class FinalizeAndRenderPptxTool:
                 muted=pack.colors.ink_muted, accent=pack.colors.accent,
                 accent_alt=pack.colors.accent_alt, ground=pack.colors.ground,
                 face=pack.body_face, small_pt=small,
+                body_floor_pt=round(pack.policy.floor_pt("body", pack.canvas), 1),
+                caption_floor_pt=round(pack.policy.floor_pt("caption", pack.canvas), 1),
                 margin_in=min(margin.top, margin.right, margin.bottom, margin.left) or 0.5,
                 side_in=min(margin.left, margin.right) or 0.5,
                 cover_pages=covers, appended_pages=appended)
@@ -618,18 +620,47 @@ class FinalizeAndRenderPptxTool:
         Never fails the render: a deck without its overlay is still a deck,
         and the report says what went missing.
         """
+        from app.renderer import deck_ops
+
+        style = cls._deck_style(pack, design_system, covers, appended)
         if not operations:
+            cls._write_style(path, style)
             return []
+        try:
+            reports = deck_ops.apply(path, operations, style,
+                                     dict(run_context.get_assets()))
+        except Exception as exc:   # noqa: BLE001 - the deck itself rendered
+            logger.warning("deck_operations_failed", error=str(exc), slides=slides)
+            # The file pass did not run, so the file is not in the new
+            # colours a recolour names: the sidecar says what it is in.
+            cls._write_style(path, style)
+            return [{"id": op.id, "kind": op.kind, "problem": str(exc)[:300]}
+                    for op in operations]
+        cls._write_style(path, deck_ops.recoloured(style, operations))
+        return reports
+
+    @staticmethod
+    def _write_style(path: str, style) -> None:
+        """Write the deck's style beside it, as the deck now wears it.
+
+        Read back by `edit_deck_with_code`, which hands a script the same
+        colours, margins, covers and floors the operations were placed by
+        (#376). Beside the file rather than in a context variable: this tool
+        runs in a copy of the loop's context, and the deck and its style are
+        then one thing on disk that a later render overwrites together. The
+        page count is kept with it, so a reader can tell when a script has
+        since added or removed pages and the covers no longer line up.
+        """
+        import json
+
         from app.renderer import deck_ops
 
         try:
-            return deck_ops.apply(path, operations,
-                                  cls._deck_style(pack, design_system, covers, appended),
-                                  dict(run_context.get_assets()))
+            with open(deck_ops.style_path(path), "w", encoding="utf-8") as handle:
+                json.dump({**deck_ops.style_to_dict(style),
+                           "pages": deck_ops.page_count(path)}, handle)
         except Exception as exc:   # noqa: BLE001 - the deck itself rendered
-            logger.warning("deck_operations_failed", error=str(exc), slides=slides)
-            return [{"id": op.id, "kind": op.kind, "problem": str(exc)[:300]}
-                    for op in operations]
+            logger.warning("deck_style_not_written", error=str(exc))
 
     @classmethod
     def _render_composed(cls, slides: list, pack, metadata: dict,

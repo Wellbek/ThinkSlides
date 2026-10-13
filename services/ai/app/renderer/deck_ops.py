@@ -290,6 +290,11 @@ class DeckStyle:
     ground: str = "#FFFFFF"
     face: str = "Calibri"
     small_pt: float = 10.0
+    # The smallest sizes the deck's design reads at: body copy and the
+    # smallest rung (captions, sources). Handed to a script so what it adds
+    # is held to the same floor as what the engine set (#368).
+    body_floor_pt: float = 12.0
+    caption_floor_pt: float = 10.0
     margin_in: float = 0.5
     # The grid's side margin: where an overlay's left or right edge sits.
     side_in: float = 0.5
@@ -323,6 +328,44 @@ def recoloured(style: DeckStyle, operations) -> DeckStyle:
         return style
     return replace(style, **updates, previous={
         role: frozenset(values) for role, values in previous.items()})
+
+
+def style_path(deck_path: str) -> str:
+    """Where a rendered deck's style is written, beside the deck."""
+    return f"{deck_path}.style.json"
+
+
+def page_count(path) -> int:
+    """How many pages the deck at ``path`` (a path or a file object) has,
+    read off the package's part names rather than by loading it."""
+    import zipfile
+
+    with zipfile.ZipFile(path) as package:
+        return sum(1 for name in package.namelist()
+                   if re.fullmatch(r"ppt/slides/slide\d+\.xml", name))
+
+
+def style_to_dict(style: DeckStyle) -> dict:
+    """The style as JSON, so it can sit beside the deck it describes."""
+    out = {name: getattr(style, name) for name in style.__dataclass_fields__}
+    out["cover_pages"] = sorted(style.cover_pages)
+    out["appended_pages"] = sorted(style.appended_pages)
+    out["previous"] = {role: sorted(values) for role, values in style.previous.items()}
+    return out
+
+
+def style_from_dict(raw: dict) -> DeckStyle:
+    """The style written by `style_to_dict`; unknown keys are ignored, so a
+    sidecar from an older render still reads."""
+    fields = DeckStyle.__dataclass_fields__
+    values = {name: raw[name] for name in fields if name in raw}
+    for name in ("cover_pages", "appended_pages"):
+        if name in values:
+            values[name] = frozenset(int(page) for page in values[name])
+    if "previous" in values:
+        values["previous"] = {role: frozenset(colours)
+                              for role, colours in dict(values["previous"]).items()}
+    return DeckStyle(**values)
 
 
 # ── geometry ───────────────────────────────────────────────────────────────
@@ -471,13 +514,28 @@ def _is_obstacle(shape, page: Box) -> bool:
     box = _box_of(shape)
     if box is None or box.width * box.height >= GROUND_SHARE * page.width * page.height:
         return False
-    if shape.shape_type in (MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.GROUP,
-                            MSO_SHAPE_TYPE.TABLE, MSO_SHAPE_TYPE.CHART,
-                            MSO_SHAPE_TYPE.EMBEDDED_OLE_OBJECT):
+    if _is_picture(shape) or _shape_type(shape) in (
+            MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.GROUP, MSO_SHAPE_TYPE.TABLE,
+            MSO_SHAPE_TYPE.CHART, MSO_SHAPE_TYPE.EMBEDDED_OLE_OBJECT):
         return True
     if getattr(shape, "has_chart", False) or getattr(shape, "has_table", False):
         return True
     return _has_text(shape)
+
+
+def _is_picture(shape) -> bool:
+    """A picture, including one filling a picture placeholder, whose
+    ``shape_type`` python-pptx reports as a placeholder."""
+    return shape._element.tag.endswith("}pic")
+
+
+def _shape_type(shape):
+    """The shape's type, or None for a shape python-pptx cannot classify (an
+    ``sp`` with no geometry, common in exported templates)."""
+    try:
+        return shape.shape_type
+    except NotImplementedError:
+        return None
 
 
 def _solid_fill(fill) -> Optional[str]:
@@ -498,8 +556,13 @@ def _inherited(slide) -> list:
     on the slide, and an overlay must not land on it."""
     if slide._element.get("showMasterSp") == "0":
         return []
+    layout = slide.slide_layout
+    # A layout can hide its master's shapes as well - title layouts often
+    # do, to keep the master's logo and bands off the cover.
+    owners = ((layout,) if layout._element.get("showMasterSp") == "0"
+              else (layout.slide_master, layout))
     shapes = []
-    for owner in (slide.slide_layout.slide_master, slide.slide_layout):
+    for owner in owners:
         shapes.extend(shape for shape in owner.shapes if not shape.is_placeholder)
     return shapes
 
@@ -615,6 +678,175 @@ def _why_not(slide, op: Overlay, width: float, height: float, page: Box,
         what = f"the text '{text[:40]}'" if text else "a picture, table or chart"
         return f"even at half size it would cover {what} at the {op.anchor}"
     return f"no clear space at the {op.anchor}"
+
+
+# ── reading the deck, for code ─────────────────────────────────────────────
+
+# A clear stretch narrower than this is not offered as free space: no logo,
+# page number or line of type fits it. How tall it must be is a line at the
+# deck's caption floor, so the threshold follows the deck's own type.
+MIN_FREE_WIDTH_IN = 0.5
+LINE_LEADING = 1.2
+
+
+def describe(deck: bytes, style: DeckStyle, *, pages_known: bool = True) -> dict:
+    """The deck as the engine sees it, for a script that edits it (#376).
+
+    The probes measured the cost of not having this: every scripted edit
+    spent a model turn printing the deck's shapes before it could write the
+    edit, and a script that guessed coordinates landed on the master's logo,
+    which `slide.shapes` does not list. This hands over what the overlay
+    placement itself reads - every page's content boxes, inherited ones
+    included, the margins, the colours by role and the type floors - so a
+    script can place by the same rules in one turn.
+
+    In inches, top-left origin. A box that is ``"blocks": false`` is a panel,
+    a rule or a background: an addition may sit on it, as type sits on a
+    panel. Each free rectangle carries the ground under its middle, read the
+    way an overlay's is, so a script picks its ink against what it lands on.
+
+    ``pages_known`` is False when the deck no longer has the pages its style
+    was written for - a script added or removed one - and which page is a
+    cover or an appendix is then reported as unknown (None), not guessed.
+    """
+    from pptx import Presentation
+
+    presentation = Presentation(io.BytesIO(deck))
+    page = Box(0.0, 0.0, _inches(presentation.slide_width),
+               _inches(presentation.slide_height))
+    edge = min(EDGE_INSET_IN, style.margin_in)
+    pages = []
+    for number, slide in enumerate(presentation.slides, start=1):
+        shapes, blocking = [], []
+        drawn = [(shape, True) for shape in _inherited(slide)]
+        drawn += [(shape, False) for shape in slide.shapes]
+        for shape, inherited in drawn:
+            box = _box_of(shape)
+            if box is None:
+                continue
+            blocks = _blocks(shape, page)
+            if blocks:
+                blocking.append(box)
+            entry = {"name": shape.name or "", "kind": _kind(shape),
+                     "box": [round(value, 3) for value in
+                             (box.left, box.top, box.width, box.height)],
+                     "blocks": blocks}
+            if inherited:
+                entry["inherited"] = True
+            text = shape.text_frame.text.strip() if _has_text(shape) else ""
+            if text:
+                entry["text"] = text[:80]
+            shapes.append(entry)
+        free = _free_bands(blocking, page, edge, style.side_in,
+                           style.caption_floor_pt * LINE_LEADING / 72.0)
+        pages.append({
+            "number": number,
+            "cover": number in style.cover_pages if pages_known else None,
+            "appended": number in style.appended_pages if pages_known else None,
+            "shapes": shapes,
+            "free": {side: [{"box": box, "ground": _ground_at(slide, Box(*box), style.ground)}
+                            for box in boxes]
+                     for side, boxes in free.items()},
+        })
+    return {
+        "units": "inches, from the top-left corner",
+        "page": {"width": round(page.width, 3), "height": round(page.height, 3)},
+        "margins": {"edge": round(edge, 3), "side": round(style.side_in, 3)},
+        "colours": {"ink": style.ink, "ink_reversed": style.ink_reversed,
+                    "muted": style.muted, "accent": style.accent,
+                    "accent_alt": style.accent_alt, "ground": style.ground},
+        "face": style.face,
+        "type": {"body_floor_pt": style.body_floor_pt,
+                 "caption_floor_pt": style.caption_floor_pt,
+                 "small_pt": style.small_pt},
+        "names": {"overlay": "ts-overlay-<what>", "background": "ts-background-<what>"},
+        "pages": pages,
+    }
+
+
+def _kind(shape) -> str:
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    if getattr(shape, "has_table", False):
+        return "table"
+    if getattr(shape, "has_chart", False):
+        return "chart"
+    kind = _shape_type(shape)
+    if _is_picture(shape) or kind == MSO_SHAPE_TYPE.PICTURE:
+        return "picture"
+    if kind == MSO_SHAPE_TYPE.GROUP:
+        return "group"
+    if _has_text(shape):
+        return "text"
+    return "shape"
+
+
+def _free_bands(blocking: list[Box], page: Box, edge: float, side: float,
+                min_height: float) -> dict:
+    """The clear space along the top and bottom of a page, as rectangles that
+    sit on the edge inset and rise to the nearest content above (or below)
+    them, from side margin to side margin.
+
+    Measured as a skyline rather than one band across the page: a picture
+    that runs to the bottom edge on one half leaves the other half free, and
+    a single full-width band would call the whole bottom taken. Offered as
+    the skyline's maximal rectangles; one too narrow or too short for a line
+    at the caption floor is left out.
+    """
+    left_edge, right_edge = side, page.width - side
+    if right_edge - left_edge < MIN_FREE_WIDTH_IN:
+        return {"top": [], "bottom": []}
+    cuts = sorted({left_edge, right_edge} | {
+        x for box in blocking for x in (box.left, box.right)
+        if left_edge < x < right_edge})
+    bottom_line = page.height - edge
+    full = bottom_line - edge
+
+    def skyline(clearance) -> list[list[float]]:
+        runs: list[list[float]] = []   # [x0, x1, height]
+        for x0, x1 in zip(cuts, cuts[1:]):
+            over = [box for box in blocking
+                    if box.left < x1 - TOLERANCE_IN and x0 < box.right - TOLERANCE_IN]
+            height = min((clearance(box) for box in over), default=full)
+            if runs and abs(runs[-1][2] - height) < TOLERANCE_IN and runs[-1][1] == x0:
+                runs[-1][1] = x1
+            else:
+                runs.append([x0, x1, height])
+        # Each step widened across its neighbours at least as tall: the
+        # maximal clear rectangles, so a script that wants the widest box a
+        # line fits in, or the tallest, finds it whole.
+        widest: list[list[float]] = []
+        for index, (_, _, height) in enumerate(runs):
+            first = last = index
+            while first > 0 and runs[first - 1][2] >= height - TOLERANCE_IN:
+                first -= 1
+            while last < len(runs) - 1 and runs[last + 1][2] >= height - TOLERANCE_IN:
+                last += 1
+            box = [runs[first][0], runs[last][1], height]
+            if (box not in widest and box[1] - box[0] >= MIN_FREE_WIDTH_IN
+                    and height >= min_height):
+                widest.append(box)
+        return sorted(widest)
+
+    # Content entirely inside either edge inset limits nothing: a rectangle
+    # runs between the two insets at most. Anything reaching past the inset
+    # it rises from limits it, down to nothing.
+    def below(box: Box) -> float:
+        if box.top >= bottom_line or box.bottom <= edge:
+            return full
+        return min(full, max(0.0, bottom_line - box.bottom - TOLERANCE_IN))
+
+    def above(box: Box) -> float:
+        if box.bottom <= edge or box.top >= bottom_line:
+            return full
+        return min(full, max(0.0, box.top - edge - TOLERANCE_IN))
+
+    def boxes(runs, at_top: bool) -> list[list[float]]:
+        return [[round(x0, 3), round(edge if at_top else bottom_line - height, 3),
+                 round(x1 - x0, 3), round(height, 3)] for x0, x1, height in runs]
+
+    return {"top": boxes(skyline(above), True),
+            "bottom": boxes(skyline(below), False)}
 
 
 def _picture_bytes(element, assets: dict[str, bytes]) -> Optional[bytes]:
