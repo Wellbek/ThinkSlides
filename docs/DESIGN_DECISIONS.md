@@ -123,10 +123,14 @@ Which face a role is drawn in is one rule (`pack.face_of`), read by the pack, th
 
 **One frame, one ground (#396).**
 A frame that carries copy or an exhibit and declares no ground of its own is drawn in ink chosen for the ground under it, so it must sit on one ground.
-When a shipped pack is loaded, before its capacities are measured again, each top-level frame with more than `STRADDLE_SHARE` of its area on a second ground is seated on the ground it mostly covers (on a tie, the one painted first): it is clipped to that ground's rectangle and set a grid gutter in from every edge it was cut at, and it is placed by fraction from then on (`app/design/grounds.py`).
-What is clipped is the frame's place, not its bled rectangle, so an edge it bled past and was not cut at still bleeds, and an exhibit bound to it, which loses its bleed (section 10), stays inside the margins.
+What it sits on is what is visible under it: the frame, as drawn with its bleed, is cut along every ground edge that crosses it, and each cell takes the topmost ground painted below the frame there, else the pack's page ground, resolved to a colour so that a role and the hex it names are one ground.
+A panel stacked on a full-page panel hides it, and where no panel is painted the page itself shows; summing every ground frame the frame overlaps got both wrong.
+With more than `STRADDLE_SHARE` of its area on another colour than the one most of it is on (on a tie, the colour met first, top-left onward), the frame is seated (`app/design/grounds.py`): cut to the largest rectangle of cells on its own colour, whose edges are ground edges, and set a grid gutter in from each edge the cut moved; it is placed by fraction from then on.
+What is cut is the frame's place, not its bled rectangle, so an edge that was not cut still bleeds, an exhibit bound to it (which loses its bleed, section 10) stays inside the margins, and an edge the cut moved loses its bleed.
+A seat that would keep less than `MIN_KEPT_SHARE` of the frame is refused and logged, since a sliver holds nothing; the shipped packs are tested to have no frame on two grounds after loading.
 A frame with a ground of its own, such as a pull-quote on its own card across a panel edge, is exempt; a scrim is not a ground of its own, since a wash at under half opacity leaves the two grounds different beneath it.
-The rule moved four frames across the shipped packs: WTI's split-canvas figure, snapped to a grid column that starts half an inch left of its navy panel, and the line traced along that page's foot across both halves; one column on WTI's exhibit page; and a figure on EY's card row.
+Seating runs on every shipped pack as it is loaded and on every pack built from a reference, before capacities are measured again.
+It moved four frames across the shipped packs: WTI's split-canvas figure, snapped to a grid column that starts half an inch left of its navy panel, and the line traced along that page's foot across both halves; one column on WTI's exhibit page; and a figure on EY's card row.
 On the WTI specimen deck the chart was drawn throughout in the white half's dark ink over the navy, and its title, legend, values and years were close to unreadable.
 
 **Openers.**
@@ -287,10 +291,12 @@ A slot that could show only the labels is not offered, since what the diagram wa
 The title band is measured at the size the title is drawn at, from the pack's body size.
 
 **Inked for its ground (#396).**
-A chart is drawn for the ground under its own frame, and a diagram, a row of figures or another typed block is compiled for it: the topmost frame declaring a ground whose rectangle contains the exhibit's, else the page's.
+A chart is drawn for the ground under its own frame, and a diagram, a row of figures or another typed block is compiled for it, read the way the frame's own type is (`_ground_under`): the frame's own ground, else the topmost lower frame declaring one that contains it, else the page's.
+A chart and its caption therefore always agree on what they sit on.
 Both used to be drawn for the page's ground on every page, so on a split page an exhibit on the dark half was inked for the light one.
-On a dark ground the chart's furniture takes reversed ink, and each series colour that falls below `SERIES_CONTRAST` against the ground is mixed toward white in tenths until it clears it, keeping its hue so the series reads as the same series on every page.
-The WTI navy series on WTI's navy panel measured 1.1:1.
+On a dark ground the chart's furniture takes reversed ink, and each series is moved toward white in tenths until it clears `SERIES_CONTRAST` against the ground and sits `SERIES_SEPARATION` from every series before it, keeping its hue so the series reads as the same series on every page; moved one at a time, several dark series would land on one pale tint.
+WTI's navy series on WTI's navy panel measured 1.1:1.
+On a light ground the palette is left as the deck has it: it was chosen for that ground, and darkening a brand's coral on every white chart would trade the deck's own colours for a rule its designer already weighed.
 
 ## 8. Splitting a page
 
@@ -703,7 +709,9 @@ The ones that report on the decisions above:
 | `TEXT_CONTRAST`, `MARK_CONTRAST` | 4.5, 3.0 | `renderer/deck_ops.py` |
 | `CHAR_EM` | 0.68 em per character, sizing a text overlay's box | `renderer/deck_ops.py` |
 | `STRADDLE_SHARE` | 0.05 of a frame's area on a second ground before it is seated | `design/grounds.py` |
+| `MIN_KEPT_SHARE` | 0.25 of a frame's area, the least a seat may keep | `design/grounds.py` |
 | `SERIES_CONTRAST` | 3.0, a chart series against a dark ground | `renderer/chart_renderer.py` |
+| `SERIES_SEPARATION` | 48 in RGB distance (of 441) between two moved series | `renderer/chart_renderer.py` |
 
 ## 17. Evidence log
 

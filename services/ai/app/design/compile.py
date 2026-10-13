@@ -363,7 +363,10 @@ def _exhibit_primitives(exhibit: Exhibit, rect: PositionConfig, pack: Pack,
     # - so this is the one place that reconciles them, rather than asking two
     # callers to agree on a name neither owns.
     kind = _EXHIBIT_TO_BLOCK_KIND.get(str(kind), str(kind))
-    compiled = block_compiler.fit(kind, exhibit.payload, rect, ident)
+    # A compiler that inks per ground is asked for the one this frame sits on.
+    for_region = getattr(block_compiler, "for_region", None)
+    compiler = for_region(frame.id) if for_region else block_compiler
+    compiled = compiler.fit(kind, exhibit.payload, rect, ident)
     return [replace(p, region_id=frame.id) for p in compiled]
 
 
