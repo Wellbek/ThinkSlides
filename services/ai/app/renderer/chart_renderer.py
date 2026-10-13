@@ -261,13 +261,20 @@ def _superscript(text: str) -> str:
 
 def _adapt_to_ground(style, ground: str | None):
     """
-    Re-colour a chart's furniture for the ground it will be drawn on.
+    Re-colour a chart's furniture and series for the ground it will be drawn on.
 
     The PNG is transparent, so the slide (or the region) shows through, and
     the axis, ticks, labels and gridlines are all drawn in the design
     system's ``dark`` tone. On a dark ground that is a chart with invisible
     axes - the same defect as dark text on a dark slide, in the one element
     that had no way to find out what was behind it.
+
+    A series is a mark, and a mark the ground swallows is not drawn: the
+    deck's navy series on its own navy panel measured 1.1:1 (#396), so on a
+    dark ground each is held to ``SERIES_CONTRAST`` (`_series_for`). On a
+    light ground the palette is left as the deck has it: it was chosen for
+    that ground, and a brand's coral on white is the brand's, not a defect to
+    darken on every chart.
     """
     from dataclasses import replace
 
@@ -277,11 +284,56 @@ def _adapt_to_ground(style, ground: str | None):
         return style
     return replace(
         style,
+        color_sequence=_series_for(style.color_sequence, ground),
         axis_color=colors.readable_on(ground, "#FFFFFF"),
         # A gridline is meant to be barely there; on a dark ground that is a
         # slight lift off the ground rather than a light grey line.
         grid_color=colors.mix(ground, "#FFFFFF", 0.28),
     )
+
+
+# The contrast a series keeps against its ground: WCAG's 3:1 for a graphical
+# object, the floor a deck operation's marks keep too. And how far apart two
+# series stay once moved, as a distance in RGB (of 441): moved one at a time,
+# two dark series on a dark ground would otherwise land on one pale tint.
+SERIES_CONTRAST = 3.0
+SERIES_SEPARATION = 48.0
+
+
+def _series_for(sequence: list[str], ground: str) -> list[str]:
+    """The series colours on a dark ground, each moved toward white in
+    tenths until it clears ``SERIES_CONTRAST`` and sits ``SERIES_SEPARATION``
+    from every series before it. The same hue, so a series keeps its identity
+    across pages; a colour that already reads and stands apart is left as it
+    is."""
+    from app import colors
+
+    toward = "#FFFFFF"
+    chosen: list[str] = []
+    for colour in sequence:
+        if not colors.parse_hex(colour):
+            chosen.append(colour)
+            continue
+        legible = apart = None
+        for step in range(11):
+            candidate = colors.mix(colour, toward, step / 10)
+            if colors.contrast_ratio(candidate, ground) < SERIES_CONTRAST:
+                continue
+            legible = legible or candidate
+            if all(_distance(candidate, other) >= SERIES_SEPARATION for other in chosen):
+                apart = candidate
+                break
+        chosen.append(apart or legible or toward)
+    return chosen
+
+
+def _distance(a: str, b: str) -> float:
+    from app import colors
+
+    first, second = colors.parse_hex(a), colors.parse_hex(b)
+    if not first or not second:
+        return 441.0
+    return sum((x - y) ** 2 for x, y in zip(first, second)) ** 0.5
 
 
 def render_chart_to_png(

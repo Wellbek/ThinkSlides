@@ -108,8 +108,11 @@ def load(pack_id: str) -> Pack:
     # Every shipped pack was recovered from sampled *design* pages, so none of
     # them has a cover, a divider or a closing page. A deck needs all three.
     # And its slot capacities were traced before its frames were final, so
-    # they are measured again from the frames it actually has.
-    return ensure(remeasured(pack))
+    # they are measured again from the frames it actually has - after any
+    # frame laid across two grounds is seated on one (#396).
+    from app.design.grounds import seated
+
+    return ensure(remeasured(seated(pack)))
 
 
 def available() -> tuple[str, ...]:

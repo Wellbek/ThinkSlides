@@ -1197,9 +1197,12 @@ def from_pdf(pdf_path: str, pages: Optional[Sequence[int]] = None, *,
     # The capacities above were traced from each block before its frame was
     # snapped and grown; they stay as what the page carried, and the ceiling
     # is measured from the frame as it now is.
+    # A frame snapped onto a grid column across a panel edge is seated on
+    # one ground first (#396), so the capacity measured is the frame's.
+    from app.design.grounds import seated
     from app.design.vocabulary import remeasured
 
-    return remeasured(pack)
+    return remeasured(seated(pack))
 
 
 def _modal_grid(
