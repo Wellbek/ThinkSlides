@@ -557,6 +557,16 @@ The eight probes answered all of them with `edit_deck_with_code` (`benchmark/rep
 - **When code is still the answer.**
   `edit_deck_with_code` stays for what the vocabulary cannot say: moving, rotating or restyling something that is already on a page.
   The change step names it only when the operator has enabled code; otherwise a request outside the vocabulary is declined in words.
+- **What a script is told** (`deck_ops.describe`).
+  A script finds `layout.json` beside `deck.pptx`: the page size and margins in inches from the top-left, the deck's colours by role and its body face, the type floors, and per page whether it is a cover or an appended page, every shape's box (with its kind and first words), and the free space along its top and bottom edges.
+  It is what the overlay placement reads, handed over so that a script places by the same rules in the turn it is written: in the probes every scripted edit first spent a turn printing the deck's shapes, and a script that guessed coordinates could not see the master's wordmark, which `slide.shapes` does not list.
+  Shapes from the layout and master are listed and marked `inherited`; a shape is marked `blocks` exactly when the overlay collision rule above counts it as content.
+  The style comes from a sidecar every render writes beside the deck (`<deck>.style.json`), as the deck wears it after recolours, so a script reads the same colours, covers and floors the operations were placed by; a deck without one is described in the defaults, still with its real boxes.
+  The type floors are the pack's body and caption floors (`LegibilityPolicy.floor_pt`); a script is told nothing it adds is smaller than the caption floor.
+- **Free space** is measured as a skyline from the edge inset, between the side margins: across each stretch, the clear height up (or down) to the nearest content.
+  It is offered as that skyline's maximal rectangles - each step widened across its neighbours at least as tall - so the widest box a line fits in and the tallest box are both there whole.
+  One band across the page was tried first and was wrong on the WTI specimen: a chart running to the bottom edge on the right half left the left half's bottom clear, and the band called the whole bottom taken, or offered a 0.1in sliver a script then squeezed a line into.
+  A rectangle narrower than `MIN_FREE_WIDTH_IN` or shorter than one line at the caption floor (`LINE_LEADING` times the floor) is left out; content wholly inside the edge inset does not limit a rectangle that stops at it.
 
 ## 14. What drafting is told
 
@@ -688,6 +698,8 @@ The ones that report on the decisions above:
 | `WATERMARK_OPACITY`, `WATERMARK_ROTATION_DEG` | 0.15, -30 | `renderer/deck_ops.py` |
 | `TEXT_CONTRAST`, `MARK_CONTRAST` | 4.5, 3.0 | `renderer/deck_ops.py` |
 | `CHAR_EM` | 0.68 em per character, sizing a text overlay's box | `renderer/deck_ops.py` |
+| `MIN_FREE_WIDTH_IN` | 0.5in, the narrowest free rectangle a script is offered | `renderer/deck_ops.py` |
+| `LINE_LEADING` | 1.2, so a free rectangle holds one line at the caption floor | `renderer/deck_ops.py` |
 
 ## 17. Evidence log
 
@@ -731,3 +743,4 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #371 | the 23 languages authored in `benchmark/evidence/`, composing a heading and three points of about 100 characters | On 10 of them one point was set in a caption, footnote or standfirst rung and the other two in the body. | Parallel points share a rung (section 6.3). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |
+| #376 | WTI specimen deck (`language_specimen_slides` on `wti-2025`), a scripted footer | One free band across the bottom offered nothing on a page whose chart ran to the bottom edge on one half only, then a 0.1in sliver a script set a line into. | Free space as a skyline's maximal rectangles, at least one caption line tall (section 13). |
