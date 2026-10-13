@@ -8,6 +8,8 @@ A user writes what they need, optionally attaching documents and a PPTX or POTX 
 ThinkSlides settles the brief, gathers evidence, writes a storyline the user reviews, chooses or authors a design language, compiles every slide at once, renders the deck, checks the rendered pages, and repairs what fails.
 Every step streams to the browser as it happens, and every step is recorded with why it ran, what it cost and why it stopped.
 
+This document describes the system as designed; how far the code has come, decision by decision, is tracked in [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md) ("Status and priorities" and section 13.5).
+
 ## Contents
 
 - [Architecture](#architecture)
@@ -190,7 +192,7 @@ No composite score is formed: each dimension is reported apart, per category and
 - Docker and Docker Compose v2 or later
 - Node.js 20 or later (frontend development)
 - Python 3.11 or later (AI service development)
-- Go 1.22 or later (orchestrator development)
+- Go 1.24 or later (orchestrator development)
 - Make
 
 ### Run the full stack
@@ -266,7 +268,7 @@ PYTHONPATH=. .venv/bin/python -m app.research run ../../benchmark/tasks/technica
     └── diagrams/               the figures above, and the code that draws them
 ```
 
-The figures are code: `docs/diagrams/src/figures.py` draws each one, and `services/ai/.venv/bin/python docs/diagrams/src/figures.py` redraws them all.
+The figures are code: `docs/diagrams/src/figures.py` draws each one, and `services/ai/.venv/bin/python docs/diagrams/src/figures.py` redraws them all (it needs `rsvg-convert` from librsvg).
 Products are shown by their own logos, from [Simple Icons](https://simpleicons.org/) and Wikimedia Commons, listed in `docs/diagrams/src/logos/logos.json`.
 
 ## Key design decisions

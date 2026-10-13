@@ -9,17 +9,21 @@ one function and a re-run, not a redraw:
 
     python docs/diagrams/src/figures.py        # writes docs/diagrams/*.svg and *.png
 
-PNGs are rendered with rsvg-convert at twice the SVG's size.
+PNGs are rendered with rsvg-convert (librsvg) at twice the SVG's size; text is
+measured in Noto Sans when fontconfig finds it, else in matplotlib's DejaVu Sans.
 """
 from __future__ import annotations
 
+import functools
+import itertools
 import json
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from html import escape
-from typing import Iterable, Sequence
+from typing import Iterable
 
 from PIL import ImageFont
 
@@ -28,11 +32,6 @@ OUT = os.path.dirname(HERE)
 LOGOS = os.path.join(HERE, "logos")
 
 FONT = "Calibri, Carlito, 'Noto Sans', 'Segoe UI', Arial, sans-serif"
-_FONT_FILES = {
-    (False, False): "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-    (True, False): "/usr/share/fonts/noto/NotoSans-Bold.ttf",
-    (False, True): "/usr/share/fonts/noto/NotoSans-Italic.ttf",
-}
 
 INK = "#000000"
 LINE = "#1F2D3D"
@@ -51,9 +50,29 @@ KINDS = {
 }
 
 
+@functools.lru_cache(maxsize=None)
+def font_file(bold: bool = False, italic: bool = False) -> str:
+    """The face text is measured in: Noto Sans through fontconfig where it is
+    installed, else the DejaVu Sans matplotlib ships with."""
+    style = "Bold" if bold else ("Italic" if italic else "Regular")
+    if shutil.which("fc-match"):
+        found = subprocess.run(["fc-match", "-f", "%{file}", f"Noto Sans:style={style}"],
+                               capture_output=True, text=True, check=False).stdout.strip()
+        if "NotoSans" in os.path.basename(found):
+            return found
+    from matplotlib import font_manager
+    return font_manager.findfont(font_manager.FontProperties(
+        family="DejaVu Sans", weight="bold" if bold else "normal",
+        style="italic" if italic and not bold else "normal"))
+
+
+@functools.lru_cache(maxsize=None)
+def _font(bold: bool, italic: bool, size: float):
+    return ImageFont.truetype(font_file(bold, italic and not bold), int(round(size * 4)))
+
+
 def measure(text: str, size: float, bold: bool = False, italic: bool = False) -> float:
-    font = ImageFont.truetype(_FONT_FILES[(bold, italic and not bold)], int(round(size * 4)))
-    return font.getlength(text) / 4
+    return _font(bold, italic, size).getlength(text) / 4
 
 
 @dataclass
@@ -76,17 +95,6 @@ class Figure:
         self.parts.append(
             f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" text-anchor="{anchor}" '
             f'fill="{color}" style="{";".join(style)}">{escape(s)}</text>')
-
-    def lines(self, x, y, rows: Sequence, size=13, anchor="middle", leading=1.25,
-              bold=False, italic=False, color=INK):
-        """Several lines centred on ``y``; a row may be (text, {style})."""
-        n = len(rows)
-        first = y - (n - 1) * size * leading / 2 + size * 0.35
-        for i, row in enumerate(rows):
-            text, opts = (row, {}) if isinstance(row, str) else row
-            self.text(x, first + i * size * leading, text, size=opts.get("size", size),
-                      bold=opts.get("bold", bold), italic=opts.get("italic", italic),
-                      anchor=anchor, color=opts.get("color", color))
 
     def rect(self, x, y, w, h, fill="#fff", stroke=LINE, r=7, dash=None, sw=1.1):
         d = f' stroke-dasharray="{dash}"' if dash else ""
@@ -188,8 +196,15 @@ class Figure:
         self.parts.append(f'<path d="{d}" fill="none" stroke="{color}" stroke-width="{sw}"{dd}/>')
 
     def logo(self, name, x, y, size):
-        """The product's own logo, square, at (x, y)."""
+        """The product's own logo, square, at (x, y). Its internal ids (a
+        gradient, a clip path) are made unique per drawing, so a logo drawn
+        twice in one figure does not repeat an id."""
         body, viewbox, colour = _logo(name)
+        suffix = f"-{name}{next(_INSTANCES)}"
+        for found in set(re.findall(r'\bid="([^"]+)"', body)):
+            body = body.replace(f'id="{found}"', f'id="{found}{suffix}"')
+            body = body.replace(f"url(#{found})", f"url(#{found}{suffix})")
+            body = body.replace(f'href="#{found}"', f'href="#{found}{suffix}"')
         fill = f' fill="{colour}"' if colour else ""
         self.parts.append(
             f'<svg x="{x:.1f}" y="{y:.1f}" width="{size}" height="{size}" '
@@ -231,12 +246,16 @@ class Figure:
         path = os.path.join(OUT, f"{name}.svg")
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(self.svg())
+        if not shutil.which("rsvg-convert"):
+            raise SystemExit("rsvg-convert (librsvg) is needed to write the PNGs; "
+                             f"the SVG is at {path}")
         subprocess.run(["rsvg-convert", "-z", "2", "-b", "white", "-o",
                         os.path.join(OUT, f"{name}.png"), path], check=True)
         return path
 
 
 _CACHE: dict = {}
+_INSTANCES = itertools.count(1)
 
 
 def _logo(name: str):

@@ -45,6 +45,8 @@ async def once() -> dict:
     end = time.perf_counter()
     await asyncio.sleep(0.03)
     beat.cancel()
+    if not result.success:
+        raise SystemExit(f"the render failed, so nothing was measured: {result.error}")
     served = [t for t in ticks if start <= t <= end]
     gaps = [b - a for a, b in zip(ticks, ticks[1:]) if b >= start and a <= end]
     return {"ok": result.success, "render_s": round(end - start, 2),
