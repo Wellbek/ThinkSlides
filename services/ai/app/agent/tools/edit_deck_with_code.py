@@ -122,8 +122,13 @@ class EditDeckWithCodeTool:
                         "own logo and bands, which slide.shapes does not list "
                         "- with 'blocks': true where covering it would hide "
                         "content, and under 'free' the clear rectangles "
-                        "along its top and bottom edges, each tall enough for "
-                        "a line at the caption floor. Pictures the user supplied are "
+                        "along its top and bottom edges, each {'box': [left, "
+                        "top, width, height], 'ground': the colour under it}. "
+                        "A 'bottom' rectangle rises from the bottom margin to "
+                        "the nearest content, so set a footer at its bottom "
+                        "(top + height - your height), not at its top; a 'top' "
+                        "one hangs from the top margin. 'cover' is null when "
+                        "pages were added or removed since the render. Pictures the user supplied are "
                         "listed in the instructions you were given and sit "
                         "beside the deck under those names; open them with "
                         "PIL or add them with python-pptx's add_picture."
@@ -335,17 +340,33 @@ def _layout(deck: bytes, path: Optional[str]) -> Optional[bytes]:
 
     from app.renderer import deck_ops
 
-    style = deck_ops.DeckStyle()
+    style, pages = deck_ops.DeckStyle(), None
     if path and os.path.exists(deck_ops.style_path(path)):
         try:
             with open(deck_ops.style_path(path), encoding="utf-8") as handle:
-                style = deck_ops.style_from_dict(json.load(handle))
+                raw = json.load(handle)
+            style, pages = deck_ops.style_from_dict(raw), raw.get("pages")
         except (OSError, ValueError, TypeError) as exc:
             logger.warning("deck_style_unreadable", error=str(exc))
     try:
-        return json.dumps(deck_ops.describe(deck, style)).encode("utf-8")
+        # Covers are numbered pages of the deck the style was written for; a
+        # script that has since added or removed a page moved them.
+        known = pages is not None and pages == _page_count(deck)
+        return json.dumps(deck_ops.describe(deck, style, pages_known=known)).encode("utf-8")
     except Exception as exc:   # noqa: BLE001 - the script can still run blind
         logger.warning("deck_layout_not_described", error=str(exc))
+        return None
+
+
+def _page_count(deck: bytes) -> Optional[int]:
+    import io
+    import zipfile
+
+    from app.renderer import deck_ops
+
+    try:
+        return deck_ops.page_count(io.BytesIO(deck))
+    except zipfile.BadZipFile:
         return None
 
 

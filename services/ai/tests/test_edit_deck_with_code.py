@@ -238,13 +238,13 @@ from pptx.util import Inches, Pt
 layout = json.load(open("layout.json"))
 deck = Presentation("deck.pptx")
 for page in layout["pages"]:
-    bands = page["free"]["bottom"]
+    bands = [entry["box"] for entry in page["free"]["bottom"]]
     if not bands or page["cover"]:
         continue
-    band = max(bands, key=lambda box: box[2])
-    left, top, width, height = band
+    left, top, width, height = max(bands, key=lambda box: box[2])
+    line = min(height, 0.4)
     box = deck.slides[page["number"] - 1].shapes.add_textbox(
-        Inches(left), Inches(top), Inches(width), Inches(min(height, 0.4)))
+        Inches(left), Inches(top + height - line), Inches(width), Inches(line))
     box.name = "ts-overlay-footer"
     run = box.text_frame.paragraphs[0].add_run()
     run.text = "Acme"
@@ -281,9 +281,9 @@ class TestTheScriptReadsTheDeckAsTheEngineDoes:
 
         path = self._deck(tmp_path)
         with open(deck_ops.style_path(path), "w", encoding="utf-8") as handle:
-            json.dump(deck_ops.style_to_dict(deck_ops.DeckStyle(
+            json.dump({**deck_ops.style_to_dict(deck_ops.DeckStyle(
                 accent="#E4572E", caption_floor_pt=10.5,
-                cover_pages=frozenset({1}))), handle)
+                cover_pages=frozenset({1}))), "pages": 2}, handle)
         token = run_context.set_rendered_path(path)
         try:
             result = _run(code=READS_THE_LAYOUT, intent="a footer on every content page")
@@ -294,7 +294,8 @@ class TestTheScriptReadsTheDeckAsTheEngineDoes:
         cover, content = Presentation(path).slides
         assert not [s for s in cover.shapes if s.name == "ts-overlay-footer"]
         (footer,) = [s for s in content.shapes if s.name == "ts-overlay-footer"]
-        assert footer.top >= 6 * 914400            # below the copy, not on it
+        # At the bottom margin, not just under the copy.
+        assert abs((footer.top + footer.height) / 914400 - (7.5 - 0.3)) < 0.01
         run = footer.text_frame.paragraphs[0].runs[0]
         assert run.font.size.pt == 10.5
         assert str(run.font.color.rgb) == "E4572E"
@@ -317,3 +318,30 @@ class TestTheScriptReadsTheDeckAsTheEngineDoes:
         assert replay(path, [{"source": READS_THE_LAYOUT, "intent": "footer"}]) == []
         names = [s.name for slide in Presentation(path).slides for s in slide.shapes]
         assert "ts-overlay-footer" in names
+
+
+    def test_once_a_script_adds_a_page_the_next_is_not_told_stale_covers(self, tmp_path):
+        import json
+
+        from app.renderer import deck_ops
+
+        path = self._deck(tmp_path)
+        with open(deck_ops.style_path(path), "w", encoding="utf-8") as handle:
+            json.dump({**deck_ops.style_to_dict(deck_ops.DeckStyle(cover_pages=frozenset({1}))),
+                       "pages": 2}, handle)
+        adds_a_page = (
+            "from pptx import Presentation\n"
+            "deck = Presentation('deck.pptx')\n"
+            "deck.slides.add_slide(deck.slide_layouts[6])\n"
+            "deck.save('deck.pptx')\n")
+        prints_covers = (
+            "import json\n"
+            "print([page['cover'] for page in json.load(open('layout.json'))['pages']])\n")
+        token = run_context.set_rendered_path(path)
+        try:
+            assert _run(code=prints_covers, intent="look").data["stdout"].strip() == "[True, False]"
+            assert _run(code=adds_a_page, intent="a closing page").success
+            after = _run(code=prints_covers, intent="look")
+        finally:
+            run_context.reset_rendered_path(token)
+        assert after.data["stdout"].strip() == "[None, None, None]"

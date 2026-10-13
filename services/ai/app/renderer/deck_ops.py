@@ -335,6 +335,16 @@ def style_path(deck_path: str) -> str:
     return f"{deck_path}.style.json"
 
 
+def page_count(path) -> int:
+    """How many pages the deck at ``path`` (a path or a file object) has,
+    read off the package's part names rather than by loading it."""
+    import zipfile
+
+    with zipfile.ZipFile(path) as package:
+        return sum(1 for name in package.namelist()
+                   if re.fullmatch(r"ppt/slides/slide\d+\.xml", name))
+
+
 def style_to_dict(style: DeckStyle) -> dict:
     """The style as JSON, so it can sit beside the deck it describes."""
     out = {name: getattr(style, name) for name in style.__dataclass_fields__}
@@ -504,13 +514,28 @@ def _is_obstacle(shape, page: Box) -> bool:
     box = _box_of(shape)
     if box is None or box.width * box.height >= GROUND_SHARE * page.width * page.height:
         return False
-    if shape.shape_type in (MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.GROUP,
-                            MSO_SHAPE_TYPE.TABLE, MSO_SHAPE_TYPE.CHART,
-                            MSO_SHAPE_TYPE.EMBEDDED_OLE_OBJECT):
+    if _is_picture(shape) or _shape_type(shape) in (
+            MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.GROUP, MSO_SHAPE_TYPE.TABLE,
+            MSO_SHAPE_TYPE.CHART, MSO_SHAPE_TYPE.EMBEDDED_OLE_OBJECT):
         return True
     if getattr(shape, "has_chart", False) or getattr(shape, "has_table", False):
         return True
     return _has_text(shape)
+
+
+def _is_picture(shape) -> bool:
+    """A picture, including one filling a picture placeholder, whose
+    ``shape_type`` python-pptx reports as a placeholder."""
+    return shape._element.tag.endswith("}pic")
+
+
+def _shape_type(shape):
+    """The shape's type, or None for a shape python-pptx cannot classify (an
+    ``sp`` with no geometry, common in exported templates)."""
+    try:
+        return shape.shape_type
+    except NotImplementedError:
+        return None
 
 
 def _solid_fill(fill) -> Optional[str]:
@@ -531,8 +556,13 @@ def _inherited(slide) -> list:
     on the slide, and an overlay must not land on it."""
     if slide._element.get("showMasterSp") == "0":
         return []
+    layout = slide.slide_layout
+    # A layout can hide its master's shapes as well - title layouts often
+    # do, to keep the master's logo and bands off the cover.
+    owners = ((layout,) if layout._element.get("showMasterSp") == "0"
+              else (layout.slide_master, layout))
     shapes = []
-    for owner in (slide.slide_layout.slide_master, slide.slide_layout):
+    for owner in owners:
         shapes.extend(shape for shape in owner.shapes if not shape.is_placeholder)
     return shapes
 
@@ -659,7 +689,7 @@ MIN_FREE_WIDTH_IN = 0.5
 LINE_LEADING = 1.2
 
 
-def describe(deck: bytes, style: DeckStyle) -> dict:
+def describe(deck: bytes, style: DeckStyle, *, pages_known: bool = True) -> dict:
     """The deck as the engine sees it, for a script that edits it (#376).
 
     The probes measured the cost of not having this: every scripted edit
@@ -672,7 +702,12 @@ def describe(deck: bytes, style: DeckStyle) -> dict:
 
     In inches, top-left origin. A box that is ``"blocks": false`` is a panel,
     a rule or a background: an addition may sit on it, as type sits on a
-    panel.
+    panel. Each free rectangle carries the ground under its middle, read the
+    way an overlay's is, so a script picks its ink against what it lands on.
+
+    ``pages_known`` is False when the deck no longer has the pages its style
+    was written for - a script added or removed one - and which page is a
+    cover or an appendix is then reported as unknown (None), not guessed.
     """
     from pptx import Presentation
 
@@ -702,14 +737,16 @@ def describe(deck: bytes, style: DeckStyle) -> dict:
             if text:
                 entry["text"] = text[:80]
             shapes.append(entry)
+        free = _free_bands(blocking, page, edge, style.side_in,
+                           style.caption_floor_pt * LINE_LEADING / 72.0)
         pages.append({
             "number": number,
-            "cover": number in style.cover_pages,
-            "appended": number in style.appended_pages,
-            "ground": _ground_at(slide, page, style.ground),
+            "cover": number in style.cover_pages if pages_known else None,
+            "appended": number in style.appended_pages if pages_known else None,
             "shapes": shapes,
-            "free": _free_bands(blocking, page, edge, style.side_in,
-                                style.caption_floor_pt * LINE_LEADING / 72.0),
+            "free": {side: [{"box": box, "ground": _ground_at(slide, Box(*box), style.ground)}
+                            for box in boxes]
+                     for side, boxes in free.items()},
         })
     return {
         "units": "inches, from the top-left corner",
@@ -734,8 +771,8 @@ def _kind(shape) -> str:
         return "table"
     if getattr(shape, "has_chart", False):
         return "chart"
-    kind = shape.shape_type
-    if kind == MSO_SHAPE_TYPE.PICTURE:
+    kind = _shape_type(shape)
+    if _is_picture(shape) or kind == MSO_SHAPE_TYPE.PICTURE:
         return "picture"
     if kind == MSO_SHAPE_TYPE.GROUP:
         return "group"
@@ -763,14 +800,14 @@ def _free_bands(blocking: list[Box], page: Box, edge: float, side: float,
         x for box in blocking for x in (box.left, box.right)
         if left_edge < x < right_edge})
     bottom_line = page.height - edge
+    full = bottom_line - edge
 
     def skyline(clearance) -> list[list[float]]:
         runs: list[list[float]] = []   # [x0, x1, height]
         for x0, x1 in zip(cuts, cuts[1:]):
             over = [box for box in blocking
                     if box.left < x1 - TOLERANCE_IN and x0 < box.right - TOLERANCE_IN]
-            height = min((clearance(box) for box in over),
-                         default=bottom_line - edge)
+            height = min((clearance(box) for box in over), default=full)
             if runs and abs(runs[-1][2] - height) < TOLERANCE_IN and runs[-1][1] == x0:
                 runs[-1][1] = x1
             else:
@@ -791,15 +828,18 @@ def _free_bands(blocking: list[Box], page: Box, edge: float, side: float,
                 widest.append(box)
         return sorted(widest)
 
-    # Content entirely inside the edge inset does not limit a band that stops
-    # at the inset; anything reaching past it does, down to nothing.
+    # Content entirely inside either edge inset limits nothing: a rectangle
+    # runs between the two insets at most. Anything reaching past the inset
+    # it rises from limits it, down to nothing.
     def below(box: Box) -> float:
-        return bottom_line - edge if box.top >= bottom_line else max(
-            0.0, bottom_line - box.bottom - TOLERANCE_IN)
+        if box.top >= bottom_line or box.bottom <= edge:
+            return full
+        return min(full, max(0.0, bottom_line - box.bottom - TOLERANCE_IN))
 
     def above(box: Box) -> float:
-        return bottom_line - edge if box.bottom <= edge else max(
-            0.0, box.top - edge - TOLERANCE_IN)
+        if box.bottom <= edge or box.top >= bottom_line:
+            return full
+        return min(full, max(0.0, box.top - edge - TOLERANCE_IN))
 
     def boxes(runs, at_top: bool) -> list[list[float]]:
         return [[round(x0, 3), round(edge if at_top else bottom_line - height, 3),

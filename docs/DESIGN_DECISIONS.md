@@ -522,7 +522,8 @@ The eight probes answered all of them with `edit_deck_with_code` (`benchmark/rep
   A picture is fitted inside the size asked for at its own aspect, never stretched; with no size, a picture is 0.6in high and a QR code 1.0in.
   Text with no size is set at the pack's caption rung.
 - **Collision.**
-  On each page the overlay is tested against the page's content: every shape with text, every picture, table, chart and group, and every overlay already placed on that page by an earlier operation - including what the slide shows from its layout and master (a template's own logo or footer), but not their empty placeholders, which draw nothing.
+  On each page the overlay is tested against the page's content: every shape with text, every picture, table, chart and group, and every overlay already placed on that page by an earlier operation - including what the slide shows from its layout and master (a template's own logo or footer), but not their empty placeholders, which draw nothing, and not the master's shapes on a slide or layout that hides them (`showMasterSp="0"`, as title layouts often do).
+  A picture filling a picture placeholder is a picture, though python-pptx reports it as a placeholder.
   A watermark is not content to a later overlay: it crosses everything by design.
   A shape without text (a panel, a rule) and a shape covering at least `GROUND_SHARE` of the page are grounds, not content: an overlay may sit on them, as type sits on a panel.
   Overlap counts only past `TOLERANCE_IN`.
@@ -561,12 +562,16 @@ The eight probes answered all of them with `edit_deck_with_code` (`benchmark/rep
   A script finds `layout.json` beside `deck.pptx`: the page size and margins in inches from the top-left, the deck's colours by role and its body face, the type floors, and per page whether it is a cover or an appended page, every shape's box (with its kind and first words), and the free space along its top and bottom edges.
   It is what the overlay placement reads, handed over so that a script places by the same rules in the turn it is written: in the probes every scripted edit first spent a turn printing the deck's shapes, and a script that guessed coordinates could not see the master's wordmark, which `slide.shapes` does not list.
   Shapes from the layout and master are listed and marked `inherited`; a shape is marked `blocks` exactly when the overlay collision rule above counts it as content.
-  The style comes from a sidecar every render writes beside the deck (`<deck>.style.json`), as the deck wears it after recolours, so a script reads the same colours, covers and floors the operations were placed by; a deck without one is described in the defaults, still with its real boxes.
+  The style comes from a sidecar every render writes beside the deck (`<deck>.style.json`), after the operations are applied and as the deck then wears it: recoloured only when the recolour reached the file.
+  A script therefore reads the same colours, covers and floors the operations were placed by; a deck without a sidecar is described in the defaults, still with its real boxes.
+  The sidecar records the page count it was written for; once a script has added or removed a page, which page is a cover or an appendix is reported as unknown (`null`) rather than read off numbers that have moved.
   The type floors are the pack's body and caption floors (`LegibilityPolicy.floor_pt`); a script is told nothing it adds is smaller than the caption floor.
 - **Free space** is measured as a skyline from the edge inset, between the side margins: across each stretch, the clear height up (or down) to the nearest content.
   It is offered as that skyline's maximal rectangles - each step widened across its neighbours at least as tall - so the widest box a line fits in and the tallest box are both there whole.
+  A bottom rectangle rises from the bottom inset to the content above it, so a footer is set at its bottom, not its top; the script is told so.
+  Each rectangle carries the ground under its middle, read as an overlay's is, so a script picks its ink against what it lands on rather than against the middle of the page.
   One band across the page was tried first and was wrong on the WTI specimen: a chart running to the bottom edge on the right half left the left half's bottom clear, and the band called the whole bottom taken, or offered a 0.1in sliver a script then squeezed a line into.
-  A rectangle narrower than `MIN_FREE_WIDTH_IN` or shorter than one line at the caption floor (`LINE_LEADING` times the floor) is left out; content wholly inside the edge inset does not limit a rectangle that stops at it.
+  A rectangle narrower than `MIN_FREE_WIDTH_IN` or shorter than one line at the caption floor (`LINE_LEADING` times the floor) is left out; content wholly inside either edge inset limits nothing, and no rectangle reaches past either inset.
 
 ## 14. What drafting is told
 

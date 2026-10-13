@@ -656,6 +656,10 @@ def test_the_last_page_is_the_deck_not_its_appendix(tmp_path):
 # ── reading the deck, for code ─────────────────────────────────────────────
 
 
+def _free(page, side):
+    return [entry["box"] for entry in page["free"][side]]
+
+
 def test_a_script_is_told_every_box_the_engine_places_by(tmp_path):
     """What the overlay placement reads, handed to a script: the slide's
     content, the master's wordmark that `slide.shapes` never lists, and the
@@ -686,17 +690,17 @@ def test_a_script_is_told_every_box_the_engine_places_by(tmp_path):
     # Nothing offered covers content, inherited or not.
     for page in layout["pages"]:
         content = [Box(*shape["box"]) for shape in page["shapes"] if shape["blocks"]]
-        for box in page["free"]["top"] + page["free"]["bottom"]:
+        for box in _free(page, "top") + _free(page, "bottom"):
             assert not any(Box(*box).overlaps(other) for other in content), box
     # Above the copy, the widest box stops short of the wordmark, whose own
     # corner leaves less than a caption line. Below, it runs from side
     # margin to side margin, from the copy to the edge inset.
-    widest_top = max(first["free"]["top"], key=lambda box: box[2])
+    widest_top = max(_free(first, "top"), key=lambda box: box[2])
     assert widest_top == pytest.approx([0.5, 0.3, W - 3.0, 1.18], abs=0.03)
-    widest_bottom = max(first["free"]["bottom"], key=lambda box: box[2])
+    widest_bottom = max(_free(first, "bottom"), key=lambda box: box[2])
     assert widest_bottom == pytest.approx([0.5, 5.52, W - 1.0, 1.68], abs=0.03)
     # On a page with only the wordmark, the whole top beside it is free.
-    assert max(second["free"]["top"], key=lambda box: box[3]) == pytest.approx(
+    assert max(_free(second, "top"), key=lambda box: box[3]) == pytest.approx(
         [0.5, 0.3, W - 3.0, H - 0.6], abs=0.03)
 
 
@@ -707,7 +711,7 @@ def test_content_down_one_side_leaves_the_other_side_free(tmp_path):
         (1, 0.5, 0.5, 5.0, 4.0, "Copy on the left"),
         (1, 7.0, 0.5, 6.0, 6.95, "A figure down the right")])
     with open(path, "rb") as handle:
-        wide, tall = deck_ops.describe(handle.read(), STYLE)["pages"][0]["free"]["bottom"]
+        wide, tall = _free(deck_ops.describe(handle.read(), STYLE)["pages"][0], "bottom")
     # Under the copy, out to the figure: the widest box a footer fits in.
     left, top, width, height = wide
     assert left == pytest.approx(0.5) and left + width == pytest.approx(7.0, abs=0.03)
@@ -750,3 +754,98 @@ def test_a_render_with_no_operations_still_writes_its_style(tmp_path, monkeypatc
     result, pack = _render(tmp_path, "plain", [], monkeypatch)
     with open(deck_ops.style_path(result.data["filePath"]), encoding="utf-8") as handle:
         assert json.load(handle)["accent"] == pack.colors.accent
+
+
+def test_content_inside_an_edge_inset_does_not_stretch_a_rectangle_past_it(tmp_path):
+    """A master logo wholly inside the top inset limits nothing: the bottom
+    rectangle under it still stops at the top inset, not on the logo."""
+    path = _deck(tmp_path / "d.pptx", pages=1, text_boxes=[(1, 1.0, 0.05, 2.0, 0.2, "ACME")])
+    with open(path, "rb") as handle:
+        page = deck_ops.describe(handle.read(), STYLE)["pages"][0]
+    for box in _free(page, "top") + _free(page, "bottom"):
+        assert box[1] >= 0.3 - 1e-6 and box[1] + box[3] <= H - 0.3 + 1e-6, box
+
+
+def test_each_free_rectangle_says_what_it_lands_on(tmp_path):
+    """A dark band along the bottom of a white page: the bottom rectangle
+    reports the band's colour, not the page's."""
+    from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_SHAPE
+
+    path = _deck(tmp_path / "d.pptx", pages=1,
+                 text_boxes=[(1, 0.5, 0.5, 12.0, 3.0, "Copy")])
+    presentation = Presentation(path)
+    band = presentation.slides[0].shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, 0, Inches(5.0), presentation.slide_width, Inches(2.5))
+    band.fill.solid()
+    band.fill.fore_color.rgb = RGBColor.from_string("1F2A44")
+    presentation.save(path)
+    with open(path, "rb") as handle:
+        page = deck_ops.describe(handle.read(), STYLE)["pages"][0]
+    (bottom,) = page["free"]["bottom"]
+    assert bottom["ground"].upper() == "#1F2A44"
+
+
+def test_a_shape_python_pptx_cannot_classify_does_not_lose_the_layout(tmp_path):
+    from lxml import etree
+
+    path = _deck(tmp_path / "d.pptx", pages=1)
+    presentation = Presentation(path)
+    tree = presentation.slide_masters[0].shapes._spTree
+    tree.append(etree.fromstring(
+        '<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        '<p:nvSpPr><p:cNvPr id="99" name="Bare"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
+        '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm></p:spPr>'
+        '</p:sp>'))
+    presentation.save(path)
+    with open(path, "rb") as handle:
+        page = deck_ops.describe(handle.read(), STYLE)["pages"][0]
+    assert [shape["name"] for shape in page["shapes"]] == ["Bare"]
+
+
+def test_a_layout_that_hides_its_masters_shapes_hides_them(tmp_path):
+    path = _deck(tmp_path / "d.pptx", pages=1)
+    presentation = Presentation(path)
+    mark = presentation.slides[0].shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1))
+    mark.text_frame.text = "ACME"
+    presentation.slide_masters[0].shapes._spTree.append(mark._element)
+    presentation.slides[0].slide_layout._element.set("showMasterSp", "0")
+    presentation.save(path)
+    with open(path, "rb") as handle:
+        page = deck_ops.describe(handle.read(), STYLE)["pages"][0]
+    assert page["shapes"] == []
+
+
+def test_a_picture_in_a_placeholder_is_a_picture(tmp_path):
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[8])   # picture with caption
+    holder = next(p for p in slide.placeholders if p.placeholder_format.type == 18)
+    picture_path = tmp_path / "p.png"
+    picture_path.write_bytes(_png())
+    holder.insert_picture(str(picture_path))
+    buffer = io.BytesIO()
+    presentation.save(buffer)
+    page = deck_ops.describe(buffer.getvalue(), STYLE)["pages"][0]
+    (picture,) = [shape for shape in page["shapes"] if shape["kind"] == "picture"]
+    assert picture["blocks"] is True
+
+
+def test_covers_are_unknown_once_the_pages_have_changed(tmp_path):
+    path = _deck(tmp_path / "d.pptx", pages=2)
+    with open(path, "rb") as handle:
+        layout = deck_ops.describe(handle.read(), STYLE, pages_known=False)
+    assert {(page["cover"], page["appended"]) for page in layout["pages"]} == {(None, None)}
+
+
+def test_a_failed_recolour_leaves_the_style_in_the_colours_the_file_has(tmp_path, monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("could not save")
+
+    monkeypatch.setattr(deck_ops, "apply", boom)
+    operations = [{"kind": "recolour", "id": "r", "role": "accent", "to": "#E4572E"}]
+    result, pack = _render(tmp_path, "failed", operations, monkeypatch)
+    with open(deck_ops.style_path(result.data["filePath"]), encoding="utf-8") as handle:
+        raw = json.load(handle)
+    assert raw["accent"] == pack.colors.accent
+    assert raw["pages"] == len(Presentation(result.data["filePath"]).slides)

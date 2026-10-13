@@ -228,8 +228,8 @@ def _change_directive(loop: "AgentLoop") -> str:
             "- Only what neither can express - something already on a page "
             "moved, rotated or restyled: edit_deck_with_code, leaving every "
             "slide's copy, layout and design as they are. Choose coordinates "
-            "from layout.json beside the deck - every page's shapes and free "
-            "bands, the margins, the deck's colours and face and its type "
+            "from layout.json beside the deck - every page's shapes and the "
+            "clear rectangles along its edges, the margins, the deck's colours and face and its type "
             "floors - in the same script, so place anything you add clear of "
             "the content in the deck's own colours without reading the deck "
             "first.")

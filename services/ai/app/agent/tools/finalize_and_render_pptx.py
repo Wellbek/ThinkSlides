@@ -623,37 +623,42 @@ class FinalizeAndRenderPptxTool:
         from app.renderer import deck_ops
 
         style = cls._deck_style(pack, design_system, covers, appended)
-        cls._write_style(path, style, operations)
         if not operations:
+            cls._write_style(path, style)
             return []
         try:
-            return deck_ops.apply(path, operations, style,
-                                  dict(run_context.get_assets()))
+            reports = deck_ops.apply(path, operations, style,
+                                     dict(run_context.get_assets()))
         except Exception as exc:   # noqa: BLE001 - the deck itself rendered
             logger.warning("deck_operations_failed", error=str(exc), slides=slides)
+            # The file pass did not run, so the file is not in the new
+            # colours a recolour names: the sidecar says what it is in.
+            cls._write_style(path, style)
             return [{"id": op.id, "kind": op.kind, "problem": str(exc)[:300]}
                     for op in operations]
+        cls._write_style(path, deck_ops.recoloured(style, operations))
+        return reports
 
     @staticmethod
-    def _write_style(path: str, style, operations: list) -> None:
+    def _write_style(path: str, style) -> None:
         """Write the deck's style beside it, as the deck now wears it.
 
         Read back by `edit_deck_with_code`, which hands a script the same
         colours, margins, covers and floors the operations were placed by
         (#376). Beside the file rather than in a context variable: this tool
         runs in a copy of the loop's context, and the deck and its style are
-        then one thing on disk that a later render overwrites together.
+        then one thing on disk that a later render overwrites together. The
+        page count is kept with it, so a reader can tell when a script has
+        since added or removed pages and the covers no longer line up.
         """
         import json
 
         from app.renderer import deck_ops
 
         try:
-            worn = deck_ops.recoloured(style, [
-                deck_ops.parse(op) if isinstance(op, dict) else op
-                for op in operations])
             with open(deck_ops.style_path(path), "w", encoding="utf-8") as handle:
-                json.dump(deck_ops.style_to_dict(worn), handle)
+                json.dump({**deck_ops.style_to_dict(style),
+                           "pages": deck_ops.page_count(path)}, handle)
         except Exception as exc:   # noqa: BLE001 - the deck itself rendered
             logger.warning("deck_style_not_written", error=str(exc))
 
