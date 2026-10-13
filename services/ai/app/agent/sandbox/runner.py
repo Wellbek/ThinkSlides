@@ -67,6 +67,11 @@ MAX_OUTPUT_CHARS = 8_000                        # of stdout or stderr, kept
 # a prefix both have to remember.
 DECK_NAME = "deck.pptx"
 
+# The deck as the engine reads it (`deck_ops.describe`), beside the deck:
+# page boxes, margins, colours and type floors, so a script places by the
+# engine's rules instead of spending a turn printing shapes first (#376).
+LAYOUT_NAME = "layout.json"
+
 # The whole environment the script gets. Everything else is dropped, which is
 # the point: no provider key, no database URL, no encryption key.
 #
@@ -122,12 +127,14 @@ _ASSET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}\.(png|jpg|jpeg|gif)$")
 
 def run(source: str, *, deck: Optional[bytes] = None,
         wants: tuple[str, ...] = (),
-        assets: Optional[dict[str, bytes]] = None) -> Result:
+        assets: Optional[dict[str, bytes]] = None,
+        layout: Optional[bytes] = None) -> Result:
     """Run ``source`` on a copy of ``deck``, and return what it produced.
 
     ``assets`` are pictures placed beside the script under the given names -
     a plain name with an image extension, a few of them, size-capped. The
-    script reads them; nothing here lets it fetch one.
+    script reads them; nothing here lets it fetch one. ``layout`` is the
+    deck's description, written as ``LAYOUT_NAME``.
 
     ``wants`` names the files to read back out of the work dir. The deck is
     always read back when one was supplied, because editing it is the point.
@@ -146,6 +153,10 @@ def run(source: str, *, deck: Optional[bytes] = None,
         if deck is not None:
             with open(os.path.join(work_dir, DECK_NAME), "wb") as handle:
                 handle.write(deck)
+
+        if layout is not None:
+            with open(os.path.join(work_dir, LAYOUT_NAME), "wb") as handle:
+                handle.write(layout)
 
         for name, data in list((assets or {}).items())[:MAX_ASSETS]:
             if not _ASSET_NAME.match(name) or len(data) > ASSET_BYTES:
