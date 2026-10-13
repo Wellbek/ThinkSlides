@@ -44,7 +44,7 @@ Appendices: A. Iteration review; B. Version control plan; C. Engineering style r
 ## Status and priorities
 
 Living section, updated whenever the order of work changes.
-Last updated: 2026-10-01, at the start of the fourth implementation session.
+Last updated: 2026-10-13: section 13.5 reviews the architecture through the README's figures, and records D-15 to D-20.
 Every open item is a GitHub issue labelled `roadmap` and its area; nothing planned lives only in this document.
 
 ### Where the project stands
@@ -840,6 +840,29 @@ Advisory (reported, fixed only if cheap): topic title in a format that prefers a
 
 ---
 
+### 13.5 Architecture review through the README figures (2026-10-13)
+
+The README's figures were redrawn to document the target as built.
+Drawing each one was used as a check: every box that differs from the code today was traced to the code, and kept only where it is measured to be better or is the established answer to a defect the code has.
+The figures are code (`docs/diagrams/src/figures.py`), so a change here is a change to one function.
+
+| Area | Today, in the code | In the figures | Why it is better | Proof | Issue |
+| --- | --- | --- | --- | --- | --- |
+| Run hand-off | a Redis list: `LPUSH` / `BRPOP` (`services/orchestrator/internal/queue/redis.go:71,81`); a popped job exists only in the orchestrator's memory | a Redis stream with a consumer group; the run worker `XACK`s at pause or finish and `XAUTOCLAIM` hands a dead worker's run to another | at-least-once delivery: a crash between pop and finish no longer loses the run | known: a list pop has no acknowledgement | #338 |
+| Who runs a run | the orchestrator's worker calls the AI service over HTTP, fire and forget, one goroutine per job with no bound (`internal/worker/processor.go:152`) | AI run workers consume the stream themselves; the orchestrator admits and streams | one hop fewer, no fire-and-forget gap, and back-pressure from the number of consumers | known | #338 |
+| Admission | none: every message starts a run at once | per-organisation run and token limits at the orchestrator | a burst from one tenant cannot starve the others | known | #338 |
+| Rendering | composition, charts, LibreOffice and PyMuPDF run inside the agent's async tool calls (`agent/loop.py:5483` awaits the tool directly; `renderer/preview_generator.py:101` calls `subprocess.run`) | a render pool of separate processes | the event loop of the worker that renders is blocked for the whole render, so every other session on it stops publishing, calling models and compiling | **measured**: 0 heartbeat ticks served during six renders of a three-page deck, 2.5 to 3.0 s each (`benchmark/scripts/event_loop_stall.py`) | #338 |
+| SSE | events carry no `id`; a dropped connection misses what was published while it was down | events get a per-session `seq`, are inserted before they are published, sent as `id:`, and replayed after `Last-Event-ID` | a reconnect is lossless; persist-then-publish means nothing seen live is missing from the replay | known: the SSE specification's own resume mechanism | #398 |
+| Run state | the working state lives in Redis with a one-hour TTL (`agent/loop.py:1947`); `deck_snapshots` only at completion | a `runs` table holds the checkpoint; Redis is a cache; `deck_snapshots` folds into it | a run paused for more than an hour (an unanswered question, an outline under review) no longer loses its state | known | #338 |
+| Vector index | `ivfflat ... WITH (lists = 100)` created on an empty `document_chunks` (`db/migrations/003_create_chat_tables.sql:111`) | HNSW on `chunks.embedding`, beside a GIN full-text index, fused by reciprocal rank | ivfflat computes its list centroids from the rows present when the index is built, so one built on an empty table clusters nothing; HNSW needs no training and gives a better speed and recall trade-off; exact terms and figures need the full-text side | known: pgvector's own guidance | #327 |
+| Transport | an unwired gRPC contract (`services/orchestrator/proto/agent.proto`) beside the live HTTP path | one transport | two contracts for one call drift apart; the stream makes the call itself unnecessary | known | #336 |
+| Figures | prompts for an image generator, two of five images present, the rest placeholders | figures drawn by code in the house style of the DeepSeek reports, every product shown by its own logo | reproducible, reviewable as a diff, and re-drawn when the system changes | - | - |
+
+**Against the mission.**
+The mission is a demonstrated quality/cost frontier (section 1).
+Every lever in the target serves one side of it: compile, caching, routing and the render pool cut cost and runtime; evidence, grounding, gates, checks and bounded repair hold quality.
+The frontier itself is measured once, later, against pure frontier-model workflows (iteration 6); until then each change is judged by its own engineering evidence, as the decisions above are.
+
 ## 14. Proposed agent architecture and model routing
 
 ### 14.1 Roles
@@ -1049,7 +1072,7 @@ Categories: **remove**, **refactor**, **retain**, **investigate**.
 | `PyPDF2==3.0.1` listed twice in `requirements.txt`; PyPDF2 is deprecated | requirements file | refactor | Move to a maintained extractor as part of iteration 4 |
 | `datetime.utcnow()` usages | 129 deprecation warnings in the test run | refactor | Fix with the next change to those files |
 | `SimplePresentationRequest` endpoint | Legacy direct-render path | investigate | Keep only if a caller exists |
-| `docs/architecture-diagram-prompts.md` | States 12 tools and "no image generation" | refactor | Stale: 31 tools, `generate_image` exists |
+| `docs/architecture-diagram-prompts.md` | States 12 tools and "no image generation" | removed (2026-10-13) | Stale: 31 tools, `generate_image` exists; the README figures are now drawn by `docs/diagrams/src/figures.py` |
 | README "Design Decisions" on images | Same staleness | refactor | Documentation accuracy |
 | Composer and preview controls with no behaviour (section 19) | No handlers | done: minimal versions marked beta or in development (D-14) | UI honesty |
 | `design/*`, `measure/*`, `grounding/*`, `narrative.py`, `titles.py` | Core of the target architecture | retain | The strongest assets |
@@ -1230,6 +1253,12 @@ Slide-scoped editing, project-level sources, run durability and admission contro
 | D-12 | 2026-09-24 | "Local runs through Claude Code" means a `claude-code` provider mode that hands each model request to a Claude Code session, billed to the subscription | Product decision; design in 17.2 |
 | D-13 | 2026-09-24 | Tracing: own simple store as source of truth, optional OpenTelemetry export to self-hosted Langfuse | Product decision |
 | D-14 | 2026-09-24 | Non-functional UI controls get minimal working versions, clearly marked beta or in development, rather than being removed | Product decision |
+| D-15 | 2026-10-13 | Runs travel on a Redis stream with a consumer group, acknowledged at pause or finish and reclaimed from a dead worker; AI run workers consume it directly, and the orchestrator admits runs per organisation | 13.5; a list pop loses a run on a crash |
+| D-16 | 2026-10-13 | Rendering, conversion and rasterisation run in a process pool, never on the event loop | 13.5; measured: the loop blocked for the whole of every render |
+| D-17 | 2026-10-13 | Events are persisted with a per-session sequence before they are published, and SSE resumes from `Last-Event-ID` | 13.5 |
+| D-18 | 2026-10-13 | Run state is checkpointed to a `runs` table in PostgreSQL; Redis holds caches only | 13.5; the one-hour TTL loses a paused run |
+| D-19 | 2026-10-13 | The evidence store indexes chunks with HNSW and full-text side by side, fused by reciprocal rank | 13.5; refines D-7 |
+| D-20 | 2026-10-13 | One transport between orchestrator and AI service; the gRPC contract is removed | 13.5 |
 
 ## 24. Rejected alternatives
 
@@ -1242,6 +1271,9 @@ Slide-scoped editing, project-level sources, run durability and admission contro
 | A single "quality score" to optimise | Encourages metric gaming; categories disagree (R-004) |
 | Distillation or co-training now | No training infrastructure; no data yet; CTCD's setting does not transfer (R-414) |
 | Big-bang rewrite of `loop.py` | Risky; refactor along seams as each iteration touches them |
+| An ivfflat vector index | Its centroids come from the rows present at build time; HNSW needs no training and is the better speed and recall trade-off at this corpus size (D-19) |
+| gRPC between orchestrator and AI service | A second contract for the same call; the run stream removes the call (D-20) |
+| A Redis list as the job queue | No acknowledgement, so a crash after the pop loses the run (D-15) |
 
 ## 25. Completed research (this iteration)
 
