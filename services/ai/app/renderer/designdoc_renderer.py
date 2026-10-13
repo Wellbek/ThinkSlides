@@ -61,10 +61,8 @@ def _block_compiler(pack: Pack, design_system: dict, ground: str):
     ``_exhibit_primitives`` returned nothing for every one of them the moment
     it saw that. See issue #286.
 
-    Built once per page rather than per mark: the block compiler's `fit`
-    already scales a whole block together, and the page's own ground -
-    exactly what ``_materialise_charts`` already uses for a chart's ground -
-    is the same simplification, not a new one.
+    One per ground (see `_GroundedCompilers`): a diagram on a navy panel
+    is inked for the navy, not for the page's white (#396).
     """
     from app import colors as colors_module
     from app.renderer.blocks import BlockCompiler
@@ -85,8 +83,46 @@ def _block_compiler(pack: Pack, design_system: dict, ground: str):
                          design_system=design_system)
 
 
+class _GroundedCompilers:
+    """A block compiler for whatever ground each exhibit lands on.
+
+    ``compile_page`` hands an exhibit's rectangle, not its frame, so the
+    ground is read off the rectangle: the topmost frame with a ground of its
+    own that contains it, else the page's.
+    """
+
+    def __init__(self, pack: Pack, design_system: dict, resolved, page_ground: str):
+        self._pack, self._system = pack, design_system
+        self._resolved, self._page_ground = resolved, page_ground
+        self._by_ground: dict[str, object] = {}
+
+    def fit(self, kind, payload, rect, ident):
+        ground = _ground_at(rect, self._resolved, self._pack, self._page_ground)
+        if ground not in self._by_ground:
+            self._by_ground[ground] = _block_compiler(self._pack, self._system, ground)
+        return self._by_ground[ground].fit(kind, payload, rect, ident)
+
+
+def _ground_at(rect, resolved, pack: Pack, page_ground: str) -> str:
+    """The colour under ``rect``: the topmost frame declaring a ground whose
+    rectangle contains it, allowing the hairline fractional geometry rounds
+    to, else the page's."""
+    ground = page_ground
+    for other in resolved:   # paint order: the last match is on top
+        if not other.frame.ground:
+            continue
+        if (other.rect.left - 0.02 <= rect.left
+                and other.rect.top - 0.02 <= rect.top
+                and other.right + 0.02 >= rect.left + rect.width
+                and other.bottom + 0.02 >= rect.top + rect.height):
+            colour = other.frame.ground
+            ground = colour if colour.startswith("#") else pack.colors.get(colour)
+    return ground
+
+
 def _materialise_charts(marks: list[Primitive], pack: Pack,
-                        design_system: dict) -> list[Primitive]:
+                        design_system: dict, resolved=(),
+                        page_ground: Optional[str] = None) -> list[Primitive]:
     """Turn chart and table payloads into image bytes before anything tries
     to paint them.
 
@@ -104,9 +140,12 @@ def _materialise_charts(marks: list[Primitive], pack: Pack,
         image = mark.image or {}
         chart_payload = image.get("chart") if mark.kind == "image" else None
         if chart_payload:
+            # Drawn for the ground it lands on, not the pack's: a chart on a
+            # navy panel inked for white is unreadable (#396).
             png = render_chart_to_png(
                 chart_payload, design_system, mark.box.width, mark.box.height,
-                dpi=200, ground=pack.colors.ground,
+                dpi=200, ground=_ground_at(mark.box, resolved, pack,
+                                           page_ground or pack.colors.ground),
             )
         else:
             out.append(mark)
@@ -166,11 +205,13 @@ def render_doc(doc: DesignDoc, pack: Pack, output_path: str, *,
         )
         _paint_page_ground(slide, doc, ground)
 
+        resolved = resolve_page(doc, page)
         marks = compile_page(
             doc, page, pack,
-            block_compiler=block_compiler or _block_compiler(pack, system, ground),
+            block_compiler=block_compiler or _GroundedCompilers(
+                pack, system, resolved, ground),
         )
-        marks = _materialise_charts(marks, pack, system)
+        marks = _materialise_charts(marks, pack, system, resolved, ground)
 
         context = PaintContext(
             ground=ground,
@@ -179,7 +220,6 @@ def render_doc(doc: DesignDoc, pack: Pack, output_path: str, *,
             default_size_pt=scale.body_size_pt,
             default_font=pack.body_face,
         )
-        resolved = resolve_page(doc, page)
         for mark in marks:
             local = _context_for(mark, resolved, pack, context)
             table = _table_of(mark)

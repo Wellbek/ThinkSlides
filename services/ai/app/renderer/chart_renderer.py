@@ -277,11 +277,34 @@ def _adapt_to_ground(style, ground: str | None):
         return style
     return replace(
         style,
+        # A series is a mark, and a mark the ground swallows is not drawn:
+        # the deck's navy series on its own navy panel measured 1.1:1 (#396).
+        color_sequence=[_lifted(colour, ground) for colour in style.color_sequence],
         axis_color=colors.readable_on(ground, "#FFFFFF"),
         # A gridline is meant to be barely there; on a dark ground that is a
         # slight lift off the ground rather than a light grey line.
         grid_color=colors.mix(ground, "#FFFFFF", 0.28),
     )
+
+
+# The contrast a series keeps against a dark ground: WCAG's 3:1 for a
+# graphical object, the same floor a deck operation's marks keep.
+SERIES_CONTRAST = 3.0
+
+
+def _lifted(colour: str, ground: str) -> str:
+    """``colour``, mixed toward white in tenths until it clears
+    ``SERIES_CONTRAST`` on ``ground``: the same hue, lighter, so the series
+    keeps its identity in the legend and on every other page."""
+    from app import colors
+
+    if not colors.parse_hex(colour):
+        return colour
+    for step in range(11):
+        candidate = colors.mix(colour, "#FFFFFF", step / 10)
+        if colors.contrast_ratio(candidate, ground) >= SERIES_CONTRAST:
+            return candidate
+    return "#FFFFFF"
 
 
 def render_chart_to_png(
