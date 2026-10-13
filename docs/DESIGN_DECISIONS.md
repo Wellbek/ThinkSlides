@@ -121,6 +121,14 @@ Everything that asks whether copy fits - the selector's strain and overflow (sec
 Each of these used to leave out weight and case, and all of them paragraph spacing, so a bold headline was measured five to ten percent narrower than it is drawn and a spaced block of several paragraphs shorter.
 Which face a role is drawn in is one rule (`pack.face_of`), read by the pack, the authored compiler and the measured-pack builder alike.
 
+**One frame, one ground (#396).**
+A frame that carries copy or an exhibit and declares no ground of its own is drawn in ink chosen for the ground under it, so it must sit on one ground.
+When a shipped pack is loaded, before its capacities are measured again, each top-level frame with more than `STRADDLE_SHARE` of its area on a second ground is seated on the ground it mostly covers (on a tie, the one painted first): it is clipped to that ground's rectangle and set a grid gutter in from every edge it was cut at, and it is placed by fraction from then on (`app/design/grounds.py`).
+What is clipped is the frame's place, not its bled rectangle, so an edge it bled past and was not cut at still bleeds, and an exhibit bound to it, which loses its bleed (section 10), stays inside the margins.
+A frame with a ground of its own, such as a pull-quote on its own card across a panel edge, is exempt; a scrim is not a ground of its own, since a wash at under half opacity leaves the two grounds different beneath it.
+The rule moved four frames across the shipped packs: WTI's split-canvas figure, snapped to a grid column that starts half an inch left of its navy panel, and the line traced along that page's foot across both halves; one column on WTI's exhibit page; and a figure on EY's card row.
+On the WTI specimen deck the chart was drawn throughout in the white half's dark ink over the navy, and its title, legend, values and years were close to unreadable.
+
 **Openers.**
 A pack with no cover, section or closing page gets one composed from its own grid, ramp and colours (`app/design/vocabulary.py`, `ensure`).
 These are laid out upward from a baseline (cover 0.93, section 0.62 of the page) so each block is exactly as tall as its own type.
@@ -277,6 +285,12 @@ Diagram text is measured with the real typesetter, 4% narrower than its box (`TE
 The floor the selector reads (section 7, above) is this layout at 10pt **with** the details, in a rect up to eight times the diagram's own shape (`PROBE_HEIGHT_FACTOR`), the least height that reads; infinite when none does.
 A slot that could show only the labels is not offered, since what the diagram was drawn to say would be lost; a wider slot, the plain page at worst, shows all of it.
 The title band is measured at the size the title is drawn at, from the pack's body size.
+
+**Inked for its ground (#396).**
+A chart is drawn for the ground under its own frame, and a diagram, a row of figures or another typed block is compiled for it: the topmost frame declaring a ground whose rectangle contains the exhibit's, else the page's.
+Both used to be drawn for the page's ground on every page, so on a split page an exhibit on the dark half was inked for the light one.
+On a dark ground the chart's furniture takes reversed ink, and each series colour that falls below `SERIES_CONTRAST` against the ground is mixed toward white in tenths until it clears it, keeping its hue so the series reads as the same series on every page.
+The WTI navy series on WTI's navy panel measured 1.1:1.
 
 ## 8. Splitting a page
 
@@ -688,6 +702,8 @@ The ones that report on the decisions above:
 | `WATERMARK_OPACITY`, `WATERMARK_ROTATION_DEG` | 0.15, -30 | `renderer/deck_ops.py` |
 | `TEXT_CONTRAST`, `MARK_CONTRAST` | 4.5, 3.0 | `renderer/deck_ops.py` |
 | `CHAR_EM` | 0.68 em per character, sizing a text overlay's box | `renderer/deck_ops.py` |
+| `STRADDLE_SHARE` | 0.05 of a frame's area on a second ground before it is seated | `design/grounds.py` |
+| `SERIES_CONTRAST` | 3.0, a chart series against a dark ground | `renderer/chart_renderer.py` |
 
 ## 17. Evidence log
 
@@ -731,3 +747,4 @@ A replay feeds the recorded model answers to the current code, so it tests the d
 | #371 | the 23 languages authored in `benchmark/evidence/`, composing a heading and three points of about 100 characters | On 10 of them one point was set in a caption, footnote or standfirst rung and the other two in the body. | Parallel points share a rung (section 6.3). |
 | #359 | found while writing this document | A `nudge` verdict re-renders the identical page, since composition never reads the finding. | `nudge` is answered as a `replace` (section 13). |
 | #322 | the 17 languages in `benchmark/evidence/`, via `app.research.gate_audit` | A language could derive and still be unable to show a table legibly or compile a cover. | The compile gate (section 4); the plain-page fallback (section 9). |
+| #396 | WTI specimen deck (`language_specimen_slides` on `wti-2025`) | The split-canvas chart straddled the navy panel's edge and was drawn throughout for the white half: title, legend, values and years dark on navy, the first series navy on navy. | One frame, one ground (section 3); an exhibit inked for its ground (section 7). |
