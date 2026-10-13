@@ -13,12 +13,11 @@
 ThinkSlides is a multi-tenant web application that builds branded PowerPoint decks from a chat.
 Users describe what they need, attach documents and optionally a PPTX or POTX template, and get back an editable `.pptx`.
 
-The pipeline is designed to run mostly on small, inexpensive models.
+The pipeline is designed to run mostly on small, inexpensive models, while matching frontier large model output quality.
 Models answer narrow, typed requests; code handles layout, checks and repairs.
 Progress streams to the browser while the deck is built, and every step is traced with its inputs, model, tokens and cost.
 
 This README describes the system as designed.
-Implementation status is tracked in [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md).
 
 ## Quick Start
 
