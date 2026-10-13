@@ -62,3 +62,7 @@ services/ai/eval_scorecards/*.md
 
 # Headless research runs (benchmark/runs/<task>/<run>/)
 benchmark/runs/
+
+# Local tool data (Claude Code project settings and worktrees, ProjectAtlas index)
+.claude/
+.projectatlas/
