@@ -136,7 +136,7 @@ def system_architecture() -> Figure:
     f.arrow([(875, 662), (875, 700)], both=True)
 
     f.legend(30, 812, [("code", "deterministic code"), ("model", "language models"),
-                       ("user", "the person"), ("group", "process boundary"),
+                       ("user", "user"), ("group", "process boundary"),
                        ("arrow", "request or data"), ("dashed", "optional")], size=11.5)
     f.logo("docker", 1028, 795, 26)
     f.text(1060, 813, "every service runs in a container", size=11.5, anchor="start", color=MUTED)
@@ -228,7 +228,7 @@ def request_sse_flow() -> Figure:
         f.parts.insert(0, f'<path d="M{x},{lifeline_from} L{x},{bottom}" stroke="#9A9A9A" '
                           f'stroke-width="1" stroke-dasharray="3 4" fill="none"/>')
     f.legend(24, bottom + 30, [("arrow", "request or reply"), ("code", "code"), ("store", "store"),
-                               ("user", "the person")], size=11.5)
+                               ("user", "user")], size=11.5)
     f.line([(560, bottom + 27), (582, bottom + 27)], color=BLUE, sw=1.4)
     f.text(588, bottom + 31, "the event path", size=11.5, anchor="start")
     f.height = bottom + 48
@@ -274,7 +274,7 @@ def pipeline() -> Figure:
     f.box(x1[3], yb, W, H, [("Storyline", {"bold": True}), ("per slide: action title,", {"size": 11}),
                             ("claim, evidence refs,", {"size": 11}), ("exhibit intent", {"size": 11}),
                             tier("medium model, 1 call")], kind="model")
-    f.box(x1[4], yb, W, H, [("Outline review", {"bold": True}), ("the person reads the", {"size": 11}),
+    f.box(x1[4], yb, W, H, [("Outline review", {"bold": True}), ("the user checks the", {"size": 11}),
                             ("argument before any", {"size": 11}), ("slide exists", {"size": 11})],
           kind="user")
     stack(f, x1[5], yb, W, H, [("Design language", {"bold": True}), ("the template's own, or", {"size": 11}),
@@ -311,8 +311,8 @@ def pipeline() -> Figure:
                                  tier("code, then vision model")], kind="vision")
     f.box(1004, yr, 190, 150, [("Deliver", {"bold": True}), (".pptx, sources appendix,", {"size": 11}),
                                ("the run's trace and scores,", {"size": 11}),
-                               ("a closing note that says", {"size": 11}),
-                               ("what was left undone", {"size": 11})], kind="code")
+                               ("a summary of open", {"size": 11}),
+                               ("issues, if any", {"size": 11})], kind="code")
     f.arrow([(254, yr + 75), (282, yr + 75)])
     f.arrow([(472, yr + 75), (510, yr + 75)])
     f.arrow([(700, yr + 75), (738, yr + 75)])
@@ -320,13 +320,13 @@ def pipeline() -> Figure:
     f.text(971, yr + 92, "defects", size=10.5, italic=True, color=MUTED)
 
     # repair loop
-    f.box(510, 528, 418, 44, [("Repair at the cheapest rung that can fix it: nudge, re-place, "
-                               "redraft one slide", {"size": 11})], kind="warn")
+    f.box(510, 528, 418, 44, [("Repair: nudge a frame, re-place the page, or redraft one slide",
+                               {"size": 11})], kind="warn")
     f.arrow([(833, yr + 150), (833, 528)], label="blocking", label_at=(839, 518), label_anchor="start",
             size=10.5)
     f.arrow([(510, 550), (377, 550), (377, yr + 150)])
     f.text(445, 568, "changed slides only", size=10.5, italic=True, color=MUTED)
-    f.text(719, 596, "at most two rounds; a round that removes nothing stops the loop", size=10.5,
+    f.text(719, 596, "at most two rounds; stops early if a round fixes nothing", size=10.5,
            italic=True, color=MUTED)
     f.arrow([(310, yr + 150), (310, yr + 176), (160, yr + 176), (160, yr + 150)], dash="4 3")
     f.text(44, yr + 196, "a slide failing one gate twice is compiled again one tier up", size=10.5,
@@ -335,10 +335,10 @@ def pipeline() -> Figure:
     # trace band
     f.rect(24, 630, 1192, 40, fill="#F7F7F7", stroke="#BFBFBF", r=4)
     f.text(620, 655, "Every step is a span: why it ran, its inputs, model and tier, tokens, cached "
-           "tokens, cost, and why it stopped (run_spans, Figure 8)", size=12)
+           "tokens, cost, and why it stopped (run_spans, Figure 7)", size=12)
 
     f.legend(24, 706, [("code", "deterministic code"), ("model", "language model"),
-                       ("vision", "vision model"), ("user", "the person"), ("warn", "repair")],
+                       ("vision", "vision model"), ("user", "user"), ("warn", "repair")],
              size=11.5)
     f.text(1216, 706, "stacked boxes run in parallel", size=11.5, anchor="end", italic=True,
            color=MUTED)
@@ -352,7 +352,7 @@ def design_selection() -> Figure:
     f = Figure(1240, 820, "How a deck's design language and each page's layout are chosen",
                "Stage I settles one design language for the deck: the uploaded template's "
                "own, or three authored by a model, gated in code and shown as specimens for "
-               "the person to choose. Stage II places each page: its material is bound to "
+               "the user to choose. Stage II places each page: its material is bound to "
                "every archetype by an exact assignment, infeasible bindings are refused, the "
                "cheapest feasible one wins, and a page nothing can carry is split.")
     sz = 11.5
@@ -383,7 +383,7 @@ def design_selection() -> Figure:
     stack(f, 270, 486, 190, 78, [("Specimen decks", {"bold": True}), ("three slides, identical copy,", {"size": sz}),
                                  ("so only design differs", {"size": sz})], kind="code", n=2)
     f.arrow([(365, 456), (365, 486)])
-    f.box(270, 590, 190, 40, [("The person chooses", {"bold": True})], kind="user")
+    f.box(270, 590, 190, 40, [("User picks one", {"bold": True})], kind="user")
     f.arrow([(365, 564), (365, 590)])
     f.box(54, 650, 410, 70, [("Pack: grid, type ramp, colour roles and page archetypes,", {"size": sz}),
                              ("slot capacities measured by setting copy in the real face;", {"size": sz}),
@@ -430,18 +430,17 @@ def design_selection() -> Figure:
                                ("re-place on another archetype", {"size": sz}),
                                ("redraft the slide", {"size": sz}),
                                ("at most twice per page", {"size": sz, "italic": True})], kind="warn")
-    f.box(886, 600, 300, 112, [("A page is kept only if", {"bold": True}),
-                               ("its score falls, so a bounded", {"size": sz}),
-                               ("loop never ends on its worst try;", {"size": sz}),
-                               ("every rule and its parameter", {"size": sz}),
-                               ("is in DESIGN_DECISIONS.md", {"size": sz})], kind="plain")
+    f.box(886, 600, 300, 112, [("Keep the better version", {"bold": True}),
+                               ("a change is kept only if the", {"size": sz}),
+                               ("page scores better than before,", {"size": sz}),
+                               ("so a retry never makes a page", {"size": sz}),
+                               ("worse", {"size": sz})], kind="plain")
     f.arrow([(710, 572), (710, 600)], label="a defect", label_at=(716, 590), label_anchor="start", size=10.5)
     f.arrow([(560, 656), (544, 656), (544, 186), (560, 186)], dash="4 3")
 
-    f.text(620, 772, "No model ever emits a coordinate: models choose words, kinds and exhibits; "
-           "code chooses every position.", size=12.5, italic=True)
+    f.text(620, 772, "Models choose the content; code decides every position.", size=12.5, italic=True)
     f.legend(24, 806, [("code", "deterministic code"), ("model", "language model"),
-                       ("vision", "vision model"), ("user", "the person"), ("warn", "fallback or repair")],
+                       ("vision", "vision model"), ("user", "user"), ("warn", "fallback or repair")],
              size=11.5)
     return f
 
@@ -482,7 +481,7 @@ def amending() -> Figure:
                              ("same gates as a first draft (Figure 3)", {"size": sz})], kind="model")
     f.box(44, 390, 332, 86, [("Only those slides re-rendered", {"bold": True}),
                              ("every other page is the page", {"size": sz}),
-                             ("the person already approved", {"size": sz})], kind="code")
+                             ("the user already approved", {"size": sz})], kind="code")
     f.arrow([(210, 292), (210, 306)])
     f.arrow([(210, 376), (210, 390)])
 
@@ -518,7 +517,7 @@ def amending() -> Figure:
     for x in (210, 620, 1030):
         f.arrow([(x, 496), (x, 526)])
     f.legend(24, 620, [("code", "deterministic code"), ("model", "language model"),
-                       ("vision", "vision model"), ("user", "the person"), ("group", "one path")], size=11.5)
+                       ("vision", "vision model"), ("user", "user"), ("group", "one path")], size=11.5)
     return f
 
 
@@ -540,7 +539,7 @@ def evidence() -> Figure:
                                 ("Tavily or the provider's own", {"size": sz})], kind="code", n=2)
     stack(f, 44, 266, 250, 70, [("Fetch × m", {"bold": True}),
                                 ("pages, robots respected, cached", {"size": sz})], kind="code", n=2)
-    f.box(44, 366, 260, 92, [("The person's own sources", {"bold": True}),
+    f.box(44, 366, 260, 92, [("User sources", {"bold": True}),
                              ("uploaded documents, pasted text,", {"size": sz}),
                              ("connected MCP servers", {"size": sz})], kind="user",
           logos=["modelcontextprotocol"], logo_size=16)
@@ -591,7 +590,7 @@ def evidence() -> Figure:
           kind="plain")
     f.arrow([(1045, 458), (1045, 500)])
     f.legend(24, 572, [("code", "deterministic code"), ("model", "language model"),
-                       ("user", "the person"), ("group", "stage")], size=11.5)
+                       ("user", "user"), ("group", "stage")], size=11.5)
     f.text(1216, 572, "stacked boxes run in parallel", size=11.5, anchor="end", italic=True, color=MUTED)
     f.height = 588
     return f
@@ -754,13 +753,13 @@ def evaluation() -> Figure:
                                ("pairwise vision against category", {"size": sz}),
                                ("references, positions swapped", {"size": sz})], kind="vision")
     f.box(924, 332, 272, 70, [("Human calibration set", {"bold": True}),
-                              ("the judge must agree with people", {"size": sz})], kind="user")
+                              ("checks that judges agree with people", {"size": sz})], kind="user")
     f.box(924, 416, 272, 74, [("No single composite score", {"bold": True}),
                               ("each dimension is reported apart", {"size": sz})], kind="plain")
     f.arrow([(854, 277), (904, 277)])
 
-    f.box(24, 530, 1192, 46, [("Results store: quality against cost and runtime, per category and per "
-                               "model configuration; the frontier the project exists to move", {"size": 12})],
+    f.box(24, 530, 1192, 46, [("Results store: quality, cost and runtime per category and per model configuration",
+                               {"size": 12})],
           kind="code")
     f.arrow([(1060, 510), (1060, 530)])
     f.legend(24, 596, [("code", "deterministic code"), ("model", "language model"),
