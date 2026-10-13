@@ -1,0 +1,142 @@
+{
+ "anthropic": {
+  "title": "Anthropic",
+  "hex": "#191919",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "azure": {
+  "title": "Microsoft Azure",
+  "hex": null,
+  "source": "Wikimedia Commons, the owner's own artwork"
+ },
+ "claude": {
+  "title": "Claude",
+  "hex": "#D97757",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "claudecode": {
+  "title": "Claude Code",
+  "hex": "#D97757",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "docker": {
+  "title": "Docker",
+  "hex": "#2496ED",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "fastapi": {
+  "title": "FastAPI",
+  "hex": "#009688",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "gin": {
+  "title": "Gin",
+  "hex": "#008ECF",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "github": {
+  "title": "GitHub",
+  "hex": "#181717",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "go": {
+  "title": "Go",
+  "hex": "#00ADD8",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "jsonwebtokens": {
+  "title": "JSON Web Tokens",
+  "hex": "#000000",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "libreoffice": {
+  "title": "LibreOffice",
+  "hex": "#18A303",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "matplotlib": {
+  "title": "Matplotlib",
+  "hex": null,
+  "source": "Wikimedia Commons, the owner's own artwork"
+ },
+ "mermaid": {
+  "title": "Mermaid",
+  "hex": "#FF3670",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "modelcontextprotocol": {
+  "title": "Model Context Protocol",
+  "hex": "#000000",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "nextdotjs": {
+  "title": "Next.js",
+  "hex": "#000000",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "numpy": {
+  "title": "NumPy",
+  "hex": "#013243",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "openai": {
+  "title": "OpenAI",
+  "hex": "#000000",
+  "source": "Wikimedia Commons, the owner's own artwork"
+ },
+ "opentelemetry": {
+  "title": "OpenTelemetry",
+  "hex": "#000000",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "postgresql": {
+  "title": "PostgreSQL",
+  "hex": "#4169E1",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "powerpoint": {
+  "title": "Microsoft PowerPoint",
+  "hex": null,
+  "source": "Wikimedia Commons, the owner's own artwork"
+ },
+ "pydantic": {
+  "title": "Pydantic",
+  "hex": "#E92063",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "python": {
+  "title": "Python",
+  "hex": "#3776AB",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "react": {
+  "title": "React",
+  "hex": "#61DAFB",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "redis": {
+  "title": "Redis",
+  "hex": "#FF4438",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "sqlalchemy": {
+  "title": "SQLAlchemy",
+  "hex": "#D71F00",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "tailwindcss": {
+  "title": "Tailwind CSS",
+  "hex": "#06B6D4",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "typescript": {
+  "title": "TypeScript",
+  "hex": "#3178C6",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ },
+ "zdotai": {
+  "title": "Z.ai",
+  "hex": "#2D2D2D",
+  "source": "Simple Icons 16.30.0 (CC0)"
+ }
+}

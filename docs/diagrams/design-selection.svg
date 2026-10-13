@@ -1,212 +1,178 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 810" width="1020" height="810" role="img" aria-labelledby="ttl desc">
-<title id="ttl">How ThinkSlides chooses a deck's design language and each page's layout</title>
-<desc id="desc">A two-stage conditional flow chart. Stage I settles one design language for the whole deck, either from an uploaded template or by authoring three languages and letting the user choose. Stage II decides each page's layout by binding that page's material to every archetype in the pack and taking the cheapest that carries all of it, and a bounded revision ladder when validation judges the arrangement wrong.</desc>
-
-<defs>
-  <marker id="a" viewBox="0 0 10 10" refX="9.4" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-    <path d="M0 0.6 L10 5 L0 9.4 z" fill="#000"/>
-  </marker>
-  <style>
-    .f    { font-family:"Times New Roman","Nimbus Roman","Liberation Serif",Times,serif; }
-    .box  { fill:#fff; stroke:#000; stroke-width:1; }
-    .term { fill:#f1f1f1; stroke:#000; stroke-width:1; }
-    .dia  { fill:#fff; stroke:#000; stroke-width:1; }
-    .n    { font-size:12.5px; fill:#000; text-anchor:middle; }
-    .ns   { font-size:10.5px; fill:#333; text-anchor:middle; font-style:italic; }
-    .e    { font-size:10px;   fill:#000; text-anchor:middle; }
-    .num  { font-size:9px;    fill:#000; text-anchor:start; font-weight:bold; }
-    .band { font-size:12.5px; fill:#000; font-variant:small-caps; letter-spacing:.06em; }
-    .rule { stroke:#000; stroke-width:.9; }
-    .ln   { stroke:#000; stroke-width:.9; fill:none; }
-    .cap  { font-size:11.5px; fill:#000; }
-    .capb { font-size:11.5px; fill:#000; font-weight:bold; }
-  </style>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 820" width="1240" height="820" role="img" aria-labelledby="t d" font-family="Calibri, Carlito, &#x27;Noto Sans&#x27;, &#x27;Segoe UI&#x27;, Arial, sans-serif">
+<title id="t">How a deck&#x27;s design language and each page&#x27;s layout are chosen</title>
+<desc id="d">Stage I settles one design language for the deck: the uploaded template&#x27;s own, or three authored by a model, gated in code and shown as specimens for the person to choose. Stage II places each page: its material is bound to every archetype by an exact assignment, infeasible bindings are refused, the cheapest feasible one wins, and a page nothing can carry is split.</desc>
+<rect width="100%" height="100%" fill="#FFFFFF"/>
+<defs><marker id="m000000" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="#000000"/></marker></defs>
+<rect x="24.0" y="40.0" width="470.0" height="700.0" rx="4" fill="none" stroke="#2E75B6" stroke-width="1.6" stroke-dasharray="7 4"/>
+<text x="24.0" y="33.0" font-size="14" text-anchor="start" fill="#000000" style="font-weight:700">Stage I · one design language per deck</text>
+<rect x="54.0" y="66.0" width="410.0" height="58.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="259.0" y="89.4" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Brief and deck format</text>
+<text x="259.0" y="105.7" font-size="11.5" text-anchor="middle" fill="#000000" style="">a typed value: canvas, type floor, page vocabulary</text>
+<rect x="154.0" y="146.0" width="210.0" height="44.0" rx="20" fill="#FFFFFF" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="259.0" y="170.5" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">A template uploaded?</text>
+<path d="M259.0,124.0 L259.0,146.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<rect x="54.0" y="222.0" width="180.0" height="92.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<svg x="135.0" y="232.1" width="18" height="18" viewBox="60 78.75 581.25 562.5" preserveAspectRatio="xMidYMid meet"><g><defs>
+<linearGradient id="linear0" gradientUnits="userSpaceOnUse" x1="22.096001" y1="4.05626" x2="-0.876391" y2="26.0329" gradientTransform="matrix(15,0,0,15,0,0)">
+<stop offset="0.0582736" style="stop-color:rgb(100%,49.803922%,28.235294%);stop-opacity:1;"/>
+<stop offset="1" style="stop-color:rgb(89.803922%,28.627451%,35.686275%);stop-opacity:1;"/>
+</linearGradient>
+<radialGradient id="radial0" gradientUnits="userSpaceOnUse" cx="0" cy="0" fx="0" fy="0" r="1" gradientTransform="matrix(-399.288723,399.288723,-672.056545,-672.056545,471.141014,241.960487)">
+<stop offset="0.151523" style="stop-color:rgb(66.666667%,11.372549%,17.647059%);stop-opacity:1;"/>
+<stop offset="0.380855" style="stop-color:rgb(81.960784%,16.862745%,9.411765%);stop-opacity:0.439216;"/>
+<stop offset="0.601996" style="stop-color:rgb(100%,23.529412%,0%);stop-opacity:0;"/>
+</radialGradient>
+<radialGradient id="radial1" gradientUnits="userSpaceOnUse" cx="0" cy="0" fx="0" fy="0" r="1" gradientTransform="matrix(484.012072,-228.617844,414.174468,876.858248,-19.41075,588.617992)">
+<stop offset="0.4067" style="stop-color:rgb(100%,40%,98.431373%);stop-opacity:0.501961;"/>
+<stop offset="1" style="stop-color:rgb(91.764706%,23.921569%,0.392157%);stop-opacity:0;"/>
+</radialGradient>
+<linearGradient id="linear1" gradientUnits="userSpaceOnUse" x1="27.549299" y1="28.1723" x2="47.729" y2="13.2157" gradientTransform="matrix(15,0,0,15,0,0)">
+<stop offset="0.310768" style="stop-color:rgb(100%,43.137255%,18.823529%);stop-opacity:1;"/>
+<stop offset="0.634576" style="stop-color:rgb(100%,62.745098%,36.078431%);stop-opacity:1;"/>
+</linearGradient>
+<radialGradient id="radial2" gradientUnits="userSpaceOnUse" cx="0" cy="0" fx="0" fy="0" r="1" gradientTransform="matrix(355.857605,74.568775,-71.089695,339.254713,312.756014,393.631496)">
+<stop offset="0.78593" style="stop-color:rgb(100%,62.745098%,36.078431%);stop-opacity:0;"/>
+<stop offset="0.904889" style="stop-color:rgb(100%,80.784314%,51.764706%);stop-opacity:1;"/>
+</radialGradient>
+<radialGradient id="radial3" gradientUnits="userSpaceOnUse" cx="0" cy="0" fx="0" fy="0" r="1" gradientTransform="matrix(307.211443,-201.015927,192.233827,293.789814,369.794998,355.780506)">
+<stop offset="0.295239" style="stop-color:rgb(100%,60%,91.372549%);stop-opacity:0.8;"/>
+<stop offset="0.727968" style="stop-color:rgb(100%,60%,91.372549%);stop-opacity:0;"/>
+</radialGradient>
+<radialGradient id="radial4" gradientUnits="userSpaceOnUse" cx="0" cy="0" fx="0" fy="0" r="1" gradientTransform="matrix(257.143156,-294.39511,268.864458,234.843083,328.567486,398.717995)">
+<stop offset="0" style="stop-color:rgb(99.215686%,43.137255%,97.647059%);stop-opacity:1;"/>
+<stop offset="0.637205" style="stop-color:rgb(100%,60%,26.666667%);stop-opacity:1;"/>
+<stop offset="0.85186" style="stop-color:rgb(98.823529%,76.862745%,47.45098%);stop-opacity:1;"/>
+</radialGradient>
+<radialGradient id="radial5" gradientUnits="userSpaceOnUse" cx="0" cy="0" fx="0" fy="0" r="1" gradientTransform="matrix(-29.045837,196.819309,-444.814842,-65.644064,302.984991,115.919852)">
+<stop offset="0.144283" style="stop-color:rgb(100%,55.294118%,7.45098%);stop-opacity:1;"/>
+<stop offset="0.537266" style="stop-color:rgb(100%,49.803922%,16.078431%);stop-opacity:0;"/>
+</radialGradient>
+<radialGradient id="radial6" gradientUnits="userSpaceOnUse" cx="0" cy="0" fx="0" fy="0" r="1" gradientTransform="matrix(239.999814,239.999814,-239.999814,239.999814,59.97075,345)">
+<stop offset="0" style="stop-color:rgb(97.254902%,9.803922%,24.313725%);stop-opacity:1;"/>
+<stop offset="0.939062" style="stop-color:rgb(57.254902%,2.352941%,8.627451%);stop-opacity:1;"/>
+</radialGradient>
+<radialGradient id="radial7" gradientUnits="userSpaceOnUse" cx="0" cy="0" fx="0" fy="0" r="1" gradientTransform="matrix(0.000000000000010287,167.999997,-191.25,0.000000000000011711,179.970002,488.999977)">
+<stop offset="0.575893" style="stop-color:rgb(100%,69.019608%,33.333333%);stop-opacity:0;"/>
+<stop offset="0.973806" style="stop-color:rgb(100%,94.901961%,74.509804%);stop-opacity:0.301961;"/>
+</radialGradient>
 </defs>
-
-<rect x="0" y="0" width="1020" height="810" fill="#ffffff"/>
-
-<!-- ═══════════════ STAGE I ═══════════════ -->
-<g class="f">
-  <text class="band" x="26" y="36">Stage I.  The design language — settled once, for the whole deck</text>
-  <line class="rule" x1="26" y1="44" x2="994" y2="44"/>
-
-  <g id="s1"><title>The user's request enters the run</title>
-    <rect class="term" x="26" y="76" width="106" height="40" rx="20"/>
-    <text class="n" x="79" y="101">request</text>
-  </g>
-  <line class="ln" x1="132" y1="96" x2="164" y2="96" marker-end="url(#a)"/>
-
-  <g id="s2"><title>Intake reads the request into a brief: what the deck is about, and who for</title>
-    <rect class="box" x="168" y="72" width="120" height="48"/>
-    <text class="num" x="173" y="84">1</text>
-    <text class="n" x="228" y="98">intake brief</text>
-    <text class="ns" x="228" y="112">topic · audience</text>
-  </g>
-  <line class="ln" x1="288" y1="96" x2="322" y2="96" marker-end="url(#a)"/>
-
-  <g id="s3"><title>The user is asked what kind of presentation this is, before any design is offered</title>
-    <path class="dia" d="M400 62 L472 96 L400 130 L328 96 z"/>
-    <text class="n" x="400" y="99">format?</text>
-  </g>
-  <text class="ns" x="400" y="152">pitch · boardroom · academic · dashboard · poster</text>
-  <text class="ns" x="400" y="165">sets the canvas, the type floor, the page vocabulary</text>
-  <line class="ln" x1="472" y1="96" x2="512" y2="96" marker-end="url(#a)"/>
-
-  <g id="s4"><title>Has the user attached a branded template? If so they have already chosen a design</title>
-    <path class="dia" d="M596 54 L678 96 L596 138 L514 96 z"/>
-    <text class="n" x="596" y="92">template</text>
-    <text class="n" x="596" y="107">uploaded?</text>
-  </g>
-
-  <line class="ln" x1="678" y1="96" x2="714" y2="96" marker-end="url(#a)"/>
-  <text class="e" x="696" y="89">yes</text>
-  <g id="s5"><title>The template's own measured design system is used unchanged</title>
-    <rect class="box" x="718" y="70" width="164" height="52"/>
-    <text class="num" x="723" y="82">2a</text>
-    <text class="n" x="800" y="96">template design system</text>
-    <text class="ns" x="800" y="112">measured, not authored</text>
-  </g>
-
-  <path class="ln" d="M596 138 L596 182" marker-end="url(#a)"/>
-  <text class="e" x="608" y="164">no</text>
-
-  <g id="s6"><title>A model authors three design languages for this deck: the measure, the type ramp, the colour roles and the kinds of page it needs</title>
-    <rect class="box" x="476" y="184" width="252" height="62"/>
-    <text class="num" x="481" y="196">2b</text>
-    <text class="n" x="602" y="210">author 3 design languages</text>
-    <text class="ns" x="602" y="226">measure · ramp · colour roles · page kinds</text>
-    <text class="ns" x="602" y="239">the model never emits geometry</text>
-  </g>
-  <path class="ln" d="M602 246 L602 282" marker-end="url(#a)"/>
-
-  <g id="s7"><title>to_pack derives the geometry from those decisions: a grid, a ramp in points, and archetypes whose slots have measured capacity</title>
-    <rect class="box" x="476" y="284" width="252" height="62"/>
-    <text class="num" x="481" y="296">3</text>
-    <text class="n" x="602" y="310">derive a pack</text>
-    <text class="ns" x="602" y="326">grid · ramp · archetypes · slot capacity</text>
-    <text class="ns" x="602" y="339">geometry is computed, never asserted</text>
-  </g>
-  <path class="ln" d="M476 315 L400 315" marker-end="url(#a)"/>
-
-  <g id="s8"><title>Deterministic gates: contrast, the legibility floor, and whether the language derives into a usable pack at all</title>
-    <path class="dia" d="M320 273 L396 315 L320 357 L244 315 z"/>
-    <text class="n" x="320" y="311">gates</text>
-    <text class="n" x="320" y="326">pass?</text>
-  </g>
-  <text class="ns" x="320" y="378">WCAG AA · legibility floor · derivable</text>
-
-  <path class="ln" d="M320 273 L320 215 L472 215" marker-end="url(#a)"/>
-  <text class="e" x="396" y="209">no — retry, stating the reason it failed</text>
-
-  <path class="ln" d="M244 315 L168 315" marker-end="url(#a)"/>
-  <text class="e" x="206" y="309">yes</text>
-  <g id="s9"><title>Each surviving language renders a three-slide specimen deck, all three carrying the same copy so the comparison is of design alone</title>
-    <rect class="box" x="26" y="288" width="140" height="54"/>
-    <text class="num" x="31" y="300">4</text>
-    <text class="n" x="96" y="314">specimen decks</text>
-    <text class="ns" x="96" y="330">3 slides, same copy</text>
-  </g>
-  <path class="ln" d="M96 342 L96 374" marker-end="url(#a)"/>
-  <g id="s10"><title>The user picks one direction, and a colour, in a single pause</title>
-    <rect class="term" x="26" y="376" width="140" height="44" rx="22"/>
-    <text class="n" x="96" y="395">user chooses</text>
-    <text class="ns" x="96" y="410">direction + colour</text>
-  </g>
-
+<g id="surface1">
+<path style=" stroke:none;fill-rule:nonzero;fill:url(#linear0);" d="M 641.199219 360 C 641.199219 204.667969 515.292969 78.75 359.976562 78.75 C 204.660156 78.75 78.75 204.667969 78.75 360 C 78.75 515.332031 204.660156 641.25 359.976562 641.25 C 515.292969 641.25 641.199219 515.332031 641.199219 360 Z M 641.199219 360 "/>
+<path style=" stroke:none;fill-rule:nonzero;fill:url(#radial0);" d="M 641.199219 360 C 641.199219 204.667969 515.292969 78.75 359.976562 78.75 C 204.660156 78.75 78.75 204.667969 78.75 360 C 78.75 515.332031 204.660156 641.25 359.976562 641.25 C 515.292969 641.25 641.199219 515.332031 641.199219 360 Z M 641.199219 360 "/>
+<path style=" stroke:none;fill-rule:nonzero;fill:url(#radial1);" d="M 641.199219 360 C 641.199219 204.667969 515.292969 78.75 359.976562 78.75 C 204.660156 78.75 78.75 204.667969 78.75 360 C 78.75 515.332031 204.660156 641.25 359.976562 641.25 C 515.292969 641.25 641.199219 515.332031 641.199219 360 Z M 641.199219 360 "/>
+<path style=" stroke:none;fill-rule:nonzero;fill:url(#linear1);" d="M 360.015625 78.75 C 515.328125 78.753906 641.234375 204.671875 641.234375 360 C 641.234375 411.671875 627.273438 460.070312 602.960938 501.679688 L 607.53125 491.558594 C 635.363281 429.761719 590.125 359.832031 522.347656 359.882812 L 410.417969 359.96875 C 382.59375 359.992188 360.015625 337.433594 360.015625 309.609375 L 360.015625 197.476562 C 360.011719 129.671875 290.003906 84.484375 228.222656 112.410156 L 219.226562 116.484375 C 260.632812 92.492188 308.71875 78.75 360.015625 78.75 Z M 360.015625 78.75 "/>
+<path style=" stroke:none;fill-rule:nonzero;fill:url(#radial2);" d="M 360.015625 78.75 C 515.328125 78.753906 641.234375 204.671875 641.234375 360 C 641.234375 411.671875 627.273438 460.070312 602.960938 501.679688 L 607.53125 491.558594 C 635.363281 429.761719 590.125 359.832031 522.347656 359.882812 L 410.417969 359.96875 C 382.59375 359.992188 360.015625 337.433594 360.015625 309.609375 L 360.015625 197.476562 C 360.011719 129.671875 290.003906 84.484375 228.222656 112.410156 L 219.226562 116.484375 C 260.632812 92.492188 308.71875 78.75 360.015625 78.75 Z M 360.015625 78.75 "/>
+<path style=" stroke:none;fill-rule:nonzero;fill:url(#radial3);" d="M 360.015625 78.75 C 515.328125 78.753906 641.234375 204.671875 641.234375 360 C 641.234375 411.671875 627.273438 460.070312 602.960938 501.679688 L 607.53125 491.558594 C 635.363281 429.761719 590.125 359.832031 522.347656 359.882812 L 410.417969 359.96875 C 382.59375 359.992188 360.015625 337.433594 360.015625 309.609375 L 360.015625 197.476562 C 360.011719 129.671875 290.003906 84.484375 228.222656 112.410156 L 219.226562 116.484375 C 260.632812 92.492188 308.71875 78.75 360.015625 78.75 Z M 360.015625 78.75 "/>
+<path style=" stroke:none;fill-rule:nonzero;fill:url(#radial4);" d="M 360.015625 78.75 C 515.328125 78.753906 641.234375 204.671875 641.234375 360 C 641.234375 411.671875 627.273438 460.070312 602.960938 501.679688 L 607.53125 491.558594 C 635.363281 429.761719 590.125 359.832031 522.347656 359.882812 L 410.417969 359.96875 C 382.59375 359.992188 360.015625 337.433594 360.015625 309.609375 L 360.015625 197.476562 C 360.011719 129.671875 290.003906 84.484375 228.222656 112.410156 L 219.226562 116.484375 C 260.632812 92.492188 308.71875 78.75 360.015625 78.75 Z M 360.015625 78.75 "/>
+<path style=" stroke:none;fill-rule:nonzero;fill:url(#radial5);" d="M 360.015625 78.75 C 515.328125 78.753906 641.234375 204.671875 641.234375 360 C 641.234375 411.671875 627.273438 460.070312 602.960938 501.679688 L 607.53125 491.558594 C 635.363281 429.761719 590.125 359.832031 522.347656 359.882812 L 410.417969 359.96875 C 382.59375 359.992188 360.015625 337.433594 360.015625 309.609375 L 360.015625 197.476562 C 360.011719 129.671875 290.003906 84.484375 228.222656 112.410156 L 219.226562 116.484375 C 260.632812 92.492188 308.71875 78.75 360.015625 78.75 Z M 360.015625 78.75 "/>
+<path style=" stroke:none;fill-rule:nonzero;fill:url(#radial6);" d="M 108.75 345 L 251.25 345 C 278.175781 345 300 366.824219 300 393.75 L 300 536.25 C 300 563.175781 278.175781 585 251.25 585 L 108.75 585 C 81.824219 585 60 563.175781 60 536.25 L 60 393.75 C 60 366.824219 81.824219 345 108.75 345 Z M 108.75 345 "/>
+<path style=" stroke:none;fill-rule:nonzero;fill:url(#radial7);" d="M 108.75 345 L 251.25 345 C 278.175781 345 300 366.824219 300 393.75 L 300 536.25 C 300 563.175781 278.175781 585 251.25 585 L 108.75 585 C 81.824219 585 60 563.175781 60 536.25 L 60 393.75 C 60 366.824219 81.824219 345 108.75 345 Z M 108.75 345 "/>
+<path style=" stroke:none;fill-rule:nonzero;fill:rgb(100%,100%,100%);fill-opacity:1;" d="M 168.292969 488.90625 L 168.292969 533.570312 L 137.417969 533.570312 L 137.417969 396.425781 L 185.117188 396.425781 C 202.195312 396.425781 215.195312 400.15625 224.117188 407.617188 C 233.105469 415.074219 237.597656 426.136719 237.597656 440.800781 C 237.597656 455.914062 232.5625 467.707031 222.492188 476.1875 C 212.488281 484.667969 199.039062 488.90625 182.152344 488.90625 Z M 168.292969 420.144531 L 168.292969 465.1875 L 181.199219 465.1875 C 188.84375 465.1875 194.742188 463.183594 198.882812 459.164062 C 203.023438 455.148438 205.097656 449.378906 205.097656 441.855469 C 205.097656 434.90625 203.054688 429.550781 198.976562 425.785156 C 194.960938 422.023438 189.195312 420.144531 181.675781 420.144531 Z M 168.292969 420.144531 "/>
 </g>
-
-<line class="rule" x1="26" y1="452" x2="994" y2="452" stroke-dasharray="2 3" stroke-width=".6"/>
-
-<!-- ═══════════════ STAGE II ═══════════════ -->
-<g class="f">
-  <text class="band" x="26" y="484">Stage II.  The page layout — decided per page, from that page's own material</text>
-  <line class="rule" x1="26" y1="492" x2="994" y2="492"/>
-
-  <g id="t1"><title>One designed slide: its heading, its paragraphs, its charts and tables</title>
-    <rect class="term" x="26" y="538" width="112" height="44" rx="22"/>
-    <text class="n" x="82" y="557">a slide</text>
-    <text class="ns" x="82" y="572">as designed</text>
-  </g>
-  <line class="ln" x1="138" y1="560" x2="170" y2="560" marker-end="url(#a)"/>
-
-  <g id="t2"><title>The slide is read into a material shape: what kind of page it is, and how much of what kind of material it carries</title>
-    <rect class="box" x="174" y="530" width="154" height="60"/>
-    <text class="num" x="179" y="542">5</text>
-    <text class="n" x="251" y="556">material shape</text>
-    <text class="ns" x="251" y="571">role · items · characters</text>
-    <text class="ns" x="251" y="584">exhibits and their aspect</text>
-  </g>
-  <line class="ln" x1="328" y1="560" x2="358" y2="560" marker-end="url(#a)"/>
-
-  <g id="t3"><title>Every archetype in the pack is tried: its slots are bound to the material by an exact assignment, and the binding is costed</title>
-    <rect class="box" x="362" y="523" width="180" height="74"/>
-    <text class="num" x="367" y="535">6</text>
-    <text class="n" x="452" y="549">for every archetype</text>
-    <text class="ns" x="452" y="564">bind material to slots by</text>
-    <text class="ns" x="452" y="577">exact assignment, then cost it</text>
-    <text class="ns" x="452" y="590">slot · capacity · aspect · density</text>
-  </g>
-  <line class="ln" x1="542" y1="560" x2="572" y2="560" marker-end="url(#a)"/>
-
-  <g id="t4"><title>An archetype missing a required slot, or unable to carry every item, is rejected outright rather than costed</title>
-    <path class="dia" d="M656 514 L738 560 L656 606 L574 560 z"/>
-    <text class="n" x="656" y="556">carries it</text>
-    <text class="n" x="656" y="571">all?</text>
-  </g>
-  <text class="ns" x="656" y="626">an unfilled required slot, or an unplaced item,</text>
-  <text class="ns" x="656" y="639">is a rejection rather than a cost</text>
-
-  <path class="ln" d="M656 514 L656 506 L452 506 L452 523" marker-end="url(#a)"/>
-  <text class="e" x="554" y="502">none fit — split the page and try again</text>
-
-  <line class="ln" x1="738" y1="560" x2="772" y2="560" marker-end="url(#a)"/>
-  <text class="e" x="755" y="553">yes</text>
-
-  <g id="t5"><title>The cheapest archetype wins; ties break toward the page the publication uses more often</title>
-    <rect class="box" x="776" y="530" width="160" height="60"/>
-    <text class="num" x="781" y="542">7</text>
-    <text class="n" x="856" y="556">lowest cost wins</text>
-    <text class="ns" x="856" y="571">ties break toward the</text>
-    <text class="ns" x="856" y="584">more frequent page</text>
-  </g>
-  <path class="ln" d="M856 590 L856 664" marker-end="url(#a)"/>
-
-  <g id="t6"><title>The page is built, repaired against its own findings, and rendered</title>
-    <rect class="box" x="776" y="666" width="160" height="52"/>
-    <text class="num" x="781" y="678">8</text>
-    <text class="n" x="856" y="692">build · repair</text>
-    <text class="ns" x="856" y="708">then render</text>
-  </g>
-  <line class="ln" x1="776" y1="692" x2="726" y2="692" marker-end="url(#a)"/>
-
-  <g id="t7"><title>Validation judges the arrangement, not only overflow and contrast</title>
-    <path class="dia" d="M640 658 L722 692 L640 726 L558 692 z"/>
-    <text class="n" x="640" y="688">layout</text>
-    <text class="n" x="640" y="703">wrong?</text>
-  </g>
-
-  <line class="ln" x1="558" y1="692" x2="534" y2="692" marker-end="url(#a)"/>
-  <text class="e" x="546" y="684">yes</text>
-  <g id="t9"><title>The smallest fix that works: nudge a frame, place the page again on a different arrangement, or send the slide back to be rewritten. The model picks, and a page is revised at most twice.</title>
-    <rect class="box" x="320" y="660" width="212" height="64"/>
-    <text class="num" x="325" y="672">9</text>
-    <text class="n"  x="426" y="681">revise, smallest fix first</text>
-    <text class="ns" x="426" y="696">nudge a frame · place it again ·</text>
-    <text class="ns" x="426" y="709">redraft the slide</text>
-    <text class="ns" x="426" y="722">at most twice, never worse</text>
-  </g>
-  <path class="ln" d="M426 660 L426 599" marker-end="url(#a)"/>
-
-  <path class="ln" d="M640 726 L640 752 L170 752" marker-end="url(#a)"/>
-  <text class="e" x="654" y="742">no</text>
-  <g id="t8"><title>The page is finished</title>
-    <rect class="term" x="26" y="730" width="140" height="44" rx="22"/>
-    <text class="n" x="96" y="757">page is done</text>
-  </g>
-</g>
-
-<!-- ═══════════════ CAPTION ═══════════════ -->
-<g class="f">
-  <text class="cap" x="510" y="794" style="text-anchor:middle">How a deck's design language, and then each page's layout, is chosen. No model emits a coordinate at any step.</text>
-</g>
+</g></svg>
+<text x="144.0" y="265.8" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Its measured design</text>
+<text x="144.0" y="282.0" font-size="11.5" text-anchor="middle" fill="#000000" style="">system, read from the</text>
+<text x="144.0" y="298.3" font-size="11.5" text-anchor="middle" fill="#000000" style="">slide XML; no authoring</text>
+<path d="M200.0,190.0 L144.0,222.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<text x="160.0" y="206.0" font-size="11.5" text-anchor="end" fill="#595959" style="font-style:italic">yes</text>
+<rect x="280.0" y="212.0" width="190.0" height="92.0" rx="7" fill="#DEEBF7" stroke="#1F2D3D" stroke-width="1.1"/>
+<rect x="275.0" y="217.0" width="190.0" height="92.0" rx="7" fill="#DEEBF7" stroke="#1F2D3D" stroke-width="1.1"/>
+<rect x="270.0" y="222.0" width="190.0" height="92.0" rx="7" fill="#DEEBF7" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="365.0" y="254.3" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Author three languages</text>
+<text x="365.0" y="270.5" font-size="11.5" text-anchor="middle" fill="#000000" style="">measure, ramp, colour roles,</text>
+<text x="365.0" y="286.8" font-size="11.5" text-anchor="middle" fill="#000000" style="">page kinds; never geometry</text>
+<path d="M318.0,190.0 L365.0,222.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<text x="350.0" y="206.0" font-size="11.5" text-anchor="start" fill="#595959" style="font-style:italic">no</text>
+<rect x="270.0" y="338.0" width="190.0" height="118.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="365.0" y="367.0" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Gates, in code</text>
+<text x="365.0" y="383.3" font-size="11.5" text-anchor="middle" fill="#000000" style="">WCAG AA contrast</text>
+<text x="365.0" y="399.5" font-size="11.5" text-anchor="middle" fill="#000000" style="">legibility floor</text>
+<text x="365.0" y="415.8" font-size="11.5" text-anchor="middle" fill="#000000" style="">derives into a pack</text>
+<text x="365.0" y="432.0" font-size="11.5" text-anchor="middle" fill="#000000" style="">every page kind compiles</text>
+<path d="M365.0,314.0 L365.0,338.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<path d="M460.0,397.0 L482.0,397.0 L482.0,268.0 L470.0,268.0" fill="none" stroke="#000000" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#m000000)"/>
+<text x="476.0" y="330.0" font-size="10.5" text-anchor="end" fill="#595959" style="font-style:italic">fail: re-author</text>
+<rect x="280.0" y="476.0" width="190.0" height="78.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<rect x="275.0" y="481.0" width="190.0" height="78.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<rect x="270.0" y="486.0" width="190.0" height="78.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="365.0" y="511.3" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Specimen decks</text>
+<text x="365.0" y="527.5" font-size="11.5" text-anchor="middle" fill="#000000" style="">three slides, identical copy,</text>
+<text x="365.0" y="543.8" font-size="11.5" text-anchor="middle" fill="#000000" style="">so only design differs</text>
+<path d="M365.0,456.0 L365.0,486.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<rect x="270.0" y="590.0" width="190.0" height="40.0" rx="7" fill="#EDEDED" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="365.0" y="612.5" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">The person chooses</text>
+<path d="M365.0,564.0 L365.0,590.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<rect x="54.0" y="650.0" width="410.0" height="70.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="259.0" y="671.3" font-size="11.5" text-anchor="middle" fill="#000000" style="">Pack: grid, type ramp, colour roles and page archetypes,</text>
+<text x="259.0" y="687.5" font-size="11.5" text-anchor="middle" fill="#000000" style="">slot capacities measured by setting copy in the real face;</text>
+<text x="259.0" y="703.8" font-size="11.5" text-anchor="middle" fill="#000000" style="">every frame seated on one ground</text>
+<path d="M144.0,314.0 L144.0,650.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<path d="M365.0,630.0 L365.0,650.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<rect x="530.0" y="40.0" width="686.0" height="700.0" rx="4" fill="none" stroke="#2E75B6" stroke-width="1.6" stroke-dasharray="7 4"/>
+<text x="530.0" y="33.0" font-size="14" text-anchor="start" fill="#000000" style="font-weight:700">Stage II · one layout per page</text>
+<path d="M464.0,685.0 L512.0,685.0 L512.0,95.0 L560.0,95.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<rect x="560.0" y="66.0" width="626.0" height="58.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="873.0" y="89.4" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Material shape of the page</text>
+<text x="873.0" y="105.7" font-size="11.5" text-anchor="middle" fill="#000000" style="">kind, items, characters per item, each exhibit&#x27;s natural aspect</text>
+<rect x="570.0" y="142.0" width="300.0" height="150.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<rect x="565.0" y="147.0" width="300.0" height="150.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<rect x="560.0" y="152.0" width="300.0" height="150.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="710.0" y="188.9" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Bind to every archetype</text>
+<text x="710.0" y="205.2" font-size="11.5" text-anchor="middle" fill="#000000" style="">an exact assignment of items</text>
+<text x="710.0" y="221.4" font-size="11.5" text-anchor="middle" fill="#000000" style="">to slots, per archetype</text>
+<text x="710.0" y="237.7" font-size="11.5" text-anchor="middle" fill="#000000" style="">refused, not costed: a required</text>
+<text x="710.0" y="253.9" font-size="11.5" text-anchor="middle" fill="#000000" style="">slot left empty, an item left out,</text>
+<text x="710.0" y="270.2" font-size="11.5" text-anchor="middle" fill="#000000" style="">an exhibit below its legible floor</text>
+<path d="M710.0,124.0 L710.0,152.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<rect x="886.0" y="152.0" width="300.0" height="150.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="1036.0" y="188.9" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Cost of a feasible binding</text>
+<text x="1036.0" y="205.2" font-size="11.5" text-anchor="middle" fill="#000000" style="">slot mismatch, capacity strain,</text>
+<text x="1036.0" y="221.4" font-size="11.5" text-anchor="middle" fill="#000000" style="">exhibit aspect, density deviation,</text>
+<text x="1036.0" y="237.7" font-size="11.5" text-anchor="middle" fill="#000000" style="">reading order, overflow;</text>
+<text x="1036.0" y="253.9" font-size="11.5" text-anchor="middle" fill="#000000" style="">the cheapest wins, ties to the</text>
+<text x="1036.0" y="270.2" font-size="11.5" text-anchor="middle" fill="#000000" style="">page the publication uses most</text>
+<path d="M870.0,227.0 L886.0,227.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<rect x="560.0" y="330.0" width="300.0" height="62.0" rx="7" fill="#FBE5D6" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="710.0" y="355.4" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Nothing feasible?</text>
+<text x="710.0" y="371.7" font-size="11.5" text-anchor="middle" fill="#000000" style="">split the page and bind again</text>
+<path d="M700.0,330.0 L700.0,302.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)" marker-start="url(#m000000)"/>
+<rect x="886.0" y="330.0" width="300.0" height="62.0" rx="7" fill="#FBE5D6" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="1036.0" y="355.4" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Still nothing?</text>
+<text x="1036.0" y="371.7" font-size="11.5" text-anchor="middle" fill="#000000" style="">the fallback chain, ending in a plain page</text>
+<path d="M860.0,361.0 L886.0,361.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<rect x="560.0" y="420.0" width="626.0" height="62.0" rx="7" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="873.0" y="445.4" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Build, settle and repair</text>
+<text x="873.0" y="461.7" font-size="11.5" text-anchor="middle" fill="#000000" style="">short material cut to its size and set at the optical centre; a monotone patch loop</text>
+<path d="M1186.0,227.0 L1202.0,227.0 L1202.0,451.0 L1186.0,451.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<path d="M1036.0,392.0 L1036.0,420.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<rect x="560.0" y="510.0" width="626.0" height="62.0" rx="7" fill="#E2F0D9" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="873.0" y="535.4" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Render, then check</text>
+<text x="873.0" y="551.7" font-size="11.5" text-anchor="middle" fill="#000000" style="">geometry from the real render; a vision verdict on each changed page</text>
+<path d="M873.0,482.0 L873.0,510.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<rect x="560.0" y="600.0" width="300.0" height="112.0" rx="7" fill="#FBE5D6" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="710.0" y="626.0" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">Revision ladder</text>
+<text x="710.0" y="642.3" font-size="11.5" text-anchor="middle" fill="#000000" style="">nudge a frame</text>
+<text x="710.0" y="658.5" font-size="11.5" text-anchor="middle" fill="#000000" style="">re-place on another archetype</text>
+<text x="710.0" y="674.8" font-size="11.5" text-anchor="middle" fill="#000000" style="">redraft the slide</text>
+<text x="710.0" y="691.0" font-size="11.5" text-anchor="middle" fill="#000000" style="font-style:italic">at most twice per page</text>
+<rect x="886.0" y="600.0" width="300.0" height="112.0" rx="7" fill="#FFFFFF" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="1036.0" y="626.0" font-size="13" text-anchor="middle" fill="#000000" style="font-weight:700">A page is kept only if</text>
+<text x="1036.0" y="642.3" font-size="11.5" text-anchor="middle" fill="#000000" style="">its score falls, so a bounded</text>
+<text x="1036.0" y="658.5" font-size="11.5" text-anchor="middle" fill="#000000" style="">loop never ends on its worst try;</text>
+<text x="1036.0" y="674.8" font-size="11.5" text-anchor="middle" fill="#000000" style="">every rule and its parameter</text>
+<text x="1036.0" y="691.0" font-size="11.5" text-anchor="middle" fill="#000000" style="">is in DESIGN_DECISIONS.md</text>
+<path d="M710.0,572.0 L710.0,600.0" fill="none" stroke="#000000" stroke-width="1.1" marker-end="url(#m000000)"/>
+<text x="716.0" y="590.0" font-size="10.5" text-anchor="start" fill="#595959" style="font-style:italic">a defect</text>
+<path d="M560.0,656.0 L544.0,656.0 L544.0,186.0 L560.0,186.0" fill="none" stroke="#000000" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#m000000)"/>
+<text x="620.0" y="772.0" font-size="12.5" text-anchor="middle" fill="#000000" style="font-style:italic">No model ever emits a coordinate: models choose words, kinds and exhibits; code chooses every position.</text>
+<rect x="24.0" y="796.0" width="22.0" height="14.0" rx="3" fill="#FFF2CC" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="52.0" y="807.0" font-size="11.5" text-anchor="start" fill="#000000" style="">deterministic code</text>
+<rect x="167.9" y="796.0" width="22.0" height="14.0" rx="3" fill="#DEEBF7" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="195.9" y="807.0" font-size="11.5" text-anchor="start" fill="#000000" style="">language model</text>
+<rect x="299.9" y="796.0" width="22.0" height="14.0" rx="3" fill="#E2F0D9" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="327.9" y="807.0" font-size="11.5" text-anchor="start" fill="#000000" style="">vision model</text>
+<rect x="412.4" y="796.0" width="22.0" height="14.0" rx="3" fill="#EDEDED" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="440.4" y="807.0" font-size="11.5" text-anchor="start" fill="#000000" style="">the person</text>
+<rect x="515.0" y="796.0" width="22.0" height="14.0" rx="3" fill="#FBE5D6" stroke="#1F2D3D" stroke-width="1.1"/>
+<text x="543.0" y="807.0" font-size="11.5" text-anchor="start" fill="#000000" style="">fallback or repair</text>
 </svg>
