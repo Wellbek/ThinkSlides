@@ -651,3 +651,102 @@ def test_the_last_page_is_the_deck_not_its_appendix(tmp_path):
     assert report[0]["pages"] == [3]
     assert report[1]["pages"] == [2]
     assert report[1]["skipped"] == [{"page": 9, "reason": "the deck has 4 pages"}]
+
+
+# ── reading the deck, for code ─────────────────────────────────────────────
+
+
+def test_a_script_is_told_every_box_the_engine_places_by(tmp_path):
+    """What the overlay placement reads, handed to a script: the slide's
+    content, the master's wordmark that `slide.shapes` never lists, and the
+    clear bands above and below them."""
+    path = _deck(tmp_path / "d.pptx", pages=2,
+                 text_boxes=[(1, 1.0, 1.5, 6.0, 4.0, "Revenue held at 14%")])
+    presentation = Presentation(path)
+    mark = presentation.slides[0].shapes.add_textbox(
+        Inches(W - 2.5), Inches(0.4), Inches(2.0), Inches(0.6))
+    mark.text_frame.text = "ACME"
+    presentation.slide_masters[0].shapes._spTree.append(mark._element)
+    presentation.save(path)
+
+    style = DeckStyle(accent="#E4572E", body_floor_pt=16.2, caption_floor_pt=10.5,
+                      cover_pages=frozenset({1}))
+    with open(path, "rb") as handle:
+        layout = deck_ops.describe(handle.read(), style)
+
+    assert layout["page"] == {"width": W, "height": H}
+    assert layout["colours"]["accent"] == "#E4572E"
+    assert layout["type"]["caption_floor_pt"] == 10.5
+    first, second = layout["pages"]
+    assert (first["cover"], second["cover"]) == (True, False)
+    texts = {shape.get("text"): shape for shape in first["shapes"]}
+    assert texts["Revenue held at 14%"]["blocks"] is True
+    assert texts["Revenue held at 14%"]["box"] == [1.0, 1.5, 6.0, 4.0]
+    assert texts["ACME"]["inherited"] is True and texts["ACME"]["blocks"] is True
+    # Nothing offered covers content, inherited or not.
+    for page in layout["pages"]:
+        content = [Box(*shape["box"]) for shape in page["shapes"] if shape["blocks"]]
+        for box in page["free"]["top"] + page["free"]["bottom"]:
+            assert not any(Box(*box).overlaps(other) for other in content), box
+    # Above the copy, the widest box stops short of the wordmark, whose own
+    # corner leaves less than a caption line. Below, it runs from side
+    # margin to side margin, from the copy to the edge inset.
+    widest_top = max(first["free"]["top"], key=lambda box: box[2])
+    assert widest_top == pytest.approx([0.5, 0.3, W - 3.0, 1.18], abs=0.03)
+    widest_bottom = max(first["free"]["bottom"], key=lambda box: box[2])
+    assert widest_bottom == pytest.approx([0.5, 5.52, W - 1.0, 1.68], abs=0.03)
+    # On a page with only the wordmark, the whole top beside it is free.
+    assert max(second["free"]["top"], key=lambda box: box[3]) == pytest.approx(
+        [0.5, 0.3, W - 3.0, H - 0.6], abs=0.03)
+
+
+def test_content_down_one_side_leaves_the_other_side_free(tmp_path):
+    """A picture to the bottom edge on the right half: the left half's
+    bottom is still free, which one band across the page would deny."""
+    path = _deck(tmp_path / "d.pptx", pages=1, text_boxes=[
+        (1, 0.5, 0.5, 5.0, 4.0, "Copy on the left"),
+        (1, 7.0, 0.5, 6.0, 6.95, "A figure down the right")])
+    with open(path, "rb") as handle:
+        wide, tall = deck_ops.describe(handle.read(), STYLE)["pages"][0]["free"]["bottom"]
+    # Under the copy, out to the figure: the widest box a footer fits in.
+    left, top, width, height = wide
+    assert left == pytest.approx(0.5) and left + width == pytest.approx(7.0, abs=0.03)
+    assert top == pytest.approx(4.5, abs=0.05) and top + height == pytest.approx(H - 0.3)
+    # And the gutter between them, clear to the top inset.
+    assert tall[0] == pytest.approx(5.5) and tall[3] == pytest.approx(H - 0.6)
+
+
+def test_a_band_too_thin_to_hold_anything_is_not_offered(tmp_path):
+    path = _deck(tmp_path / "d.pptx", pages=1,
+                 text_boxes=[(1, 0.5, 0.32, 12.0, 7.0, "Full page")])
+    with open(path, "rb") as handle:
+        page = deck_ops.describe(handle.read(), STYLE)["pages"][0]
+    assert page["free"] == {"top": [], "bottom": []}
+
+
+def test_the_style_survives_its_round_trip_through_json():
+    style = DeckStyle(accent="#E4572E", cover_pages=frozenset({1, 3}),
+                      appended_pages=frozenset({9}), body_floor_pt=16.2,
+                      previous={"accent": frozenset({"#1F4E79"})})
+    raw = json.loads(json.dumps(deck_ops.style_to_dict(style)))
+    assert deck_ops.style_from_dict(raw) == style
+    # A sidecar from a render before a field existed still reads.
+    assert deck_ops.style_from_dict({"accent": "#000000", "gone": 1}).accent == "#000000"
+
+
+def test_every_render_writes_the_style_it_was_placed_by(tmp_path, monkeypatch):
+    operations = [{"kind": "recolour", "id": "r", "role": "accent", "to": "#E4572E"}]
+    result, pack = _render(tmp_path, "styled", operations, monkeypatch)
+    with open(deck_ops.style_path(result.data["filePath"]), encoding="utf-8") as handle:
+        style = deck_ops.style_from_dict(json.load(handle))
+    # As the deck now wears it: the recolour, and the pack's own floors.
+    assert style.accent == "#E4572E"
+    assert style.body_floor_pt == round(pack.policy.floor_pt("body", pack.canvas), 1)
+    assert style.caption_floor_pt == round(pack.policy.floor_pt("caption", pack.canvas), 1)
+    assert style.cover_pages
+
+
+def test_a_render_with_no_operations_still_writes_its_style(tmp_path, monkeypatch):
+    result, pack = _render(tmp_path, "plain", [], monkeypatch)
+    with open(deck_ops.style_path(result.data["filePath"]), encoding="utf-8") as handle:
+        assert json.load(handle)["accent"] == pack.colors.accent

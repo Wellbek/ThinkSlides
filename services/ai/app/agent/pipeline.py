@@ -227,10 +227,12 @@ def _change_directive(loop: "AgentLoop") -> str:
         lines.append(
             "- Only what neither can express - something already on a page "
             "moved, rotated or restyled: edit_deck_with_code, leaving every "
-            "slide's copy, layout and design as they are. Read the slide's "
-            "shapes and the page size from the deck before choosing "
-            "coordinates, place anything you add clear of the content, and use "
-            "the deck's own theme colours and fonts.")
+            "slide's copy, layout and design as they are. Choose coordinates "
+            "from layout.json beside the deck - every page's shapes and free "
+            "bands, the margins, the deck's colours and face and its type "
+            "floors - in the same script, so place anything you add clear of "
+            "the content in the deck's own colours without reading the deck "
+            "first.")
     if ws.deck_operations:
         listed = "; ".join(_operation_line(op) for op in ws.deck_operations)
         lines.append(

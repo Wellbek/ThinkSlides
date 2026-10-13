@@ -592,6 +592,8 @@ class FinalizeAndRenderPptxTool:
                 muted=pack.colors.ink_muted, accent=pack.colors.accent,
                 accent_alt=pack.colors.accent_alt, ground=pack.colors.ground,
                 face=pack.body_face, small_pt=small,
+                body_floor_pt=round(pack.policy.floor_pt("body", pack.canvas), 1),
+                caption_floor_pt=round(pack.policy.floor_pt("caption", pack.canvas), 1),
                 margin_in=min(margin.top, margin.right, margin.bottom, margin.left) or 0.5,
                 side_in=min(margin.left, margin.right) or 0.5,
                 cover_pages=covers, appended_pages=appended)
@@ -618,18 +620,42 @@ class FinalizeAndRenderPptxTool:
         Never fails the render: a deck without its overlay is still a deck,
         and the report says what went missing.
         """
-        if not operations:
-            return []
         from app.renderer import deck_ops
 
+        style = cls._deck_style(pack, design_system, covers, appended)
+        cls._write_style(path, style, operations)
+        if not operations:
+            return []
         try:
-            return deck_ops.apply(path, operations,
-                                  cls._deck_style(pack, design_system, covers, appended),
+            return deck_ops.apply(path, operations, style,
                                   dict(run_context.get_assets()))
         except Exception as exc:   # noqa: BLE001 - the deck itself rendered
             logger.warning("deck_operations_failed", error=str(exc), slides=slides)
             return [{"id": op.id, "kind": op.kind, "problem": str(exc)[:300]}
                     for op in operations]
+
+    @staticmethod
+    def _write_style(path: str, style, operations: list) -> None:
+        """Write the deck's style beside it, as the deck now wears it.
+
+        Read back by `edit_deck_with_code`, which hands a script the same
+        colours, margins, covers and floors the operations were placed by
+        (#376). Beside the file rather than in a context variable: this tool
+        runs in a copy of the loop's context, and the deck and its style are
+        then one thing on disk that a later render overwrites together.
+        """
+        import json
+
+        from app.renderer import deck_ops
+
+        try:
+            worn = deck_ops.recoloured(style, [
+                deck_ops.parse(op) if isinstance(op, dict) else op
+                for op in operations])
+            with open(deck_ops.style_path(path), "w", encoding="utf-8") as handle:
+                json.dump(deck_ops.style_to_dict(worn), handle)
+        except Exception as exc:   # noqa: BLE001 - the deck itself rendered
+            logger.warning("deck_style_not_written", error=str(exc))
 
     @classmethod
     def _render_composed(cls, slides: list, pack, metadata: dict,

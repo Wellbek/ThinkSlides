@@ -227,3 +227,93 @@ class TestAFigureDeclaresWhereItsNumbersCameFrom:
         source = ("def bar(slide, width):\n    return width\n"
                   "bar(None, 10)\nplot = 3\n")
         assert grounding.problem(source, "none") is None
+
+
+READS_THE_LAYOUT = '''
+import json
+from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.util import Inches, Pt
+
+layout = json.load(open("layout.json"))
+deck = Presentation("deck.pptx")
+for page in layout["pages"]:
+    bands = page["free"]["bottom"]
+    if not bands or page["cover"]:
+        continue
+    band = max(bands, key=lambda box: box[2])
+    left, top, width, height = band
+    box = deck.slides[page["number"] - 1].shapes.add_textbox(
+        Inches(left), Inches(top), Inches(width), Inches(min(height, 0.4)))
+    box.name = "ts-overlay-footer"
+    run = box.text_frame.paragraphs[0].add_run()
+    run.text = "Acme"
+    run.font.size = Pt(layout["type"]["caption_floor_pt"])
+    run.font.color.rgb = RGBColor.from_string(layout["colours"]["accent"][1:])
+deck.save("deck.pptx")
+'''
+
+
+class TestTheScriptReadsTheDeckAsTheEngineDoes:
+    """#376: a script gets `layout.json` beside the deck - boxes, margins,
+    colours, covers and floors - so it places in one turn by the rules the
+    typed operations follow, rather than printing the deck first."""
+
+    def _deck(self, tmp_path):
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        path = str(tmp_path / "deck.pptx")
+        deck = Presentation()
+        for _ in range(2):
+            slide = deck.slides.add_slide(deck.slide_layouts[6])
+            box = slide.shapes.add_textbox(Inches(0.5), Inches(1), Inches(9), Inches(5))
+            box.text_frame.text = "Revenue held at 14%"
+        deck.save(path)
+        return path
+
+    def test_a_footer_lands_in_the_free_band_in_the_decks_colour(self, tmp_path):
+        import json
+
+        from pptx import Presentation
+
+        from app.renderer import deck_ops
+
+        path = self._deck(tmp_path)
+        with open(deck_ops.style_path(path), "w", encoding="utf-8") as handle:
+            json.dump(deck_ops.style_to_dict(deck_ops.DeckStyle(
+                accent="#E4572E", caption_floor_pt=10.5,
+                cover_pages=frozenset({1}))), handle)
+        token = run_context.set_rendered_path(path)
+        try:
+            result = _run(code=READS_THE_LAYOUT, intent="a footer on every content page")
+        finally:
+            run_context.reset_rendered_path(token)
+
+        assert result.success, result.error
+        cover, content = Presentation(path).slides
+        assert not [s for s in cover.shapes if s.name == "ts-overlay-footer"]
+        (footer,) = [s for s in content.shapes if s.name == "ts-overlay-footer"]
+        assert footer.top >= 6 * 914400            # below the copy, not on it
+        run = footer.text_frame.paragraphs[0].runs[0]
+        assert run.font.size.pt == 10.5
+        assert str(run.font.color.rgb) == "E4572E"
+
+    def test_a_deck_without_a_style_is_still_described(self, tmp_path):
+        path = self._deck(tmp_path)
+        token = run_context.set_rendered_path(path)
+        try:
+            result = _run(code=READS_THE_LAYOUT, intent="a footer")
+        finally:
+            run_context.reset_rendered_path(token)
+        assert result.success, result.error
+
+    def test_a_replayed_edit_reads_the_layout_of_the_deck_it_replays_onto(self, tmp_path):
+        from pptx import Presentation
+
+        from app.agent.tools.edit_deck_with_code import replay
+
+        path = self._deck(tmp_path)
+        assert replay(path, [{"source": READS_THE_LAYOUT, "intent": "footer"}]) == []
+        names = [s.name for slide in Presentation(path).slides for s in slide.shapes]
+        assert "ts-overlay-footer" in names

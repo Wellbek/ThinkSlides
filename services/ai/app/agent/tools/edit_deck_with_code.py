@@ -60,6 +60,7 @@ logger = get_logger(__name__)
 # adding a fifth, unconstrained way to produce one would make the ranking in
 # `renderer/svg/sources.py` a lie. What this tool does is edit the deck.
 DECK_NAME = runner.DECK_NAME
+LAYOUT_NAME = runner.LAYOUT_NAME
 
 WHEN_NOT_TO = (
     "Do NOT use this when a build_* tool already has the shape. build_chart "
@@ -109,7 +110,20 @@ class EditDeckWithCodeTool:
                         "particular not os, sys, subprocess, socket or this "
                         "service's own modules. No eval, no exec, no "
                         "__import__. There is no network and no filesystem "
-                        "outside your own directory. Pictures the user supplied are "
+                        "outside your own directory. Beside the deck is "
+                        f"{LAYOUT_NAME!r}: read it with json and place by it "
+                        "rather than printing the deck first. It gives the page "
+                        "size and margins in inches from the top-left, the "
+                        "deck's colours by role (ink, muted, accent, "
+                        "accent_alt, ground, ink_reversed) and its face, the "
+                        "type floors (nothing you add is smaller than "
+                        "caption_floor_pt), and per page whether it is a "
+                        "cover, every shape's box - including the template's "
+                        "own logo and bands, which slide.shapes does not list "
+                        "- with 'blocks': true where covering it would hide "
+                        "content, and under 'free' the clear rectangles "
+                        "along its top and bottom edges, each tall enough for "
+                        "a line at the caption floor. Pictures the user supplied are "
                         "listed in the instructions you were given and sit "
                         "beside the deck under those names; open them with "
                         "PIL or add them with python-pptx's add_picture."
@@ -188,7 +202,8 @@ class EditDeckWithCodeTool:
             )
 
         # Gate two: what the process can reach.
-        result = runner.run(source, deck=deck, assets=_assets())
+        result = runner.run(source, deck=deck, assets=_assets(),
+                            layout=_layout(deck, _deck_path()))
         if not result.ok:
             logger.info("sandbox_code_failed")
             return ToolResult(
@@ -284,7 +299,8 @@ def replay(path: str, log: list[dict]) -> list[str]:
             continue
         with open(path, "rb") as handle:
             current = handle.read()
-        result = runner.run(source, deck=current, assets=_assets())
+        result = runner.run(source, deck=current, assets=_assets(),
+                            layout=_layout(current, path))
         if not result.ok:
             problems.append(f"{entry.get('intent') or 'an edit'}: {result.failure}")
             continue
@@ -305,6 +321,32 @@ def _assets() -> dict[str, bytes]:
     from app.agent import run_context
 
     return dict(run_context.get_assets())
+
+
+def _layout(deck: bytes, path: Optional[str]) -> Optional[bytes]:
+    """The deck as the engine reads it, as the script finds it.
+
+    The style is the one the render wrote beside the deck; a deck without
+    one (rendered before it was written) is described in the defaults,
+    which still gives the script every page's real boxes. None only when the
+    deck cannot be read, which `adopt` will say better.
+    """
+    import json
+
+    from app.renderer import deck_ops
+
+    style = deck_ops.DeckStyle()
+    if path and os.path.exists(deck_ops.style_path(path)):
+        try:
+            with open(deck_ops.style_path(path), encoding="utf-8") as handle:
+                style = deck_ops.style_from_dict(json.load(handle))
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("deck_style_unreadable", error=str(exc))
+    try:
+        return json.dumps(deck_ops.describe(deck, style)).encode("utf-8")
+    except Exception as exc:   # noqa: BLE001 - the script can still run blind
+        logger.warning("deck_layout_not_described", error=str(exc))
+        return None
 
 
 def _slide_cap_for(deck: bytes) -> int:
